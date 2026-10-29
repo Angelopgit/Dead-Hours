@@ -1,0 +1,113 @@
+import gsap from 'gsap';
+import { GAME } from '@dead-hours/shared';
+import { h } from './dom';
+import { SettingsPanel } from './SettingsPanel';
+import { LoadoutPanel } from './LoadoutPanel';
+import { audio } from '../audio/AudioEngine';
+import type { Input } from '../core/Input';
+
+export interface MainMenuCallbacks {
+  onSolo: () => void;
+}
+
+/** Cinematic main menu overlay. The 3D street behind it is driven by MenuCinematic. */
+export class MainMenu {
+  readonly el: HTMLElement;
+  private panel: HTMLElement | null = null;
+  private playOpen = false;
+  private readonly sub: HTMLElement;
+  private readonly main: HTMLElement;
+
+  constructor(private readonly input: Input, private readonly cb: MainMenuCallbacks) {
+    const item = (label: string, onClick: () => void, opts: { disabled?: boolean; tag?: string } = {}) =>
+      h('button', {
+        class: 'menu-item',
+        disabled: opts.disabled,
+        onmouseenter: () => { if (!opts.disabled) audio.ui('hover'); },
+        onclick: () => { audio.unlock(); if (!opts.disabled) { audio.ui('click'); onClick(); } },
+      }, label, opts.tag ? h('span', { class: 'tag' }, opts.tag) : null);
+
+    this.sub = h('div', { class: 'menu-sub', style: 'height:0' },
+      item('SOLO', () => this.cb.onSolo(), { tag: 'EXPLORE THE NEIGHBORHOOD' }),
+      item('HOST LOBBY', () => {}, { disabled: true, tag: 'ONLINE PLAY IN DEVELOPMENT' }),
+      item('JOIN LOBBY', () => {}, { disabled: true }),
+      item('QUICK JOIN', () => {}, { disabled: true }),
+    );
+
+    this.main = h('div', { class: 'menu-main' },
+      h('h1', { class: 'title' }, GAME.title),
+      h('div', { class: 'subtitle' }, GAME.subtitle),
+      h('nav', { class: 'menu-list' },
+        item('PLAY', () => this.togglePlay()),
+        this.sub,
+        item('LOADOUT', () => this.openPanel(new LoadoutPanel(() => this.closePanel()).el)),
+        item('SETTINGS', () => this.openPanel(new SettingsPanel(this.input, () => this.closePanel()).el)),
+        item('CREDITS', () => this.openPanel(this.credits())),
+      ),
+    );
+
+    this.el = h('div', { class: 'menu' },
+      h('div', { class: 'menu-shade' }),
+      this.main,
+      h('div', { class: 'menu-footer' }, 'BUILD 0.1 — FOUNDATION'),
+      h('div', { class: 'menu-hint' }, 'HEADPHONES RECOMMENDED'),
+    );
+    window.addEventListener('keydown', this.onKey);
+  }
+
+  private onKey = (e: KeyboardEvent): void => {
+    if (e.code === 'Escape' && this.panel && this.el.isConnected && !this.input.captureNext) this.closePanel();
+  };
+
+  private togglePlay(): void {
+    this.playOpen = !this.playOpen;
+    gsap.to(this.sub, { height: this.playOpen ? 'auto' : 0, duration: 0.45, ease: 'power3.out' });
+    gsap.fromTo(this.sub.children, { opacity: 0, x: -10 }, { opacity: 1, x: 0, stagger: 0.05, duration: 0.4, delay: 0.05, ease: 'power2.out' });
+  }
+
+  private credits(): HTMLElement {
+    return h('div', { class: 'panel credits' },
+      h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closePanel(); } }, 'CLOSE ✕'),
+      h('h2', {}, 'CREDITS'),
+      h('p', { class: 'role' }, 'Design'), h('p', {}, 'Angelo'),
+      h('p', { class: 'role' }, 'Engineering, art & audio'), h('p', {}, 'Built with Claude Code'),
+      h('p', { class: 'role' }, 'Technology'), h('p', {}, 'Three.js · Rapier · Colyseus · GSAP · Vite · TypeScript'),
+      h('p', { class: 'role' }, 'Audio'), h('p', {}, 'All sound and music is synthesized live with the Web Audio API.'),
+      h('p', { class: 'role' }, 'Typefaces'), h('p', {}, 'Oswald (Vernon Adams) · Inter (Rasmus Andersson), SIL Open Font License'),
+    );
+  }
+
+  private openPanel(el: HTMLElement): void {
+    if (this.panel) this.panel.remove();
+    this.panel = el;
+    this.el.append(el);
+    gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out' });
+    gsap.to(this.main, { opacity: 0.35, duration: 0.4 });
+  }
+
+  private closePanel(): void {
+    const p = this.panel;
+    if (!p) return;
+    this.panel = null;
+    gsap.to(p, { opacity: 0, x: 16, duration: 0.25, ease: 'power2.in', onComplete: () => p.remove() });
+    gsap.to(this.main, { opacity: 1, duration: 0.4 });
+  }
+
+  show(parent: HTMLElement): void {
+    parent.append(this.el);
+    gsap.fromTo(this.main.querySelector('.title'), { opacity: 0, letterSpacing: '0.5em' }, { opacity: 1, letterSpacing: '0.22em', duration: 2.4, ease: 'power3.out' });
+    gsap.fromTo(this.main.querySelectorAll('.subtitle, .menu-list > .menu-item'), { opacity: 0, y: 8 },
+      { opacity: 1, y: 0, duration: 0.8, stagger: 0.08, delay: 0.7, ease: 'power2.out' });
+  }
+
+  hide(): Promise<void> {
+    return new Promise((resolve) => {
+      gsap.to(this.el, { opacity: 0, duration: 0.6, onComplete: () => { this.el.remove(); this.el.style.opacity = '1'; resolve(); } });
+    });
+  }
+
+  dispose(): void {
+    window.removeEventListener('keydown', this.onKey);
+    this.el.remove();
+  }
+}

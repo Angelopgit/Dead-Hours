@@ -1,0 +1,26 @@
+{
+  "name": "@dead-hours/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p . && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@dead-hours/shared": "*",
+    "@dimforge/rapier3d-compat": "0.14.0",
+    "@fontsource/inter": "^5.2.0",
+    "@fontsource/oswald": "^5.2.0",
+    "colyseus.js": "^0.16.22",
+    "gsap": "^3.13.0",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "~5.9.3",
+    "vite": "^6.4.0"
+  }
+}
