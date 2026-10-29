@@ -3,7 +3,7 @@ import type { MapDefinition } from '@dead-hours/shared';
 import type { LightField } from './LightField';
 
 /** Bump when the bake math changes so cached results are discarded. */
-export const BAKE_VERSION = 6;
+export const BAKE_VERSION = 8;
 
 /** Ground lightmap: covers the play area at 0.5 m per texel. */
 export const GROUND_BAKE = { half: 128, res: 512 } as const;
@@ -23,6 +23,8 @@ const STORE = 'bakes';
 
 function openDb(): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
+    // Some embedded or private contexts never answer; bake without the cache rather than hang.
+    setTimeout(() => resolve(null), 2000);
     try {
       const req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = () => req.result.createObjectStore(STORE);

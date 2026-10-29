@@ -77,9 +77,10 @@ const AO_DIRS = hemisphere(10);
 const AO_DIRS_FAST = hemisphere(8);
 
 /** Albedo assumed for first-bounce light. */
-const BOUNCE_ALBEDO = 0.5;
+const BOUNCE_ALBEDO = 0.65;
 const LIGHT_RADIUS = 0.6;
-const SHADE_UP = 1.0;
+/** Upward direction cosines over which a lamp shade cuts the light off. */
+const SHADE_RIM = [-0.15, 0.25] as const;
 const VPL_RANGE = 5.5;
 
 /**
@@ -137,9 +138,11 @@ export class LightField {
       if (cosA <= l.cosOuter) return 0;
       const t = Math.min(1, (cosA - l.cosOuter) / Math.max(1e-4, l.cosInner - l.cosOuter));
       f *= t * t * (3 - 2 * t);
-    } else if (uy > 0) {
-      // Shades and fixture housings send point light downward; it fades to nothing straight up.
-      f *= 1 - SHADE_UP * uy;
+    } else {
+      // Shades and fixture housings send point light downward: full strength below the rim,
+      // nothing above it. Ceilings are then lit by the bounce, which is smooth at vertex density.
+      const t = Math.min(1, Math.max(0, (uy - SHADE_RIM[0]) / (SHADE_RIM[1] - SHADE_RIM[0])));
+      f *= 1 - t * t * (3 - 2 * t);
     }
     return f;
   }
