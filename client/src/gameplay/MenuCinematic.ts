@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Humanoid, zombieLook } from '../characters/Humanoid';
 import { audio } from '../audio/AudioEngine';
+import type { LightField } from '../lighting/LightField';
+import { DynamicProbe } from '../lighting/Probes';
 
 /**
  * Slow dolly through the street behind the main menu, with a zombie that occasionally
@@ -32,11 +34,18 @@ export class MenuCinematic {
   private groaned = false;
   readonly focus = new THREE.Vector3();
   private readonly look = new THREE.Vector3();
+  private probe: DynamicProbe | null = null;
 
   constructor(private readonly camera: THREE.PerspectiveCamera, scene: THREE.Scene) {
     this.zombie = new Humanoid(zombieLook(1));
     this.zombie.setVisible(false);
     scene.add(this.zombie.root);
+  }
+
+  /** Lights the background zombie from the baked light field. */
+  applyProbe(field: LightField): void {
+    this.probe = new DynamicProbe(field);
+    this.probe.attach(this.zombie.surfaces());
   }
 
   /** Current camera pose, used to start the intro transition from where the menu left off. */
@@ -85,6 +94,7 @@ export class MenuCinematic {
     const d = this.zombieEnd.clone().sub(this.zombieStart);
     this.zombie.root.rotation.y = Math.atan2(d.x, d.z);
     this.zombie.update(dt, { speed, crouch: 0, aim: 0, grounded: true, strafe: 0 });
+    this.probe?.update(dt, p, this.camera);
     if (!this.groaned && this.zombieProgress > 0.35) {
       this.groaned = true;
       audio.groan(p.clone().setY(1.6), 0.8);

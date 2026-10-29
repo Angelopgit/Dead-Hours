@@ -230,6 +230,11 @@ export class Humanoid {
     this.root.visible = v;
   }
 
+  /** Surface materials, for lighting patches (light probes). */
+  surfaces(): THREE.Material[] {
+    return this.materials;
+  }
+
   dispose(): void {
     this.root.removeFromParent();
     for (const g of this.geometries) g.dispose();

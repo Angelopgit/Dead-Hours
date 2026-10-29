@@ -10,6 +10,7 @@ export function worldBox(
   w: number, h: number, d: number,
   texScale: number,
   ao: { groundY: number; strength: number } | null = { groundY: 0, strength: 0.45 },
+  cell = 0,
 ): THREE.BufferGeometry {
   const x0 = cx - w / 2, x1 = cx + w / 2;
   const y0 = cy - h / 2, y1 = cy + h / 2;
@@ -30,16 +31,39 @@ export function worldBox(
     uvOf: (v: [number, number, number]) => [number, number],
     top = false,
   ) => {
+    // Optional tessellation so per-vertex baked lighting has enough resolution on big faces.
+    const [a, b, , d] = verts;
+    const lenU = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    const lenV = Math.hypot(d[0] - a[0], d[1] - a[1], d[2] - a[2]);
+    const groundTop = top && n[1] > 0 && a[1] < 0.17 && a[1] > -0.3;
+    const nu = cell > 0 && !groundTop ? Math.max(1, Math.ceil(lenU / cell)) : 1;
+    const nv = cell > 0 && !groundTop ? Math.max(1, Math.ceil(lenV / cell)) : 1;
     const base = pos.length / 3;
-    for (const v of verts) {
-      pos.push(...v);
-      nor.push(...n);
-      const [u, w2] = uvOf(v);
-      uv.push(u / texScale, w2 / texScale);
-      const s = top ? 1 : shade(v[1]);
-      col.push(s, s, s);
+    for (let j = 0; j <= nv; j++) {
+      for (let i = 0; i <= nu; i++) {
+        const fu = i / nu, fv = j / nv;
+        const v: [number, number, number] = [
+          a[0] + (b[0] - a[0]) * fu + (d[0] - a[0]) * fv,
+          a[1] + (b[1] - a[1]) * fu + (d[1] - a[1]) * fv,
+          a[2] + (b[2] - a[2]) * fu + (d[2] - a[2]) * fv,
+        ];
+        pos.push(...v);
+        nor.push(...n);
+        const [u, w2] = uvOf(v);
+        uv.push(u / texScale, w2 / texScale);
+        const sh = top ? 1 : shade(v[1]);
+        col.push(sh, sh, sh);
+      }
     }
-    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    for (let j = 0; j < nv; j++) {
+      for (let i = 0; i < nu; i++) {
+        const p0 = base + j * (nu + 1) + i;
+        const p1 = p0 + 1;
+        const p3 = p0 + (nu + 1);
+        const p2 = p3 + 1;
+        idx.push(p0, p1, p2, p0, p2, p3);
+      }
+    }
   };
   // +X
   face([[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]], [1, 0, 0], (v) => [-v[2], v[1]]);

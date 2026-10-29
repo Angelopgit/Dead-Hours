@@ -11,6 +11,8 @@ import { MenuCinematic } from '../gameplay/MenuCinematic';
 import { SoloSession } from '../gameplay/SoloSession';
 import { MainMenu } from '../ui/MainMenu';
 import { audio } from '../audio/AudioEngine';
+import { AutoExposure } from '../lighting/Probes';
+import type { LightField } from '../lighting/LightField';
 
 type State = 'menu' | 'session';
 
@@ -26,6 +28,8 @@ export class Game {
   private session: SoloSession | null = null;
   private state: State = 'menu';
   private emittersAdded = false;
+  private field!: LightField;
+  private exposure!: AutoExposure;
   private readonly ui = document.getElementById('ui-root')!;
 
   async boot(): Promise<void> {
@@ -36,8 +40,18 @@ export class Game {
     this.physics = new Physics(NEIGHBORHOOD);
     this.world = new Neighborhood(NEIGHBORHOOD, this.engine.scene, this.engine.renderer.capabilities.getMaxAnisotropy());
     this.world.lighting.onThunder = (delay, power) => audio.thunder(delay, power);
-    this.doors = new DoorSystem(NEIGHBORHOOD, this.physics, this.world.lib, this.world.root);
+    const label = document.querySelector('.boot');
+    let lastLabel = '';
+    this.field = await this.world.bakeLighting((f, text) => {
+      const next = `${text} ${Math.round(f * 100)}%`;
+      if (label && next !== lastLabel) label.textContent = lastLabel = next;
+    });
+    this.world.buildEnvironment(this.engine.renderer);
+    this.exposure = new AutoExposure(this.field);
+    this.doors = new DoorSystem(NEIGHBORHOOD, this.physics, this.world.root);
+    this.doors.applyProbes(this.field);
     this.menuCine = new MenuCinematic(this.engine.camera, this.engine.scene);
+    this.menuCine.applyProbe(this.field);
     this.applyRenderSettings();
     settings.subscribe(() => this.applyRenderSettings());
 
@@ -81,7 +95,7 @@ export class Game {
     }
   }
 
-  private async startSolo(): Promise<void> {
+  async startSolo(): Promise<void> {
     if (this.state !== 'menu') return;
     this.state = 'session';
     const fade = document.getElementById('fade')!;
@@ -91,7 +105,7 @@ export class Game {
     ]);
     const pose = this.menuCine.pose();
     this.menuCine.setActive(false);
-    this.session = new SoloSession(this.engine, this.input, this.physics, this.doors, this.ui, () => void this.quitToMenu(), pose);
+    this.session = new SoloSession(this.engine, this.input, this.physics, this.doors, this.field, this.ui, () => void this.quitToMenu(), pose);
   }
 
   private async quitToMenu(): Promise<void> {
@@ -108,13 +122,14 @@ export class Game {
   private update(dt: number, t: number): void {
     if (this.state === 'menu' || !this.session) {
       this.menuCine.update(dt);
-      this.doors.update(dt);
+      this.doors.update(dt, this.engine.camera);
       this.tmpFocus.copy(this.menuCine.focus);
     } else {
       this.session.update(dt);
       this.tmpFocus.copy(this.session.focus);
     }
     this.world.update(dt, t, this.engine.camera, this.tmpFocus);
+    this.engine.renderer.toneMappingExposure = 1.45 * this.exposure.update(dt, this.engine.camera);
     audio.update(dt, this.engine.camera);
     this.input.endFrame();
   }

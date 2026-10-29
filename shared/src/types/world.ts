@@ -6,16 +6,23 @@ export type MaterialKey =
   | 'concrete'
   | 'grass'
   | 'dirt'
+  | 'gravel'
   | 'sidingBlue'
   | 'sidingGreen'
   | 'sidingGray'
   | 'sidingBeige'
   | 'brick'
+  | 'stucco'
   | 'interiorWall'
+  | 'interiorWallBlue'
   | 'woodFloor'
+  | 'carpet'
   | 'tile'
   | 'trim'
   | 'fenceWood'
+  | 'darkWood'
+  | 'metal'
+  | 'roofFlat'
   | 'invisible';
 
 /** An axis-aligned static box. Position is the box center; sizes are full extents (meters). */
@@ -31,9 +38,15 @@ export interface StaticBox {
   collide?: boolean;
   /** Defaults to true. */
   visible?: boolean;
+  /** Window glass: blocks movement but lets baked light through. Breakable in Phase 6. */
+  glass?: boolean;
+  /** Tilt for ramps (stairs collision), radians about the X or Z axis. */
+  rotX?: number;
+  rotZ?: number;
 }
 
 export type Facing = 'north' | 'south';
+export type WallSide = 'front' | 'back' | 'west' | 'east';
 
 export interface HouseSpec {
   id: string;
@@ -51,6 +64,19 @@ export interface HouseSpec {
   /** Fraction of windows lit from the inside (0..1). */
   litWindows: number;
   seed: number;
+  /** Floor slab height (default 0.3). Garages sit at ground level. */
+  slab?: number;
+  /** Ground-storey wall height (default 3.0). */
+  groundHeight?: number;
+  roof?: 'gable-x' | 'gable-z' | 'flat';
+  /** Walls shared with a neighbouring structure. */
+  skipWalls?: WallSide[];
+  /** Interior wall finish for enterable houses. */
+  interior?: MaterialKey;
+  /** Floor finish for enterable houses. */
+  floorMat?: MaterialKey;
+  /** Display name for location notices. */
+  label?: string;
 }
 
 /** A window opening. Glass is a collider until it breaks (barricading arrives in Phase 6). */
@@ -68,6 +94,8 @@ export interface WindowSpec {
   /** Outward normal sign along the perpendicular axis. */
   outward: 1 | -1;
   lit: boolean;
+  /** Storefront glass has no mullions. */
+  plain?: boolean;
 }
 
 export interface DoorSpec {
@@ -82,35 +110,85 @@ export interface DoorSpec {
   outward: 1 | -1;
   /** Interior doorways have no door leaf. */
   exterior: boolean;
+  style?: 'wood' | 'glass' | 'rollup';
+  /** Floor height under the door. */
+  floorY?: number;
 }
 
 export type PropKind =
-  | 'streetlight'
-  | 'car'
-  | 'policeCar'
-  | 'wreckedCar'
-  | 'trashBin'
-  | 'mailbox'
-  | 'tree'
-  | 'pine'
-  | 'bush'
-  | 'hydrant'
-  | 'utilityPole'
-  | 'fence'
-  | 'roadblock'
-  | 'trashBag';
+  // street
+  | 'streetlight' | 'car' | 'policeCar' | 'wreckedCar' | 'trashBin' | 'mailbox' | 'tree' | 'pine' | 'bush'
+  | 'hydrant' | 'utilityPole' | 'fence' | 'roadblock' | 'trashBag' | 'streetSign' | 'stopSign' | 'puddle' | 'leafPile'
+  // checkpoint
+  | 'jerseyBarrier' | 'sandbags' | 'floodlight' | 'tent' | 'cone' | 'armoredTruck' | 'boardSign'
+  // gas station
+  | 'pump' | 'signPylon' | 'dumpster' | 'tireStack' | 'oilDrum' | 'iceChest'
+  // park
+  | 'swingSet' | 'slide' | 'merryGoRound' | 'sandbox' | 'bench' | 'picnicTable' | 'parkLamp' | 'gazebo' | 'ironFence'
+  // backyards
+  | 'shed' | 'bbq' | 'patioTable' | 'trampoline' | 'clothesline' | 'woodpile' | 'doghouse' | 'kiddiePool'
+  // interiors
+  | 'sofa' | 'armchair' | 'coffeeTable' | 'tvStand' | 'bed' | 'wardrobe' | 'bookshelf' | 'counter' | 'fridge'
+  | 'stove' | 'diningTable' | 'chair' | 'workbench' | 'metalShelf' | 'crate' | 'ammoCrate' | 'washer'
+  | 'waterHeater' | 'desk' | 'dresser' | 'rug' | 'floorLamp' | 'storeShelf' | 'storeCounter' | 'cooler'
+  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress';
 
 export interface PropSpec {
   kind: PropKind;
   x: number;
   z: number;
   rotY: number;
+  /** Base height (upper floors, basements). Defaults to 0. */
+  y?: number;
   /** Kind-specific variant (car color, fence length, flicker, ...). */
   variant?: number;
-  /** Fence length / generic scale. */
+  /** Fence length / generic length along local X. */
   length?: number;
-  /** Streetlights: whether this one flickers. Cars: hazards on. */
+  /** Streetlights: whether this one flickers. Cars: hazards on. Police: strobes on. */
   flag?: boolean;
+  /** Signs: text painted on the face. */
+  text?: string;
+  /** Can be picked up and placed as a barricade (Phase 6). */
+  movable?: boolean;
+  /** Stairs: rise over the run (along local +X). */
+  rise?: number;
+  /** Instanced woodland tree (no per-tree draw call). */
+  forest?: boolean;
+}
+
+/** Static light: baked into static geometry and sampled by dynamic objects through probes. */
+export interface LightSpec {
+  x: number;
+  y: number;
+  z: number;
+  color: number;
+  /** Luminous intensity in candela (Three.js physical units). */
+  intensity: number;
+  range: number;
+  decay?: number;
+  kind: 'point' | 'spot';
+  /** Spot target. */
+  tx?: number;
+  ty?: number;
+  tz?: number;
+  angle?: number;
+  penumbra?: number;
+  /** Visible emitter shape the renderer draws at the light. */
+  fixture?: 'bulb' | 'panel' | 'none';
+}
+
+export interface Rect {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+}
+
+export interface AreaSpec extends Rect {
+  name: string;
+  /** Vertical band, for basements and upper floors. */
+  y0?: number;
+  y1?: number;
 }
 
 export interface MapDefinition {
@@ -122,5 +200,9 @@ export interface MapDefinition {
   windows: WindowSpec[];
   doors: DoorSpec[];
   props: PropSpec[];
+  lights: LightSpec[];
+  /** Ground removed from the terrain collider (basements). */
+  excavations: Rect[];
+  areas: AreaSpec[];
   playerSpawns: { x: number; y: number; z: number; yaw: number }[];
 }

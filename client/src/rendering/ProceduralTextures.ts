@@ -54,7 +54,9 @@ function finish(c: HTMLCanvasElement, anisotropy: number, srgb = true): THREE.Ca
   return t;
 }
 
-export type TextureKey = 'asphalt' | 'sidewalk' | 'concrete' | 'grass' | 'siding' | 'brick' | 'plaster' | 'wood' | 'roof' | 'fence';
+export type TextureKey =
+  | 'asphalt' | 'sidewalk' | 'concrete' | 'grass' | 'siding' | 'brick' | 'plaster' | 'wood' | 'roof' | 'fence'
+  | 'gravel' | 'dirt' | 'tile' | 'carpet' | 'metal';
 
 /** Grayscale detail maps: multiplied with the material color so one texture serves many tints. */
 export function createTextures(size: number, anisotropy: number): Record<TextureKey, THREE.Texture> {
@@ -243,7 +245,78 @@ export function createTextures(size: number, anisotropy: number): Record<Texture
     return finish(c, anisotropy);
   })();
 
-  return { asphalt, sidewalk, concrete, grass, siding, brick, plaster, wood, roof, fence };
+  const gravel = (() => {
+    const [c, x] = canvas(size);
+    x.fillStyle = '#8c8c8c';
+    x.fillRect(0, 0, size, size);
+    blotches(x, size, 20, 0.2, r);
+    for (let i = 0; i < size * 5; i++) {
+      const v = 90 + r() * 165;
+      x.fillStyle = `rgba(${v},${v},${v},0.85)`;
+      const s = 1.5 + r() * 3.5;
+      x.beginPath();
+      x.ellipse(r() * size, r() * size, s, s * (0.6 + r() * 0.4), r() * 3, 0, Math.PI * 2);
+      x.fill();
+    }
+    return finish(c, anisotropy);
+  })();
+
+  const dirt = (() => {
+    const [c, x] = canvas(size);
+    x.fillStyle = '#a0a0a0';
+    x.fillRect(0, 0, size, size);
+    blotches(x, size, 50, 0.22, r);
+    speckle(x, size, size * 20, 0.3, r);
+    speckle(x, size, size * 4, 0.2, r, true);
+    return finish(c, anisotropy);
+  })();
+
+  const tile = (() => {
+    // 30 cm vinyl tiles, alternating tone (texture covers 1.2 m).
+    const [c, x] = canvas(size);
+    const n = 4;
+    const t = size / n;
+    for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) {
+      const v = (i + k) % 2 ? 205 : 170 + r() * 10;
+      x.fillStyle = `rgb(${v},${v},${v})`;
+      x.fillRect(i * t, k * t, t, t);
+    }
+    blotches(x, size, 16, 0.1, r);
+    speckle(x, size, size * 6, 0.12, r);
+    x.fillStyle = 'rgba(0,0,0,0.3)';
+    for (let i = 0; i < n; i++) {
+      x.fillRect(i * t, 0, 1, size);
+      x.fillRect(0, i * t, size, 1);
+    }
+    return finish(c, anisotropy);
+  })();
+
+  const carpet = (() => {
+    const [c, x] = canvas(size / 2);
+    const s = size / 2;
+    x.fillStyle = '#b8b8b8';
+    x.fillRect(0, 0, s, s);
+    speckle(x, s, s * 60, 0.25, r);
+    speckle(x, s, s * 20, 0.2, r, true);
+    blotches(x, s, 10, 0.12, r);
+    return finish(c, anisotropy);
+  })();
+
+  const metal = (() => {
+    const [c, x] = canvas(size / 2);
+    const s = size / 2;
+    x.fillStyle = '#bdbdbd';
+    x.fillRect(0, 0, s, s);
+    for (let i = 0; i < s; i++) {
+      x.fillStyle = `rgba(0,0,0,${r() * 0.06})`;
+      x.fillRect(0, i, s, 1);
+    }
+    blotches(x, s, 18, 0.25, r);
+    speckle(x, s, s * 4, 0.3, r);
+    return finish(c, anisotropy);
+  })();
+
+  return { asphalt, sidewalk, concrete, grass, siding, brick, plaster, wood, roof, fence, gravel, dirt, tile, carpet, metal };
 }
 
 /** Soft radial sprite used by fog wisps, light halos and smoke. */

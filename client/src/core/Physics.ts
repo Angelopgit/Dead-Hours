@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { propColliders, type MapDefinition } from '@dead-hours/shared';
+import { propColliders, subtractRects, type MapDefinition } from '@dead-hours/shared';
 
 export { RAPIER };
 
@@ -31,12 +31,16 @@ export class Physics {
     const staticGroups = groups(GROUP.static, 0xffff);
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
 
-    // Ground plane and world boundary.
+    // Ground slab (open where basements are dug out) and world boundary.
     const half = map.halfExtent;
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(half + 40, 0.5, half + 40).setTranslation(0, -0.5, 0).setCollisionGroups(staticGroups),
-      body,
-    );
+    const ground = { x0: -half - 40, x1: half + 40, z0: -half - 40, z1: half + 40 };
+    for (const r of subtractRects(ground, map.excavations)) {
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid((r.x1 - r.x0) / 2, 2, (r.z1 - r.z0) / 2)
+          .setTranslation((r.x0 + r.x1) / 2, -2, (r.z0 + r.z1) / 2).setCollisionGroups(staticGroups),
+        body,
+      );
+    }
     for (const [x, z, hx, hz] of [
       [0, -half, half, 0.5], [0, half, half, 0.5], [-half, 0, 0.5, half], [half, 0, 0.5, half],
     ] as const) {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { NEIGHBORHOOD, PLAYER, STORY, type MapDefinition } from '@dead-hours/shared';
+import { NEIGHBORHOOD, PLAYER, type MapDefinition } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import type { Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
@@ -13,15 +13,20 @@ import { HUD } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { audio } from '../audio/AudioEngine';
 import { h } from '../ui/dom';
+import type { LightField } from '../lighting/LightField';
+import { DynamicProbe } from '../lighting/Probes';
 
 type Phase = 'intro' | 'playing' | 'paused';
 
-function insideHouse(map: MapDefinition, p: THREE.Vector3): string | null {
-  for (const hs of map.houses) {
-    if (!hs.enterable) continue;
-    if (Math.abs(p.x - hs.x) < hs.w / 2 - 0.1 && Math.abs(p.z - hs.z) < hs.d / 2 - 0.1 && p.y < STORY.slab + STORY.ground) return hs.id;
+/** Name of the map area containing a point (areas are ordered most specific first). */
+export function areaAt(map: MapDefinition, p: THREE.Vector3): string {
+  for (const a of map.areas) {
+    if (p.x < a.x0 || p.x > a.x1 || p.z < a.z0 || p.z > a.z1) continue;
+    if (a.y0 !== undefined && p.y < a.y0) continue;
+    if (a.y1 !== undefined && p.y > a.y1) continue;
+    return a.name;
   }
-  return null;
+  return map.name.toUpperCase();
 }
 
 /**
@@ -40,7 +45,9 @@ export class SoloSession {
   private readonly letterbox: HTMLElement[];
   private readonly skip: HTMLElement;
   private readonly clickToPlay: HTMLElement;
-  private wasInside: string | null = null;
+  private area = '';
+  private areaCooldown = 0;
+  private readonly probe: DynamicProbe;
   readonly focus = new THREE.Vector3();
   private readonly abort = new AbortController();
   private readonly fill = new THREE.PointLight(0xa8b8d0, 1.6, 9, 1.5);
@@ -50,6 +57,7 @@ export class SoloSession {
     private readonly input: Input,
     private readonly physics: Physics,
     private readonly doors: DoorSystem,
+    field: LightField,
     private readonly ui: HTMLElement,
     private readonly onQuit: () => void,
     startPose: { position: THREE.Vector3; target: THREE.Vector3 },
@@ -57,11 +65,13 @@ export class SoloSession {
     const spawn = NEIGHBORHOOD.playerSpawns[0];
     this.player = new PlayerController(physics, spawn, SURVIVOR_LOOKS[0]);
     engine.scene.add(this.player.character.root);
-    this.player.character.onFootstep = (l) => audio.footstep(l, insideHouse(NEIGHBORHOOD, this.player.position) !== null);
+    this.probe = new DynamicProbe(field);
+    this.probe.attach(this.player.character.surfaces());
+    this.player.character.onFootstep = (l) => audio.footstep(l, this.indoors);
     this.cam = new ThirdPersonCamera(engine.camera, physics);
     this.cam.yaw = spawn.yaw;
     this.focus.copy(this.player.position);
-    this.wasInside = insideHouse(NEIGHBORHOOD, this.player.position);
+    this.area = areaAt(NEIGHBORHOOD, this.player.position);
     // Soft fill that travels with the camera so the survivor stays readable at night.
     this.fill.position.set(0, 0.4, 0.6);
     engine.camera.add(this.fill);
@@ -82,6 +92,11 @@ export class SoloSession {
       if (this.phase === 'playing' && !input.locked) input.requestLock();
     }, sig);
     this.runIntro(startPose);
+  }
+
+  /** Under a roof: sky mostly hidden (drives footstep acoustics). */
+  get indoors(): boolean {
+    return this.probe.sample.ao < 0.35;
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -121,7 +136,7 @@ export class SoloSession {
     this.engine.camera.updateProjectionMatrix();
   }
 
-  private finishIntro(): void {
+  finishIntro(): void {
     if (this.phase !== 'intro') return;
     this.intro?.kill();
     this.intro = null;
@@ -167,6 +182,7 @@ export class SoloSession {
       this.engine.camera.position.set(c.px, c.py, c.pz);
       this.engine.camera.lookAt(c.tx, c.ty, c.tz);
       p.render(dt, 1);
+      this.probe.update(dt, p.renderPosition, this.engine.camera);
       this.focus.set(c.tx, 0, c.tz);
       return;
     }
@@ -183,7 +199,7 @@ export class SoloSession {
     let steps = 0;
     while (this.accumulator >= step && steps < 5) {
       if (this.phase !== 'paused') p.fixedUpdate(step, this.cam.yaw);
-      this.doors.update(step);
+      this.doors.update(step, this.engine.camera);
       this.physics.step();
       this.accumulator -= step;
       steps++;
@@ -194,7 +210,7 @@ export class SoloSession {
     if (p.landed) {
       p.landed = false;
       this.cam.addTrauma(0.12);
-      audio.footstep(0.8, insideHouse(NEIGHBORHOOD, p.position) !== null);
+      audio.footstep(0.8, this.indoors);
     }
 
     this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming, p.sprinting);
@@ -206,10 +222,15 @@ export class SoloSession {
     this.hud.setHealth(p.health, PLAYER.maxHealth);
     this.hud.setFps(this.engine.fps);
 
-    const inside = insideHouse(NEIGHBORHOOD, p.position);
-    if (inside !== this.wasInside) {
-      if (inside === 'safehouse' && this.wasInside === null && this.phase === 'playing') this.hud.notify('SAFEHOUSE', '', 1.2);
-      this.wasInside = inside;
+    this.probe.update(dt, p.renderPosition, this.engine.camera);
+
+    // Location notices when crossing into a named area.
+    this.areaCooldown -= dt;
+    const area = areaAt(NEIGHBORHOOD, p.position);
+    if (area !== this.area && this.areaCooldown <= 0 && this.phase === 'playing') {
+      this.area = area;
+      this.areaCooldown = 2.5;
+      this.hud.notify(area, '', 1.6);
     }
   }
 

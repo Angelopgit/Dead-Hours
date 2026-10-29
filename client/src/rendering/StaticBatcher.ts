@@ -5,6 +5,7 @@ import { withWhiteColors } from './GeometryUtils';
 /**
  * Collects static geometry by material and merges it into one mesh per material.
  * This keeps the whole neighborhood at a few dozen draw calls regardless of prop count.
+ * Geometry stays indexed so per-vertex baked lighting is computed once per shared vertex.
  */
 export class StaticBatcher {
   private readonly buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
@@ -17,8 +18,13 @@ export class StaticBatcher {
       this.buckets.set(material, list);
       this.flags.set(material, { cast, receive });
     }
-    const g = geometry.index ? geometry.toNonIndexed() : geometry;
-    if (g !== geometry) geometry.dispose();
+    const g = geometry;
+    if (!g.index) {
+      const n = g.getAttribute('position').count;
+      const idx = new (n > 65535 ? Uint32Array : Uint16Array)(n);
+      for (let i = 0; i < n; i++) idx[i] = i;
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+    }
     // Normalize attributes so everything in a bucket merges.
     for (const name of Object.keys(g.attributes)) {
       if (!['position', 'normal', 'uv', 'color'].includes(name)) g.deleteAttribute(name);

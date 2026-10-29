@@ -17,7 +17,13 @@ export class PlayerController {
   readonly position = new THREE.Vector3();
   private readonly prevPosition = new THREE.Vector3();
   readonly renderPosition = new THREE.Vector3();
+  /** Actual displacement per second after collision (animation, footsteps, facing). */
   readonly velocity = new THREE.Vector3();
+  /**
+   * Velocity the player is trying to move at. Kept separate from the collided result so
+   * a step edge that briefly stops the capsule doesn't also zero the push that climbs it.
+   */
+  private readonly intent = new THREE.Vector3();
   private readonly body: RAPIER.RigidBody;
   private collider: RAPIER.Collider;
   private readonly controller: RAPIER.KinematicCharacterController;
@@ -123,33 +129,29 @@ export class PlayerController {
     const target = this.wish.clone().multiplyScalar(speed);
     const accel = this.grounded ? PLAYER.acceleration : PLAYER.acceleration * PLAYER.airControl;
     const k = 1 - Math.exp(-accel * dt);
-    this.velocity.x += (target.x - this.velocity.x) * k;
-    this.velocity.z += (target.z - this.velocity.z) * k;
+    this.intent.x += (target.x - this.intent.x) * k;
+    this.intent.z += (target.z - this.intent.z) * k;
 
     this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
     if (this.jumpBuffered > 0 && this.coyote > 0 && !this.crouching) {
-      this.velocity.y = PLAYER.jumpVelocity;
+      this.intent.y = PLAYER.jumpVelocity;
       this.jumpBuffered = 0;
       this.coyote = 0;
       this.grounded = false;
     }
-    this.velocity.y += PLAYER.gravity * dt;
-    if (this.grounded && this.velocity.y < 0) this.velocity.y = -1;
+    this.intent.y += PLAYER.gravity * dt;
+    if (this.grounded && this.intent.y < 0) this.intent.y = -1;
 
-    const desired = { x: this.velocity.x * dt, y: this.velocity.y * dt, z: this.velocity.z * dt };
+    const desired = { x: this.intent.x * dt, y: this.intent.y * dt, z: this.intent.z * dt };
     this.controller.computeColliderMovement(this.collider, desired, undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic));
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
     this.grounded = this.controller.computedGrounded();
-    if (this.grounded && this.velocity.y < 0) this.velocity.y = 0;
+    if (this.grounded && this.intent.y < 0) this.intent.y = 0;
     // Bonk head on ceilings.
-    if (!this.grounded && desired.y > 0 && m.y < desired.y * 0.5) this.velocity.y = 0;
-    // Keep horizontal velocity consistent with sliding along walls.
-    if (dt > 0) {
-      this.velocity.x = m.x / dt;
-      this.velocity.z = m.z / dt;
-    }
+    if (!this.grounded && desired.y > 0 && m.y < desired.y * 0.5) this.intent.y = 0;
+    if (dt > 0) this.velocity.set(m.x / dt, this.intent.y, m.z / dt);
     const t = this.body.translation();
     const next = { x: t.x + m.x, y: t.y + m.y, z: t.z + m.z };
     this.body.setNextKinematicTranslation(next);
