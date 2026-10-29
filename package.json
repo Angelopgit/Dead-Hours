@@ -1,7 +1,7 @@
 {
   "name": "dead-hours",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "workspaces": [
     "shared",
@@ -13,6 +13,7 @@
     "dev:server": "npm run dev -w server",
     "build": "npm run build -w client",
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
-    "check:world": "tsx client/tests/world.check.ts"
+    "check:world": "tsx client/tests/world.check.ts",
+    "check:sim": "tsx shared/tests/sim.check.ts"
   }
 }

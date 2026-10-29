@@ -23,6 +23,12 @@ export class ThirdPersonCamera {
   private initialized = false;
   /** World-space point under the crosshair (used for aiming and HUD). */
   readonly aimPoint = new THREE.Vector3();
+  /** Aim ray (camera position and forward before shake): what shots are fired along. */
+  readonly aimOrigin = new THREE.Vector3();
+  readonly aimDir = new THREE.Vector3(0, 0, -1);
+  /** Recoil climb still to be recovered (radians). */
+  private recover = 0;
+  private recoverYaw = 0;
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly physics: Physics) {}
 
@@ -36,16 +42,36 @@ export class ThirdPersonCamera {
     if (input.pressed('shoulder')) this.shoulder *= -1;
   }
 
+  /** Muzzle climb: the view kicks up (and a little sideways) and settles most of the way back. */
+  addRecoil(pitch: number, yaw: number): void {
+    this.pitch = THREE.MathUtils.clamp(this.pitch + pitch, -1.25, 0.95);
+    this.yaw += yaw;
+    this.recover += pitch * 0.65;
+    this.recoverYaw += yaw * 0.5;
+  }
+
   addTrauma(amount: number): void {
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
   snapNext(): void {
     this.initialized = false;
+    this.recover = this.recoverYaw = 0;
   }
 
   update(dt: number, target: THREE.Vector3, eyeHeight: number, aiming: boolean, sprinting: boolean): void {
     this.aimBlend += ((aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 12));
+    if (this.recover !== 0 || this.recoverYaw !== 0) {
+      const k = 1 - Math.exp(-dt * 7);
+      const rp = this.recover * k;
+      const ry = this.recoverYaw * k;
+      this.pitch = THREE.MathUtils.clamp(this.pitch - rp, -1.25, 0.95);
+      this.yaw -= ry;
+      this.recover -= rp;
+      this.recoverYaw -= ry;
+      if (Math.abs(this.recover) < 1e-5) this.recover = 0;
+      if (Math.abs(this.recoverYaw) < 1e-5) this.recoverYaw = 0;
+    }
     this.shoulderSmoothed += (this.shoulder - this.shoulderSmoothed) * (1 - Math.exp(-dt * 10));
 
     this.pivot.set(target.x, target.y + eyeHeight, target.z);
@@ -91,6 +117,8 @@ export class ThirdPersonCamera {
     this.camera.position.copy(camPos);
     this.camera.position.y += sprintBob;
     this.camera.quaternion.copy(q);
+    this.aimOrigin.copy(this.camera.position);
+    this.aimDir.set(0, 0, -1).applyQuaternion(q);
     if (s > 0) {
       this.camera.rotateX((Math.sin(t * 37) * 0.04) * s);
       this.camera.rotateY((Math.sin(t * 41 + 2) * 0.04) * s);
@@ -103,9 +131,10 @@ export class ThirdPersonCamera {
     }
 
     // Crosshair target.
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    const hit = this.physics.raycast(camPos.x, camPos.y, camPos.z, fwd.x, fwd.y, fwd.z, 200);
-    this.aimPoint.copy(camPos).addScaledVector(fwd, hit ?? 200);
+    const o = this.aimOrigin;
+    const fwd = this.aimDir;
+    const hit = this.physics.raycast(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, 200);
+    this.aimPoint.copy(o).addScaledVector(fwd, hit ?? 200);
   }
 
   get aimAmount(): number {

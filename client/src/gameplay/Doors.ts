@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { STORY, type DoorSpec, type MapDefinition } from '@dead-hours/shared';
-import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
+import { createDoorBodies, type DoorBody, type MapDefinition } from '@dead-hours/shared';
+import type { Physics } from '../core/Physics';
 import type { LightField } from '../lighting/LightField';
 import { StaticProbe } from '../lighting/Probes';
 import { patchProbe } from '../lighting/BakeShader';
@@ -13,27 +13,21 @@ import { patchProbe } from '../lighting/BakeShader';
  */
 export class Door {
   readonly pivot = new THREE.Group();
-  private readonly body: RAPIER.RigidBody;
-  private angle = 0;
-  private target = 0;
-  open = false;
   readonly center: THREE.Vector3;
   private readonly baseYaw: number;
-  private readonly hinge: THREE.Vector3;
   private readonly rollup: boolean;
+  private shownAngle = NaN;
   private readonly materials: THREE.MeshStandardMaterial[] = [];
   private probe: StaticProbe | null = null;
   private rollupPanel: THREE.Group | null = null;
 
-  constructor(readonly spec: DoorSpec, physics: Physics, parent: THREE.Object3D) {
+  constructor(readonly body: DoorBody, parent: THREE.Object3D) {
+    const spec = body.spec;
     const style = spec.style ?? 'wood';
-    this.rollup = style === 'rollup';
-    const floor = spec.floorY ?? STORY.slab;
-    const along = spec.axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
-    this.hinge = new THREE.Vector3(spec.x, floor, spec.z).addScaledVector(along, -spec.w / 2);
-    // Leaf extends from the hinge along +along. Yaw so that local +X maps onto `along`.
-    this.baseYaw = spec.axis === 'x' ? 0 : -Math.PI / 2;
-    this.pivot.position.copy(this.hinge);
+    this.rollup = body.rollup;
+    // Leaf extends from the hinge along the wall; the body owns the hinge and the swing.
+    this.baseYaw = body.baseYaw;
+    this.pivot.position.set(body.hinge.x, body.hinge.y, body.hinge.z);
     this.pivot.rotation.y = this.baseYaw;
     const mat = (color: number, roughness: number, metalness = 0, extra: THREE.MeshStandardMaterialParameters = {}) => {
       const m = new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true, ...extra });
@@ -47,7 +41,7 @@ export class Door {
       parentObj.add(mesh);
       return mesh;
     };
-    const thickness = this.rollup ? 0.08 : 0.06;
+    const thickness = body.thickness;
 
     if (style === 'wood') {
       part(new THREE.BoxGeometry(spec.w - 0.04, spec.h - 0.02, thickness), mat(0x3a2a1e, 0.7), spec.w / 2, spec.h / 2, 0);
@@ -82,17 +76,15 @@ export class Door {
       part(new THREE.BoxGeometry(0.3, 0.05, 0.05), mat(0x2a2a2a, 0.5, 0.6), spec.w / 2, 0.15, 0.06, panel);
     }
     parent.add(this.pivot);
+    this.center = new THREE.Vector3(body.center.x, body.center.y, body.center.z);
+  }
 
-    this.body = physics.world.createRigidBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(this.hinge.x, this.hinge.y, this.hinge.z).setRotation(this.quat(this.baseYaw)),
-    );
-    physics.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(spec.w / 2 - 0.02, spec.h / 2, thickness / 2)
-        .setTranslation(spec.w / 2, spec.h / 2, 0)
-        .setCollisionGroups(groups(GROUP.dynamic, 0xffff)),
-      this.body,
-    );
-    this.center = new THREE.Vector3(spec.x, floor + 1.1, spec.z);
+  get spec() {
+    return this.body.spec;
+  }
+
+  get open(): boolean {
+    return this.body.open;
   }
 
   /** Lights the leaf from the baked light field at the doorway. */
@@ -106,56 +98,37 @@ export class Door {
     return this.rollup ? 'rollup' : 'hinged';
   }
 
-  private quat(yaw: number) {
-    return { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
-  }
-
   /** Opens away from the user so the door never swings into the player. */
   toggle(from: THREE.Vector3): void {
-    this.open = !this.open;
-    if (this.rollup) {
-      this.target = this.open ? 1 : 0;
-      return;
-    }
-    if (!this.open) {
-      this.target = 0;
-      return;
-    }
-    const n = this.spec.axis === 'x' ? new THREE.Vector3(0, 0, this.spec.outward) : new THREE.Vector3(this.spec.outward, 0, 0);
-    const side = Math.sign(from.clone().sub(this.center).dot(n)) || 1;
-    // Rotating local +Z toward the side opposite the user.
-    const swing = (Math.PI / 2) * 0.95;
-    const testDir = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.baseYaw);
-    this.target = testDir.dot(n) * side > 0 ? swing : -swing;
+    this.body.toggle(from.x, from.z);
   }
 
-  update(dt: number, camera: THREE.Camera): void {
+  /** Follows the physical leaf; `stepBody` advances it when no simulation owns the doors (menu). */
+  update(dt: number, camera: THREE.Camera, stepBody: boolean): void {
     this.probe?.update(camera);
-    const prev = this.angle;
-    this.angle += (this.target - this.angle) * (1 - Math.exp(-dt * (this.rollup ? 3.2 : 7)));
-    if (Math.abs(this.angle - prev) < 1e-5) return;
+    if (stepBody) this.body.update(dt);
+    const a = this.body.angle;
+    if (a === this.shownAngle) return;
+    this.shownAngle = a;
     if (this.rollup) {
-      // Slats fold into the header: the panel shrinks upward, the collider rises out of the way.
-      const k = this.angle;
+      // Slats fold into the header as the panel rises.
       const panel = this.rollupPanel!;
-      panel.scale.y = Math.max(0.06, 1 - k);
+      panel.scale.y = Math.max(0.06, 1 - a);
       panel.position.y = this.spec.h * (1 - panel.scale.y);
-      this.body.setNextKinematicTranslation({ x: this.hinge.x, y: this.hinge.y + this.spec.h * k * 0.98, z: this.hinge.z });
       return;
     }
-    this.pivot.rotation.y = this.baseYaw + this.angle;
-    this.body.setNextKinematicRotation(this.quat(this.baseYaw + this.angle));
+    this.pivot.rotation.y = this.baseYaw + a;
   }
 }
 
 export class DoorSystem {
   readonly doors: Door[] = [];
+  /** Physical doors indexed like the map's door list (null where there is no leaf). */
+  readonly bodies: (DoorBody | null)[];
 
   constructor(map: MapDefinition, physics: Physics, parent: THREE.Object3D) {
-    const enterable = new Set(map.houses.filter((h) => h.enterable).map((h) => h.id));
-    for (const d of map.doors) {
-      if (d.exterior && enterable.has(d.houseId)) this.doors.push(new Door(d, physics, parent));
-    }
+    this.bodies = createDoorBodies(map, physics);
+    for (const b of this.bodies) if (b) this.doors.push(new Door(b, parent));
   }
 
   applyProbes(field: LightField): void {
@@ -175,7 +148,16 @@ export class DoorSystem {
     return best;
   }
 
-  update(dt: number, camera: THREE.Camera): void {
-    for (const d of this.doors) d.update(dt, camera);
+  byIndex(index: number): Door | undefined {
+    return this.doors.find((d) => d.body.index === index);
+  }
+
+  /** Closes every door instantly (new session). */
+  reset(): void {
+    for (const b of this.bodies) b?.reset();
+  }
+
+  update(dt: number, camera: THREE.Camera, stepBodies = true): void {
+    for (const d of this.doors) d.update(dt, camera, stepBodies);
   }
 }

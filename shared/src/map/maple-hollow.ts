@@ -257,6 +257,7 @@ function safehouse(b: MapBuilder): void {
   b.prop('chair', -2.78, -20.5, -Math.PI / 2, { movable: true });
   b.prop('chair', -2.6, -18.9, -Math.PI / 2 - 0.9, { movable: true });
   b.prop('crate', -6.25, -15.72, 0.3, { movable: true });
+  b.prop('firstAid', -6.68, -23.05, Math.PI / 2, { y: 1.5 });
   b.light({ kind: 'point', x: -3.8, y: 2.85, z: -20.4, color: WARM_BULB, intensity: 8, range: 11, decay: 1.7, fixture: 'bulb' });
 
   // Living room.
@@ -304,7 +305,8 @@ function safehouse(b: MapBuilder): void {
   };
   b.house(garage, { front: [door(0, 3.2, 'rollup', 2.5)], back: [], west: [], east: [door(-1.75, 1.0), win(1.8, 1.0)] }, null);
   b.boxMinMax(8.2, 0, -15, 11.8, 0.024, -7, 'concrete', { collide: false });
-  b.prop('workbench', 10, -23.86, 0);
+  b.prop('workbench', 10, -23.86, 0, { use: 'weapons' });
+  b.prop('firstAid', 11.75, -24.19, 0, { y: 1.5 });
   b.prop('metalShelf', 12.3, -23.2, -Math.PI / 2);
   b.prop('metalShelf', 7.48, -17.6, Math.PI / 2);
   b.prop('ammoCrate', 9.0, -22.7, 0.15);
@@ -348,6 +350,7 @@ function houseNe(b: MapBuilder): void {
   b.prop('counter', 26.0, -22.42, 0, { length: 1.6 });
   b.prop('chair', 25.0, -17.0, 1.9, { movable: true });
   b.prop('crate', 22.4, -16.0, 0.6, { movable: true });
+  b.prop('firstAid', 24.4, -22.69, 0, { y: 1.5 });
   b.light({ kind: 'point', x: 28.5, y: 2.85, z: -18.0, color: WARM_BULB, intensity: 6.5, range: 11, decay: 1.7, fixture: 'bulb' });
   b.area('THE HENDERSON HOUSE', 21, 33, -23, -14, -0.1, 6);
 }
@@ -394,6 +397,7 @@ function gasStation(b: MapBuilder): void {
   b.prop('storeShelf', 98.0, -38.6, Math.PI / 2, { length: 4.5, variant: 1 });
   for (const x of [85.6, 87.7, 89.8]) b.prop('cooler', x, -42.33, 0);
   b.prop('crate', 99.6, -41.8, 0.2, { movable: true });
+  b.prop('firstAid', 95.6, -42.69, 0, { y: 1.5 });
   b.prop('trashBag', 93.2, -35.2, 1, { variant: 3, movable: true });
   b.prop('ceilingLamp', 92, -38, 0, { y: 3.8 });
   for (const x of [87, 97]) b.light({ kind: 'point', x, y: 3.72, z: -38, color: 0xdfe8ff, intensity: 55, range: 10, decay: 2, fixture: 'panel' });
@@ -473,6 +477,7 @@ function checkpoint(b: MapBuilder): void {
   b.prop('crate', -99.5, 15.8, 0.1, { movable: true });
   b.prop('crate', -102.3, 15.4, -0.2, { movable: true });
   b.prop('ammoCrate', -101.2, 14.6, 0.05);
+  b.prop('firstAid', -99.5, 15.8, 0.1, { y: 0.74 });
   b.prop('mattress', -102.6, 17.6, 0, { movable: true });
   b.prop('pallet', -96.5, 12.5, 0.2, { movable: true });
   b.prop('crate', -96.4, 12.4, 0.25, { y: 0.15, movable: true });

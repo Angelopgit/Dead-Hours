@@ -131,7 +131,7 @@ export type PropKind =
   | 'sofa' | 'armchair' | 'coffeeTable' | 'tvStand' | 'bed' | 'wardrobe' | 'bookshelf' | 'counter' | 'fridge'
   | 'stove' | 'diningTable' | 'chair' | 'workbench' | 'metalShelf' | 'crate' | 'ammoCrate' | 'washer'
   | 'waterHeater' | 'desk' | 'dresser' | 'rug' | 'floorLamp' | 'storeShelf' | 'storeCounter' | 'cooler'
-  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress';
+  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress' | 'firstAid';
 
 export interface PropSpec {
   kind: PropKind;
@@ -154,6 +154,8 @@ export interface PropSpec {
   rise?: number;
   /** Instanced woodland tree (no per-tree draw call). */
   forest?: boolean;
+  /** Interaction the prop offers besides its kind's default (the workbench that is the weapon table). */
+  use?: 'weapons';
 }
 
 /** Static light: baked into static geometry and sampled by dynamic objects through probes. */

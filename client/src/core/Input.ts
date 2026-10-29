@@ -10,6 +10,8 @@ export class Input {
   private lookX = 0;
   private lookY = 0;
   private wheel = 0;
+  /** Mouse moves to drop right after pointer lock is taken (browsers report a jump there). */
+  private settleMoves = 0;
   enabled = false;
   private readonly target: HTMLElement;
   private readonly abort = new AbortController();
@@ -25,8 +27,18 @@ export class Input {
     window.addEventListener('mouseup', (e) => this.onButton(e, false), opts);
     window.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
+      if (this.settleMoves > 0) {
+        this.settleMoves--;
+        return;
+      }
+      // A single event far beyond what a hand can do is a pointer-lock glitch, not a flick.
+      if (Math.abs(e.movementX) > 400 || Math.abs(e.movementY) > 400) return;
       this.lookX += e.movementX;
       this.lookY += e.movementY;
+    }, opts);
+    document.addEventListener('pointerlockchange', () => {
+      this.lookX = this.lookY = 0;
+      this.settleMoves = this.locked ? 2 : 0;
     }, opts);
     window.addEventListener('wheel', (e) => { this.wheel += Math.sign(e.deltaY); }, { ...opts, passive: true });
     window.addEventListener('contextmenu', (e) => { if (this.enabled) e.preventDefault(); }, opts);

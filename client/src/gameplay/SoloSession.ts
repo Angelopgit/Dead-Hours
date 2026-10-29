@@ -1,22 +1,34 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { NEIGHBORHOOD, PLAYER, type MapDefinition } from '@dead-hours/shared';
+import {
+  GAME, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS,
+  type Interactable, type MapDefinition, type NavGrid, type SimEvent, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
+} from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import type { Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
 import { settings } from '../core/Settings';
 import { PlayerController } from './PlayerController';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
-import type { DoorSystem } from './Doors';
+import type { Door, DoorSystem } from './Doors';
+import { WeaponRack } from './WeaponRack';
 import { SURVIVOR_LOOKS } from '../characters/Humanoid';
-import { HUD } from '../ui/HUD';
+import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
+import { PlayerWeapon } from '../weapons/PlayerWeapon';
+import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
+import { Effects } from '../effects/Effects';
+import { ZombieView } from '../zombies/ZombieView';
+import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
+import { Inventory } from '../ui/Inventory';
+import { ResultsScreen } from '../ui/ResultsScreen';
+import { WeaponTablePanel } from '../ui/WeaponTablePanel';
 import { audio } from '../audio/AudioEngine';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 
-type Phase = 'intro' | 'playing' | 'paused';
+type Phase = 'intro' | 'playing' | 'paused' | 'table' | 'dead';
 
 /** Name of the map area containing a point (areas are ordered most specific first). */
 export function areaAt(map: MapDefinition, p: THREE.Vector3): string {
@@ -29,15 +41,50 @@ export function areaAt(map: MapDefinition, p: THREE.Vector3): string {
   return map.name.toUpperCase();
 }
 
+const ME = 'p1';
+const v3 = (v: Vec3, out: THREE.Vector3) => out.set(v.x, v.y, v.z);
+
+export interface SessionOptions {
+  /** Retry: straight into play, no establishing shot. */
+  skipIntro?: boolean;
+}
+
+interface Candidate {
+  kind: 'door' | Interactable['kind'];
+  pos: THREE.Vector3;
+  door?: Door;
+  it?: Interactable;
+}
+
+/** A dropped weapon tumbling to the floor when its owner dies. */
+interface Dropped {
+  model: WeaponModel;
+  vel: THREE.Vector3;
+  spin: THREE.Vector3;
+  floor: number;
+  rest: THREE.Quaternion;
+  landed: boolean;
+}
+
 /**
- * A local play session: one player in the neighborhood. The multiplayer room in Phase 4
- * reuses PlayerController as the predicted local player and adds remote players.
+ * A local play session: one survivor in the neighborhood running the authoritative simulation
+ * in the browser. The client sends the same intents the Phase 4 room will receive over the
+ * network (fire, reload, switch, melee, heal, use) and renders the simulation's events.
  */
 export class SoloSession {
   readonly player: PlayerController;
   readonly cam: ThirdPersonCamera;
+  readonly sim: Simulation;
+  readonly me: SimPlayer;
   private readonly hud: HUD;
   private readonly pause: PauseMenu;
+  private readonly inventory = new Inventory();
+  private readonly weapon: PlayerWeapon;
+  private readonly effects: Effects;
+  private readonly zombies: ZombieView;
+  private readonly rack: WeaponRack | null = null;
+  private table: WeaponTablePanel | null = null;
+  private results: ResultsScreen | null = null;
   private phase: Phase = 'intro';
   private accumulator = 0;
   private intro: gsap.core.Timeline | null = null;
@@ -51,6 +98,37 @@ export class SoloSession {
   readonly focus = new THREE.Vector3();
   private readonly abort = new AbortController();
   private readonly fill = new THREE.PointLight(0xa8b8d0, 1.6, 9, 1.5);
+  private readonly unsubSettings: () => void;
+  private readonly doorColliders = new Set<number>();
+
+  // Intents gathered per frame, sent to the simulation in the next fixed step.
+  private fireHeld = false;
+  private fireBuffer = 0;
+  private wantReload = false;
+  private wantSlot: 'primary' | 'secondary' | null = null;
+  private wantMelee = false;
+  private wantHeal = false;
+  private reloadFromEmpty = false;
+
+  private readonly later: { t: number; fn: () => void }[] = [];
+  private hurtFlash = 0;
+  private impactSoundAt = 0;
+  private lastHurtDir = new THREE.Vector3(0, 0, 1);
+  private ragdoll: Ragdoll | null = null;
+  private dropped: Dropped | null = null;
+  private deathT = 0;
+  private deathYaw = 0;
+  private readonly tablePose = { px: 0, py: 0, pz: 0, tx: 0, ty: 0, tz: 0 };
+  private tableTween: gsap.core.Tween | null = null;
+  private hovered: WeaponId | null = null;
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly mouse = new THREE.Vector2();
+  private outbreakAnnounced = false;
+
+  private readonly tmpA = new THREE.Vector3();
+  private readonly tmpB = new THREE.Vector3();
+  private readonly tmpC = new THREE.Vector3();
+  private readonly tmpD = new THREE.Vector3();
 
   constructor(
     private readonly engine: Engine,
@@ -58,16 +136,36 @@ export class SoloSession {
     private readonly physics: Physics,
     private readonly doors: DoorSystem,
     field: LightField,
+    nav: NavGrid,
     private readonly ui: HTMLElement,
     private readonly onQuit: () => void,
+    private readonly onRetry: () => void,
     startPose: { position: THREE.Vector3; target: THREE.Vector3 },
+    opts: SessionOptions = {},
   ) {
     const spawn = NEIGHBORHOOD.playerSpawns[0];
+    doors.reset();
+    for (const b of doors.bodies) if (b) this.doorColliders.add(b.collider.handle);
+
+    // Authoritative simulation.
+    this.sim = new Simulation({
+      physics, map: NEIGHBORHOOD, nav, doors: doors.bodies,
+      seed: (Math.random() * 2 ** 31) | 0, preparation: GAME.preparationSeconds,
+    });
+    const profile = settings.value.profile;
+    const primary = (PRIMARY_WEAPONS as string[]).includes(profile.primary) ? (profile.primary as WeaponId) : 'ar';
+    this.me = this.sim.addPlayer(ME, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw);
+
+    // Survivor.
     this.player = new PlayerController(physics, spawn, SURVIVOR_LOOKS[0]);
     engine.scene.add(this.player.character.root);
     this.probe = new DynamicProbe(field);
     this.probe.attach(this.player.character.surfaces());
     this.player.character.onFootstep = (l) => audio.footstep(l, this.indoors);
+    this.weapon = new PlayerWeapon(engine.scene, this.player.character);
+    this.probe.attach(this.weapon.materials());
+    this.weapon.onMaterials = (m) => this.probe.attach(m);
+    this.weapon.onCue = (cue) => audio.foley(cue, this.handPos());
     this.cam = new ThirdPersonCamera(engine.camera, physics);
     this.cam.yaw = spawn.yaw;
     this.focus.copy(this.player.position);
@@ -77,31 +175,65 @@ export class SoloSession {
     engine.camera.add(this.fill);
     if (!engine.camera.parent) engine.scene.add(engine.camera);
 
-    this.hud = new HUD(settings.value.profile.name);
+    // World feedback.
+    this.effects = new Effects(engine.scene, physics);
+    this.effects.isMoving = (pos, n) => {
+      const hit = physics.raycastHit(pos.x + n.x * 0.06, pos.y + n.y * 0.06, pos.z + n.z * 0.06, -n.x, -n.y, -n.z, 0.15);
+      return hit !== null && this.doorColliders.has(hit.collider.handle);
+    };
+    this.effects.casings.onBounce = (pos, shell, strength) => audio.casing(pos, shell, strength);
+    this.zombies = new ZombieView(engine.scene, physics, field);
+    this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
+    const bench = NEIGHBORHOOD.props.find((p) => p.use === 'weapons');
+    if (bench) {
+      this.rack = new WeaponRack(engine.scene, bench, field);
+      this.rack.highlight(null, this.me.arsenal.primary.id);
+    }
+    this.applySettings();
+    this.unsubSettings = settings.subscribe(() => this.applySettings());
+
+    // Interface.
+    this.hud = new HUD(profile.name);
     this.hud.el.style.opacity = '0';
     ui.append(this.hud.el);
     this.pause = new PauseMenu(input, () => this.resume(), () => this.quit());
-
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
     this.skip = h('div', { class: 'skip' }, 'PRESS ANY KEY TO SKIP');
     this.clickToPlay = h('div', { class: 'click-to-play' }, 'CLICK TO CONTINUE');
     const sig = { signal: this.abort.signal };
     document.addEventListener('pointerlockchange', this.onLockChange, sig);
     window.addEventListener('keydown', this.onKeyDown, sig);
-    engine.canvas.addEventListener('click', () => {
-      if (this.phase === 'playing' && !input.locked) input.requestLock();
-    }, sig);
-    this.runIntro(startPose);
+    engine.canvas.addEventListener('click', this.onCanvasClick, sig);
+    engine.canvas.addEventListener('mousemove', this.onCanvasMove, sig);
+    if (opts.skipIntro) this.quickStart();
+    else this.runIntro(startPose);
   }
 
-  /** Under a roof: sky mostly hidden (drives footstep acoustics). */
+  private applySettings(): void {
+    const g = settings.value.graphics;
+    this.effects.setQuality(g.particleQuality, g.gore, settings.value.accessibility.reducedFlashing);
+    this.zombies.gore = g.gore !== 'off';
+  }
+
+  /** Under a roof: sky mostly hidden (drives footstep and gunshot acoustics). */
   get indoors(): boolean {
     return this.probe.sample.ao < 0.35;
   }
 
+  private handPos(): THREE.Vector3 {
+    return this.player.character.armR.end.getWorldPosition(this.tmpD);
+  }
+
+  // ------------------------------------------------------------------ phases
+
   private onKeyDown = (e: KeyboardEvent): void => {
     if (this.phase === 'intro') {
       this.finishIntro();
+      return;
+    }
+    if (this.phase === 'table') {
+      const interact = settings.value.controls.bindings.interact;
+      if (e.code === 'Escape' || interact.includes(e.code)) this.closeTable();
       return;
     }
     if (e.code === 'Escape' && this.phase === 'paused') {
@@ -114,6 +246,33 @@ export class SoloSession {
     if (this.phase === 'playing' && !this.input.locked) this.openPause();
     if (this.input.locked) this.clickToPlay.remove();
   };
+
+  private onCanvasClick = (e: MouseEvent): void => {
+    if (this.phase === 'playing' && !this.input.locked) this.input.requestLock();
+    if (this.phase === 'table' && this.rack) {
+      const id = this.pickRack(e);
+      if (id) this.choose(id);
+    }
+  };
+
+  private onCanvasMove = (e: MouseEvent): void => {
+    if (this.phase !== 'table' || !this.rack) return;
+    const id = this.pickRack(e);
+    if (id !== this.hovered) {
+      this.hovered = id;
+      this.rack.highlight(id, this.me.arsenal.primary.id);
+      this.table?.mark(id);
+      this.engine.canvas.style.cursor = id ? 'pointer' : '';
+      if (id) audio.ui('hover');
+    }
+  };
+
+  private pickRack(e: MouseEvent): WeaponId | null {
+    const r = this.engine.canvas.getBoundingClientRect();
+    this.mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.mouse, this.engine.camera);
+    return this.rack?.pick(this.raycaster) ?? null;
+  }
 
   /** Fade from black → exterior establishing shot → glide to the safehouse → hand over control. */
   private runIntro(from: { position: THREE.Vector3; target: THREE.Vector3 }): void {
@@ -136,19 +295,29 @@ export class SoloSession {
     this.engine.camera.updateProjectionMatrix();
   }
 
+  private quickStart(): void {
+    gsap.set(document.getElementById('fade'), { opacity: 1 });
+    this.phase = 'intro';
+    this.finishIntro();
+  }
+
   finishIntro(): void {
     if (this.phase !== 'intro') return;
     this.intro?.kill();
     this.intro = null;
-    gsap.to(document.getElementById('fade'), { opacity: 0, duration: 0.5 });
+    gsap.to(document.getElementById('fade'), { opacity: 0, duration: 0.6 });
     for (const el of [...this.letterbox, this.skip]) el.remove();
     this.phase = 'playing';
     this.cam.snapNext();
     this.hud.setVisible(true);
-    this.hud.notify('MAPLE HOLLOW', 'THE SAFEHOUSE · 21:47', 3.2);
+    this.hud.notify('MAPLE HOLLOW', 'THE SAFEHOUSE · 21:47 · GEAR UP BEFORE THEY ARRIVE', 3.2);
     this.input.enabled = true;
     this.input.requestLock();
-    // If the browser refused pointer lock (no gesture), wait for a click.
+    this.promptClick();
+  }
+
+  /** If the browser refused pointer lock (no gesture), wait for a click. */
+  private promptClick(): void {
     setTimeout(() => {
       if (this.phase === 'playing' && !this.input.locked) this.ui.append(this.clickToPlay);
     }, 250);
@@ -158,6 +327,8 @@ export class SoloSession {
     this.phase = 'paused';
     this.input.clear();
     this.player.clearInput();
+    this.clearIntents();
+    this.inventory.hide();
     this.pause.show(this.ui);
   }
 
@@ -165,15 +336,82 @@ export class SoloSession {
     this.pause.hide();
     this.phase = 'playing';
     this.input.requestLock();
-    setTimeout(() => {
-      if (this.phase === 'playing' && !this.input.locked) this.ui.append(this.clickToPlay);
-    }, 250);
+    this.promptClick();
   }
 
   private quit(): void {
     this.pause.hide();
     this.onQuit();
   }
+
+  private clearIntents(): void {
+    this.fireHeld = false;
+    this.fireBuffer = 0;
+    this.wantReload = this.wantMelee = this.wantHeal = false;
+    this.wantSlot = null;
+  }
+
+  // ------------------------------------------------------------------ weapon table
+
+  private openTable(): void {
+    if (!this.rack || this.phase !== 'playing') return;
+    this.phase = 'table';
+    this.input.clear();
+    this.player.clearInput();
+    this.clearIntents();
+    this.inventory.hide();
+    this.input.releaseLock();
+    this.hud.setPrompt(null);
+    this.hud.setVisible(false);
+    this.player.character.setVisible(false);
+    this.weapon.setVisible(false);
+    const cam = this.engine.camera;
+    const look = this.tmpA.set(0, 0, -1).applyQuaternion(cam.quaternion).multiplyScalar(2).add(cam.position);
+    Object.assign(this.tablePose, { px: cam.position.x, py: cam.position.y, pz: cam.position.z, tx: look.x, ty: look.y, tz: look.z });
+    const v = this.rack.view;
+    this.tableTween = gsap.to(this.tablePose, {
+      px: v.position.x, py: v.position.y, pz: v.position.z, tx: v.target.x, ty: v.target.y, tz: v.target.z,
+      duration: 0.75, ease: 'power2.inOut',
+    });
+    this.table = new WeaponTablePanel(this.me.arsenal.primary.id, {
+      onHover: (id) => this.rack?.highlight(id, this.me.arsenal.primary.id),
+      onPick: (id) => this.choose(id),
+      onClose: () => this.closeTable(),
+    });
+    this.ui.append(this.table.el);
+    gsap.fromTo(this.table.el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, delay: 0.25, ease: 'power3.out' });
+    audio.ui('click');
+  }
+
+  private choose(id: WeaponId): void {
+    if (id === this.me.arsenal.primary.id) return;
+    if (this.sim.selectPrimary(ME, id)) {
+      settings.update((s) => { s.profile.primary = id; });
+      this.table?.setCarried(id);
+      this.rack?.highlight(this.hovered, id);
+      audio.ui('click');
+    }
+  }
+
+  private closeTable(): void {
+    if (this.phase !== 'table') return;
+    this.tableTween?.kill();
+    this.tableTween = null;
+    this.table?.el.remove();
+    this.table = null;
+    this.hovered = null;
+    this.engine.canvas.style.cursor = '';
+    this.rack?.highlight(null, this.me.arsenal.primary.id);
+    this.player.character.setVisible(true);
+    this.weapon.setVisible(true);
+    this.hud.setVisible(true);
+    this.phase = 'playing';
+    this.cam.snapNext();
+    this.input.requestLock();
+    this.promptClick();
+  }
+
+  // ------------------------------------------------------------------ frame
 
   update(dt: number): void {
     const p = this.player;
@@ -182,30 +420,44 @@ export class SoloSession {
       this.engine.camera.position.set(c.px, c.py, c.pz);
       this.engine.camera.lookAt(c.tx, c.ty, c.tz);
       p.render(dt, 1);
+      this.weapon.update(dt, this.me.arsenal, { aim: 0, sprinting: false, aimPoint: this.cam.aimPoint });
       this.probe.update(dt, p.renderPosition, this.engine.camera);
       this.focus.set(c.tx, 0, c.tz);
       return;
     }
 
-    if (this.phase === 'playing') {
-      this.cam.look(this.input);
-      p.sampleInput(this.input, this.cam.yaw);
-      this.handleInteraction();
-    }
+    if (this.phase === 'playing') this.gatherInput();
 
     // Fixed-step simulation, rendered with interpolation.
     const step = this.physics.fixedDt;
-    this.accumulator += dt;
+    const running = this.phase !== 'paused';
+    if (running) this.accumulator += dt;
     let steps = 0;
     while (this.accumulator >= step && steps < 5) {
-      if (this.phase !== 'paused') p.fixedUpdate(step, this.cam.yaw);
-      this.doors.update(step, this.engine.camera);
+      p.fixedUpdate(step, this.cam.yaw);
+      this.sim.setMotion(ME, p.motion(this.cam.yaw, this.cam.pitch));
+      if (this.phase === 'playing') this.sendIntents(step);
+      this.sim.step(step);
+      this.doors.update(step, this.engine.camera, false);
       this.physics.step();
       this.accumulator -= step;
       steps++;
     }
     if (steps === 5) this.accumulator = 0;
+    if (running) for (const e of this.sim.drain()) this.onEvent(e);
     const alpha = this.accumulator / step;
+    // Frozen while paused: effects, corpses and timers wait too.
+    const live = running ? dt : 0;
+
+    for (let i = this.later.length - 1; i >= 0; i--) {
+      const l = this.later[i];
+      l.t -= live;
+      if (l.t <= 0) {
+        this.later.splice(i, 1);
+        l.fn();
+      }
+    }
+
     p.render(dt, alpha);
     if (p.landed) {
       p.landed = false;
@@ -213,16 +465,37 @@ export class SoloSession {
       audio.footstep(0.8, this.indoors);
     }
 
-    this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming, p.sprinting);
+    // Camera.
+    if (this.phase === 'table') {
+      const c = this.tablePose;
+      this.engine.camera.position.set(c.px, c.py, c.pz);
+      this.engine.camera.lookAt(c.tx, c.ty, c.tz);
+      this.fovTo(dt, 50);
+    } else if (this.phase === 'dead') {
+      this.deathCamera(live);
+    } else {
+      this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming && this.canAim, p.sprinting);
+    }
     this.focus.copy(p.renderPosition);
 
-    const hv = Math.hypot(p.velocity.x, p.velocity.z);
-    this.hud.setSpread(p.aiming ? 0 : Math.min(14, hv * 2 + (p.grounded ? 0 : 8)));
-    this.hud.setStance(p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
-    this.hud.setHealth(p.health, PLAYER.maxHealth);
-    this.hud.setFps(this.engine.fps);
+    // Body and hands.
+    const a = this.me.arsenal;
+    p.lookPitch = this.cam.pitch;
+    if (this.phase === 'dead') {
+      this.ragdoll?.update(live);
+      this.updateDropped(live);
+    } else {
+      this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint });
+    }
+    this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
 
-    this.probe.update(dt, p.renderPosition, this.engine.camera);
+    // World.
+    const renderTime = this.sim.time - step + alpha * step;
+    this.zombies.update(live, this.sim, renderTime, this.engine.camera);
+    this.effects.update(live, this.engine.camera);
+    this.rack?.update(dt, this.engine.camera);
+
+    this.updateHud(dt);
 
     // Location notices when crossing into a named area.
     this.areaCooldown -= dt;
@@ -234,32 +507,516 @@ export class SoloSession {
     }
   }
 
-  private handleInteraction(): void {
+  private get canAim(): boolean {
+    const action = this.me.arsenal.action;
+    return action !== 'melee' && action !== 'bandage';
+  }
+
+  private fovTo(dt: number, fov: number): void {
+    const c = this.engine.camera;
+    if (Math.abs(c.fov - fov) < 0.01) return;
+    c.fov += (fov - c.fov) * (1 - Math.exp(-dt * 6));
+    c.updateProjectionMatrix();
+  }
+
+  private gatherInput(): void {
+    const input = this.input;
     const p = this.player;
-    const probe = p.position.clone().setY(p.position.y + 1.1);
-    const door = this.doors.nearest(probe, 1.9);
-    if (door) {
-      this.hud.setPrompt('interact', door.open ? 'CLOSE DOOR' : 'OPEN DOOR');
-      if (this.input.pressed('interact')) {
-        door.toggle(p.position);
-        audio.door(door.open);
-      }
-    } else {
+    this.cam.look(input);
+    p.sampleInput(input, this.cam.yaw);
+    const a = this.me.arsenal;
+    if (a.action === 'bandage') p.blockSprint(0.1);
+
+    this.fireHeld = input.held('fire');
+    if (input.pressed('fire')) this.fireBuffer = 0.18;
+    if (this.fireHeld || this.fireBuffer > 0) p.blockSprint(0.35);
+    if (input.pressed('reload')) this.wantReload = true;
+    if (input.pressed('weapon1')) this.wantSlot = 'primary';
+    if (input.pressed('weapon2')) this.wantSlot = 'secondary';
+    const wheel = input.consumeWheel();
+    if (wheel !== 0) this.wantSlot = a.active === 'primary' ? 'secondary' : 'primary';
+    if (input.pressed('melee')) this.wantMelee = true;
+    if (input.pressed('heal')) {
+      if (this.me.bandages <= 0) this.hud.feedLine('NO BANDAGES');
+      else if (this.me.health >= PLAYER.maxHealth) this.hud.feedLine('HEALTH FULL');
+      else this.wantHeal = true;
+    }
+
+    if (input.held('inventory')) this.inventory.show(this.ui, this.me, this.timerText());
+    else this.inventory.hide();
+
+    this.handleInteraction();
+  }
+
+  /** Intents for this fixed step (the Phase 4 client sends these as messages). */
+  private sendIntents(step: number): void {
+    const sim = this.sim;
+    if (this.wantSlot) {
+      sim.switchWeapon(ME, this.wantSlot);
+      this.wantSlot = null;
+    }
+    if (this.wantMelee) {
+      this.wantMelee = false;
+      sim.melee(ME);
+    }
+    if (this.wantHeal) {
+      this.wantHeal = false;
+      sim.bandage(ME);
+    }
+    if (this.wantReload) {
+      this.wantReload = false;
+      const w = this.me.arsenal.weapon;
+      const empty = w.mag === 0;
+      if (sim.reload(ME)) this.reloadFromEmpty = empty;
+    }
+    const a = this.me.arsenal;
+    const pressed = this.fireBuffer > 0;
+    this.fireBuffer = Math.max(0, this.fireBuffer - step);
+    if (!this.fireHeld && !pressed) return;
+    // Holding the trigger on an empty magazine clicks once, not every step.
+    if (a.weapon.mag <= 0 && !pressed) return;
+    if (!a.def.auto && !pressed) return;
+    const o = this.cam.aimOrigin;
+    const d = this.cam.aimDir;
+    const r = sim.fire(ME, { x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, pressed, (Math.random() * 2 ** 31) | 1);
+    if (r !== 'busy') this.fireBuffer = 0;
+    if (r === 'dry' && a.action === 'reload') this.reloadFromEmpty = true;
+  }
+
+  private handleInteraction(): void {
+    const best = this.pickInteraction();
+    if (!best) {
       this.hud.setPrompt(null);
+      return;
+    }
+    if (best.kind === 'door') this.hud.setPrompt('interact', best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR');
+    else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
+    else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
+    else this.hud.setPrompt('interact', 'SELECT WEAPON');
+    if (!this.input.pressed('interact')) return;
+    if (best.kind === 'door') {
+      best.door!.toggle(this.player.position);
+      audio.door(best.door!.open);
+    } else if (best.kind === 'weapons') {
+      this.openTable();
+    } else {
+      this.sim.use(ME, best.it!.id);
     }
   }
 
+  /** What [E] acts on: the reachable thing closest to where the camera looks. */
+  private pickInteraction(): Candidate | null {
+    if (!this.me.alive) return null;
+    const p = this.player.position;
+    const eye = this.tmpA.set(p.x, p.y + 1.1, p.z);
+    const cands: Candidate[] = [];
+    const door = this.doors.nearest(eye, 1.9);
+    if (door) cands.push({ kind: 'door', pos: door.center, door });
+    for (const it of this.sim.reachable(ME)) {
+      if (it.supply <= 0) continue;
+      cands.push({ kind: it.kind, pos: new THREE.Vector3(it.pos.x, it.pos.y, it.pos.z), it });
+    }
+    if (!cands.length) return null;
+    const camPos = this.engine.camera.position;
+    const fwd = this.cam.aimDir;
+    let best: Candidate | null = null;
+    let bestScore = -Infinity;
+    for (const c of cands) {
+      const toC = this.tmpB.subVectors(c.pos, camPos);
+      const dist = toC.length();
+      const angle = Math.acos(THREE.MathUtils.clamp(toC.divideScalar(dist || 1).dot(fwd), -1, 1));
+      const near = c.pos.distanceTo(eye);
+      // What the crosshair is on wins; something right beside you still counts.
+      if (angle > 0.75 && near > 1.0) continue;
+      const score = -angle * 3 - near * 0.4;
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  // ------------------------------------------------------------------ events
+
+  private onEvent(e: SimEvent): void {
+    const A = this.tmpA, B = this.tmpB, C = this.tmpC;
+    switch (e.type) {
+      case 'shot': {
+        if (e.player !== ME) break;
+        const def = WEAPONS[e.weapon];
+        const muzzle = this.weapon.muzzleWorld(A);
+        const dir = this.weapon.muzzleDir(B);
+        this.effects.muzzle(muzzle, dir, e.weapon);
+        for (let i = 0; i < e.pellets.length; i++) {
+          // A shotgun's pellets would be a solid sheet of light; a few streaks read better.
+          if (e.pellets.length > 1 && i % 3 !== 0) continue;
+          this.effects.tracer(muzzle, v3(e.pellets[i].end, C));
+        }
+        audio.gunshot(e.weapon, muzzle, this.indoors, true);
+        this.weapon.fired(def);
+        const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
+        this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
+        this.cam.addTrauma(0.04 + def.recoil * 0.05);
+        this.player.faceCamera(0.7);
+        if (e.weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
+        else this.ejectCasing(false);
+        break;
+      }
+      case 'dryFire':
+        if (e.player === ME) audio.dryFire(this.handPos());
+        break;
+      case 'impact': {
+        v3(e.pos, A);
+        this.effects.impact(A, v3(e.normal, B), e.surface, v3(e.dir, C));
+        const now = performance.now();
+        if (now - this.impactSoundAt > 35) {
+          this.impactSoundAt = now;
+          audio.impact(e.surface, A);
+        }
+        break;
+      }
+      case 'zombieHit': {
+        v3(e.pos, A);
+        v3(e.dir, B);
+        const exit = e.exit ? { pos: new THREE.Vector3(e.exit.pos.x, e.exit.pos.y, e.exit.pos.z), normal: new THREE.Vector3(e.exit.normal.x, e.exit.normal.y, e.exit.normal.z) } : null;
+        this.effects.blood(A, B, e.damage, { exit, killed: e.killed, head: e.zone === 'head', melee: e.melee });
+        this.zombies.hit(e.zombie, e.zone, B, e.damage, e.melee);
+        audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
+        if (e.by === ME) {
+          const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
+          this.hud.hitMarker(kind);
+          audio.hitMarker(kind);
+        }
+        if (!e.killed && Math.random() < 0.4) audio.zombieHurt(this.zombies.headOf(e.zombie, C) ?? A);
+        break;
+      }
+      case 'zombieDied': {
+        const head = this.zombies.headOf(e.zombie, C);
+        if (head) audio.zombieDeath(head);
+        this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force);
+        break;
+      }
+      case 'zombieRemoved':
+        this.zombies.removed(e.zombie);
+        break;
+      case 'zombieAlert':
+        audio.zombieAlert(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A));
+        break;
+      case 'zombieAttack': {
+        const head = this.zombies.headOf(e.zombie, C);
+        if (head) audio.zombieAttack(head);
+        break;
+      }
+      case 'zombieGroan':
+        audio.groan(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A), 0.8);
+        break;
+      case 'doorPound':
+        audio.doorPound(v3(e.pos, A));
+        break;
+      case 'doorForced': {
+        v3(e.pos, A);
+        audio.doorBurst(A);
+        const d = this.doors.byIndex(e.door);
+        if (d) {
+          const n = d.body.normal;
+          B.set(n.x, 0, n.z);
+          // Splinters fly into the room the zombie broke into.
+          if (B.dot(this.tmpC.subVectors(this.player.position, A)) < 0) B.negate();
+          this.effects.splinters(A, B);
+        }
+        break;
+      }
+      case 'playerHurt':
+        if (e.player === ME) this.onHurt(e.damage, e.from);
+        break;
+      case 'playerDied':
+        if (e.player === ME) this.onDeath();
+        break;
+      case 'playerHealed':
+        if (e.player === ME) this.hud.feedLine(`HEALTH +${Math.round(e.amount)}`);
+        break;
+      case 'reload':
+        if (e.player !== ME) break;
+        if (e.stage === 'shell') audio.foley('shellIn', this.handPos());
+        if (e.stage === 'end' && e.weapon === 'shotgun' && this.reloadFromEmpty) {
+          this.weapon.cycleAction();
+          this.later.push({ t: 0.12, fn: () => audio.foley('pump', this.handPos()) });
+        }
+        if (e.stage === 'end' || e.stage === 'cancel') this.reloadFromEmpty = false;
+        break;
+      case 'melee':
+        if (e.player !== ME) break;
+        if (e.stage === 'swing') {
+          audio.meleeSwing(this.handPos());
+          this.player.faceCamera(0.6);
+          this.player.blockSprint(0.6);
+        }
+        break;
+      case 'bandage':
+        if (e.player !== ME) break;
+        if (e.stage === 'start') audio.bandage();
+        if (e.stage === 'cancel') this.hud.feedLine('BANDAGE INTERRUPTED');
+        break;
+      case 'pickup':
+        if (e.player !== ME) break;
+        audio.pickup(e.item);
+        if (e.item === 'ammo') this.hud.feedLine(`AMMUNITION +${e.amount}`);
+        else if (e.item === 'bandage') this.hud.feedLine(`BANDAGE +${e.amount}`);
+        else if (e.weapon) this.hud.feedLine(`${WEAPONS[e.weapon].model} EQUIPPED`);
+        break;
+      case 'notice':
+        if (e.player === ME || e.player === null) this.hud.feedLine(e.text);
+        break;
+      case 'phase':
+        if (e.phase === 'survival' && !this.outbreakAnnounced) {
+          this.outbreakAnnounced = true;
+          this.hud.notify('THE OUTBREAK HAS BEGUN', 'SURVIVE AS LONG AS YOU CAN', 3.6, 'danger');
+          audio.outbreak();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  private ejectCasing(shell: boolean): void {
+    if (!this.me.alive) return;
+    const pos = this.tmpC;
+    const dir = this.tmpD;
+    this.weapon.ejectWorld(pos, dir);
+    const p = this.player.position;
+    const floor = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 3);
+    this.effects.eject(pos, dir, floor !== null ? pos.y - floor : p.y, shell, this.player.velocity);
+  }
+
+  private onHurt(damage: number, from: Vec3): void {
+    const p = this.player.position;
+    const dx = from.x - p.x, dz = from.z - p.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const yaw = this.cam.yaw;
+    const fwd = dx / len * -Math.sin(yaw) + dz / len * -Math.cos(yaw);
+    const right = dx / len * Math.cos(yaw) + dz / len * -Math.sin(yaw);
+    this.hud.damageFrom(Math.atan2(right, fwd), damage);
+    this.lastHurtDir.set(-dx / len, 0, -dz / len);
+    this.player.character.flinch('torso', -dx / len, -dz / len, Math.min(1, damage / 25));
+    this.cam.addTrauma(0.22 + Math.min(0.4, damage / 60));
+    this.hurtFlash = Math.min(1, this.hurtFlash + 0.35 + damage / 50);
+    audio.playerHurt(Math.min(1, damage / 30));
+    if (this.phase === 'table') this.closeTable();
+  }
+
+  private onDeath(): void {
+    if (this.phase === 'dead') return;
+    if (this.phase === 'table') this.closeTable();
+    this.phase = 'dead';
+    this.survivedAtDeath = this.outbreakAnnounced ? this.sim.phaseTime : 0;
+    this.deathT = 0;
+    this.deathYaw = this.cam.yaw;
+    this.inventory.hide();
+    this.input.enabled = false;
+    this.input.clear();
+    this.clearIntents();
+    this.input.releaseLock();
+    this.hud.setPrompt(null);
+    this.hud.setVisible(false);
+    audio.death();
+
+    // The held weapon falls; the survivor goes limp.
+    const held = this.weapon.heldModel;
+    if (held) {
+      const model = createWeaponModel(held.id);
+      model.root.position.copy(held.root.position);
+      model.root.quaternion.copy(held.root.quaternion);
+      this.engine.scene.add(model.root);
+      this.probe.attach(model.materials);
+      const at = model.root.position;
+      const hit = this.physics.raycast(at.x, at.y, at.z, 0, -1, 0, 3);
+      const lie = new THREE.Quaternion().setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)),
+      );
+      const rest = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2).multiply(lie);
+      this.dropped = {
+        model,
+        vel: this.player.velocity.clone().multiplyScalar(0.5).add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 1, (Math.random() - 0.5) * 1.5)),
+        spin: new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 8),
+        floor: hit !== null ? at.y - hit + 0.035 : this.player.position.y + 0.035,
+        rest,
+        landed: false,
+      };
+    }
+    this.weapon.setVisible(false);
+    const body = this.player.character;
+    const vel = this.player.velocity.clone().setY(0);
+    this.player.kill();
+    this.ragdoll = new Ragdoll(this.physics, body);
+    this.ragdoll.start(vel, [{ joints: ZONE_PARTICLES.torso, impulse: this.lastHurtDir.clone().setY(0.2).multiplyScalar(1.6) }]);
+    this.later.push({ t: 4.2, fn: () => this.showResults() });
+  }
+
+  private updateDropped(dt: number): void {
+    const d = this.dropped;
+    if (!d || d.landed) return;
+    const r = d.model.root;
+    d.vel.y -= 9.8 * dt;
+    r.position.addScaledVector(d.vel, dt);
+    r.rotateX(d.spin.x * dt);
+    r.rotateY(d.spin.y * dt);
+    r.rotateZ(d.spin.z * dt);
+    if (r.position.y <= d.floor) {
+      r.position.y = d.floor;
+      if (Math.abs(d.vel.y) > 1.2) {
+        audio.impact('metal', r.position);
+        d.vel.set(d.vel.x * 0.4, -d.vel.y * 0.25, d.vel.z * 0.4);
+        d.spin.multiplyScalar(0.3);
+      } else {
+        d.landed = true;
+        gsap.to({ t: 0 }, {
+          t: 1, duration: 0.25, ease: 'power2.out',
+          onUpdate: function (this: gsap.core.Tween) { r.quaternion.slerp(d.rest, (this.targets()[0] as { t: number }).t); },
+        });
+      }
+    }
+  }
+
+  private deathCamera(dt: number): void {
+    this.deathT += dt;
+    const c = this.ragdoll ? this.ragdoll.center(this.tmpA) : this.tmpA.copy(this.player.position);
+    const t = this.deathT;
+    const ease = 1 - Math.exp(-t * 0.8);
+    const yaw = this.deathYaw + t * 0.12;
+    const dist = 3.2 + ease * 1.2;
+    const height = 1.4 + ease * 2.4;
+    const cam = this.engine.camera;
+    // Behind where the camera looked (camera forward is -Z rotated by yaw), drifting up and around,
+    // held inside rooms by a sphere cast from the body.
+    const dir = this.tmpC.set(Math.sin(yaw) * dist, height, Math.cos(yaw) * dist);
+    const len = dir.length();
+    dir.divideScalar(len);
+    const oy = c.y + 0.4;
+    const hit = this.physics.sphereCast(c.x, oy, c.z, dir.x, dir.y, dir.z, 0.25, len);
+    const reach = hit !== null ? Math.max(0.6, hit - 0.1) : len;
+    const target = this.tmpB.set(c.x + dir.x * reach, oy + dir.y * reach, c.z + dir.z * reach);
+    const k = 1 - Math.exp(-dt * 2.5);
+    cam.position.lerp(target, k);
+    cam.lookAt(c.x, c.y + 0.2, c.z);
+    this.fovTo(dt, 52);
+  }
+
+  private showResults(): void {
+    if (this.results) return;
+    this.input.releaseLock();
+    this.results = new ResultsScreen({
+      survived: this.survivedAtDeath,
+      total: this.me.diedAt,
+      stats: { ...this.me.stats },
+      outbreak: this.outbreakAnnounced,
+    }, () => this.onRetry(), () => this.onQuit());
+    this.results.show(this.ui);
+  }
+
+  /** Seconds survived since the outbreak, frozen at death. */
+  private survivedAtDeath = 0;
+
+  // ------------------------------------------------------------------ HUD
+
+  private timerText(): string {
+    const s = this.sim;
+    if (s.phase === 'preparation') return `OUTBREAK IMMINENT — ${clock(Math.ceil(s.phaseTime))}`;
+    return `SURVIVED ${clock(s.phaseTime)}`;
+  }
+
+  private updateHud(dt: number): void {
+    const hud = this.hud;
+    const me = this.me;
+    const a = me.arsenal;
+    const def = a.def;
+    const p = this.player;
+
+    hud.setHealth(me.health, PLAYER.maxHealth);
+    hud.weapon({
+      model: def.model,
+      mag: a.weapon.mag,
+      magazine: def.magazine,
+      reserve: a.weapon.reserve,
+      mode: def.mode,
+      reload: a.action === 'reload' ? a.progress : null,
+      slot: a.active,
+      primaryModel: WEAPONS[a.primary.id].model,
+      secondaryModel: WEAPONS[a.secondary.id].model,
+      bandages: me.bandages,
+      healing: a.action === 'bandage' ? a.progress : null,
+    });
+    const s = this.sim;
+    hud.setTimer(this.timerText(), s.phase === 'preparation' && s.phaseTime <= 10);
+
+    // Ammunition warning: the active gun is down to its last magazine in total.
+    const total = (w: { mag: number; reserve: number }) => w.mag + w.reserve;
+    const allEmpty = total(a.primary) === 0 && total(a.secondary) === 0;
+    const critical = total(a.weapon) <= def.magazine && def.mode !== 'MELEE';
+    hud.setWarning(allEmpty ? 'OUT OF AMMUNITION · USE YOUR MACHETE' : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
+
+    // Dynamic crosshair: gap follows the real spread cone.
+    const hv = Math.hypot(p.velocity.x, p.velocity.z);
+    const spread = a.spread({ speed: hv, crouching: p.crouching, grounded: p.grounded, aiming: p.aiming });
+    const cam = this.engine.camera;
+    const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
+    hud.setSpread(Math.min(70, px));
+    hud.setCrosshairVisible(this.phase === 'playing' && !p.sprinting && a.action !== 'bandage');
+    hud.setStance(a.action === 'bandage' ? 'BANDAGING' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    hud.setFps(this.engine.fps);
+
+    // Pain: hits flash the screen edges red; low health keeps a pulse there.
+    this.hurtFlash = Math.max(0, this.hurtFlash - dt * 1.6);
+    const hp = me.health / PLAYER.maxHealth;
+    const low = me.alive ? THREE.MathUtils.clamp((0.4 - hp) / 0.4, 0, 1) : 1;
+    const pulse = low > 0 ? 0.75 + 0.25 * Math.sin(performance.now() * 0.006) : 0;
+    this.engine.post.uniforms.uDamage.value = Math.min(1, Math.max(this.hurtFlash * 0.9, low * 0.65 * pulse));
+    audio.setVitals(me.alive ? low : 0);
+  }
+
+  // ------------------------------------------------------------------ debugging (dev hook)
+
+  /** Dev/test helpers: jump to the outbreak, place zombies around the survivor. */
+  readonly debug = {
+    skipPreparation: () => this.sim.skipPreparation(),
+    spawnZombie: (dist = 8, angle = 0, kind: ZombieKind = 'walker') => {
+      const p = this.player.position;
+      const yaw = this.cam.yaw + angle;
+      const at = { x: p.x - Math.sin(yaw) * dist, y: p.y + 0.02, z: p.z - Math.cos(yaw) * dist };
+      return this.sim.spawnZombie(kind, at, 'approach').id;
+    },
+    phase: () => this.phase,
+  };
+
   dispose(): void {
     this.abort.abort();
+    this.unsubSettings();
     this.intro?.kill();
+    this.tableTween?.kill();
     for (const el of [...this.letterbox, this.skip, this.clickToPlay]) el.remove();
+    this.table?.el.remove();
+    this.results?.dispose();
+    this.inventory.dispose();
+    this.engine.canvas.style.cursor = '';
     this.input.enabled = false;
     this.input.releaseLock();
     this.input.clear();
     this.hud.dispose();
     this.pause.hide();
+    this.sim.dispose();
+    this.zombies.dispose();
+    this.effects.dispose();
+    this.rack?.dispose();
+    this.weapon.dispose();
+    if (this.dropped) {
+      this.dropped.model.dispose();
+      this.dropped.model.root.removeFromParent();
+    }
     this.player.dispose();
     this.fill.removeFromParent();
     this.fill.dispose();
+    this.engine.post.uniforms.uDamage.value = 0;
+    audio.setVitals(0);
   }
 }

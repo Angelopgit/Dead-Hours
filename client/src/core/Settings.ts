@@ -1,18 +1,19 @@
 export type ShadowQuality = 'off' | 'low' | 'medium' | 'high';
 export type Quality = 'low' | 'medium' | 'high';
 export type AimMode = 'hold' | 'toggle';
+export type GoreLevel = 'off' | 'reduced' | 'full';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
   | 'sprint' | 'crouch' | 'jump' | 'interact'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2'
-  | 'inventory' | 'shoulder' | 'fire' | 'aim';
+  | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
   sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact',
   reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon',
-  inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim',
+  inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
 };
 
 export interface SettingsData {
@@ -26,6 +27,7 @@ export interface SettingsData {
     filmGrain: boolean;
     fogQuality: Quality;
     particleQuality: Quality;
+    gore: GoreLevel;
     renderDistance: number;
     fpsLimit: number;
     showFps: boolean;
@@ -63,6 +65,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   shoulder: ['KeyV'],
   fire: ['Mouse0'],
   aim: ['Mouse2'],
+  heal: ['KeyQ'],
 };
 
 export const DEFAULT_SETTINGS: SettingsData = {
@@ -76,6 +79,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     filmGrain: true,
     fogQuality: 'high',
     particleQuality: 'high',
+    gore: 'full',
     renderDistance: 220,
     fpsLimit: 0,
     showFps: false,

@@ -85,6 +85,7 @@ export class SettingsPanel {
         row('Film grain', toggle(this.g('filmGrain'), this.setG('filmGrain'))),
         row('Fog quality', seg([['low', 'Low'], ['medium', 'Med'], ['high', 'High']], this.g('fogQuality'), this.setG('fogQuality'))),
         row('Particle quality', seg([['low', 'Low'], ['medium', 'Med'], ['high', 'High']], this.g('particleQuality'), this.setG('particleQuality'))),
+        row('Gore', seg([['off', 'Off'], ['reduced', 'Reduced'], ['full', 'Full']], this.g('gore'), this.setG('gore')), 'Blood, wounds and splatter'),
         row('Render distance', slider(80, 300, 10, this.g('renderDistance'), this.setG('renderDistance'), (v) => `${v}m`)),
         row('FPS limit', seg([[0, 'Off'], [30, '30'], [60, '60'], [120, '120'], [144, '144']], this.g('fpsLimit'), this.setG('fpsLimit')), 'Browsers always present with VSync'),
         row('Show FPS', toggle(this.g('showFps'), this.setG('showFps'))),

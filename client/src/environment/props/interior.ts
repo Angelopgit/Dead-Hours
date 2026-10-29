@@ -128,12 +128,14 @@ export const INTERIOR: Partial<Record<PropKind, Builder>> = {
       const th = 0.18 + k.rand(i + 9) * 0.3;
       k.block(tw, th, 0.03, i % 3 ? tool : k.mat(0x7a2a1c, 0.6), -1.0 + i * 0.25, 1.3 + k.rand(i + 20) * 0.35, -0.33);
     }
-    // A rifle being stripped, magazines and a box of rounds.
+    // Magazines and a box of rounds; the weapon table lays its real guns out in the middle.
     const gun = k.mat(0x161718, 0.45, 0.5);
-    k.block(0.9, 0.06, 0.07, gun, -0.3, 0.97, 0.1, { ry: 0.15 });
-    k.block(0.25, 0.1, 0.05, k.mat(0x3a2a1e, 0.7), 0.25, 0.97, 0.03, { ry: 0.15 });
-    for (let i = 0; i < 3; i++) k.block(0.04, 0.16, 0.08, gun, 0.55 + i * 0.07, 0.96, 0.15, { rz: 0.1 * i });
-    k.block(0.2, 0.08, 0.13, k.mat(0x6b5a2a, 0.8), 0.85, 0.96, -0.05);
+    if (k.p.use !== 'weapons') {
+      k.block(0.9, 0.06, 0.07, gun, -0.3, 0.97, 0.1, { ry: 0.15 });
+      k.block(0.25, 0.1, 0.05, k.mat(0x3a2a1e, 0.7), 0.25, 0.97, 0.03, { ry: 0.15 });
+    }
+    for (let i = 0; i < 3; i++) k.block(0.04, 0.16, 0.08, gun, 1.0 + i * 0.07, 0.96, 0.22, { rz: 0.1 * i });
+    k.block(0.2, 0.08, 0.13, k.mat(0x6b5a2a, 0.8), 1.05, 0.96, -0.2);
     // Vise.
     k.block(0.14, 0.12, 0.16, k.mat(0x24425e, 0.5, 0.5), -1.05, 0.96, 0.3);
     // Gun rack on the pegboard.
@@ -167,6 +169,23 @@ export const INTERIOR: Partial<Record<PropKind, Builder>> = {
     const dark = k.mat(0x4a3826, 0.9);
     for (const sz of [-1, 1]) for (const y of [0.08, 0.52]) k.block(0.82, 0.08, 0.02, dark, 0, y - 0.04, sz * 0.305);
     for (const sx of [-1, 1]) k.block(0.08, 0.6, 0.62, dark, sx * 0.38, 0, 0);
+  },
+  firstAid(k) {
+    const white = k.mat(0xd8d4ca, 0.55);
+    const red = k.mat(0x9a1c18, 0.6);
+    if ((k.p.y ?? 0) < 1) {
+      // Lying on a table or crate.
+      k.block(0.34, 0.1, 0.26, white, 0, 0, 0);
+      k.block(0.16, 0.005, 0.05, red, 0, 0.1, 0);
+      k.block(0.05, 0.005, 0.16, red, 0, 0.1, 0);
+      return;
+    }
+    // Wall-mounted case hanging below its mount height, front toward +Z.
+    k.block(0.34, 0.26, 0.1, white, 0, -0.26, 0.05);
+    k.block(0.36, 0.03, 0.11, k.mat(0x9c988e, 0.5), 0, 0, 0.05);
+    k.block(0.16, 0.05, 0.005, red, 0, -0.155, 0.1025);
+    k.block(0.05, 0.16, 0.005, red, 0, -0.21, 0.1025);
+    k.block(0.08, 0.02, 0.02, k.mat(0x4a4a46, 0.5, 0.6), 0, -0.29, 0.1);
   },
   ammoCrate(k) {
     const g = k.mat(0x3a4230, 0.75, 0.2);

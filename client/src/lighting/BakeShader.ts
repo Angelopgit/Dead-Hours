@@ -10,7 +10,7 @@ export const bakeUniforms = {
 };
 bakeUniforms.uGroundBake.value.needsUpdate = true;
 
-function chain(mat: THREE.Material, tag: string, patch: (shader: THREE.WebGLProgramParametersWithUniforms) => void): void {
+export function chain(mat: THREE.Material, tag: string, patch: (shader: THREE.WebGLProgramParametersWithUniforms) => void): void {
   const prev = mat.onBeforeCompile;
   const baseKey = mat.customProgramCacheKey();
   mat.onBeforeCompile = (shader, renderer) => {

@@ -20,6 +20,20 @@ export interface WeaponDef {
   recoil: number;
   range: number;
   auto: boolean;
+  /** HUD fire mode label. */
+  mode: 'AUTO' | 'SEMI' | 'PUMP' | 'MELEE';
+  /** Zombies hear the shot within this many meters. */
+  noise: number;
+  /** Seconds to draw the weapon. */
+  draw: number;
+  /** Zombies a round can pass through (each costs damage). */
+  penetration: number;
+  /** Shells loaded one at a time (shotgun): reloadTime is the time for a full tube. */
+  perShell?: boolean;
+  /** Carry limit for reserve ammunition. */
+  maxReserve: number;
+  /** How the model is held: two-handed long gun, pistol, or blade. */
+  hold: 'rifle' | 'pistol' | 'melee';
   /** 0..1 summary bars for the loadout screen. */
   stats: { damage: number; fireRate: number; handling: number; range: number };
 }
@@ -30,6 +44,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     description: 'Balanced damage, medium recoil, moderate ammunition.',
     damage: 30, pellets: 1, fireRate: 700, magazine: 30, startReserve: 150, reloadTime: 2.3,
     hipSpread: 3.2, aimSpread: 0.6, recoil: 0.55, range: 120, auto: true,
+    mode: 'AUTO', noise: 70, draw: 0.55, penetration: 0, maxReserve: 240, hold: 'rifle',
     stats: { damage: 0.6, fireRate: 0.7, handling: 0.6, range: 0.7 },
   },
   smg: {
@@ -37,6 +52,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     description: 'High fire rate, low damage, excellent close-range handling.',
     damage: 19, pellets: 1, fireRate: 900, magazine: 32, startReserve: 192, reloadTime: 1.9,
     hipSpread: 2.6, aimSpread: 1.0, recoil: 0.35, range: 60, auto: true,
+    mode: 'AUTO', noise: 55, draw: 0.45, penetration: 0, maxReserve: 288, hold: 'rifle',
     stats: { damage: 0.35, fireRate: 0.95, handling: 0.9, range: 0.4 },
   },
   shotgun: {
@@ -44,6 +60,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     description: 'Devastating close-range damage, slow reload, limited ammunition.',
     damage: 16, pellets: 9, fireRate: 75, magazine: 6, startReserve: 30, reloadTime: 3.6,
     hipSpread: 6.5, aimSpread: 4.5, recoil: 1.4, range: 25, auto: false,
+    mode: 'PUMP', noise: 75, draw: 0.6, penetration: 0, perShell: true, maxReserve: 48, hold: 'rifle',
     stats: { damage: 0.95, fireRate: 0.2, handling: 0.5, range: 0.2 },
   },
   marksman: {
@@ -51,6 +68,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     description: 'High precision and damage with a slow rate of fire.',
     damage: 85, pellets: 1, fireRate: 150, magazine: 10, startReserve: 50, reloadTime: 2.8,
     hipSpread: 4.5, aimSpread: 0.15, recoil: 1.1, range: 200, auto: false,
+    mode: 'SEMI', noise: 85, draw: 0.65, penetration: 1, maxReserve: 80, hold: 'rifle',
     stats: { damage: 0.85, fireRate: 0.3, handling: 0.35, range: 1 },
   },
   pistol: {
@@ -58,6 +76,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     description: 'Reliable sidearm for when the primary runs dry.',
     damage: 24, pellets: 1, fireRate: 360, magazine: 15, startReserve: 60, reloadTime: 1.5,
     hipSpread: 2.2, aimSpread: 0.8, recoil: 0.5, range: 50, auto: false,
+    mode: 'SEMI', noise: 50, draw: 0.35, penetration: 0, maxReserve: 105, hold: 'pistol',
     stats: { damage: 0.4, fireRate: 0.5, handling: 0.85, range: 0.45 },
   },
   machete: {
@@ -65,9 +84,45 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     description: 'Silent. Never runs out of ammunition.',
     damage: 55, pellets: 1, fireRate: 80, magazine: 0, startReserve: 0, reloadTime: 0,
     hipSpread: 0, aimSpread: 0, recoil: 0, range: 2, auto: false,
+    mode: 'MELEE', noise: 5, draw: 0.3, penetration: 0, maxReserve: 0, hold: 'melee',
     stats: { damage: 0.6, fireRate: 0.25, handling: 0.7, range: 0.05 },
   },
 };
 
 export const PRIMARY_WEAPONS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman'];
 export const SECONDARY_WEAPONS: WeaponId[] = ['pistol'];
+
+/** Hit zones on a zombie and their damage multipliers. */
+export type HitZone = 'head' | 'torso' | 'armL' | 'armR' | 'legL' | 'legR';
+
+export const ZONE_MULTIPLIER: Record<HitZone, number> = {
+  head: 2.5, torso: 1, armL: 0.6, armR: 0.6, legL: 0.7, legR: 0.7,
+};
+
+/** Combat tuning shared by the client and the server. */
+export const COMBAT = {
+  /** Seconds to blend into aim (spread follows this, not the camera). */
+  aimTime: 0.22,
+  /** Damage stays full to this fraction of range, then falls to `falloffMin` at full range. */
+  falloffStart: 0.5,
+  falloffMin: 0.5,
+  /** Bullets travel this multiple of range, at a quarter damage past range. */
+  maxRangeFactor: 1.6,
+  /** Fire is refused if the claimed origin is farther than this from the shooter's eye. */
+  maxOriginOffset: 4.6,
+  meleeWindup: 0.16,
+  meleeDuration: 0.55,
+  meleeArc: 1.25,
+  meleeKnockback: 2.2,
+  bandageTime: 2.6,
+  bandageHeal: 40,
+  maxBandages: 3,
+  startBandages: 2,
+  /** Ammunition crate: rounds handed out per use, as magazines. */
+  crateMagsPrimary: 2,
+  crateMagsSecondary: 1,
+  crateUses: 2,
+  /** First aid boxes hold this many bandages. */
+  aidBoxBandages: 2,
+  interactRange: 1.8,
+} as const;

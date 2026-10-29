@@ -1,0 +1,41 @@
+import type { HitZone, WeaponId, WeaponSlot } from '../config/weapons';
+import type { ZombieKind } from '../config/zombies';
+import type { Surface } from '../physics/Physics';
+import type { Vec3 } from './math';
+
+export type SimPhase = 'preparation' | 'survival' | 'over';
+
+/** One pellet/bullet of a shot, for tracers and impact effects. */
+export interface PelletTrace {
+  end: Vec3;
+  /** What stopped it (or 'none' when it flew to max range). */
+  hit: 'world' | 'zombie' | 'none';
+}
+
+/**
+ * Everything observable that happened during a simulation step. The solo client renders these
+ * directly; in Phase 4 the server broadcasts them to every client.
+ */
+export type SimEvent =
+  | { type: 'phase'; phase: SimPhase }
+  | { type: 'shot'; player: string; weapon: WeaponId; origin: Vec3; pellets: PelletTrace[] }
+  | { type: 'dryFire'; player: string; weapon: WeaponId }
+  | { type: 'impact'; pos: Vec3; normal: Vec3; surface: Surface; dir: Vec3 }
+  | { type: 'zombieHit'; zombie: number; zone: HitZone; pos: Vec3; dir: Vec3; damage: number; killed: boolean; by: string; melee: boolean; exit: { pos: Vec3; normal: Vec3 } | null }
+  | { type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string }
+  | { type: 'zombieSpawned'; zombie: number; kind: ZombieKind }
+  | { type: 'zombieRemoved'; zombie: number }
+  | { type: 'zombieAlert'; zombie: number; pos: Vec3 }
+  | { type: 'zombieAttack'; zombie: number; target: string }
+  | { type: 'zombieGroan'; zombie: number; pos: Vec3 }
+  | { type: 'playerHurt'; player: string; damage: number; from: Vec3; health: number }
+  | { type: 'playerDied'; player: string }
+  | { type: 'playerHealed'; player: string; amount: number; health: number }
+  | { type: 'reload'; player: string; weapon: WeaponId; stage: 'start' | 'shell' | 'end' | 'cancel' }
+  | { type: 'draw'; player: string; slot: WeaponSlot; weapon: WeaponId }
+  | { type: 'melee'; player: string; stage: 'swing' | 'hit' | 'miss' }
+  | { type: 'bandage'; player: string; stage: 'start' | 'end' | 'cancel' }
+  | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon'; amount: number; source: number; weapon?: WeaponId }
+  | { type: 'doorPound'; door: number; pos: Vec3 }
+  | { type: 'doorForced'; door: number; pos: Vec3 }
+  | { type: 'notice'; player: string | null; text: string; sub?: string };

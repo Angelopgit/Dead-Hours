@@ -47,7 +47,7 @@ class Walker {
     this.vx += (wx * speed - this.vx) * k;
     this.vz += (wz * speed - this.vz) * k;
     this.vy += PLAYER.gravity * DT;
-    if (this.grounded && this.vy < 0) this.vy = -1;
+    if (this.grounded && this.vy < 0) this.vy = 0;
     const desired = { x: this.vx * DT, y: this.vy * DT, z: this.vz * DT };
     this.ctrl.computeColliderMovement(this.col, desired, undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic));
     const m = this.ctrl.computedMovement();
@@ -58,17 +58,17 @@ class Walker {
     this.p.world.step();
   }
   /** Steers to each waypoint; returns false at the first one it can't reach. */
-  walk(points: V[], label: string, tol = 0.3): boolean {
+  walk(points: V[], label: string, tol = 0.3, speed: number = PLAYER.walkSpeed): boolean {
     for (const [tx, tz] of points) {
       const s = this.pos;
-      const limit = (Math.hypot(tx - s.x, tz - s.z) / PLAYER.walkSpeed) * 2.5 + 1.5;
+      const limit = (Math.hypot(tx - s.x, tz - s.z) / speed) * 2.5 + 1.5;
       let t = 0;
       for (; t < limit; t += DT) {
         const p = this.pos;
         const dx = tx - p.x, dz = tz - p.z;
         const d = Math.hypot(dx, dz);
         if (d < tol) break;
-        this.step(dx / d, dz / d, d < 0.6 ? PLAYER.walkSpeed * 0.5 : PLAYER.walkSpeed);
+        this.step(dx / d, dz / d, d < 0.6 ? speed * 0.5 : speed);
       }
       if (t >= limit) {
         const p = this.pos;
@@ -85,10 +85,10 @@ class Walker {
   }
 }
 
-function route(p: Physics, label: string, start: [number, number, number], points: V[], expectY?: number): void {
+function route(p: Physics, label: string, start: [number, number, number], points: V[], expectY?: number, speed: number = PLAYER.walkSpeed): void {
   const w = new Walker(p, ...start);
   for (let i = 0; i < 30; i++) w.step(0, 0);
-  const ok = w.walk(points, label);
+  const ok = w.walk(points, label, 0.3, speed);
   const e = w.pos;
   const yOk = expectY === undefined || Math.abs(e.y - expectY) < 0.12;
   if (ok && !yOk) fail(`${label}: ended at y ${e.y.toFixed(2)}, expected ${expectY}`);
@@ -117,6 +117,8 @@ for (const d of map.doors) {
     const a: [number, number, number] = [d.x + nx * 1.1 * side, floor + 0.05, d.z + nz * 1.1 * side];
     const b: V = [d.x - nx * 1.1 * side, d.z - nz * 1.1 * side];
     route(phys, `${d.id}${d.exterior ? ` ${d.style ?? 'wood'}` : ''} side ${side}`, a, [b]);
+    // Crouch-walking speed: thresholds must not stall slow movers (zombies shamble slower still).
+    route(phys, `${d.id} side ${side} at crouch speed`, a, [b], undefined, PLAYER.crouchSpeed * 0.5);
   }
 }
 

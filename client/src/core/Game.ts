@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { NEIGHBORHOOD } from '@dead-hours/shared';
+import { NEIGHBORHOOD, type NavGrid } from '@dead-hours/shared';
 import { Engine } from './Engine';
 import { Input } from './Input';
 import { Physics, initPhysics } from './Physics';
+import { loadNavGrid } from './NavLoader';
 import { settings } from './Settings';
 import { Neighborhood } from '../environment/Neighborhood';
 import { DoorSystem } from '../gameplay/Doors';
@@ -30,6 +31,7 @@ export class Game {
   private emittersAdded = false;
   private field!: LightField;
   private exposure!: AutoExposure;
+  private nav!: NavGrid;
   private readonly ui = document.getElementById('ui-root')!;
 
   async boot(): Promise<void> {
@@ -50,6 +52,11 @@ export class Game {
     this.exposure = new AutoExposure(this.field);
     this.doors = new DoorSystem(NEIGHBORHOOD, this.physics, this.world.root);
     this.doors.applyProbes(this.field);
+    // Zombie navigation is built from the same collision (cached between visits).
+    this.nav = await loadNavGrid(this.physics, NEIGHBORHOOD, (f) => {
+      const next = `MAPPING STREETS ${Math.round(f * 100)}%`;
+      if (label && next !== lastLabel) label.textContent = lastLabel = next;
+    });
     this.menuCine = new MenuCinematic(this.engine.camera, this.engine.scene);
     this.menuCine.applyProbe(this.field);
     this.applyRenderSettings();
@@ -105,7 +112,24 @@ export class Game {
     ]);
     const pose = this.menuCine.pose();
     this.menuCine.setActive(false);
-    this.session = new SoloSession(this.engine, this.input, this.physics, this.doors, this.field, this.ui, () => void this.quitToMenu(), pose);
+    this.session = this.createSession(pose, false);
+  }
+
+  private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean): SoloSession {
+    return new SoloSession(
+      this.engine, this.input, this.physics, this.doors, this.field, this.nav, this.ui,
+      () => void this.quitToMenu(), () => void this.retry(), pose, { skipIntro },
+    );
+  }
+
+  /** Results → RETRY: a fresh run from the safehouse, straight into play. */
+  private async retry(): Promise<void> {
+    if (this.state !== 'session' || !this.session) return;
+    const fade = document.getElementById('fade')!;
+    await new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() }));
+    const pose = this.menuCine.pose();
+    this.session.dispose();
+    this.session = this.createSession(pose, true);
   }
 
   private async quitToMenu(): Promise<void> {
@@ -113,6 +137,7 @@ export class Game {
     await new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() }));
     this.session?.dispose();
     this.session = null;
+    this.doors.reset();
     this.state = 'menu';
     this.menu.show(this.ui);
     gsap.to(fade, { opacity: 0, duration: 1.4 });

@@ -1,0 +1,250 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { WeaponId } from '@dead-hours/shared';
+
+/**
+ * A held weapon: merged low-poly parts with vertex colors (a draw call or two each), plus
+ * the attachment points animation needs. Model space: +Z is the barrel, +Y the top, and the
+ * origin is where the right wrist goes when holding the grip.
+ */
+export interface WeaponModel {
+  readonly id: WeaponId;
+  readonly root: THREE.Group;
+  /** Detachable magazine (reloads), at rest in its well. */
+  readonly mag: THREE.Object3D | null;
+  readonly magRest: THREE.Vector3;
+  /** Shotgun fore-end / pistol slide: slides along Z when cycling. */
+  readonly action: THREE.Object3D | null;
+  readonly actionRest: THREE.Vector3;
+  readonly muzzle: THREE.Vector3;
+  /** Left wrist target on the handguard (or the support grip for pistols). */
+  readonly fore: THREE.Vector3;
+  readonly eject: THREE.Vector3;
+  /** Butt of the stock, seated in the shoulder when aiming (origin for pistols and blades). */
+  readonly stock: THREE.Vector3;
+  /** Charging handle / slide catch the left hand slaps at the end of a reload. */
+  readonly bolt: THREE.Vector3;
+  readonly materials: THREE.MeshStandardMaterial[];
+  dispose(): void;
+}
+
+type Part = { g: THREE.BufferGeometry; color: number };
+
+class Builder {
+  readonly parts: Part[] = [];
+  private readonly m = new THREE.Matrix4();
+  private readonly q = new THREE.Quaternion();
+  private readonly e = new THREE.Euler();
+
+  private push(g: THREE.BufferGeometry, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): void {
+    const geo = g.index ? g.toNonIndexed() : g;
+    if (geo !== g) g.dispose();
+    geo.deleteAttribute('uv');
+    this.q.setFromEuler(this.e.set(rx, ry, rz));
+    geo.applyMatrix4(this.m.compose(new THREE.Vector3(x, y, z), this.q, new THREE.Vector3(1, 1, 1)));
+    this.parts.push({ g: geo, color });
+  }
+
+  box(w: number, h: number, d: number, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): this {
+    this.push(new THREE.BoxGeometry(w, h, d), color, x, y, z, rx, ry, rz);
+    return this;
+  }
+
+  /** Cylinder along Z from z0 to z1. */
+  tube(r: number, z0: number, z1: number, color: number, x: number, y: number, segs = 8, r1 = r): this {
+    this.push(new THREE.CylinderGeometry(r1, r, Math.abs(z1 - z0), segs), color, x, y, (z0 + z1) / 2, Math.PI / 2);
+    return this;
+  }
+
+  build(): THREE.BufferGeometry {
+    const c = new THREE.Color();
+    for (const p of this.parts) {
+      const n = p.g.getAttribute('position').count;
+      const col = new Float32Array(n * 3);
+      c.setHex(p.color);
+      for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
+      p.g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    }
+    const merged = mergeGeometries(this.parts.map((p) => p.g), false)!;
+    for (const p of this.parts) p.g.dispose();
+    merged.computeBoundingSphere();
+    return merged;
+  }
+}
+
+const BLACK = 0x1d1e20;
+const DARK = 0x26272a;
+const STEEL = 0x141516;
+const WOOD = 0x5a3b24;
+const TAN = 0x6b5f48;
+const COYOTE = 0x8b7556;
+
+interface Spec {
+  body: Builder;
+  mag?: { b: Builder; at: [number, number, number] };
+  action?: { b: Builder; at: [number, number, number] };
+  muzzle: [number, number, number];
+  fore: [number, number, number];
+  eject: [number, number, number];
+  stock: [number, number, number];
+  bolt: [number, number, number];
+  metal?: boolean;
+}
+
+function m4(): Spec {
+  const b = new Builder()
+    .box(0.05, 0.06, 0.26, DARK, 0, 0.05, 0.08)
+    .box(0.045, 0.05, 0.2, BLACK, 0, 0.0, 0.06)
+    .box(0.062, 0.066, 0.24, 0x1a1b1d, 0, 0.05, 0.33)
+    .tube(0.011, 0.45, 0.62, STEEL, 0, 0.05)
+    .tube(0.015, 0.62, 0.67, STEEL, 0, 0.05, 6)
+    .box(0.014, 0.05, 0.018, BLACK, 0, 0.1, 0.43)
+    .box(0.03, 0.03, 0.05, BLACK, 0, 0.09, 0.1)
+    .tube(0.022, 0.06, 0.15, STEEL, 0, 0.118, 10)
+    .box(0.02, 0.016, 0.03, BLACK, 0, 0.085, -0.02)
+    .tube(0.016, -0.21, -0.05, BLACK, 0, 0.042)
+    .box(0.045, 0.085, 0.11, BLACK, 0, 0.02, -0.22)
+    .box(0.05, 0.12, 0.02, 0x121212, 0, 0.01, -0.28)
+    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.35)
+    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08);
+  const mag = new Builder().box(0.024, 0.17, 0.062, 0x202124, 0, -0.08, 0.012, 0.18);
+  return {
+    body: b, mag: { b: mag, at: [0, -0.01, 0.12] },
+    muzzle: [0, 0.05, 0.68], fore: [0.035, -0.015, 0.25], eject: [-0.03, 0.06, 0.1], stock: [0, 0.03, -0.29], bolt: [0.02, 0.085, -0.02],
+  };
+}
+
+function mp5(): Spec {
+  const b = new Builder()
+    .tube(0.026, -0.08, 0.22, DARK, 0, 0.05, 8)
+    .box(0.02, 0.02, 0.22, BLACK, 0, 0.085, 0.07)
+    .box(0.03, 0.035, 0.03, BLACK, 0, 0.09, -0.05)
+    .box(0.034, 0.045, 0.022, BLACK, 0, 0.088, 0.24)
+    .box(0.056, 0.062, 0.14, 0x1b1c1e, 0, 0.04, 0.28)
+    .tube(0.012, 0.35, 0.42, STEEL, 0, 0.05, 6)
+    .box(0.04, 0.04, 0.13, BLACK, 0, 0.005, 0.03)
+    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.03, -0.25)
+    .box(0.008, 0.008, 0.18, STEEL, 0.02, 0.045, -0.16)
+    .box(0.008, 0.008, 0.18, STEEL, -0.02, 0.045, -0.16)
+    .box(0.05, 0.1, 0.02, BLACK, 0, 0.035, -0.25);
+  const mag = new Builder().box(0.022, 0.16, 0.034, 0x202124, 0, -0.075, 0.025, 0.35);
+  return {
+    body: b, mag: { b: mag, at: [0, -0.0, 0.15] },
+    muzzle: [0, 0.05, 0.43], fore: [0.035, -0.01, 0.25], eject: [-0.03, 0.06, 0.08], stock: [0, 0.035, -0.26], bolt: [0.0, 0.08, 0.2],
+  };
+}
+
+function m870(): Spec {
+  const b = new Builder()
+    .box(0.05, 0.075, 0.2, 0x1f2022, 0, 0.04, 0.06)
+    .tube(0.013, 0.16, 0.63, STEEL, 0, 0.066)
+    .tube(0.013, 0.16, 0.54, 0x18191a, 0, 0.026)
+    .box(0.006, 0.008, 0.006, 0xbfae7a, 0, 0.083, 0.62)
+    .box(0.042, 0.1, 0.27, WOOD, 0, -0.005, -0.2, 0.12)
+    .box(0.046, 0.13, 0.025, 0x101010, 0, -0.03, -0.345, 0.12)
+    .box(0.036, 0.06, 0.09, WOOD, 0, -0.012, -0.035, 0.45)
+    .box(0.012, 0.012, 0.06, BLACK, 0, -0.01, 0.06);
+  const pump = new Builder()
+    .box(0.052, 0.05, 0.17, WOOD, 0, 0, 0)
+    .box(0.056, 0.006, 0.17, 0x4a3020, 0, -0.01, 0);
+  return {
+    body: b, action: { b: pump, at: [0, 0.026, 0.27] },
+    muzzle: [0, 0.066, 0.64], fore: [0.035, -0.002, 0.27], eject: [-0.03, 0.05, 0.07], stock: [0, -0.01, -0.35], bolt: [0.035, -0.002, 0.27],
+  };
+}
+
+function mk14(): Spec {
+  const b = new Builder()
+    .box(0.06, 0.08, 0.42, TAN, 0, 0.04, 0.12)
+    .box(0.066, 0.02, 0.3, 0x5d5340, 0, 0.04, 0.2)
+    .tube(0.012, 0.33, 0.63, STEEL, 0, 0.06)
+    .tube(0.019, 0.63, 0.69, STEEL, 0, 0.06, 6)
+    .tube(0.025, -0.02, 0.16, 0x111214, 0, 0.135, 10)
+    .tube(0.031, -0.06, -0.02, 0x111214, 0, 0.135, 10, 0.026)
+    .tube(0.026, 0.16, 0.21, 0x111214, 0, 0.135, 10, 0.033)
+    .box(0.025, 0.04, 0.02, BLACK, 0, 0.1, 0.0)
+    .box(0.025, 0.04, 0.02, BLACK, 0, 0.1, 0.13)
+    .box(0.04, 0.05, 0.18, TAN, 0, 0.045, -0.18)
+    .box(0.03, 0.03, 0.1, TAN, 0, 0.085, -0.17)
+    .box(0.05, 0.12, 0.03, BLACK, 0, 0.025, -0.28)
+    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3);
+  const mag = new Builder().box(0.03, 0.11, 0.07, 0x1c1c1c, 0, -0.055, 0, 0.05);
+  return {
+    body: b, mag: { b: mag, at: [0, -0.005, 0.12] },
+    muzzle: [0, 0.06, 0.7], fore: [0.04, -0.01, 0.26], eject: [-0.035, 0.06, 0.1], stock: [0, 0.03, -0.3], bolt: [0.035, 0.07, 0.05],
+  };
+}
+
+function m17(): Spec {
+  const b = new Builder()
+    .box(0.028, 0.025, 0.16, COYOTE, 0, 0.035, 0.1)
+    .box(0.03, 0.11, 0.046, COYOTE, 0, -0.015, 0.045, -0.3)
+    .box(0.01, 0.01, 0.045, COYOTE, 0, 0.004, 0.1);
+  const slide = new Builder()
+    .box(0.027, 0.034, 0.19, 0x1b1b1c, 0, 0, 0)
+    .box(0.006, 0.008, 0.006, 0x0e0e0e, 0, 0.02, 0.085)
+    .box(0.02, 0.008, 0.012, 0x0e0e0e, 0, 0.02, -0.088);
+  const mag = new Builder().box(0.024, 0.1, 0.036, 0x161616, 0, -0.045, 0, -0.3).box(0.03, 0.012, 0.045, 0x161616, 0, -0.098, -0.015, -0.3);
+  return {
+    body: b, action: { b: slide, at: [0, 0.064, 0.1] }, mag: { b: mag, at: [0, 0.02, 0.05] },
+    muzzle: [0, 0.064, 0.2], fore: [0.03, -0.035, 0.035], eject: [-0.02, 0.07, 0.1], stock: [0, 0, 0], bolt: [0.0, 0.07, 0.03],
+  };
+}
+
+function machete(): Spec {
+  const b = new Builder()
+    .tube(0.017, -0.03, 0.11, 0x151515, 0, 0, 8)
+    .box(0.014, 0.045, 0.014, 0x2a2a2a, 0, 0.004, 0.115)
+    .box(0.004, 0.05, 0.36, 0x8e9296, 0, 0.014, 0.3)
+    .box(0.004, 0.034, 0.09, 0x8e9296, 0, 0.022, 0.51, -0.25)
+    .box(0.0045, 0.008, 0.36, 0xb6babe, 0, -0.008, 0.3);
+  return {
+    body: b, metal: true,
+    muzzle: [0, 0.01, 0.56], fore: [0, 0, 0], eject: [0, 0, 0], stock: [0, 0, 0], bolt: [0, 0, 0],
+  };
+}
+
+const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete };
+
+const v = (a: [number, number, number]) => new THREE.Vector3(...a);
+
+export function createWeaponModel(id: WeaponId): WeaponModel {
+  const spec = SPECS[id]();
+  const root = new THREE.Group();
+  root.name = `weapon:${id}`;
+  const materials: THREE.MeshStandardMaterial[] = [];
+  const geometries: THREE.BufferGeometry[] = [];
+  const mesh = (b: Builder, parent: THREE.Object3D, metal = 0.35) => {
+    const g = b.build();
+    geometries.push(g);
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.metal ? 0.32 : 0.55, metalness: spec.metal ? 0.75 : metal, flatShading: true });
+    materials.push(mat);
+    const m = new THREE.Mesh(g, mat);
+    m.castShadow = true;
+    parent.add(m);
+    return m;
+  };
+  mesh(spec.body, root);
+  const sub = (s: { b: Builder; at: [number, number, number] } | undefined) => {
+    if (!s) return null;
+    const o = new THREE.Group();
+    o.position.set(...s.at);
+    root.add(o);
+    mesh(s.b, o);
+    return o;
+  };
+  const mag = sub(spec.mag);
+  const action = sub(spec.action);
+  return {
+    id, root, mag, action,
+    magRest: mag ? mag.position.clone() : new THREE.Vector3(),
+    actionRest: action ? action.position.clone() : new THREE.Vector3(),
+    muzzle: v(spec.muzzle), fore: v(spec.fore), eject: v(spec.eject), stock: v(spec.stock), bolt: v(spec.bolt),
+    materials,
+    dispose() {
+      root.removeFromParent();
+      for (const g of geometries) g.dispose();
+      for (const m of materials) m.dispose();
+    },
+  };
+}

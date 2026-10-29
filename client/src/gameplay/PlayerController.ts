@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER } from '@dead-hours/shared';
+import { PLAYER, type PlayerMotion } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
@@ -37,8 +37,16 @@ export class PlayerController {
   private height: number = PLAYER.height;
   private jumpBuffered = 0;
   private coyote = 0;
-  health: number = PLAYER.maxHealth;
   private wish = new THREE.Vector3();
+  /** Seconds the body keeps facing the camera after hip fire. */
+  private faceT = 0;
+  /** Seconds sprinting stays blocked (firing, melee, bandaging). */
+  private noSprintT = 0;
+  /** Camera pitch, fed to the spine so the upper body follows the aim. */
+  lookPitch = 0;
+  private turnRate = 0;
+  /** Dead: input and movement stop, a ragdoll owns the body. */
+  dead = false;
 
   constructor(private readonly physics: Physics, spawn: { x: number; y: number; z: number; yaw: number }, look: HumanoidLook) {
     this.position.set(spawn.x, spawn.y, spawn.z);
@@ -65,7 +73,7 @@ export class PlayerController {
   private capsuleDesc(height: number): RAPIER.ColliderDesc {
     return RAPIER.ColliderDesc.capsule(capsuleHalf(height), PLAYER.radius)
       .setTranslation(0, 0, 0)
-      .setCollisionGroups(groups(GROUP.player, GROUP.static | GROUP.dynamic));
+      .setCollisionGroups(groups(GROUP.player, GROUP.static | GROUP.dynamic | GROUP.zombie));
   }
 
   get colliderHandle(): RAPIER.Collider {
@@ -74,6 +82,30 @@ export class PlayerController {
 
   get eyeHeight(): number {
     return this.height - 0.2;
+  }
+
+  /** Turn the body toward the camera for a moment (hip fire, melee). */
+  faceCamera(seconds: number): void {
+    this.faceT = Math.max(this.faceT, seconds);
+  }
+
+  blockSprint(seconds: number): void {
+    this.noSprintT = Math.max(this.noSprintT, seconds);
+  }
+
+  /** Current movement state for the simulation (aim, noise, spread). */
+  motion(cameraYaw: number, cameraPitch: number): PlayerMotion {
+    return {
+      pos: { x: this.position.x, y: this.position.y, z: this.position.z },
+      vel: { x: this.velocity.x, y: this.velocity.y, z: this.velocity.z },
+      yaw: cameraYaw,
+      pitch: cameraPitch,
+      eyeHeight: this.eyeHeight,
+      crouching: this.crouching,
+      sprinting: this.sprinting,
+      aiming: this.aiming,
+      grounded: this.grounded,
+    };
   }
 
   /** Samples input once per frame (pressed events must not be missed between fixed steps). */
@@ -114,11 +146,14 @@ export class PlayerController {
 
   fixedUpdate(dt: number, cameraYaw: number): void {
     this.prevPosition.copy(this.position);
+    if (this.dead) return;
+    this.faceT = Math.max(0, this.faceT - dt);
+    this.noSprintT = Math.max(0, this.noSprintT - dt);
     // Hold-to-crouch with Ctrl/C.
     const wantCrouch = this.crouchHeld;
     if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
 
-    this.sprinting = this.sprintHeld && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded;
+    this.sprinting = this.sprintHeld && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
     const speed = this.crouching
       ? PLAYER.crouchSpeed
       : this.aiming
@@ -141,13 +176,23 @@ export class PlayerController {
       this.grounded = false;
     }
     this.intent.y += PLAYER.gravity * dt;
-    if (this.grounded && this.intent.y < 0) this.intent.y = -1;
+    // No downward push while grounded: snap-to-ground holds the feet down, and a slanted move
+    // defeats autostep at slow speeds (crouch-walking would stall on door thresholds).
+    if (this.grounded && this.intent.y < 0) this.intent.y = 0;
 
     const desired = { x: this.intent.x * dt, y: this.intent.y * dt, z: this.intent.z * dt };
-    this.controller.computeColliderMovement(this.collider, desired, undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic));
+    this.controller.computeColliderMovement(this.collider, desired, undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic | GROUP.zombie));
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
-    this.grounded = this.controller.computedGrounded();
+    let grounded = this.controller.computedGrounded();
+    if (!grounded && wasGrounded && this.intent.y <= 0) {
+      // Without a downward push the controller reports "airborne" on flat floor every other
+      // step; a short probe under the feet keeps the survivor grounded unless the floor is gone.
+      const t = this.body.translation();
+      const feet = t.y + m.y - this.height / 2;
+      if (this.physics.raycast(t.x + m.x, feet + 0.05, t.z + m.z, 0, -1, 0, 0.14) !== null) grounded = true;
+    }
+    this.grounded = grounded;
     if (this.grounded && this.intent.y < 0) this.intent.y = 0;
     // Bonk head on ceilings.
     if (!this.grounded && desired.y > 0 && m.y < desired.y * 0.5) this.intent.y = 0;
@@ -156,17 +201,24 @@ export class PlayerController {
     const next = { x: t.x + m.x, y: t.y + m.y, z: t.z + m.z };
     this.body.setNextKinematicTranslation(next);
     this.position.set(next.x, next.y - this.height / 2, next.z);
-    if (!wasGrounded && this.grounded) this.landed = true;
+    // Only a real fall counts as a landing (camera jolt, thud), not a step off a curb.
+    const air = this.airTime;
+    this.airTime = this.grounded ? 0 : this.airTime + dt;
+    if (!wasGrounded && this.grounded && air > 0.18) this.landed = true;
 
     // Facing: aim locks body to camera, otherwise turn toward travel direction.
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     let desiredFacing = this.facing;
-    if (this.aiming) desiredFacing = cameraYaw + Math.PI;
+    const toCamera = this.aiming || this.faceT > 0;
+    if (toCamera) desiredFacing = cameraYaw + Math.PI;
     else if (hv > 0.4) desiredFacing = Math.atan2(this.velocity.x, this.velocity.z);
     const diff = Math.atan2(Math.sin(desiredFacing - this.facing), Math.cos(desiredFacing - this.facing));
-    this.facing += diff * (1 - Math.exp(-dt * (this.aiming ? 20 : 11)));
+    const turned = diff * (1 - Math.exp(-dt * (toCamera ? 20 : 11)));
+    this.facing += turned;
+    this.turnRate = dt > 0 ? turned / dt : 0;
   }
   landed = false;
+  private airTime = 0;
 
   private setCrouch(on: boolean): void {
     const newHeight = on ? PLAYER.crouchHeight : PLAYER.height;
@@ -179,7 +231,7 @@ export class PlayerController {
       this.physics.world.intersectionsWithShape(
         { x: t.x, y: feet + PLAYER.height / 2 + 0.02, z: t.z }, { x: 0, y: 0, z: 0, w: 1 }, shape,
         () => { blocked = true; return false; },
-        undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic), this.collider,
+        undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic | GROUP.zombie), this.collider,
       );
       if (blocked) return;
     }
@@ -197,18 +249,37 @@ export class PlayerController {
   /** Interpolates the render transform between fixed steps and animates the rig. */
   render(dt: number, alpha: number): void {
     this.renderPosition.lerpVectors(this.prevPosition, this.position, alpha);
+    if (this.dead) return;
     this.character.root.position.copy(this.renderPosition);
     this.character.root.rotation.y = this.facing;
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     const right = new THREE.Vector3(Math.cos(this.facing), 0, -Math.sin(this.facing));
     const strafe = hv > 0.1 ? (this.velocity.x * right.x + this.velocity.z * right.z) / hv : 0;
+    const travel = Math.atan2(this.velocity.x, this.velocity.z) - this.facing;
+    const moveAngle = hv > 0.3 ? Math.atan2(Math.sin(travel), Math.cos(travel)) : 0;
+    const c = this.character;
+    c.lookPitch += ((this.aiming || this.faceT > 0 ? this.lookPitch : this.lookPitch * 0.35) - c.lookPitch) * (1 - Math.exp(-dt * 12));
     this.character.update(dt, {
       speed: hv,
       crouch: this.crouching ? 1 : 0,
       aim: this.aiming ? 1 : 0,
       grounded: this.grounded,
       strafe,
+      moveAngle,
+      turn: this.turnRate,
     });
+  }
+
+  /** Stops movement and removes the capsule so nothing collides with the fallen survivor. */
+  kill(): void {
+    if (this.dead) return;
+    this.dead = true;
+    this.clearInput();
+    this.sprinting = false;
+    this.velocity.set(0, 0, 0);
+    this.intent.set(0, 0, 0);
+    this.prevPosition.copy(this.position);
+    this.collider.setEnabled(false);
   }
 
   dispose(): void {
