@@ -99,6 +99,7 @@ export class SettingsPanel {
         row('Mouse sensitivity', slider(0.2, 3, 0.05, () => c.sensitivity, (v) => settings.update((s) => { s.controls.sensitivity = v; }), (v) => v.toFixed(2))),
         row('Invert Y-axis', toggle(() => settings.value.controls.invertY, (v) => settings.update((s) => { s.controls.invertY = v; }))),
         row('Aim behavior', seg([['hold', 'Hold'], ['toggle', 'Toggle']], () => settings.value.controls.aimMode, (v) => settings.update((s) => { s.controls.aimMode = v; }))),
+        row('Aim view', seg([['sights', 'Down sights'], ['shoulder', 'Shoulder']], () => settings.value.controls.aimView, (v) => settings.update((s) => { s.controls.aimView = v; })), 'Down sights switches to first person while aiming'),
         h('h3', {}, 'Key bindings'),
       );
       for (const action of Object.keys(ACTION_LABELS) as Action[]) content.push(row(ACTION_LABELS[action], this.bindingControl(action)));

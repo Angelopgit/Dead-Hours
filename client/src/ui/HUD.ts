@@ -36,6 +36,9 @@ export class HUD {
   private readonly stance: HTMLElement;
   private readonly fps: HTMLElement;
   private readonly crosshair: HTMLElement;
+  /** Rifle scope: black surround and a duplex reticle over the zoomed view. */
+  private readonly scope: HTMLElement;
+  private scopeShown = 0;
   private readonly marker: HTMLElement;
   private readonly hp: HTMLElement;
   private readonly timer: HTMLElement;
@@ -69,6 +72,11 @@ export class HUD {
     this.crosshair = h('div', { class: 'crosshair' },
       h('i', { class: 'dot' }), h('i', { class: 'l' }), h('i', { class: 'r' }), h('i', { class: 't' }), h('i', { class: 'b' }));
     this.marker = h('div', { class: 'hitmarker' }, h('i'), h('i'), h('i'), h('i'));
+    this.scope = h('div', { class: 'scope', style: 'display:none' },
+      h('div', { class: 'lens' },
+        h('i', { class: 'h' }), h('i', { class: 'v' }),
+        h('i', { class: 'post l' }), h('i', { class: 'post r' }), h('i', { class: 'post b' }),
+        h('b')));
     this.timer = h('div', { class: 'phase-timer' });
     this.warning = h('div', { class: 'warning' });
     this.arcs = h('div', { class: 'damage-arcs' });
@@ -83,6 +91,7 @@ export class HUD {
     this.slot2 = h('div', { class: 'w-slot' });
     this.bandages = h('div', { class: 'w-heal' });
     this.el = h('div', { class: 'hud' },
+      this.scope,
       this.arcs,
       this.crosshair,
       this.marker,
@@ -130,6 +139,15 @@ export class HUD {
     r.style.transform = `translateX(${g}px)`;
     t.style.transform = `translateY(${-g - 7}px)`;
     b.style.transform = `translateY(${g}px)`;
+  }
+
+  /** 0..1 how far the rifle scope is up to the eye. */
+  setScope(v: number): void {
+    const k = Math.round(v * 50) / 50;
+    if (k === this.scopeShown) return;
+    this.scopeShown = k;
+    this.scope.style.display = k > 0 ? '' : 'none';
+    this.scope.style.opacity = String(k);
   }
 
   setCrosshairVisible(v: boolean): void {

@@ -5,10 +5,19 @@ import { settings } from '../core/Settings';
 
 const BASE_FOV = 62;
 const AIM_FOV = 46;
+const NEAR = 0.08;
+/** Close enough for an optic a hand's width from the eye. */
+const ADS_NEAR = 0.025;
+
+/** What aiming down the active weapon's sights needs from the camera. */
+export interface SightView {
+  fov: number;
+}
 
 /**
  * Over-the-shoulder camera: mouse look, shoulder swap, aim zoom, sphere-cast collision
- * so the camera never clips into walls, and trauma-based shake.
+ * so the camera never clips into walls, and trauma-based shake. Aiming with sights moves it
+ * into the survivor's eye, first person, for a sight picture down the weapon.
  */
 export class ThirdPersonCamera {
   yaw = Math.PI;
@@ -16,6 +25,8 @@ export class ThirdPersonCamera {
   private shoulder = 1;
   private shoulderSmoothed = 1;
   private aimBlend = 0;
+  private adsBlend = 0;
+  private adsFov = AIM_FOV;
   private distance = 3.1;
   private trauma = 0;
   private readonly pivot = new THREE.Vector3();
@@ -26,6 +37,9 @@ export class ThirdPersonCamera {
   /** Aim ray (camera position and forward before shake): what shots are fired along. */
   readonly aimOrigin = new THREE.Vector3();
   readonly aimDir = new THREE.Vector3(0, 0, -1);
+  /** Eye position (first person) and unshaken view orientation, for lining up the sights. */
+  readonly eye = new THREE.Vector3();
+  readonly view = new THREE.Quaternion();
   /** Recoil climb still to be recovered (radians). */
   private recover = 0;
   private recoverYaw = 0;
@@ -35,7 +49,9 @@ export class ThirdPersonCamera {
   look(input: Input): void {
     const d = input.consumeLook();
     const c = settings.value.controls;
-    const sens = 0.0022 * c.sensitivity * (this.aimBlend > 0.5 ? 0.7 : 1);
+    // Zoomed sights turn slower in proportion to the zoom, so the view keeps the same feel.
+    const zoom = this.adsBlend > 0.5 ? this.camera.fov / BASE_FOV : this.aimBlend > 0.5 ? 0.7 : 1;
+    const sens = 0.0022 * c.sensitivity * zoom;
     this.yaw -= d.x * sens;
     this.pitch -= d.y * sens * (c.invertY ? -1 : 1);
     this.pitch = THREE.MathUtils.clamp(this.pitch, -1.25, 0.95);
@@ -59,8 +75,12 @@ export class ThirdPersonCamera {
     this.recover = this.recoverYaw = 0;
   }
 
-  update(dt: number, target: THREE.Vector3, eyeHeight: number, aiming: boolean, sprinting: boolean): void {
+  /** `sight` is the active weapon's when aiming should go first person, otherwise null. */
+  update(dt: number, target: THREE.Vector3, eyeHeight: number, aiming: boolean, sprinting: boolean, sight: SightView | null = null): void {
     this.aimBlend += ((aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 12));
+    this.adsBlend += ((aiming && sight ? 1 : 0) - this.adsBlend) * (1 - Math.exp(-dt * 14));
+    if (this.adsBlend < 0.002) this.adsBlend = 0;
+    if (sight) this.adsFov = sight.fov;
     if (this.recover !== 0 || this.recoverYaw !== 0) {
       const k = 1 - Math.exp(-dt * 7);
       const rp = this.recover * k;
@@ -107,6 +127,16 @@ export class ThirdPersonCamera {
     const backDist = backHit !== null ? Math.max(0.15, backHit - 0.02) : dist;
     const camPos = shoulderPt.addScaledVector(back, backDist);
 
+    // First person: the survivor's eyes sit 14 cm above the camera pivot, at the front of the
+    // face, cheek on the stock; crouching leans the head forward and keeps it higher than the
+    // shortened collider suggests.
+    const crouch = Math.max(0, 1.6 - eyeHeight);
+    const fwdFlat = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    this.eye.copy(this.smoothPivot).addScaledVector(fwdFlat, 0.1 + crouch * 0.25).addScaledVector(right, 0.03);
+    this.eye.y += 0.14 + crouch * 0.3;
+    const ads = this.adsBlend;
+    if (ads > 0) camPos.lerp(this.eye, ads * ads * (3 - 2 * ads));
+
     // Shake.
     this.trauma = Math.max(0, this.trauma - dt * 1.4);
     const shakeScale = settings.value.accessibility.reducedShake ? 0.25 : 1;
@@ -115,8 +145,10 @@ export class ThirdPersonCamera {
     const sprintBob = sprinting ? Math.sin(t * 13) * 0.012 * shakeScale : 0;
 
     this.camera.position.copy(camPos);
-    this.camera.position.y += sprintBob;
+    this.camera.position.y += sprintBob * (1 - ads);
     this.camera.quaternion.copy(q);
+    this.view.copy(q);
+    this.eye.copy(this.camera.position);
     this.aimOrigin.copy(this.camera.position);
     this.aimDir.set(0, 0, -1).applyQuaternion(q);
     if (s > 0) {
@@ -124,9 +156,13 @@ export class ThirdPersonCamera {
       this.camera.rotateY((Math.sin(t * 41 + 2) * 0.04) * s);
       this.camera.rotateZ((Math.sin(t * 29 + 4) * 0.05) * s);
     }
-    const fov = THREE.MathUtils.lerp(BASE_FOV, AIM_FOV, a) + (sprinting ? 4 : 0);
-    if (Math.abs(this.camera.fov - fov) > 0.01) {
-      this.camera.fov += (fov - this.camera.fov) * (1 - Math.exp(-dt * 10));
+    const shoulderFov = THREE.MathUtils.lerp(BASE_FOV, AIM_FOV, a) + (sprinting ? 4 : 0);
+    // Zoom follows the eye's move (the blend already eases), so the sights don't swim.
+    const fov = THREE.MathUtils.lerp(shoulderFov, this.adsFov, ads);
+    const near = ads > 0.05 ? ADS_NEAR : NEAR;
+    if (Math.abs(this.camera.fov - fov) > 0.01 || this.camera.near !== near) {
+      this.camera.fov = ads > 0 ? fov : this.camera.fov + (fov - this.camera.fov) * (1 - Math.exp(-dt * 10));
+      this.camera.near = near;
       this.camera.updateProjectionMatrix();
     }
 
@@ -139,5 +175,10 @@ export class ThirdPersonCamera {
 
   get aimAmount(): number {
     return this.aimBlend;
+  }
+
+  /** 0..1 how far into first-person sights the view is. */
+  get ads(): number {
+    return this.adsBlend;
   }
 }

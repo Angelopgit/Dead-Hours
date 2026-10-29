@@ -51,7 +51,7 @@ Static lighting is baked in the browser on first load and cached in IndexedDB (a
 - direct light from every static lamp with ray-traced shadows (same falloff as Three.js physical lights),
 - one bounce of indirect light, gathered from virtual point lights scattered off the first hits.
 
-The bake is injected into the standard materials' irradiance, so realtime lights (moon with shadows, the flickering streetlight, police strobes, the muzzle flash later) still shade on top. Characters and door leaves are lit by light probes sampled from the same light field, and exposure adapts between indoors and out. Bump `BAKE_VERSION` in `client/src/lighting/LightBaker.ts` when the baker changes; map edits invalidate the cache automatically.
+The bake is injected into the standard materials' irradiance, so realtime lights (moon with shadows, the flickering streetlight, police strobes, the muzzle flash later) still shade on top. Characters and door leaves are lit by light probes sampled from the same light field, and exposure adapts between indoors and out. Baked light has no highlights of its own, so puddles get the nearest unoccluded static lamps as mirror-like reflections (`patchPuddle` in `client/src/lighting/BakeShader.ts`); the night-sky environment map holds only the sky and the moon, never stand-in lamp glints. Bump `BAKE_VERSION` in `client/src/lighting/LightBaker.ts` when the baker changes; map edits invalidate the cache automatically.
 
 ## Combat
 
@@ -62,6 +62,7 @@ Solo play runs the same authoritative simulation the Phase 4 server will run (`s
 - Zombies have head, torso, arm and leg hit zones (head ×2.5). They hear gunfire and footsteps, spot you in their sight cone (crouching shortens it), path through houses, pound and break doors, stagger and get knocked down.
 - 45 seconds of preparation, then the outbreak: a growing population of walkers and no waves. Death ends a solo run with the results screen.
 - Gore can be set to Off, Reduced or Full in Settings → Graphics.
+- Aiming looks down the sights in first person: the camera moves into the survivor's eye and the weapon's sights line up with it. The M4A1 has a red dot, the MP5 a peep sight and hooded post, the M870 a fiber-optic bead, the M17 three-dot night sights and the MK14 a scope (zoomed view with a duplex reticle). Settings → Controls → Aim view switches back to the over-the-shoulder zoom.
 
 ## Survivors
 
@@ -77,7 +78,7 @@ The look is plain data (`shared/src/config/appearance.ts`): catalog ids plus pal
 
 ## Controls
 
-WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim · R reload · E interact · F melee · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. All bindings are editable in Settings → Controls.
+WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact · F melee · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. All bindings are editable in Settings → Controls.
 
 ## Roadmap status
 

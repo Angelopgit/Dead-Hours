@@ -3,6 +3,8 @@ import { DEFAULT_APPEARANCE, type Appearance } from '@dead-hours/shared';
 export type ShadowQuality = 'off' | 'low' | 'medium' | 'high';
 export type Quality = 'low' | 'medium' | 'high';
 export type AimMode = 'hold' | 'toggle';
+/** Aiming looks down the sights in first person, or zooms over the shoulder. */
+export type AimView = 'sights' | 'shoulder';
 export type GoreLevel = 'off' | 'reduced' | 'full';
 
 export type Action =
@@ -39,6 +41,7 @@ export interface SettingsData {
     sensitivity: number;
     invertY: boolean;
     aimMode: AimMode;
+    aimView: AimView;
     bindings: Record<Action, string[]>;
   };
   accessibility: {
@@ -87,7 +90,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     showFps: false,
   },
   audio: { master: 0.8, music: 0.6, effects: 0.9, ambient: 0.8 },
-  controls: { sensitivity: 1, invertY: false, aimMode: 'hold', bindings: DEFAULT_BINDINGS },
+  controls: { sensitivity: 1, invertY: false, aimMode: 'hold', aimView: 'sights', bindings: DEFAULT_BINDINGS },
   accessibility: { reducedShake: false, reducedFlashing: false, uiScale: 1 },
   profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE } },
 };

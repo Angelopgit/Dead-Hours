@@ -13,7 +13,7 @@ function lines(text: string | undefined, fallback: string): string[] {
 /** Reflective water for puddles; picks up the environment map assigned later. */
 function water(k: Kit): THREE.MeshStandardMaterial {
   const m = k.lib.custom('puddle', () => new THREE.MeshStandardMaterial({
-    color: 0x07090c, roughness: 0.04, metalness: 0.2, envMapIntensity: 0.6, polygonOffset: true, polygonOffsetFactor: -3,
+    color: 0x111418, roughness: 0.05, metalness: 0.2, envMapIntensity: 1, polygonOffset: true, polygonOffsetFactor: -3,
   }));
   m.userData.envMap = true;
   return m;
@@ -39,11 +39,13 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
   },
   puddle(k) {
     const r = k.p.length ?? 1.8;
-    const g = new THREE.CircleGeometry(r, 18);
+    const g = new THREE.CircleGeometry(r, 40);
     const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    const v = k.p.variant ?? 0;
     for (let i = 1; i < pos.count; i++) {
+      // A soft, lopsided outline (low harmonics only, so no spikes).
       const a = Math.atan2(pos.getY(i), pos.getX(i));
-      const f = 0.65 + 0.35 * Math.sin(a * 3 + (k.p.variant ?? 0)) * Math.cos(a * 2 - 1);
+      const f = 0.8 + 0.12 * Math.sin(a * 2 + v) + 0.07 * Math.sin(a * 3 - v * 1.7);
       pos.setXY(i, pos.getX(i) * f, pos.getY(i) * f * 0.7);
     }
     g.rotateX(-Math.PI / 2);

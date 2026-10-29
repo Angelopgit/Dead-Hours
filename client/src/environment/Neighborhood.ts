@@ -10,7 +10,7 @@ import { Atmosphere } from './Atmosphere';
 import { Lighting } from '../lighting/Lighting';
 import { LightField } from '../lighting/LightField';
 import { LightBaker, type BakeProgress } from '../lighting/LightBaker';
-import { bakeUniforms, patchBaked } from '../lighting/BakeShader';
+import { bakeUniforms, patchBaked, patchPuddle, PUDDLE_LAMPS, type ReflectedLamp } from '../lighting/BakeShader';
 import { settings, type Quality } from '../core/Settings';
 
 const FOG_DENSITY: Record<Quality, number> = { low: 0.017, medium: 0.02, high: 0.022 };
@@ -70,8 +70,40 @@ export class Neighborhood {
     const ground = await baker.bake(this.staticMeshes, onProgress);
     bakeUniforms.uGroundBake.value = ground;
     for (const m of this.staticMeshes) patchBaked(m.material as THREE.Material);
+    const lamps = this.puddleLamps(field);
+    for (const m of this.staticMeshes) {
+      const mat = m.material as THREE.Material;
+      if (mat.name === 'puddle') patchPuddle(mat, lamps);
+    }
     this.field = field;
     return field;
+  }
+
+  /** The static lamps puddles can see (unoccluded, in range), nearest first. */
+  private puddleLamps(field: LightField): ReflectedLamp[] {
+    const puddles = this.map.props.filter((p) => p.kind === 'puddle');
+    const found: { lamp: ReflectedLamp; dist: number }[] = [];
+    for (const l of this.map.lights) {
+      let best = Infinity;
+      for (const p of puddles) {
+        const dx = l.x - p.x, dy = l.y - 0.1, dz = l.z - p.z;
+        const d = Math.hypot(dx, dy, dz);
+        if (d >= l.range || d >= best) continue;
+        if (field.tracer.occluded(p.x, 0.1, p.z, dx / d, dy / d, dz / d, d - 0.6)) continue;
+        best = d;
+      }
+      if (best === Infinity) continue;
+      const dir = new THREE.Vector3(0, -1, 0);
+      let cone = new THREE.Vector2(-2, -2);
+      if (l.kind === 'spot') {
+        dir.set((l.tx ?? l.x) - l.x, (l.ty ?? 0) - l.y, (l.tz ?? l.z) - l.z).normalize();
+        const angle = l.angle ?? Math.PI / 3;
+        cone = new THREE.Vector2(Math.cos(angle), Math.cos(angle * (1 - (l.penumbra ?? 0))));
+      }
+      const color = new THREE.Color(l.color).multiplyScalar(l.intensity);
+      found.push({ lamp: { pos: new THREE.Vector3(l.x, l.y, l.z), color, decay: l.decay ?? 2, range: l.range, dir, cone }, dist: best });
+    }
+    return found.sort((a, b) => a.dist - b.dist).slice(0, PUDDLE_LAMPS).map((f) => f.lamp);
   }
 
   /** A small night-sky environment for reflective materials (glass, car paint, puddles). */
@@ -90,16 +122,13 @@ export class Neighborhood {
     }
     skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     env.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
-    // Warm streetlight glints and a pale moon.
+    // Only the moon: lamps reflect where they really are (see patchPuddle), so the sky holds no
+    // stand-in lamp glints that would light up every puddle and windshield from nowhere.
     const glint = (x: number, y: number, z: number, r: number, color: number, k: number) => {
       const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k) }));
       m.position.set(x, y, z);
       env.add(m);
     };
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      glint(Math.cos(a) * 40, 6 + (i % 3), Math.sin(a) * 40, 1.6, 0xffb36b, 6);
-    }
     glint(-28, 22, 20, 3, 0xc8d8f0, 4);
     const pmrem = new THREE.PMREMGenerator(renderer);
     this.envMap = pmrem.fromScene(env, 0.02).texture;

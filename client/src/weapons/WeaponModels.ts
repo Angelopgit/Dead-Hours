@@ -24,25 +24,70 @@ export interface WeaponModel {
   readonly stock: THREE.Vector3;
   /** Charging handle / slide catch the left hand slaps at the end of a reload. */
   readonly bolt: THREE.Vector3;
+  /** Aiming down the sights: where the eye sits behind them (model space). */
+  readonly sight: Sight | null;
   readonly materials: THREE.MeshStandardMaterial[];
   dispose(): void;
+}
+
+export type Optic = 'iron' | 'dot' | 'scope';
+
+export interface Sight {
+  /** Eye position for a correct sight picture; the sight line runs along +Z from here. */
+  eye: THREE.Vector3;
+  /** Vertical field of view while aiming down the sights. */
+  fov: number;
+  optic: Optic;
+}
+
+type V3 = [number, number, number];
+const SIGHT_DEFS: Partial<Record<WeaponId, { eye: V3; fov: number; optic: Optic }>> = {
+  ar: { eye: [0, 0.118, -0.2], fov: 44, optic: 'dot' },
+  smg: { eye: [0, 0.1, -0.125], fov: 48, optic: 'iron' },
+  shotgun: { eye: [0, 0.088, -0.26], fov: 50, optic: 'iron' },
+  marksman: { eye: [0, 0.135, -0.15], fov: 14, optic: 'scope' },
+  pistol: { eye: [0, 0.0885, -0.45], fov: 50, optic: 'iron' },
+};
+
+/** Sights of a weapon (null for blades), without building its model. */
+export function sightOf(id: WeaponId): Sight | null {
+  const d = SIGHT_DEFS[id];
+  return d ? { eye: new THREE.Vector3(...d.eye), fov: d.fov, optic: d.optic } : null;
 }
 
 type Part = { g: THREE.BufferGeometry; color: number };
 
 class Builder {
   readonly parts: Part[] = [];
+  /** Self-lit parts (red dot, tritium and fiber-optic sights), drawn unlit so they read at night. */
+  readonly glowParts: Part[] = [];
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
   private readonly e = new THREE.Euler();
 
-  private push(g: THREE.BufferGeometry, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): void {
+  private push(g: THREE.BufferGeometry, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, glow = false): void {
     const geo = g.index ? g.toNonIndexed() : g;
     if (geo !== g) g.dispose();
     geo.deleteAttribute('uv');
     this.q.setFromEuler(this.e.set(rx, ry, rz));
     geo.applyMatrix4(this.m.compose(new THREE.Vector3(x, y, z), this.q, new THREE.Vector3(1, 1, 1)));
-    this.parts.push({ g: geo, color });
+    (glow ? this.glowParts : this.parts).push({ g: geo, color });
+  }
+
+  glow(w: number, h: number, d: number, color: number, x: number, y: number, z: number): this {
+    this.push(new THREE.BoxGeometry(w, h, d), color, x, y, z, 0, 0, 0, true);
+    return this;
+  }
+
+  /** Open ring around the Z axis (sight apertures, hoods, optic bodies) you can look through. */
+  ring(r: number, t: number, z0: number, z1: number, color: number, x: number, y: number, segs = 10): this {
+    const chord = 2 * (r + t) * Math.tan(Math.PI / segs) + 0.0005;
+    for (let i = 0; i < segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      const c = r + t / 2;
+      this.push(new THREE.BoxGeometry(chord, t, Math.abs(z1 - z0)), color, x + Math.cos(a) * c, y + Math.sin(a) * c, (z0 + z1) / 2, 0, 0, a - Math.PI / 2);
+    }
+    return this;
   }
 
   box(w: number, h: number, d: number, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): this {
@@ -56,17 +101,19 @@ class Builder {
     return this;
   }
 
-  build(): THREE.BufferGeometry {
+  build(glow = false): THREE.BufferGeometry | null {
+    const parts = glow ? this.glowParts : this.parts;
+    if (parts.length === 0) return null;
     const c = new THREE.Color();
-    for (const p of this.parts) {
+    for (const p of parts) {
       const n = p.g.getAttribute('position').count;
       const col = new Float32Array(n * 3);
       c.setHex(p.color);
       for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
       p.g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     }
-    const merged = mergeGeometries(this.parts.map((p) => p.g), false)!;
-    for (const p of this.parts) p.g.dispose();
+    const merged = mergeGeometries(parts.map((p) => p.g), false)!;
+    for (const p of parts) p.g.dispose();
     merged.computeBoundingSphere();
     return merged;
   }
@@ -98,9 +145,16 @@ function m4(): Spec {
     .box(0.062, 0.066, 0.24, 0x1a1b1d, 0, 0.05, 0.33)
     .tube(0.011, 0.45, 0.62, STEEL, 0, 0.05)
     .tube(0.015, 0.62, 0.67, STEEL, 0, 0.05, 6)
-    .box(0.014, 0.05, 0.018, BLACK, 0, 0.1, 0.43)
-    .box(0.03, 0.03, 0.05, BLACK, 0, 0.09, 0.1)
-    .tube(0.022, 0.06, 0.15, STEEL, 0, 0.118, 10)
+    // Front sight post (co-witnessed low in the optic) between protective ears.
+    .box(0.004, 0.04, 0.006, BLACK, 0, 0.087, 0.43)
+    .box(0.03, 0.012, 0.02, BLACK, 0, 0.074, 0.43)
+    .box(0.004, 0.03, 0.016, BLACK, 0.011, 0.093, 0.43)
+    .box(0.004, 0.03, 0.016, BLACK, -0.011, 0.093, 0.43)
+    // Red dot optic: an open tube on a mount, the dot floating at its front.
+    .box(0.03, 0.022, 0.05, BLACK, 0, 0.087, 0.1)
+    .ring(0.021, 0.005, 0.07, 0.14, STEEL, 0, 0.118, 12)
+    .ring(0.026, 0.003, 0.136, 0.144, BLACK, 0, 0.118, 12)
+    .glow(0.0022, 0.0022, 0.0008, 0xff2414, 0, 0.118, 0.136)
     .box(0.02, 0.016, 0.03, BLACK, 0, 0.085, -0.02)
     .tube(0.016, -0.21, -0.05, BLACK, 0, 0.042)
     .box(0.045, 0.085, 0.11, BLACK, 0, 0.02, -0.22)
@@ -117,9 +171,14 @@ function m4(): Spec {
 function mp5(): Spec {
   const b = new Builder()
     .tube(0.026, -0.08, 0.22, DARK, 0, 0.05, 8)
-    .box(0.02, 0.02, 0.22, BLACK, 0, 0.085, 0.07)
-    .box(0.03, 0.035, 0.03, BLACK, 0, 0.09, -0.05)
-    .box(0.034, 0.045, 0.022, BLACK, 0, 0.088, 0.24)
+    .box(0.02, 0.016, 0.22, BLACK, 0, 0.082, 0.07)
+    // Rear diopter (a peep ring on its drum) and the hooded front post with a tritium dot.
+    .box(0.03, 0.022, 0.03, BLACK, 0, 0.082, -0.05)
+    .ring(0.006, 0.004, -0.056, -0.044, BLACK, 0, 0.1, 10)
+    .box(0.02, 0.022, 0.022, BLACK, 0, 0.077, 0.24)
+    .ring(0.011, 0.003, 0.232, 0.248, BLACK, 0, 0.1, 12)
+    .box(0.003, 0.012, 0.004, BLACK, 0, 0.094, 0.24)
+    .glow(0.0024, 0.0024, 0.0008, 0x9dff6a, 0, 0.0985, 0.2376)
     .box(0.056, 0.062, 0.14, 0x1b1c1e, 0, 0.04, 0.28)
     .tube(0.012, 0.35, 0.42, STEEL, 0, 0.05, 6)
     .box(0.04, 0.04, 0.13, BLACK, 0, 0.005, 0.03)
@@ -139,7 +198,8 @@ function m870(): Spec {
     .box(0.05, 0.075, 0.2, 0x1f2022, 0, 0.04, 0.06)
     .tube(0.013, 0.16, 0.63, STEEL, 0, 0.066)
     .tube(0.013, 0.16, 0.54, 0x18191a, 0, 0.026)
-    .box(0.006, 0.008, 0.006, 0xbfae7a, 0, 0.083, 0.62)
+    .box(0.008, 0.006, 0.01, STEEL, 0, 0.08, 0.62)
+    .glow(0.005, 0.005, 0.005, 0xff8a2a, 0, 0.0845, 0.62)
     .box(0.042, 0.1, 0.27, WOOD, 0, -0.005, -0.2, 0.12)
     .box(0.046, 0.13, 0.025, 0x101010, 0, -0.03, -0.345, 0.12)
     .box(0.036, 0.06, 0.09, WOOD, 0, -0.012, -0.035, 0.45)
@@ -182,8 +242,13 @@ function m17(): Spec {
     .box(0.01, 0.01, 0.045, COYOTE, 0, 0.004, 0.1);
   const slide = new Builder()
     .box(0.027, 0.034, 0.19, 0x1b1b1c, 0, 0, 0)
-    .box(0.006, 0.008, 0.006, 0x0e0e0e, 0, 0.02, 0.085)
-    .box(0.02, 0.008, 0.012, 0x0e0e0e, 0, 0.02, -0.088);
+    // Three-dot night sights: front post, rear notch.
+    .box(0.004, 0.009, 0.005, 0x0e0e0e, 0, 0.0205, 0.085)
+    .glow(0.0022, 0.0022, 0.0008, 0x9dff6a, 0, 0.0215, 0.0822)
+    .box(0.0075, 0.01, 0.01, 0x0e0e0e, 0.006, 0.021, -0.088)
+    .box(0.0075, 0.01, 0.01, 0x0e0e0e, -0.006, 0.021, -0.088)
+    .glow(0.002, 0.002, 0.0008, 0x9dff6a, 0.006, 0.0215, -0.0935)
+    .glow(0.002, 0.002, 0.0008, 0x9dff6a, -0.006, 0.0215, -0.0935);
   const mag = new Builder().box(0.024, 0.1, 0.036, 0x161616, 0, -0.045, 0, -0.3).box(0.03, 0.012, 0.045, 0x161616, 0, -0.098, -0.015, -0.3);
   return {
     body: b, action: { b: slide, at: [0, 0.064, 0.1] }, mag: { b: mag, at: [0, 0.02, 0.05] },
@@ -206,22 +271,31 @@ function machete(): Spec {
 
 const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete };
 
-const v = (a: [number, number, number]) => new THREE.Vector3(...a);
+const v = (a: V3) => new THREE.Vector3(...a);
 
 export function createWeaponModel(id: WeaponId): WeaponModel {
   const spec = SPECS[id]();
   const root = new THREE.Group();
   root.name = `weapon:${id}`;
   const materials: THREE.MeshStandardMaterial[] = [];
+  const glowMaterials: THREE.Material[] = [];
   const geometries: THREE.BufferGeometry[] = [];
   const mesh = (b: Builder, parent: THREE.Object3D, metal = 0.35) => {
-    const g = b.build();
+    const g = b.build()!;
     geometries.push(g);
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.metal ? 0.32 : 0.55, metalness: spec.metal ? 0.75 : metal, flatShading: true });
+    // Double-sided: looking down the sights puts the eye inside apertures and optic tubes.
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.metal ? 0.32 : 0.55, metalness: spec.metal ? 0.75 : metal, flatShading: true, side: THREE.DoubleSide });
     materials.push(mat);
     const m = new THREE.Mesh(g, mat);
     m.castShadow = true;
     parent.add(m);
+    const glow = b.build(true);
+    if (glow) {
+      geometries.push(glow);
+      const gm = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, fog: false });
+      glowMaterials.push(gm);
+      parent.add(new THREE.Mesh(glow, gm));
+    }
     return m;
   };
   mesh(spec.body, root);
@@ -240,11 +314,13 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
     magRest: mag ? mag.position.clone() : new THREE.Vector3(),
     actionRest: action ? action.position.clone() : new THREE.Vector3(),
     muzzle: v(spec.muzzle), fore: v(spec.fore), eject: v(spec.eject), stock: v(spec.stock), bolt: v(spec.bolt),
+    sight: sightOf(id),
     materials,
     dispose() {
       root.removeFromParent();
       for (const g of geometries) g.dispose();
       for (const m of materials) m.dispose();
+      for (const m of glowMaterials) m.dispose();
     },
   };
 }

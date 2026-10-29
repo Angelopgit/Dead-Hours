@@ -94,3 +94,67 @@ export function patchProbe(mat: THREE.Material, u: ProbeUniforms): void {
           + max(dot(geometryNormal, uProbeDir1), 0.0) * uProbeCol1) * BRDF_Lambert(material.diffuseColor);`);
   });
 }
+
+/** A static light seen in puddles: position, linear color × intensity, spot aim and cone. */
+export interface ReflectedLamp {
+  pos: THREE.Vector3;
+  color: THREE.Color;
+  decay: number;
+  range: number;
+  dir: THREE.Vector3;
+  /** cos(outer), cos(inner); outer = -2 for point lights. */
+  cone: THREE.Vector2;
+}
+
+export const PUDDLE_LAMPS = 8;
+
+/**
+ * Puddles mirror the baked lamps around them. Baked light has no specular of its own, so the
+ * nearest unoccluded static lamps are added as GGX highlights, widened by the bulb's size so a
+ * puddle shows the lamp's reflection where a mirror would.
+ */
+export function patchPuddle(mat: THREE.Material, lamps: ReflectedLamp[]): void {
+  if (mat.userData.puddle || !(mat instanceof THREE.MeshStandardMaterial) || lamps.length === 0) return;
+  mat.userData.puddle = true;
+  const n = Math.min(lamps.length, PUDDLE_LAMPS);
+  const pick = <T>(f: (l: ReflectedLamp) => T) => lamps.slice(0, n).map(f);
+  const u = {
+    uLampPos: { value: pick((l) => l.pos) },
+    uLampCol: { value: pick((l) => new THREE.Vector3(l.color.r, l.color.g, l.color.b)) },
+    uLampDir: { value: pick((l) => l.dir) },
+    uLampFall: { value: pick((l) => new THREE.Vector4(l.cone.x, l.cone.y, l.decay, l.range)) },
+  };
+  chain(mat, `puddle${n}`, (shader) => {
+    Object.assign(shader.uniforms, u);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vPuddleWorld;')
+      .replace('#include <fog_vertex>', '#include <fog_vertex>\nvPuddleWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vPuddleWorld;
+        uniform vec3 uLampPos[${n}];
+        uniform vec3 uLampCol[${n}];
+        uniform vec3 uLampDir[${n}];
+        uniform vec4 uLampFall[${n}];`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        {
+          vec3 pv = normalize(cameraPosition - vPuddleWorld);
+          float nv = max(pv.y, 1e-3);
+          for (int i = 0; i < ${n}; i++) {
+            vec3 lv = uLampPos[i] - vPuddleWorld;
+            float d = length(lv);
+            vec3 l = lv / d;
+            float nl = max(l.y, 0.0);
+            vec3 h = normalize(l + pv);
+            // Bulbs are about half a meter across: widen the lobe by their angular size.
+            float a = clamp(pow2(material.roughness) + 0.14 / d, 0.0, 1.0);
+            float spec = D_GGX(a, max(h.y, 0.0)) * V_GGX_SmithCorrelated(a, nl, nv) * nl;
+            vec3 f = F_Schlick(vec3(0.02), 1.0, max(dot(pv, h), 0.0));
+            vec4 k = uLampFall[i];
+            float cone = k.x < -1.0 ? 1.0 : smoothstep(k.x, k.y, dot(-l, uLampDir[i]));
+            float w = pow2(saturate(1.0 - pow4(d / k.w)));
+            reflectedLight.directSpecular += uLampCol[i] * f * (spec * cone * w / pow(max(d, 0.5), k.z));
+          }
+        }`);
+  });
+}

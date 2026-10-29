@@ -15,7 +15,7 @@ import { WeaponRack } from './WeaponRack';
 import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
-import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
+import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../weapons/WeaponModels';
 import { Effects } from '../effects/Effects';
 import { ZombieView } from '../zombies/ZombieView';
 import { HUD, clock } from '../ui/HUD';
@@ -115,6 +115,7 @@ export class SoloSession {
   private impactSoundAt = 0;
   private lastHurtDir = new THREE.Vector3(0, 0, 1);
   private ragdoll: Ragdoll | null = null;
+  private readonly sights = new Map<WeaponId, Sight | null>();
   private dropped: Dropped | null = null;
   private deathT = 0;
   private deathYaw = 0;
@@ -475,7 +476,7 @@ export class SoloSession {
     } else if (this.phase === 'dead') {
       this.deathCamera(live);
     } else {
-      this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming && this.canAim, p.sprinting);
+      this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming && this.canAim, p.sprinting, this.adsSight());
     }
     this.focus.copy(p.renderPosition);
 
@@ -486,7 +487,15 @@ export class SoloSession {
       this.ragdoll?.update(live);
       this.updateDropped(live);
     } else {
-      this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint });
+      // First-person sights (the camera only moves into the eye while playing).
+      const ads = this.phase === 'playing' || this.phase === 'paused' ? this.cam.ads : 0;
+      const scope = this.sightFor(a.weapon.id)?.optic === 'scope' ? THREE.MathUtils.smoothstep(ads, 0.7, 0.95) : 0;
+      this.weapon.hideHeld = scope > 0.5;
+      // The fill light rides with the camera to keep the survivor readable; down the sights it
+      // would only glare off the sights an inch from the eye.
+      this.fill.intensity = 1.6 * (1 - 0.8 * ads);
+      this.hud.setScope(scope);
+      this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view });
     }
     this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
 
@@ -506,6 +515,23 @@ export class SoloSession {
       this.areaCooldown = 2.5;
       this.hud.notify(area, '', 1.6);
     }
+  }
+
+  private sightFor(id: WeaponId): Sight | null {
+    let s = this.sights.get(id);
+    if (s === undefined) {
+      s = sightOf(id);
+      this.sights.set(id, s);
+    }
+    return s;
+  }
+
+  /** The active weapon's sights when aiming should look down them (first person). */
+  private adsSight(): Sight | null {
+    if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing') return null;
+    const a = this.me.arsenal;
+    if (a.action === 'reload' || a.action === 'draw') return null;
+    return this.sightFor(a.weapon.id);
   }
 
   private get canAim(): boolean {
@@ -847,7 +873,9 @@ export class SoloSession {
       };
     }
     this.weapon.setVisible(false);
+    this.hud.setScope(0);
     const body = this.player.character;
+    body.headHidden = false;
     const vel = this.player.velocity.clone().setY(0);
     this.player.kill();
     this.ragdoll = new Ragdoll(this.physics, body);
@@ -963,7 +991,8 @@ export class SoloSession {
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
     hud.setSpread(Math.min(70, px));
-    hud.setCrosshairVisible(this.phase === 'playing' && !p.sprinting && a.action !== 'bandage');
+    // Down the sights, the sights are the crosshair.
+    hud.setCrosshairVisible(this.phase === 'playing' && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
     hud.setStance(a.action === 'bandage' ? 'BANDAGING' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps);
 

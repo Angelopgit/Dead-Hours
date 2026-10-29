@@ -133,6 +133,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 /* ── HUD ──────────────────────────────────────────────── */
 .hud { position: absolute; inset: 0; pointer-events: none !important; font-family: var(--font-display); }
 .hud * { pointer-events: none; }
+.scope { position: absolute; inset: 0; overflow: hidden; }
+.scope .lens {
+  position: absolute; left: 50%; top: 50%; width: min(94vh, 94vw); height: min(94vh, 94vw);
+  transform: translate(-50%, -50%); border-radius: 50%;
+  box-shadow: 0 0 0 200vmax #000, inset 0 0 5vmin 1.5vmin rgba(0, 0, 0, 0.9);
+}
+.scope i { position: absolute; background: #060606; }
+.scope .h { left: 0; right: 0; top: 50%; height: 1px; margin-top: -0.5px; }
+.scope .v { top: 0; bottom: 0; left: 50%; width: 1px; margin-left: -0.5px; }
+.scope .post.l, .scope .post.r { top: 50%; width: 34%; height: 5px; margin-top: -2.5px; }
+.scope .post.l { left: 0; }
+.scope .post.r { right: 0; }
+.scope .post.b { left: 50%; bottom: 0; width: 5px; height: 34%; margin-left: -2.5px; }
+.scope b { position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; border-radius: 50%; background: #d4261c; box-shadow: 0 0 3px rgba(255, 40, 20, 0.8); }
 .crosshair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
 .crosshair i { position: absolute; background: rgba(235, 235, 230, 0.85); box-shadow: 0 0 2px rgba(0,0,0,0.8); transition: transform 0.08s; }
 .crosshair .dot { width: 3px; height: 3px; left: -1.5px; top: -1.5px; border-radius: 50%; }

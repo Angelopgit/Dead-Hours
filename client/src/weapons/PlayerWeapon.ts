@@ -19,7 +19,15 @@ export interface HandsInput {
   sprinting: boolean;
   /** World point under the crosshair. */
   aimPoint: THREE.Vector3;
+  /** 0..1 first-person aim down the sights (local player only). */
+  ads?: number;
+  /** Camera eye and view orientation (unshaken) the sights line up with. */
+  eye?: THREE.Vector3;
+  view?: THREE.Quaternion;
 }
+
+/** Turns camera space (looking down -Z) into weapon space (barrel along +Z). */
+const FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
 /** Sound cues the animation reaches (reload steps, holstering). */
 export type WeaponCue = 'magOut' | 'magIn' | 'bolt' | 'pump' | 'slide' | 'holster' | 'draw' | 'shellGrab';
@@ -96,6 +104,9 @@ export class PlayerWeapon {
   private lastAction: HeldState['action'] = 'idle';
   private lastActive: WeaponId | null = null;
   private time = 0;
+  /** Hides the weapon in the hands (looking through a scope). */
+  hideHeld = false;
+  private shown = true;
   /** Called when new weapon materials appear (light probe patching). */
   onMaterials: ((m: THREE.Material[]) => void) | null = null;
   onCue: ((cue: WeaponCue, weapon: WeaponId) => void) | null = null;
@@ -250,6 +261,17 @@ export class PlayerWeapon {
       this.tmpQ.setFromRotationMatrix(new THREE.Matrix4().lookAt(dir, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)));
       this.mix(this.tmpA, this.tmpQ, this.aimW);
     }
+    const ads = busy ? 0 : input.ads ?? 0;
+    if (ads > 0.001 && model.sight && input.eye && input.view) {
+      // Down the sights: the sight line on the camera axis, the stock wherever that puts it,
+      // with a slow breathing sway.
+      const t = this.time;
+      this.tmpQ.copy(input.view).multiply(FLIP)
+        .multiply(this.e2q(Math.sin(t * 1.3) * 0.0016, Math.sin(t * 0.9 + 1) * 0.002, 0));
+      this.tmpA.copy(stockLocal).sub(model.sight.eye).applyQuaternion(this.tmpQ).add(input.eye);
+      this.mix(this.tmpA, this.tmpQ, ads);
+    }
+    body.headHidden = ads > 0.35;
     if (this.sprintW > 0.001) {
       this.spinePose(poses.sprint, this.tmpA, this.tmpQ);
       this.mix(this.tmpA, this.tmpQ, this.sprintW * (1 - this.aimW));
@@ -284,6 +306,7 @@ export class PlayerWeapon {
     rootPos.copy(stockLocal).applyQuaternion(this.quat).negate().add(this.anchor);
     rootPos.addScaledVector(this.tmpA.set(0, 0, -1).applyQuaternion(this.quat), r.z * 0.022 * kickScale);
     model.root.quaternion.copy(this.quat);
+    model.root.visible = this.shown && !this.hideHeld;
     model.root.updateMatrixWorld(true);
     body.kick = -r.pitch * 0.012;
     body.twist = twist + this.swingTwist(s);
@@ -295,6 +318,7 @@ export class PlayerWeapon {
     for (const [id, m] of this.models) {
       if (m === model) continue;
       if (id === 'machete') continue;
+      m.root.visible = this.shown;
       this.holsterPose(WEAPONS[id].slot === 'primary' ? 'back' : 'thigh', m.root.position, m.root.quaternion);
       m.root.updateMatrixWorld(true);
     }
@@ -340,6 +364,11 @@ export class PlayerWeapon {
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
     this.lastProgress = progress;
     this.lastAction = s.action;
+  }
+
+  private readonly swayQ = new THREE.Quaternion();
+  private e2q(x: number, y: number, z: number): THREE.Quaternion {
+    return this.swayQ.setFromEuler(this.e.set(x, y, z));
   }
 
   private mix(pos: THREE.Vector3, q: THREE.Quaternion, w: number): void {
@@ -476,6 +505,7 @@ export class PlayerWeapon {
 
   /** Hides every weapon model (death, cutscenes). */
   setVisible(v: boolean): void {
+    this.shown = v;
     for (const m of this.models.values()) m.root.visible = v;
     if (!v) this.bandageRoll.visible = false;
   }

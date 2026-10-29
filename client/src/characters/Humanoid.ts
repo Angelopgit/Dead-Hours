@@ -286,6 +286,11 @@ export class Humanoid {
   /** Spine pitch kick from recoil (radians, decays in the owner). */
   kick = 0;
 
+  /** Collapses the head (and everything worn on it) while the camera looks out of its eyes. */
+  set headHidden(v: boolean) {
+    this.head.scale.setScalar(v ? 0.001 : 1);
+  }
+
   // Zombie channels.
   /** Swipe progress 0..1, or -1 when not attacking. */
   attack = -1;
