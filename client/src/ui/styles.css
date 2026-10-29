@@ -1,9 +1,10 @@
-@import '@fontsource/oswald/300.css';
-@import '@fontsource/oswald/500.css';
-@import '@fontsource/inter/400.css';
-@import '@fontsource/inter/500.css';
+@import '@fontsource/oswald/latin-300.css';
+@import '@fontsource/oswald/latin-500.css';
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-500.css';
 
 :root {
+  color-scheme: dark;
   --ui-scale: 1;
   --fg: #d9dde2;
   --fg-dim: #8a929c;
@@ -59,6 +60,16 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .menu-sub .menu-item { font-size: 1.1em; letter-spacing: 0.24em; padding: 0.3em 0 0.3em 0.1em; }
 .menu-footer { position: absolute; left: 7vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.12em; pointer-events: none; }
 .menu-hint { position: absolute; right: 4vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.14em; pointer-events: none; text-align: right; }
+.menu-hint .touch { display: none; color: var(--accent); }
+@media (pointer: coarse) { .menu-hint .touch { display: block; margin-bottom: 0.6em; } }
+@media (max-width: 720px) {
+  .title { font-size: 3em; }
+  .menu-main { left: max(16px, 6vw); }
+  .panel { right: 50%; transform: translate(50%, -50%); padding: 1.4em 1.2em; }
+  .row { grid-template-columns: 1fr; }
+  .weapons { grid-template-columns: 1fr; }
+  .menu-footer { left: max(16px, 6vw); }
+}
 
 /* ── Panels ───────────────────────────────────────────── */
 .panel { position: absolute; right: 6vw; top: 50%; transform: translateY(-50%); width: min(620px, 88vw); max-height: 82vh;

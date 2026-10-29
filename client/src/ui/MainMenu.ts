@@ -50,7 +50,7 @@ export class MainMenu {
       h('div', { class: 'menu-shade' }),
       this.main,
       h('div', { class: 'menu-footer' }, 'BUILD 0.1 — FOUNDATION'),
-      h('div', { class: 'menu-hint' }, 'HEADPHONES RECOMMENDED'),
+      h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'NEEDS A KEYBOARD AND MOUSE'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);
   }
