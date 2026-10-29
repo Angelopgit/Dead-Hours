@@ -65,7 +65,10 @@ export class Game {
     window.addEventListener('pointerdown', this.unlockAudio);
     window.addEventListener('keydown', this.unlockAudio);
 
-    this.menu = new MainMenu(this.input, { onSolo: () => void this.startSolo() });
+    this.menu = new MainMenu(this.input, {
+      onSolo: () => void this.startSolo(),
+      onCreator: (open) => { this.engine.paused = open; },
+    });
     this.engine.add((dt, t) => this.update(dt, t));
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);

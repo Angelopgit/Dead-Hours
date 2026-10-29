@@ -1,5 +1,5 @@
 import { Room, type Client } from 'colyseus';
-import { C2S, GAME, NEIGHBORHOOD, PLAYER, type InputFrame, type JoinOptions } from '@dead-hours/shared';
+import { C2S, GAME, NEIGHBORHOOD, PLAYER, decodeAppearance, encodeAppearance, type InputFrame, type JoinOptions } from '@dead-hours/shared';
 import { PlayerState, SurvivalState } from './schema';
 
 interface CreateOptions {
@@ -38,6 +38,7 @@ export class SurvivalRoom extends Room<SurvivalState> {
     p.name = (options.name ?? 'Survivor').slice(0, 20);
     p.primary = options.primary ?? 'ar';
     p.secondary = options.secondary ?? 'pistol';
+    p.appearance = encodeAppearance(decodeAppearance(options.appearance));
     p.x = spawn.x;
     p.y = spawn.y;
     p.z = spawn.z;

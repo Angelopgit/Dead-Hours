@@ -33,4 +33,6 @@ export interface JoinOptions {
   name: string;
   primary: string;
   secondary: string;
+  /** encodeAppearance() of the survivor's look; the server sanitizes it and shares it in the room state. */
+  appearance: string;
 }

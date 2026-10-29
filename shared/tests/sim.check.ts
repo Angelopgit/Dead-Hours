@@ -2,11 +2,14 @@
  * Headless checks for the combat simulation, run against the real map collision:
  * the zombie navigation grid, weapon state (fire rates, magazines, reloads, switching, melee),
  * damage and hit zones, zombie perception and pursuit through buildings, door pounding,
- * the spawner, interactables and player death. Run with `npm run check:sim`.
+ * the spawner, interactables and player death, and the survivor appearance wire format.
+ * Run with `npm run check:sim`.
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
   WEAPONS, NAV_REACHABLE, zombieZones, rayZones, PLAYER, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
+  randomAppearance, rng, type Appearance, type AppearanceItem,
 } from '../src/index';
 
 let failures = 0;
@@ -359,6 +362,47 @@ section('Interactables and death');
   check(sp.health === 90 && sp.bandages === 1, 'bandage heals 40');
   const res = (() => { sim.damagePlayer(sp, 200, { x: 0, y: 0, z: 0 }); return sim.drain(); })();
   check(!sp.alive && res.some((e) => e.type === 'playerDied') && sim.phase === 'over', 'death ends the solo game');
+  cleanup(sim, body);
+}
+
+section('Survivor appearance');
+{
+  const catalogs = Object.entries(APPEARANCE_ITEMS) as [string, readonly AppearanceItem[]][];
+  check(catalogs.every(([, items]) => new Set(items.map((i) => i.id)).size === items.length), 'catalog ids are unique in every slot');
+  check(catalogs.every(([, items]) => items.length < 36 * 36), 'every catalog fits the two-digit wire index');
+  const tops = APPEARANCE_ITEMS.top.map((i) => i.id) as string[];
+  const hats = APPEARANCE_ITEMS.headwear as readonly AppearanceItem[];
+  check(['flannel', 'openflannel', 'leather', 'denim', 'hoodie', 'buttonup'].every((id) => tops.includes(id)), 'flannels, jackets and shirts are in the catalog');
+  check(['Hats', 'Helmets', 'Funny hats'].every((g) => hats.some((h) => h.group === g)), 'headwear has hats, helmets and funny hats');
+  check(APPEARANCE_ITEMS.eyes.length >= 5 && PALETTES.eye.length >= 8, 'several eye shapes and eye colors');
+
+  const sameLook = (a: Appearance, b: Appearance) => APPEARANCE_FIELDS.every(([k]) => a[k] === b[k]);
+  check(sameLook(decodeAppearance(encodeAppearance(DEFAULT_APPEARANCE)), DEFAULT_APPEARANCE), 'default look survives encode and decode');
+  const rand = rng(1234);
+  let roundTrips = 0, valid = 0;
+  for (let i = 0; i < 300; i++) {
+    const a = randomAppearance(rand);
+    if (sameLook(decodeAppearance(encodeAppearance(a)), a)) roundTrips++;
+    if (sameLook(sanitizeAppearance(a), a)) valid++;
+  }
+  check(roundTrips === 300, `300 random looks survive the wire format (${roundTrips})`);
+  check(valid === 300, `random looks are always valid (${valid})`);
+
+  const junk = sanitizeAppearance({ hair: 'laser', skin: 99, top: 'flannel', topColor: -1, eyeColor: 2.5, headwear: 'propeller' });
+  check(junk.hair === DEFAULT_APPEARANCE.hair && junk.skin === DEFAULT_APPEARANCE.skin, 'unknown items and out-of-range colors fall back');
+  check(junk.top === 'flannel' && junk.headwear === 'propeller' && junk.topColor === DEFAULT_APPEARANCE.topColor && junk.eyeColor === DEFAULT_APPEARANCE.eyeColor, 'valid fields are kept next to junk');
+  check(sameLook(sanitizeAppearance('nope'), DEFAULT_APPEARANCE) && sameLook(decodeAppearance(42), DEFAULT_APPEARANCE), 'non-objects give the default look');
+  check(sameLook(decodeAppearance('9.1.2.3'), DEFAULT_APPEARANCE), 'unknown wire versions give the default look');
+  check(sameLook(decodeAppearance('1.' + 'zz.'.repeat(80)), DEFAULT_APPEARANCE), 'oversized wire strings are refused');
+  const partial = decodeAppearance('1.2');
+  check(partial.skin === 2 && partial.hair === DEFAULT_APPEARANCE.hair, 'short wire strings fill missing fields with defaults');
+
+  const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  const cowboy = sanitizeAppearance({ ...DEFAULT_APPEARANCE, headwear: 'cowboy', top: 'flannel', eyes: 'fierce', eyeColor: 5 });
+  const p2 = sim.addPlayer('p2', 'Cowboy', 'ar', 'pistol', { x: 1, y: 0.15, z: 6 }, 0, encodeAppearance(cowboy));
+  check(sameLook(decodeAppearance(p2.appearance), cowboy), 'players keep the look they joined with');
+  const p3 = sim.addPlayer('p3', 'Hacker', 'ar', 'pistol', { x: 2, y: 0.15, z: 6 }, 0, '1.' + 'zz.'.repeat(26) + '<script>');
+  check(p3.appearance === encodeAppearance(decodeAppearance(p3.appearance)) && /^[0-9a-z.]+$/.test(p3.appearance), 'malicious appearance input is cleaned on join');
   cleanup(sim, body);
 }
 

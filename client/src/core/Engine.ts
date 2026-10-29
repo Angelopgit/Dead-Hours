@@ -90,7 +90,15 @@ export class Engine {
     this.renderer.setAnimationLoop(this.frame);
   }
 
+  /** While true the loop keeps time but neither updates nor draws (a full-screen menu covers the view). */
+  paused = false;
+
   private frame = (now: number): void => {
+    if (this.paused) {
+      this.timer.update(now);
+      this.lastFrame = now;
+      return;
+    }
     const limit = settings.value.graphics.fpsLimit;
     if (limit > 0 && now - this.lastFrame < 1000 / limit - 0.5) return;
     this.lastFrame = now;

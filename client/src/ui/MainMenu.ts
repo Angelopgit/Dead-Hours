@@ -3,17 +3,21 @@ import { GAME } from '@dead-hours/shared';
 import { h } from './dom';
 import { SettingsPanel } from './SettingsPanel';
 import { LoadoutPanel } from './LoadoutPanel';
+import { CharacterCreator } from './CharacterCreator';
 import { audio } from '../audio/AudioEngine';
 import type { Input } from '../core/Input';
 
 export interface MainMenuCallbacks {
   onSolo: () => void;
+  /** The character creator covers the street: the game can stop drawing it meanwhile. */
+  onCreator?: (open: boolean) => void;
 }
 
 /** Cinematic main menu overlay. The 3D street behind it is driven by MenuCinematic. */
 export class MainMenu {
   readonly el: HTMLElement;
   private panel: HTMLElement | null = null;
+  private creator: CharacterCreator | null = null;
   private playOpen = false;
   private readonly sub: HTMLElement;
   private readonly main: HTMLElement;
@@ -40,6 +44,7 @@ export class MainMenu {
       h('nav', { class: 'menu-list' },
         item('PLAY', () => this.togglePlay()),
         this.sub,
+        item('SURVIVOR', () => this.openCreator(), { tag: 'CUSTOMIZE' }),
         item('LOADOUT', () => this.openPanel(new LoadoutPanel(() => this.closePanel()).el)),
         item('SETTINGS', () => this.openPanel(new SettingsPanel(this.input, () => this.closePanel()).el)),
         item('CREDITS', () => this.openPanel(this.credits())),
@@ -49,15 +54,37 @@ export class MainMenu {
     this.el = h('div', { class: 'menu' },
       h('div', { class: 'menu-shade' }),
       this.main,
-      h('div', { class: 'menu-footer' }, 'BUILD 0.3 — MAPLE HOLLOW'),
+      h('div', { class: 'menu-footer' }, 'BUILD 0.3.1 — MAPLE HOLLOW'),
       h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'NEEDS A KEYBOARD AND MOUSE'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);
   }
 
   private onKey = (e: KeyboardEvent): void => {
-    if (e.code === 'Escape' && this.panel && this.el.isConnected && !this.input.captureNext) this.closePanel();
+    if (e.code !== 'Escape' || !this.el.isConnected || this.input.captureNext) return;
+    if (this.creator) this.closeCreator();
+    else if (this.panel) this.closePanel();
   };
+
+  private openCreator(): void {
+    if (this.creator) return;
+    this.closePanel();
+    this.creator = new CharacterCreator(() => this.closeCreator());
+    this.creator.show(this.el);
+    gsap.to([this.main, this.el.querySelector('.menu-footer'), this.el.querySelector('.menu-hint')], { opacity: 0, duration: 0.3 });
+    this.main.style.pointerEvents = 'none';
+    this.cb.onCreator?.(true);
+  }
+
+  private closeCreator(): void {
+    const c = this.creator;
+    if (!c) return;
+    this.creator = null;
+    this.cb.onCreator?.(false);
+    gsap.to(c.el, { opacity: 0, duration: 0.3, ease: 'power2.in', onComplete: () => c.dispose() });
+    gsap.to([this.main, this.el.querySelector('.menu-footer'), this.el.querySelector('.menu-hint')], { opacity: 1, duration: 0.45, delay: 0.1 });
+    this.main.style.pointerEvents = '';
+  }
 
   private togglePlay(): void {
     this.playOpen = !this.playOpen;
@@ -107,6 +134,8 @@ export class MainMenu {
   }
 
   dispose(): void {
+    this.creator?.dispose();
+    this.creator = null;
     window.removeEventListener('keydown', this.onKey);
     this.el.remove();
   }

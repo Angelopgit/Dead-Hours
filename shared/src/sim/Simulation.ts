@@ -4,6 +4,7 @@ import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type W
 import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
 import { SPAWNING, type ZombieKind } from '../config/zombies';
+import { decodeAppearance, encodeAppearance } from '../config/appearance';
 import type { MapDefinition } from '../types/world';
 import { Arsenal, type ArsenalTick } from './Arsenal';
 import { NAV_INDOOR, NAV_REACHABLE, type NavGrid } from './NavGrid';
@@ -45,6 +46,8 @@ export class SimPlayer {
   readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0 };
   footstepT = 0;
   diedAt = 0;
+  /** Wire form of the survivor's look (encodeAppearance), for the clients that render them. */
+  appearance = '';
 
   constructor(readonly id: string, readonly name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number) {
     this.arsenal = new Arsenal(primary, secondary);
@@ -194,8 +197,9 @@ export class Simulation {
     return e;
   }
 
-  addPlayer(id: string, name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number): SimPlayer {
+  addPlayer(id: string, name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number, appearance = ''): SimPlayer {
     const p = new SimPlayer(id, name, primary, secondary, spawn, yaw);
+    p.appearance = encodeAppearance(decodeAppearance(appearance));
     this.players.set(id, p);
     return p;
   }

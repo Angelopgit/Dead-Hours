@@ -1,3 +1,5 @@
+import { DEFAULT_APPEARANCE, type Appearance } from '@dead-hours/shared';
+
 export type ShadowQuality = 'off' | 'low' | 'medium' | 'high';
 export type Quality = 'low' | 'medium' | 'high';
 export type AimMode = 'hold' | 'toggle';
@@ -44,7 +46,7 @@ export interface SettingsData {
     reducedFlashing: boolean;
     uiScale: number;
   };
-  profile: { name: string; primary: string; secondary: string };
+  profile: { name: string; primary: string; secondary: string; appearance: Appearance };
 }
 
 export const DEFAULT_BINDINGS: Record<Action, string[]> = {
@@ -87,7 +89,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   audio: { master: 0.8, music: 0.6, effects: 0.9, ambient: 0.8 },
   controls: { sensitivity: 1, invertY: false, aimMode: 'hold', bindings: DEFAULT_BINDINGS },
   accessibility: { reducedShake: false, reducedFlashing: false, uiScale: 1 },
-  profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol' },
+  profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE } },
 };
 
 const STORAGE_KEY = 'deadhours.settings.v1';

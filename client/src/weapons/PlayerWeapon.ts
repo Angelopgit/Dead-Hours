@@ -356,7 +356,10 @@ export class PlayerWeapon {
   private holsterPose(kind: keyof typeof HOLSTERS, pos: THREE.Vector3, q: THREE.Quaternion): void {
     const h = HOLSTERS[kind];
     const bone = kind === 'back' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : this.body.hips;
-    bone.localToWorld(pos.copy(h.pos));
+    pos.copy(h.pos);
+    // A rifle slung over a backpack rides on top of it.
+    if (kind === 'back') pos.z -= this.body.backDepth;
+    bone.localToWorld(pos);
     bone.getWorldQuaternion(q).multiply(h.quat);
   }
 

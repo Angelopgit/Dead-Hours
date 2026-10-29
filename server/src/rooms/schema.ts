@@ -7,6 +7,8 @@ export class PlayerState extends Schema {
   @type('boolean') host = false;
   @type('string') primary = 'ar';
   @type('string') secondary = 'pistol';
+  /** Sanitized encodeAppearance() string: every client builds this survivor from it. */
+  @type('string') appearance = '';
   @type('number') x = 0;
   @type('number') y = 0;
   @type('number') z = 0;

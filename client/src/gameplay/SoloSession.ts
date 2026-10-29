@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  GAME, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS,
+  GAME, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, sanitizeAppearance,
   type Interactable, type MapDefinition, type NavGrid, type SimEvent, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
@@ -12,7 +12,7 @@ import { PlayerController } from './PlayerController';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
 import type { Door, DoorSystem } from './Doors';
 import { WeaponRack } from './WeaponRack';
-import { SURVIVOR_LOOKS } from '../characters/Humanoid';
+import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
@@ -154,10 +154,11 @@ export class SoloSession {
     });
     const profile = settings.value.profile;
     const primary = (PRIMARY_WEAPONS as string[]).includes(profile.primary) ? (profile.primary as WeaponId) : 'ar';
-    this.me = this.sim.addPlayer(ME, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw);
+    const look = sanitizeAppearance(profile.appearance);
+    this.me = this.sim.addPlayer(ME, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look));
 
-    // Survivor.
-    this.player = new PlayerController(physics, spawn, SURVIVOR_LOOKS[0]);
+    // Survivor, dressed as the profile's character.
+    this.player = new PlayerController(physics, spawn, survivorLook(look));
     engine.scene.add(this.player.character.root);
     this.probe = new DynamicProbe(field);
     this.probe.attach(this.player.character.surfaces());
