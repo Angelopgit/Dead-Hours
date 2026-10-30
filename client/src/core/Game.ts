@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { NEIGHBORHOOD, type NavGrid } from '@dead-hours/shared';
+import { NEIGHBORHOOD, type BeginMsg, type NavGrid } from '@dead-hours/shared';
 import { Engine } from './Engine';
 import { Input } from './Input';
 import { Physics, initPhysics } from './Physics';
@@ -9,7 +9,8 @@ import { settings } from './Settings';
 import { Neighborhood } from '../environment/Neighborhood';
 import { DoorSystem } from '../gameplay/Doors';
 import { MenuCinematic } from '../gameplay/MenuCinematic';
-import { SoloSession } from '../gameplay/SoloSession';
+import { GameSession } from '../gameplay/GameSession';
+import type { NetLink } from '../network/NetLink';
 import { MainMenu } from '../ui/MainMenu';
 import { audio } from '../audio/AudioEngine';
 import { AutoExposure } from '../lighting/Probes';
@@ -26,7 +27,9 @@ export class Game {
   private doors!: DoorSystem;
   private menuCine!: MenuCinematic;
   private menu!: MainMenu;
-  private session: SoloSession | null = null;
+  private session: GameSession | null = null;
+  /** The online room the current session is played in. */
+  private link: NetLink | null = null;
   private state: State = 'menu';
   private emittersAdded = false;
   private field!: LightField;
@@ -67,6 +70,7 @@ export class Game {
 
     this.menu = new MainMenu(this.input, {
       onSolo: () => void this.startSolo(),
+      onBegin: (link, begin) => void this.startOnline(link, begin),
       onCreator: (open) => { this.engine.paused = open; },
     });
     this.engine.add((dt, t) => this.update(dt, t));
@@ -118,11 +122,62 @@ export class Game {
     this.session = this.createSession(pose, false);
   }
 
-  private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean): SoloSession {
-    return new SoloSession(
+  private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean, online?: { link: NetLink; begin: BeginMsg }): GameSession {
+    return new GameSession(
       this.engine, this.input, this.physics, this.doors, this.field, this.nav, this.ui,
-      () => void this.quitToMenu(), () => void this.retry(), pose, { skipIntro },
+      () => void this.quitToMenu(), () => void this.retry(), pose,
+      { skipIntro, online, onLobby: online ? () => void this.backToLobby() : undefined },
     );
+  }
+
+  /** The host started the night: into the game with everyone in the room. */
+  async startOnline(link: NetLink, begin: BeginMsg): Promise<void> {
+    if (this.state !== 'menu') return;
+    this.state = 'session';
+    this.link = link;
+    link.handlers = {
+      over: (o) => this.session?.showTeam(o),
+      // The host started another night while this survivor was still on the results.
+      begin: (b) => void this.restartOnline(link, b),
+      reconnecting: (on) => this.session?.setReconnecting(on),
+      closed: () => void this.connectionLost(link),
+    };
+    const fade = document.getElementById('fade')!;
+    await Promise.all([
+      this.menu.hide(),
+      new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() })),
+    ]);
+    this.menuCine.setActive(false);
+    if (this.link !== link || !link.open) {
+      await this.quitToMenu();
+      return;
+    }
+    this.session = this.createSession(this.menuCine.pose(), true, { link, begin });
+  }
+
+  private async restartOnline(link: NetLink, begin: BeginMsg): Promise<void> {
+    if (this.link !== link || !this.session) return;
+    const fade = document.getElementById('fade')!;
+    await new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.4, onComplete: () => r() }));
+    this.session?.dispose();
+    this.session = this.createSession(this.menuCine.pose(), true, { link, begin });
+  }
+
+  /** After the night: back to the room's lobby (still connected) for the next one. */
+  private async backToLobby(): Promise<void> {
+    const link = this.link;
+    if (!link) return;
+    link.stopPlaying();
+    this.link = null;
+    await this.quitToMenu();
+    if (link.open) this.menu.openLobby(link);
+  }
+
+  private async connectionLost(link: NetLink): Promise<void> {
+    if (this.link !== link) return;
+    this.link = null;
+    await this.quitToMenu();
+    this.menu.notice('CONNECTION TO THE GAME WAS LOST');
   }
 
   /** Results → RETRY: a fresh run from the safehouse, straight into play. */
@@ -136,6 +191,9 @@ export class Game {
   }
 
   private async quitToMenu(): Promise<void> {
+    // Leaving a game in progress leaves its room.
+    this.link?.leave();
+    this.link = null;
     const fade = document.getElementById('fade')!;
     await new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() }));
     this.session?.dispose();

@@ -270,6 +270,18 @@ export class PlayerController {
     });
   }
 
+  /** Puts the survivor somewhere else at once (the server refused a move). */
+  teleport(pos: { x: number; y: number; z: number }): void {
+    this.position.set(pos.x, pos.y, pos.z);
+    this.prevPosition.copy(this.position);
+    this.renderPosition.copy(this.position);
+    const c = { x: pos.x, y: pos.y + this.height / 2, z: pos.z };
+    this.body.setTranslation(c, true);
+    this.body.setNextKinematicTranslation(c);
+    this.intent.set(0, 0, 0);
+    this.velocity.set(0, 0, 0);
+  }
+
   /** Stops movement and removes the capsule so nothing collides with the fallen survivor. */
   kill(): void {
     if (this.dead) return;

@@ -23,3 +23,4 @@ export * from './sim/Arsenal';
 export * from './sim/hitzones';
 export * from './sim/Zombie';
 export * from './sim/Simulation';
+export * from './protocol/snapshot';

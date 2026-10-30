@@ -283,8 +283,10 @@ export class HUD {
     if (this.waypointText.textContent !== text) this.waypointText.textContent = text;
   }
 
-  setFps(fps: number): void {
-    this.fps.textContent = settings.value.graphics.showFps ? `${Math.round(fps)} FPS` : '';
+  /** Frame rate (and the round trip to the server online), when the setting shows them. */
+  setFps(fps: number, rtt: number | null = null): void {
+    const show = settings.value.graphics.showFps;
+    this.fps.textContent = show ? `${Math.round(fps)} FPS${rtt !== null ? ` · ${Math.round(rtt * 1000)} MS` : ''}` : '';
   }
 
   setVisible(v: boolean): void {

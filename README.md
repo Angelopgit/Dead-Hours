@@ -7,13 +7,18 @@ A cinematic co-op zombie survival game for the browser. Three.js + TypeScript cl
 ```bash
 npm install
 npm run dev          # client on http://localhost:5173
-npm run dev:server   # multiplayer server on ws://localhost:2567 (lobbies wire up in Phase 4)
+npm run dev:server   # game server on http://localhost:2567 (restarts on changes)
+npm start            # game server, as deployed
 npm run typecheck    # shared + client + server
 npm run check:world  # walks a character through the real map collision (doors, stairs, passages)
+npm run check:houses # every enterable home: rooms reachable, stairs walkable, basements connected
 npm run check:audio  # renders every gun, action and handling sound and the echo responses, checks level and shape
 npm run check:sim    # headless combat simulation: navigation, weapons, damage, zombie AI, supplies, death, appearance wire format
+npm run check:server # starts a real server and plays it over WebSocket and HTTP: rooms, codes, a night, boards, profiles
 npm run build        # production client build into client/dist
 ```
+
+In development the client finds the server on port 2567 of the same host. A production build needs `VITE_SERVER_URL` (see Online play); without it the online menu items stay disabled and say SERVER OFFLINE, and solo play works as before.
 
 ## Layout
 
@@ -22,6 +27,7 @@ shared/   map data, weapons, player tuning, network protocol, combat simulation 
   src/config       weapons, zombies, player tuning, survivor appearance catalog (appearance.ts)
   src/map          Maple Hollow layout, map builder (houses, stairs, walls with openings), prop colliders
   src/sim          authoritative simulation: arsenal, hit zones, zombie AI, navigation grid, events
+  src/protocol     room messages, compact snapshots and the client's mirror of the server's simulation
 client/   Vite + Three.js game
   src/core         engine loop, input + rebinding, settings, Rapier physics
   src/rendering    post-processing, materials, procedural textures, static batching
@@ -32,17 +38,24 @@ client/   Vite + Three.js game
   src/weapons      weapon models, hand poses, reload/melee/bandage animation, recoil
   src/effects      particles, decals (holes, blood), shell casings, muzzle light
   src/zombies      zombie rendering: pooled bodies, interpolation, hit reactions, corpses
-  src/gameplay     player controller, shoulder camera, doors, weapon table, menu cinematic, solo session
+  src/gameplay     player controller, shoulder camera, doors, weapon table, menu cinematic, the game session
+                   (solo and online) and the other survivors online (RemoteSurvivors.ts)
+  src/network      server address and health (Net.ts), the room connection (NetLink.ts), player key and saved survivor (Account.ts)
   src/audio        procedural Web Audio engine and offline gun synthesis (no external assets)
-  src/ui           main menu, settings, loadout, HUD, pause, inventory, weapon table, results
+  src/ui           main menu, settings, loadout, HUD, pause, inventory, weapon table, results,
+                   online menu (host, join, lobby) and leaderboards
   tests/           headless world and audio checks (npm run check:world, check:audio)
   dev/lineup.html  dev-only page that renders survivors side by side for checking outfits (not in the build)
 server/   Colyseus server
-  src/rooms        SurvivalRoom + schema
+  src/game         the world's collision and navigation (built once), a night of play (Night.ts)
+  src/rooms        SurvivalRoom: lobby, host, start, the running night, results
+  src/net          HTTP API (health, open games, join codes, leaderboards, profiles, solo runs), input cleaning
+  src/store.ts     profiles, runs and boards in Postgres (DATABASE_URL) or a JSON file
+  tests/           end-to-end server check (npm run check:server)
 assets/   reserved for models, textures, audio, lightmaps
 ```
 
-The map is authored as data in `shared/src/map/maple-hollow.ts`. The client builds both visuals and Rapier collision from it (`propColliders` in `shared/src/map/colliders.ts` gives every prop its boxes), and the server will build identical collision from the same source in Phase 4.
+The map is authored as data in `shared/src/map/maple-hollow.ts`. The client builds both visuals and Rapier collision from it (`propColliders` in `shared/src/map/colliders.ts` gives every prop its boxes), and the server builds identical collision from the same source.
 
 ## Lighting
 
@@ -56,7 +69,7 @@ The bake is injected into the standard materials' irradiance, so realtime lights
 
 ## Combat
 
-Solo play runs the same authoritative simulation the Phase 4 server will run (`shared/src/sim`). The client only sends intents (fire along the camera ray, reload, switch, melee, bandage, use) and renders the events that come back, so damage, ammunition and health never live in the client.
+Solo play runs the same authoritative simulation the game server runs online (`shared/src/sim`). The client only sends intents (fire along the camera ray, reload, switch, melee, bandage, use) and renders the events that come back, so damage, ammunition and health never live in the client.
 
 - Weapons: M4A1 assault rifle, MP5 submachine gun, M870 pump shotgun (shell-by-shell reload, interruptible), MK14 marksman rifle (penetrates one body), M17 pistol, machete. Pick the starting primary in Loadout, swap it at the garage weapon table.
 - Ammunition is limited. Ammo crates refill reserves twice each; first aid boxes hold bandages (Q, 2.6 s, +40 HP, interrupted by damage).
@@ -76,7 +89,37 @@ Main menu → **Survivor** opens the character creator: a lit turntable preview 
 - Bottoms (7), shoes (5), gloves (4), eyewear and masks (11), neck pieces (6), back items (backpack, hiking pack, messenger bag, katana, guitar) and gear (tactical and hi-vis vests, bandolier, utility belt, fanny pack, knee pads), each with a color from a 20-color cloth palette.
 - Randomize, Reset and the survivor name live in the creator header. Choices save with the profile and the slung weapon sits on top of whatever is on your back.
 
-The look is plain data (`shared/src/config/appearance.ts`): catalog ids plus palette indices, sent as a short versioned string (`"1.4.1.2…"`) in the join options. The simulation and the Colyseus schema store the sanitized string per player, so other players will see your survivor when lobbies arrive in Phase 4. Catalogs and palettes are append-only: never reorder or remove entries, because indices are the wire format. Zombies are dressed from the same catalog, with muddied clothes and glowing eyes.
+The look is plain data (`shared/src/config/appearance.ts`): catalog ids plus palette indices, sent as a short versioned string (`"1.4.1.2…"`) in the join options. The simulation stores the sanitized string per player and the server sends it to everyone in the room, so other players see your survivor. Catalogs and palettes are append-only: never reorder or remove entries, because indices are the wire format. Zombies are dressed from the same catalog, with muddied clothes and glowing eyes.
+
+## Online play
+
+Main menu → Play → **Host game** makes a room on the game server: give it a name, make it public (listed under Join game) or private (code only), and send friends the five-character code. **Join game** lists the open public rooms and takes a code. In the room's lobby everyone marks ready and the host starts the night; up to four survivors.
+
+- The server runs the night: the same simulation as solo, at 60 steps a second, with zombies, damage, ammunition, doors and supply drops decided there. It sends a compact snapshot 20 times a second and every event as it happens. Each client draws the others smoothed between snapshots and shows its own shots, reloads and swings at once.
+- Hosting means creating the room and starting its nights; the room lives on the game server, not on the host's machine, so the night carries on if the host leaves (the next player who joined becomes host). This is not peer-to-peer.
+- The server checks each survivor's movement (speed, climbing, walls, map bounds) and puts them back when it doesn't add up.
+- When you die you can watch the others; when everyone is dead, everyone gets the team results and goes back to the lobby together.
+- A room is locked while its night is playing, so friends join between nights.
+- A connection that drops mid-night reconnects by itself: the server holds the survivor's place for 20 seconds (they stand still meanwhile) and the game shows CONNECTION LOST · RECONNECTING until it is back. After that it returns to the menu.
+- The server streams a night to each player only once their scene is built, and allows a few seconds of stalls (a slow machine, a hitch) before it counts a connection as lost.
+
+**Survivors and stats.** Each browser makes a player key (kept in local storage). The survivor's name, look and primary weapon are saved under it on the server whenever they change, along with lifetime stats: runs, kills, headshots, arms torn off, time survived, best time and most kills. Main menu → Leaderboards → Your survivor shows the key; entering it on another device brings the same survivor and stats there.
+
+**Leaderboards.** Longest survival and most kills, one entry per player (their best run). Online runs are recorded by the server. Solo runs are reported by the browser at the end and marked SOLO: the server refuses ones that can't be right (more kills than the time allows, more hits than shots) and limits how often a key can post, but it cannot replay a solo run, so treat those as honest-player scores.
+
+### Deploying
+
+The client is a static site (`npm run build`, publish `client/dist`). The server is one Node process (`npm start`).
+
+| Variable | Where | What |
+| --- | --- | --- |
+| `VITE_SERVER_URL` | client build | The server's address, `https://…` or `wss://…` (both work). |
+| `PORT` | server | Port to listen on (default 2567). |
+| `DATABASE_URL` | server | Postgres connection string. Tables are created on start. TLS is used for remote hosts unless `sslmode` or `PGSSLMODE` says otherwise. |
+| `DATA_FILE` | server | Without `DATABASE_URL`: the JSON file for profiles and boards (default `server/data/dead-hours.json`). |
+| `DEAD_HOURS_DEBUG` | server | `1` enables test commands in rooms (skip preparation, spawn zombies, hurt, full health). Never in production. |
+
+`GET /health` answers `{ ok, version, store }`. The server logs one line per room event (opened, joined, left, lost connection, reconnected, night started, night over with each survivor's time and kills). The HTTP API sends CORS headers for any origin, and Colyseus answers `/matchmake` with its own. The server builds the map's navigation once at start (about two seconds) and each room builds its own physics.
 
 ## Controls
 
@@ -87,5 +130,6 @@ WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB
 - **Phase 1 Foundation**: done.
 - **Phase 2 Environment**: done. Maple Hollow, 250 × 250 m: Elm Street and Birch Lane with sidewalks, alleys and fourteen streetlights (a few dead, one flickering); ten houses (eight closed homes, the two-storey safehouse with kitchen, living room, three bedrooms, basement, garage and four ways in, and the enterable Henderson house); the Quik-Stop gas station with an enterable store; a park with playground and gazebo; a police checkpoint with a barrier chicane and floodlights; fenced backyards with sheds and tight side passages; woods around the edge. Baked AO, shadows and bounce light plus fog and dynamic lights.
 - **Phase 3 Combat**: done. Six weapons with real models, hand IK, reload animations, recoil and holsters; muzzle flashes, tracers, shell casings and surface impacts; pooled blood, wounds, hit reactions and ragdoll deaths; zombie AI; weapon table, ammo crates and first aid; HUD with weapon panel, dynamic crosshair, hit markers, damage direction, timers and ammunition warning; inventory and results screen.
-- **Character customization**: done (see Survivors). Ready to sync through the player schema in Phase 4.
-- Phase 4 Multiplayer · Phase 5 Survival director · Phase 6 Defenses · Phase 7 Helicopter drops · Phase 8 Polish.
+- **Character customization**: done (see Survivors).
+- **Phase 4 Multiplayer**: done (see Online play). Hosted rooms with codes and a public list, the night run on the server, leaderboards and saved survivors.
+- Phase 5 Survival director · Phase 6 Defenses · Phase 7 Helicopter drops · Phase 8 Polish.

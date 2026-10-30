@@ -91,6 +91,21 @@ export class DoorBody {
     this.setOpen(!this.open, fromX, fromZ);
   }
 
+  /** Where the leaf is heading (radians, or 0..1 raised for a roll-up). */
+  get targetAngle(): number {
+    return this.target;
+  }
+
+  /** Takes the state another simulation decided (network clients); the leaf still swings there itself. */
+  remote(open: boolean, target: number): void {
+    if (open !== this.open) {
+      this.open = open;
+      this.changed = true;
+      this.collider.setCollisionGroups(open ? OPEN_GROUPS : CLOSED_GROUPS);
+    }
+    this.target = target;
+  }
+
   /** Zombie pounding. Returns true when the door gives way. */
   pound(amount: number, fromX: number, fromZ: number): boolean {
     if (this.open) return false;

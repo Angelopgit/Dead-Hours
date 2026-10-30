@@ -9,16 +9,17 @@ export class PauseMenu {
   private panel: HTMLElement | null = null;
   private readonly main: HTMLElement;
 
-  constructor(private readonly input: Input, onResume: () => void, onQuit: () => void) {
+  /** Online the night goes on behind the menu, and quitting means leaving the room. */
+  constructor(private readonly input: Input, onResume: () => void, onQuit: () => void, online = false) {
     const item = (label: string, fn: () => void) =>
       h('button', { class: 'menu-item', onmouseenter: () => audio.ui('hover'), onclick: () => { audio.ui('click'); fn(); } }, label);
     this.main = h('div', { class: 'menu-main' },
       h('h1', { class: 'title' }, 'PAUSED'),
-      h('div', { class: 'subtitle' }, 'The night does not wait.'),
+      h('div', { class: 'subtitle' }, online ? 'The others play on. So do they.' : 'The night does not wait.'),
       h('nav', { class: 'menu-list' },
         item('RESUME', onResume),
         item('SETTINGS', () => this.openSettings()),
-        item('QUIT TO MENU', onQuit),
+        item(online ? 'LEAVE GAME' : 'QUIT TO MENU', onQuit),
       ),
     );
     this.el = h('div', { class: 'pause' }, this.main);

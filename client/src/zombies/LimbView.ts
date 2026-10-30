@@ -66,7 +66,8 @@ export class LimbView {
   update(dt: number, sim: Simulation, alpha: number, camera: THREE.Camera, stepDt: number): void {
     const seen = new Set<number>();
     for (const l of sim.limbs) {
-      if (l.holder || !l.body) continue;
+      // (A network client's copy has no physics body for it: it is posed from snapshots.)
+      if (l.holder) continue;
       seen.add(l.id);
       let v = this.views.get(l.id);
       if (!v) {
@@ -104,7 +105,7 @@ export class LimbView {
         _p.addScaledVector(_d, 0.02);
         this.effects.drip(_p, _d.set(l.pos.x - l.prevPos.x, l.pos.y - l.prevPos.y, l.pos.z - l.prevPos.z).divideScalar(stepDt));
       }
-      if (!v.pooled && l.body.isSleeping()) {
+      if (!v.pooled && (l.body ? l.body.isSleeping() : speed < 0.02 && !v.falling && age > 1)) {
         v.pooled = true;
         if (fresh > 0.4) this.effects.pool(v.arm.cutEnd(_p).setY(r.position.y - l.radius + 0.01), 0.3 * l.scale, 120);
       }

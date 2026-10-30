@@ -263,8 +263,8 @@ export class AudioEngine {
     src.stop(t + 6.5);
   }
 
-  /** Short filtered noise burst for a foot plant. */
-  footstep(loudness: number, indoor: boolean): void {
+  /** Short filtered noise burst for a foot plant (another survivor's when `position` is given). */
+  footstep(loudness: number, indoor: boolean, position?: THREE.Vector3): void {
     if (!this.ctx || loudness <= 0.01) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
@@ -278,7 +278,8 @@ export class AudioEngine {
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(0.22 * loudness, t + 0.008);
     g.gain.exponentialRampToValueAtTime(0.001, t + (indoor ? 0.12 : 0.09));
-    src.connect(bp).connect(g).connect(this.effects);
+    if (position) src.connect(bp).connect(g).connect(this.makePanner(position)).connect(this.effects);
+    else src.connect(bp).connect(g).connect(this.effects);
     src.start(t, Math.random() * 2);
     src.stop(t + 0.2);
   }

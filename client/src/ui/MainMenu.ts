@@ -1,14 +1,21 @@
 import gsap from 'gsap';
-import { GAME } from '@dead-hours/shared';
+import { GAME, type BeginMsg } from '@dead-hours/shared';
 import { h } from './dom';
 import { SettingsPanel } from './SettingsPanel';
 import { LoadoutPanel } from './LoadoutPanel';
 import { CharacterCreator } from './CharacterCreator';
+import { OnlineMenu } from './OnlineMenu';
+import { LeaderboardPanel } from './LeaderboardPanel';
 import { audio } from '../audio/AudioEngine';
 import type { Input } from '../core/Input';
+import { net } from '../network/Net';
+import { account } from '../network/Account';
+import type { NetLink } from '../network/NetLink';
 
 export interface MainMenuCallbacks {
   onSolo: () => void;
+  /** An online room's host started the night. */
+  onBegin: (link: NetLink, begin: BeginMsg) => void;
   /** The character creator covers the street: the game can stop drawing it meanwhile. */
   onCreator?: (open: boolean) => void;
 }
@@ -17,25 +24,33 @@ export interface MainMenuCallbacks {
 export class MainMenu {
   readonly el: HTMLElement;
   private panel: HTMLElement | null = null;
+  private panelDispose: (() => void) | null = null;
+  private online: OnlineMenu | null = null;
   private creator: CharacterCreator | null = null;
+  /** Items that need the game server: enabled only once it has answered. */
+  private readonly needServer: HTMLButtonElement[] = [];
   private playOpen = false;
   private readonly sub: HTMLElement;
   private readonly main: HTMLElement;
 
   constructor(private readonly input: Input, private readonly cb: MainMenuCallbacks) {
-    const item = (label: string, onClick: () => void, opts: { disabled?: boolean; tag?: string } = {}) =>
-      h('button', {
+    const item = (label: string, onClick: () => void, opts: { tag?: string; online?: boolean } = {}) => {
+      const b: HTMLButtonElement = h('button', {
         class: 'menu-item',
-        disabled: opts.disabled,
-        onmouseenter: () => { if (!opts.disabled) audio.ui('hover'); },
-        onclick: () => { audio.unlock(); if (!opts.disabled) { audio.ui('click'); onClick(); } },
-      }, label, opts.tag ? h('span', { class: 'tag' }, opts.tag) : null);
+        onmouseenter: () => { if (!b.disabled) audio.ui('hover'); },
+        onclick: () => { audio.unlock(); if (!b.disabled) { audio.ui('click'); onClick(); } },
+      }, label, h('span', { class: 'tag' }, opts.tag ?? ''));
+      if (opts.online) {
+        b.dataset.tag = opts.tag ?? '';
+        this.needServer.push(b);
+      }
+      return b;
+    };
 
     this.sub = h('div', { class: 'menu-sub', style: 'height:0' },
-      item('SOLO', () => this.cb.onSolo(), { tag: 'EXPLORE THE NEIGHBORHOOD' }),
-      item('HOST LOBBY', () => {}, { disabled: true, tag: 'ONLINE PLAY IN DEVELOPMENT' }),
-      item('JOIN LOBBY', () => {}, { disabled: true }),
-      item('QUICK JOIN', () => {}, { disabled: true }),
+      item('SOLO', () => this.cb.onSolo(), { tag: 'SURVIVE ALONE' }),
+      item('HOST GAME', () => this.openOnline('host'), { tag: 'PLAY WITH FRIENDS', online: true }),
+      item('JOIN GAME', () => this.openOnline('browse'), { tag: 'CODE OR OPEN GAMES', online: true }),
     );
 
     this.main = h('div', { class: 'menu-main' },
@@ -46,6 +61,10 @@ export class MainMenu {
         this.sub,
         item('SURVIVOR', () => this.openCreator(), { tag: 'CUSTOMIZE' }),
         item('LOADOUT', () => this.openPanel(new LoadoutPanel(() => this.closePanel()).el)),
+        item('LEADERBOARDS', () => {
+          const p = new LeaderboardPanel(() => this.closePanel());
+          this.openPanel(p.el, () => p.dispose());
+        }, { online: true }),
         item('SETTINGS', () => this.openPanel(new SettingsPanel(this.input, () => this.closePanel()).el)),
         item('CREDITS', () => this.openPanel(this.credits())),
       ),
@@ -54,15 +73,65 @@ export class MainMenu {
     this.el = h('div', { class: 'menu' },
       h('div', { class: 'menu-shade' }),
       this.main,
-      h('div', { class: 'menu-footer' }, 'BUILD 0.3.6 — MAPLE HOLLOW'),
+      h('div', { class: 'menu-footer' }, 'BUILD 0.3.7 — MAPLE HOLLOW'),
       h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'NEEDS A KEYBOARD AND MOUSE'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);
+    this.refreshServer(false);
+  }
+
+  /** Online items work only with the game server there; until it answers they say why not. */
+  private refreshServer(force: boolean): void {
+    const set = () => {
+      const st = net.status;
+      for (const b of this.needServer) {
+        b.disabled = st !== 'online';
+        const tag = b.querySelector('.tag')!;
+        tag.textContent = st === 'online' ? b.dataset.tag ?? '' : st === 'unknown' ? 'CONNECTING…' : 'SERVER OFFLINE';
+      }
+    };
+    set();
+    void net.check(force).then(() => {
+      set();
+      if (net.status === 'online') void account.sync();
+    });
+  }
+
+  private openOnline(start: 'browse' | 'host', link?: NetLink): void {
+    const o = new OnlineMenu(start, {
+      onBegin: (l, b) => {
+        // The room now belongs to the game; the panel goes without leaving it.
+        o.release();
+        this.closePanel();
+        this.cb.onBegin(l, b);
+      },
+      onClose: () => this.closePanel(),
+    }, link);
+    this.online = o;
+    this.openPanel(o.el, () => {
+      if (this.online === o) this.online = null;
+      o.dispose();
+    });
+  }
+
+  /** A line under the menu for a few seconds (the connection dropped, ...). */
+  notice(text: string): void {
+    const n = h('div', { class: 'menu-notice' }, text);
+    this.el.append(n);
+    gsap.fromTo(n, { opacity: 0 }, { opacity: 1, duration: 0.4 });
+    gsap.to(n, { opacity: 0, duration: 0.8, delay: 5, onComplete: () => n.remove() });
+  }
+
+  /** Back from a night: straight into the room's lobby. */
+  openLobby(link: NetLink): void {
+    if (!this.playOpen) this.togglePlay();
+    this.openOnline('browse', link);
   }
 
   private onKey = (e: KeyboardEvent): void => {
     if (e.code !== 'Escape' || !this.el.isConnected || this.input.captureNext) return;
     if (this.creator) this.closeCreator();
+    else if (this.online) this.online.back();
     else if (this.panel) this.closePanel();
   };
 
@@ -104,8 +173,10 @@ export class MainMenu {
     );
   }
 
-  private openPanel(el: HTMLElement): void {
+  private openPanel(el: HTMLElement, dispose?: () => void): void {
     if (this.panel) this.panel.remove();
+    this.panelDispose?.();
+    this.panelDispose = dispose ?? null;
     this.panel = el;
     this.el.append(el);
     gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out' });
@@ -116,12 +187,15 @@ export class MainMenu {
     const p = this.panel;
     if (!p) return;
     this.panel = null;
+    this.panelDispose?.();
+    this.panelDispose = null;
     gsap.to(p, { opacity: 0, x: 16, duration: 0.25, ease: 'power2.in', onComplete: () => p.remove() });
     gsap.to(this.main, { opacity: 1, duration: 0.4 });
   }
 
   show(parent: HTMLElement): void {
     parent.append(this.el);
+    this.refreshServer(net.status !== 'online');
     gsap.fromTo(this.main.querySelector('.title'), { opacity: 0, letterSpacing: '0.5em' }, { opacity: 1, letterSpacing: '0.22em', duration: 2.4, ease: 'power3.out' });
     gsap.fromTo(this.main.querySelectorAll('.subtitle, .menu-list > .menu-item'), { opacity: 0, y: 8 },
       { opacity: 1, y: 0, duration: 0.8, stagger: 0.08, delay: 0.7, ease: 'power2.out' });
@@ -134,6 +208,7 @@ export class MainMenu {
   }
 
   dispose(): void {
+    this.panelDispose?.();
     this.creator?.dispose();
     this.creator = null;
     window.removeEventListener('keydown', this.onKey);

@@ -1,22 +1,25 @@
 {
   "name": "@dead-hours/server",
-  "version": "0.1.0",
+  "version": "0.3.7",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "check": "tsx tests/server.check.ts"
   },
   "dependencies": {
     "@colyseus/schema": "3.0.76",
     "@colyseus/ws-transport": "0.16.5",
     "@dead-hours/shared": "*",
-    "colyseus": "0.16.5"
+    "colyseus": "0.16.5",
+    "pg": "8.23.1",
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "tsx": "^4.19.0",
+    "@types/pg": "^8.23.1",
     "typescript": "~5.9.3"
   }
 }

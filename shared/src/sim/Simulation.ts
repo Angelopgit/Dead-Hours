@@ -722,7 +722,8 @@ export class Simulation {
   /** Whether a loose arm is within a player's grab (any point along it counts). */
   limbInReach(id: string, l: SimLimb): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive || l.holder || !l.body) return false;
+    // (A network client's copy of the world has no body for it: lying loose is enough.)
+    if (!p || !p.alive || l.holder) return false;
     const m = p.motion.pos;
     const dy = l.pos.y - m.y;
     if (dy < -0.6 || dy > LIMBS.reachHeight) return false;

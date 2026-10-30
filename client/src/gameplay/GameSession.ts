@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  GAME, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, sanitizeAppearance,
-  type ArmZone, type Interactable, type LimbCut, type MapDefinition, type NavGrid, type SimEvent, type SimLimb, type SimPlayer, type Vec3,
-  type WeaponId, type ZombieKind,
+  GAME, Mirror, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  type ActMsg, type ArmZone, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
+  type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { codeLabel, type Input } from '../core/Input';
@@ -14,6 +14,9 @@ import { ThirdPersonCamera } from './ThirdPersonCamera';
 import type { Door, DoorSystem } from './Doors';
 import { WeaponRack } from './WeaponRack';
 import { SupplyDrops } from './SupplyDrops';
+import { RemoteSurvivors } from './RemoteSurvivors';
+import type { NetLink } from '../network/NetLink';
+import { account } from '../network/Account';
 import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
@@ -25,7 +28,7 @@ import { LimbView } from '../zombies/LimbView';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { Inventory } from '../ui/Inventory';
-import { ResultsScreen } from '../ui/ResultsScreen';
+import { ResultsScreen, TeamResults } from '../ui/ResultsScreen';
 import { WeaponTablePanel } from '../ui/WeaponTablePanel';
 import { audio } from '../audio/AudioEngine';
 import { h } from '../ui/dom';
@@ -45,12 +48,17 @@ export function areaAt(map: MapDefinition, p: THREE.Vector3): string {
   return map.name.toUpperCase();
 }
 
-const ME = 'p1';
 const v3 = (v: Vec3, out: THREE.Vector3) => out.set(v.x, v.y, v.z);
+/** Motion messages a second to the server. */
+const MOTION_RATE = 30;
 
 export interface SessionOptions {
   /** Retry: straight into play, no establishing shot. */
   skipIntro?: boolean;
+  /** An online night: the room it is played in and how it began. */
+  online?: { link: NetLink; begin: BeginMsg };
+  /** Online: back to the room's lobby after the night (otherwise only leaving is offered). */
+  onLobby?: () => void;
 }
 
 interface Candidate {
@@ -74,15 +82,26 @@ interface Dropped {
 }
 
 /**
- * A local play session: one survivor in the neighborhood running the authoritative simulation
- * in the browser. The client sends the same intents the Phase 4 room will receive over the
- * network (fire, reload, switch, melee, heal, use) and renders the simulation's events.
+ * A play session. Solo: the survivor's browser runs the simulation itself. Online: the
+ * simulation runs on the server and this keeps a mirror of it (never stepped here); the
+ * survivor's own movement is simulated locally and sent ~30 times a second, actions go up as
+ * messages and are shown at once (fire, swing, reload, switch, bandage), and everything else
+ * is drawn from the server's snapshots and events, exactly as solo draws its own simulation.
  */
-export class SoloSession {
+export class GameSession {
   readonly player: PlayerController;
   readonly cam: ThirdPersonCamera;
   readonly sim: Simulation;
   readonly me: SimPlayer;
+  /** This survivor's id in the simulation ('p1' solo, the room session id online). */
+  readonly myId: string;
+  private readonly link: NetLink | null;
+  readonly mirror: Mirror | null;
+  private readonly remotes: RemoteSurvivors | null;
+  private motionT = 0;
+  private teamResults: TeamResults | null = null;
+  /** Online, after dying: whose fight the camera follows. */
+  private watching: string | null = null;
   private readonly hud: HUD;
   private readonly pause: PauseMenu;
   private readonly inventory = new Inventory();
@@ -160,21 +179,26 @@ export class SoloSession {
     private readonly onQuit: () => void,
     private readonly onRetry: () => void,
     startPose: { position: THREE.Vector3; target: THREE.Vector3 },
-    opts: SessionOptions = {},
+    private readonly opts: SessionOptions = {},
   ) {
-    const spawn = NEIGHBORHOOD.playerSpawns[0];
+    const online = opts.online ?? null;
+    const spawn = online ? online.begin.spawn : NEIGHBORHOOD.playerSpawns[0];
     doors.reset();
     for (const b of doors.bodies) if (b) this.doorColliders.add(b.collider.handle);
 
-    // Authoritative simulation.
+    // The simulation: authoritative here (solo), or the copy of the server's (online).
     this.sim = new Simulation({
       physics, map: NEIGHBORHOOD, nav, doors: doors.bodies,
-      seed: (Math.random() * 2 ** 31) | 0, preparation: GAME.preparationSeconds,
+      seed: online ? online.begin.seed : (Math.random() * 2 ** 31) | 0, preparation: GAME.preparationSeconds,
     });
+    this.link = online?.link ?? null;
+    this.myId = online ? online.link.id : 'p1';
     const profile = settings.value.profile;
     const primary = (PRIMARY_WEAPONS as string[]).includes(profile.primary) ? (profile.primary as WeaponId) : 'ar';
     const look = sanitizeAppearance(profile.appearance);
-    this.me = this.sim.addPlayer(ME, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look));
+    this.me = this.sim.addPlayer(this.myId, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look));
+    this.mirror = online ? new Mirror(this.sim, this.myId) : null;
+    this.remotes = online ? new RemoteSurvivors(engine.scene, physics, field, ui, this.myId) : null;
 
     // Survivor, dressed as the profile's character.
     this.player = new PlayerController(physics, spawn, survivorLook(look));
@@ -224,7 +248,7 @@ export class SoloSession {
     this.hud = new HUD(profile.name);
     this.hud.el.style.opacity = '0';
     ui.append(this.hud.el);
-    this.pause = new PauseMenu(input, () => this.resume(), () => this.quit());
+    this.pause = new PauseMenu(input, () => this.resume(), () => this.quit(), !!online);
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
     this.skip = h('div', { class: 'skip' }, 'PRESS ANY KEY TO SKIP');
     this.clickToPlay = h('div', { class: 'click-to-play' }, 'CLICK TO CONTINUE');
@@ -233,7 +257,7 @@ export class SoloSession {
     window.addEventListener('keydown', this.onKeyDown, sig);
     engine.canvas.addEventListener('click', this.onCanvasClick, sig);
     engine.canvas.addEventListener('mousemove', this.onCanvasMove, sig);
-    if (opts.skipIntro) this.quickStart();
+    if (opts.skipIntro || online) this.quickStart();
     else this.runIntro(startPose);
   }
 
@@ -243,6 +267,7 @@ export class SoloSession {
     this.zombies.gore = g.gore !== 'off';
     this.limbs.gore = g.gore !== 'off';
     this.weapon.gore = g.gore !== 'off';
+    this.remotes?.setGore(g.gore !== 'off');
   }
 
   /** Under a roof: sky mostly hidden (drives footstep and gunshot acoustics). */
@@ -257,6 +282,11 @@ export class SoloSession {
   // ------------------------------------------------------------------ phases
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    if (this.phase === 'dead' && this.watching && e.code === 'Escape') {
+      this.watching = null;
+      this.showResults();
+      return;
+    }
     if (this.phase === 'intro') {
       this.finishIntro();
       return;
@@ -415,7 +445,8 @@ export class SoloSession {
 
   private choose(id: WeaponId): void {
     if (id === this.me.arsenal.primary.id) return;
-    if (this.sim.selectPrimary(ME, id)) {
+    if (this.link) this.act({ a: 'primary', weapon: id });
+    if (this.link || this.sim.selectPrimary(this.myId, id)) {
       settings.update((s) => { s.profile.primary = id; });
       this.table?.setCarried(id);
       this.rack?.highlight(this.hovered, id);
@@ -460,21 +491,32 @@ export class SoloSession {
 
     // Fixed-step simulation, rendered with interpolation.
     const step = this.physics.fixedDt;
-    const running = this.phase !== 'paused';
+    // Online the night goes on while the menu is open.
+    const running = this.phase !== 'paused' || !!this.link;
     if (running) this.accumulator += dt;
+    if (this.link) {
+      // The scene has drawn a couple of frames (shaders compiled): ready for the server's stream.
+      if (++this.framesDrawn === 3) this.link.markLoaded();
+      this.receive();
+    }
     let steps = 0;
     while (this.accumulator >= step && steps < 5) {
       p.fixedUpdate(step, this.cam.yaw);
-      this.sim.setMotion(ME, p.motion(this.cam.yaw, this.cam.pitch));
-      if (this.phase === 'playing') this.sendIntents(step);
-      this.sim.step(step);
-      this.doors.update(step, this.engine.camera, false);
+      this.sim.setMotion(this.myId, p.motion(this.cam.yaw, this.cam.pitch));
+      if (this.link) {
+        if (this.phase === 'playing') this.sendOnline(step);
+        this.stepOnline(step);
+      } else {
+        if (this.phase === 'playing') this.sendIntents(step);
+        this.sim.step(step);
+        this.doors.update(step, this.engine.camera, false);
+      }
       this.physics.step();
       this.accumulator -= step;
       steps++;
     }
     if (steps === 5) this.accumulator = 0;
-    if (running) for (const e of this.sim.drain()) this.onEvent(e);
+    if (running && !this.link) for (const e of this.sim.drain()) this.onEvent(e);
     const alpha = this.accumulator / step;
     // Frozen while paused: effects, corpses and timers wait too.
     const live = running ? dt : 0;
@@ -502,7 +544,7 @@ export class SoloSession {
       this.engine.camera.lookAt(c.tx, c.ty, c.tz);
       this.fovTo(dt, 50);
     } else if (this.phase === 'dead') {
-      this.deathCamera(live);
+      this.deathCamera(dt);
     } else {
       this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming && this.canAim, p.sprinting, this.adsSight());
     }
@@ -527,10 +569,12 @@ export class SoloSession {
     }
     this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
 
-    // World.
-    const renderTime = this.sim.time - step + alpha * step;
+    // World (online: the mirror's clock, a snapshot behind the server).
+    const m = this.mirror;
+    const renderTime = m ? this.sim.time : this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
-    this.limbs.update(live, this.sim, alpha, this.engine.camera, step);
+    this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
+    if (m) this.remotes!.update(live, this.sim, m, this.engine.camera);
     this.bleedHeldLimb(live);
     if (running) this.drops.update(live, renderTime);
     this.drops.helicopters(this.helis);
@@ -613,24 +657,24 @@ export class SoloSession {
   private sendIntents(step: number): void {
     const sim = this.sim;
     if (this.wantSlot) {
-      sim.switchWeapon(ME, this.wantSlot);
+      sim.switchWeapon(this.myId, this.wantSlot);
       this.wantSlot = null;
     }
     if (this.wantMelee) {
       this.wantMelee = false;
       // The blow goes where the crosshair is (which arm, the head).
       const o = this.cam.aimOrigin, d = this.cam.aimDir;
-      sim.melee(ME, { origin: { x: o.x, y: o.y, z: o.z }, dir: { x: d.x, y: d.y, z: d.z } });
+      sim.melee(this.myId, { origin: { x: o.x, y: o.y, z: o.z }, dir: { x: d.x, y: d.y, z: d.z } });
     }
     if (this.wantHeal) {
       this.wantHeal = false;
-      sim.bandage(ME);
+      sim.bandage(this.myId);
     }
     if (this.wantReload) {
       this.wantReload = false;
       const w = this.me.arsenal.weapon;
       const empty = w.mag === 0;
-      if (sim.reload(ME)) this.reloadFromEmpty = empty;
+      if (sim.reload(this.myId)) this.reloadFromEmpty = empty;
     }
     const a = this.me.arsenal;
     const pressed = this.fireBuffer > 0;
@@ -641,9 +685,172 @@ export class SoloSession {
     if (!a.def.auto && !pressed) return;
     const o = this.cam.aimOrigin;
     const d = this.cam.aimDir;
-    const r = sim.fire(ME, { x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, pressed, (Math.random() * 2 ** 31) | 1);
+    const r = sim.fire(this.myId, { x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, pressed, (Math.random() * 2 ** 31) | 1);
     if (r !== 'busy') this.fireBuffer = 0;
     if (r === 'dry' && a.action === 'reload') this.reloadFromEmpty = true;
+  }
+
+  // ------------------------------------------------------------------ online
+
+  private get netNow(): number {
+    return performance.now() / 1000;
+  }
+
+  /** Snapshots, events and corrections from the server, in the order they came. */
+  private receive(): void {
+    const link = this.link!;
+    const mirror = this.mirror!;
+    for (const m of link.drain()) {
+      if (m.k === 'snap') mirror.apply(m.snap, m.at);
+      else if (m.k === 'pos') this.player.teleport(m.pos);
+      else {
+        for (const e of m.events) {
+          mirror.event(e);
+          if (!this.predicted(e)) this.onEvent(e);
+        }
+      }
+    }
+    mirror.tick(this.netNow);
+  }
+
+  /** This survivor's own actions the session already showed when they were made. */
+  private predicted(e: SimEvent): boolean {
+    if (!('player' in e) || e.player !== this.myId) return false;
+    return e.type === 'dryFire' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start');
+  }
+
+  /** What the server would do between snapshots: hands keep moving, doors keep swinging, zombies stay solid. */
+  private stepOnline(step: number): void {
+    const ticks: ArsenalTick[] = [];
+    for (const pl of this.sim.players.values()) {
+      if (!pl.alive) continue;
+      ticks.length = 0;
+      pl.arsenal.step(step, pl.motion.aiming, ticks);
+    }
+    this.mirror!.updateBodies();
+    this.doors.update(step, this.engine.camera, true);
+    // Where this survivor is and aims, ~30 times a second.
+    this.motionT -= step;
+    if (this.motionT <= 0 && this.me.alive) {
+      this.motionT += 1 / MOTION_RATE;
+      if (this.motionT < 0) this.motionT = 0;
+      const o = this.cam.aimOrigin, d = this.cam.aimDir;
+      this.link!.motion(packMotion({
+        motion: this.player.motion(this.cam.yaw, this.cam.pitch), facing: this.player.facing,
+        trigger: this.phase === 'playing' && this.fireHeld && !this.me.arsenal.limb,
+        aimOrigin: { x: o.x, y: o.y, z: o.z }, aimDir: { x: d.x, y: d.y, z: d.z },
+      }));
+    }
+  }
+
+  /** Sends an action and keeps the predicted hands from being overwritten until the server has it. */
+  private act(a: ActMsg): void {
+    this.mirror!.holdSelf(this.netNow + this.link!.rtt + 0.15);
+    this.link!.act(a);
+  }
+
+  /** Online intents: shown at once on this survivor's copy of the weapons, confirmed by the server. */
+  private sendOnline(step: number): void {
+    const a = this.me.arsenal;
+    const aim = () => {
+      const o = this.cam.aimOrigin, d = this.cam.aimDir;
+      return { o: { x: o.x, y: o.y, z: o.z }, d: { x: d.x, y: d.y, z: d.z } };
+    };
+    const swing = () => {
+      if (!a.startMelee()) return;
+      this.act({ a: 'melee', ...aim() });
+      this.onEvent({ type: 'melee', player: this.myId, stage: 'swing', limb: a.meleeWith === 'limb' });
+    };
+    if (this.wantSlot) {
+      const slot = this.wantSlot;
+      this.wantSlot = null;
+      // With an arm in hand the server throws it aside first.
+      if (a.limb ? a.action !== 'melee' : a.switchTo(slot)) this.act({ a: 'switch', slot });
+    }
+    if (this.wantMelee) {
+      this.wantMelee = false;
+      swing();
+    }
+    if (this.wantHeal) {
+      this.wantHeal = false;
+      if (a.action !== 'melee' && a.action !== 'bandage' && a.startBandage()) {
+        this.act({ a: 'bandage' });
+        audio.bandage();
+      }
+    }
+    if (this.wantReload) {
+      this.wantReload = false;
+      const empty = a.weapon.mag === 0;
+      if (a.startReload()) {
+        this.reloadFromEmpty = empty;
+        this.act({ a: 'reload' });
+      }
+    }
+    const pressed = this.fireBuffer > 0;
+    this.fireBuffer = Math.max(0, this.fireBuffer - step);
+    if (!this.fireHeld && !pressed) return;
+    if (a.limb) {
+      // The trigger finger swings the arm.
+      if (pressed) {
+        this.fireBuffer = 0;
+        swing();
+      }
+      return;
+    }
+    if (a.weapon.mag <= 0 && !pressed) return;
+    if (!a.def.auto && !pressed) return;
+    const state = a.fireState();
+    if (state === 'busy') return;
+    this.fireBuffer = 0;
+    if (state === 'empty') {
+      a.dryFire();
+      audio.dryFire(this.handPos(), a.weapon.id);
+      this.act({ a: 'fire', ...aim() });
+      if (a.startReload()) this.reloadFromEmpty = true;
+      return;
+    }
+    a.consume();
+    // Held automatic fire carries on from the trigger flag in the motion messages.
+    if (pressed) this.act({ a: 'fire', ...aim() });
+    else this.mirror!.holdSelf(this.netNow + this.link!.rtt + 0.15);
+    this.shotFeedback(a.weapon.id);
+  }
+
+  /** Muzzle flash, report, recoil and the spent case for this survivor's own shot. */
+  private shotFeedback(weapon: WeaponId): void {
+    const def = WEAPONS[weapon];
+    const muzzle = this.weapon.muzzleWorld(this.tmpA);
+    const dir = this.weapon.muzzleDir(this.tmpB);
+    this.effects.muzzle(muzzle, dir, weapon);
+    audio.gunshot(weapon, muzzle, this.indoors, true);
+    this.weapon.fired(def);
+    const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
+    this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
+    this.cam.addTrauma(0.04 + def.recoil * 0.05);
+    this.player.faceCamera(0.7);
+    if (weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
+    else this.ejectCasing(false);
+  }
+
+  /** Another survivor fired: their muzzle, their report from where they stand, tracers to where it went. */
+  private remoteShot(e: Extract<SimEvent, { type: 'shot' }>): void {
+    const r = this.remotes!;
+    const muzzle = r.muzzle(e.player, this.tmpA) ?? v3(e.origin, this.tmpA);
+    const dir = r.muzzleDir(e.player, this.tmpB) ?? this.tmpB.set(0, 0, 1);
+    this.effects.muzzle(muzzle, dir, e.weapon);
+    for (let i = 0; i < e.pellets.length; i++) {
+      if (e.pellets.length > 1 && i % 3 !== 0) continue;
+      this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
+    }
+    audio.gunshot(e.weapon, muzzle, this.indoors, false);
+    const w = r.weaponOf(e.player);
+    if (w) {
+      w.fired(WEAPONS[e.weapon]);
+      const pos = this.tmpC, d = this.tmpD;
+      w.ejectWorld(pos, d);
+      const floor = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 3);
+      this.effects.eject(pos, d, floor !== null ? pos.y - floor : pos.y - 1.2, e.weapon === 'shotgun', this.tmpA.set(0, 0, 0));
+    }
   }
 
   private handleInteraction(): void {
@@ -665,12 +872,21 @@ export class SoloSession {
     if (best.kind === 'door') {
       best.door!.toggle(this.player.position);
       audio.door(best.door!.open);
+      if (this.link) {
+        // Swung here at once; the server's word on it is ignored until it has heard.
+        const i = best.door!.body.index;
+        this.mirror!.holdDoor(i, this.netNow + this.link.rtt + 0.4);
+        this.link.act({ a: 'door', door: i });
+      }
     } else if (best.kind === 'weapons') {
       this.openTable();
     } else if (best.kind === 'limb') {
-      this.sim.grabLimb(ME, best.limb!.id);
+      if (this.link) this.act({ a: 'grab', limb: best.limb!.id });
+      else this.sim.grabLimb(this.myId, best.limb!.id);
+    } else if (this.link) {
+      this.link.act({ a: 'use', id: best.it!.id });
     } else {
-      this.sim.use(ME, best.it!.id);
+      this.sim.use(this.myId, best.it!.id);
     }
   }
 
@@ -682,14 +898,14 @@ export class SoloSession {
     const cands: Candidate[] = [];
     const door = this.doors.nearest(eye, 1.9);
     if (door) cands.push({ kind: 'door', pos: door.center, door });
-    for (const it of this.sim.reachable(ME)) {
+    for (const it of this.sim.reachable(this.myId)) {
       if (it.supply <= 0) continue;
       cands.push({ kind: it.kind, pos: new THREE.Vector3(it.pos.x, it.pos.y, it.pos.z), it });
     }
     // Severed arms within reach (not mid-swing or mid-bandage, when the hands are busy).
     const busy = this.me.arsenal.action === 'melee' || this.me.arsenal.action === 'bandage';
     if (!busy) {
-      for (const l of this.sim.limbsInReach(ME)) {
+      for (const l of this.sim.limbsInReach(this.myId)) {
         // Lying on the floor they are never close to the chest: count how near they are underfoot.
         cands.push({ kind: 'limb', pos: new THREE.Vector3(l.pos.x, l.pos.y, l.pos.z), limb: l, near: Math.hypot(l.pos.x - p.x, l.pos.z - p.z) });
       }
@@ -721,28 +937,23 @@ export class SoloSession {
     const A = this.tmpA, B = this.tmpB, C = this.tmpC;
     switch (e.type) {
       case 'shot': {
-        if (e.player !== ME) break;
-        const def = WEAPONS[e.weapon];
+        if (e.player !== this.myId) {
+          if (this.remotes) this.remoteShot(e);
+          break;
+        }
+        // Online the flash, report and kick came the moment the trigger was pulled.
+        if (!this.link) this.shotFeedback(e.weapon);
         const muzzle = this.weapon.muzzleWorld(A);
-        const dir = this.weapon.muzzleDir(B);
-        this.effects.muzzle(muzzle, dir, e.weapon);
         for (let i = 0; i < e.pellets.length; i++) {
           // A shotgun's pellets would be a solid sheet of light; a few streaks read better.
           if (e.pellets.length > 1 && i % 3 !== 0) continue;
           this.effects.tracer(muzzle, v3(e.pellets[i].end, C));
         }
-        audio.gunshot(e.weapon, muzzle, this.indoors, true);
-        this.weapon.fired(def);
-        const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
-        this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
-        this.cam.addTrauma(0.04 + def.recoil * 0.05);
-        this.player.faceCamera(0.7);
-        if (e.weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
-        else this.ejectCasing(false);
         break;
       }
       case 'dryFire':
-        if (e.player === ME) audio.dryFire(this.handPos(), e.weapon);
+        if (e.player === this.myId) audio.dryFire(this.handPos(), e.weapon);
+        else if (this.remotes?.handOf(e.player, A)) audio.dryFire(A, e.weapon);
         break;
       case 'impact': {
         v3(e.pos, A);
@@ -764,13 +975,13 @@ export class SoloSession {
           // Clubbed with a severed arm: a wet, heavy thud, blood flung off its torn end.
           audio.clubHit(A, Math.min(1, e.damage / 50));
           this.effects.clubSplash(A, B);
-          const held = e.by === ME ? this.weapon.heldLimb : null;
+          const held = e.by === this.myId ? this.weapon.heldLimb : null;
           if (held) this.effects.clubSplash(held.cutEnd(C), B);
-          if (e.by === ME) this.cam.addTrauma(0.1 + Math.min(0.1, e.damage / 400));
+          if (e.by === this.myId) this.cam.addTrauma(0.1 + Math.min(0.1, e.damage / 400));
         } else {
           audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
         }
-        if (e.by === ME) {
+        if (e.by === this.myId) {
           const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
           this.hud.hitMarker(kind);
           audio.hitMarker(kind);
@@ -779,10 +990,15 @@ export class SoloSession {
         break;
       }
       case 'limbSevered':
-        this.onSevered(e.zombie, e.arm, e.cut, v3(e.pos, A), v3(e.dir, B), e.melee, e.by === ME);
+        this.onSevered(e.zombie, e.arm, e.cut, v3(e.pos, A), v3(e.dir, B), e.melee, e.by === this.myId);
         break;
       case 'limbGrabbed':
-        if (e.player !== ME) break;
+        if (e.player !== this.myId) {
+          const w = this.remotes?.weaponOf(e.player);
+          if (w && this.limbs.liftPose(e.limb, A, this.liftQ)) w.liftFrom(e.limb, A, this.liftQ);
+          if (this.remotes?.handOf(e.player, A)) audio.limbGrab(A);
+          break;
+        }
         // Lifted from where it lay.
         if (this.limbs.liftPose(e.limb, A, this.liftQ)) this.weapon.liftFrom(e.limb, A, this.liftQ);
         audio.limbGrab(this.handPos());
@@ -801,7 +1017,7 @@ export class SoloSession {
         v3(e.dir, B);
         this.effects.gibs(A, B);
         audio.limbBreak(A);
-        if (e.player === ME) {
+        if (e.player === this.myId) {
           this.hud.feedLine('THE ARM CAME APART');
           this.cam.addTrauma(0.12);
         }
@@ -847,16 +1063,25 @@ export class SoloSession {
         break;
       }
       case 'playerHurt':
-        if (e.player === ME) this.onHurt(e.damage, e.from);
+        if (e.player === this.myId) this.onHurt(e.damage, e.from);
+        else this.remotes?.hurt(e.player, v3(e.from, A), e.damage);
         break;
       case 'playerDied':
-        if (e.player === ME) this.onDeath();
+        if (e.player === this.myId) this.onDeath();
+        else {
+          const who = this.sim.players.get(e.player);
+          if (who) this.hud.feedLine(`${who.name.toUpperCase()} IS DOWN`);
+          if (this.watching === e.player) this.watching = null;
+        }
         break;
       case 'playerHealed':
-        if (e.player === ME) this.hud.feedLine(`HEALTH +${Math.round(e.amount)}`);
+        if (e.player === this.myId) this.hud.feedLine(`HEALTH +${Math.round(e.amount)}`);
         break;
       case 'reload':
-        if (e.player !== ME) break;
+        if (e.player !== this.myId) {
+          if (e.stage === 'shell' && this.remotes?.handOf(e.player, A)) audio.foley('shellIn', A, e.weapon);
+          break;
+        }
         if (e.stage === 'shell') audio.foley('shellIn', this.handPos(), e.weapon);
         if (e.stage === 'end' && e.weapon === 'shotgun' && this.reloadFromEmpty) {
           this.weapon.cycleAction();
@@ -865,7 +1090,13 @@ export class SoloSession {
         if (e.stage === 'end' || e.stage === 'cancel') this.reloadFromEmpty = false;
         break;
       case 'melee':
-        if (e.player !== ME) break;
+        if (e.player !== this.myId) {
+          if (e.stage === 'swing' && this.remotes?.handOf(e.player, A)) {
+            if (e.limb) audio.heavySwing(A);
+            else audio.meleeSwing(A);
+          }
+          break;
+        }
         if (e.stage === 'swing') {
           if (e.limb) audio.heavySwing(this.handPos());
           else audio.meleeSwing(this.handPos());
@@ -874,12 +1105,12 @@ export class SoloSession {
         }
         break;
       case 'bandage':
-        if (e.player !== ME) break;
+        if (e.player !== this.myId) break;
         if (e.stage === 'start') audio.bandage();
         if (e.stage === 'cancel') this.hud.feedLine('BANDAGE INTERRUPTED');
         break;
       case 'pickup':
-        if (e.player !== ME) break;
+        if (e.player !== this.myId) break;
         audio.pickup(e.item);
         if (e.item === 'ammo') this.hud.feedLine(`AMMUNITION +${e.amount}`);
         else if (e.item === 'supply') {
@@ -890,7 +1121,7 @@ export class SoloSession {
         else if (e.weapon) this.hud.feedLine(`${WEAPONS[e.weapon].model} EQUIPPED`);
         break;
       case 'notice':
-        if (e.player === ME || e.player === null) {
+        if (e.player === this.myId || e.player === null) {
           if (e.text === 'SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 3.2);
           else this.hud.feedLine(e.text);
         }
@@ -986,6 +1217,8 @@ export class SoloSession {
   private onDeath(): void {
     if (this.phase === 'dead') return;
     if (this.phase === 'table') this.closeTable();
+    // Online the night goes on behind the pause menu, so death can come while it is open.
+    this.pause.hide();
     this.phase = 'dead';
     this.survivedAtDeath = this.outbreakAnnounced ? this.sim.phaseTime : 0;
     this.deathT = 0;
@@ -1060,7 +1293,9 @@ export class SoloSession {
 
   private deathCamera(dt: number): void {
     this.deathT += dt;
-    const c = this.ragdoll ? this.ragdoll.center(this.tmpA) : this.tmpA.copy(this.player.position);
+    // Watching a teammate fight on, or over this survivor's body.
+    const c = (this.watching ? this.remotes?.positionOf(this.watching, this.tmpA) : null)
+      ?? (this.ragdoll ? this.ragdoll.center(this.tmpA) : this.tmpA.copy(this.player.position));
     const t = this.deathT;
     const ease = 1 - Math.exp(-t * 0.8);
     const yaw = this.deathYaw + t * 0.12;
@@ -1083,15 +1318,60 @@ export class SoloSession {
   }
 
   private showResults(): void {
-    if (this.results) return;
+    if (this.results || this.teamResults) return;
     this.input.releaseLock();
-    this.results = new ResultsScreen({
-      survived: this.survivedAtDeath,
-      total: this.me.diedAt,
-      stats: { ...this.me.stats },
-      outbreak: this.outbreakAnnounced,
-    }, () => this.onRetry(), () => this.onQuit());
+    this.spectateLine.remove();
+    const run = { survived: this.survivedAtDeath, total: this.me.diedAt, stats: { ...this.me.stats }, outbreak: this.outbreakAnnounced };
+    if (!this.link) {
+      this.results = new ResultsScreen(run, [['RETRY', () => this.onRetry()], ['MAIN MENU', () => this.onQuit()]]);
+      this.results.show(this.ui);
+      // On the boards (when the game server can be reached), marked as a solo run.
+      void account.reportSolo(run.survived, run.stats).then((r) => { if (r) this.results?.setRanks(r); });
+      return;
+    }
+    const alive = [...this.sim.players.values()].filter((p) => p.alive && p.id !== this.myId);
+    const actions: [string, () => void][] = [];
+    if (alive.length) actions.push(['WATCH THE OTHERS', () => this.watch()]);
+    actions.push(['LEAVE GAME', () => this.onQuit()]);
+    const sub = alive.length === 1 ? `${alive[0].name.toUpperCase()} IS STILL FIGHTING.` : alive.length ? `${alive.length} SURVIVORS ARE STILL FIGHTING.` : 'THE NIGHT IS ENDING.';
+    this.results = new ResultsScreen(run, actions, sub);
     this.results.show(this.ui);
+  }
+
+  private readonly spectateLine = h('div', { class: 'spectate' });
+  private readonly reconnectLine = h('div', { class: 'spectate net-lost' }, 'CONNECTION LOST · RECONNECTING');
+  private framesDrawn = 0;
+
+  /** The connection dropped and is being restored (the night goes on without this survivor meanwhile). */
+  setReconnecting(on: boolean): void {
+    if (on) this.ui.append(this.reconnectLine);
+    else this.reconnectLine.remove();
+  }
+
+  /** Online, dead: the camera follows a teammate still alive (ESC brings the results back). */
+  private watch(): void {
+    const next = [...this.sim.players.values()].find((p) => p.alive && p.id !== this.myId);
+    if (!next) return;
+    this.watching = next.id;
+    this.results?.dispose();
+    this.results = null;
+    this.spectateLine.textContent = `WATCHING ${next.name.toUpperCase()} · ESC FOR RESULTS`;
+    this.ui.append(this.spectateLine);
+  }
+
+  /** Everyone is dead: how each survivor did, and the way back to the room. */
+  showTeam(over: OverMsg): void {
+    this.pause.hide();
+    this.results?.dispose();
+    this.results = null;
+    this.spectateLine.remove();
+    this.teamResults?.dispose();
+    this.input.releaseLock();
+    const actions: [string, () => void][] = [];
+    if (this.opts.onLobby) actions.push(['BACK TO THE LOBBY', () => this.opts.onLobby?.()]);
+    actions.push(['LEAVE GAME', () => this.onQuit()]);
+    this.teamResults = new TeamResults(over, this.myId, actions);
+    this.teamResults.show(this.ui);
   }
 
   /** Seconds survived since the outbreak, frozen at death. */
@@ -1150,7 +1430,7 @@ export class SoloSession {
     // Down the sights, the sights are the crosshair.
     hud.setCrosshairVisible(this.phase === 'playing' && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
     hud.setStance(a.action === 'bandage' ? 'BANDAGING' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
-    hud.setFps(this.engine.fps);
+    hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
     // Pain: hits flash the screen edges red; low health keeps a pulse there.
     this.hurtFlash = Math.max(0, this.hurtFlash - dt * 1.6);
@@ -1199,8 +1479,10 @@ export class SoloSession {
 
   /** Dev/test helpers: jump to the outbreak, place zombies around the survivor. */
   readonly debug = {
-    skipPreparation: () => this.sim.skipPreparation(),
+    skipPreparation: () => (this.link ? this.link.debug({ cmd: 'skipPreparation' }) : this.sim.skipPreparation()),
     spawnZombie: (dist = 8, angle = 0, kind: ZombieKind = 'walker') => {
+      // Online the server places it (when it runs with DEAD_HOURS_DEBUG=1).
+      if (this.link) return this.link.debug({ cmd: 'spawn', dist, angle, kind }), -1;
       const p = this.player.position;
       const yaw = this.cam.yaw + angle;
       const at = { x: p.x - Math.sin(yaw) * dist, y: p.y + 0.02, z: p.z - Math.cos(yaw) * dist };
@@ -1208,7 +1490,10 @@ export class SoloSession {
     },
     phase: () => this.phase,
     /** Calls a supply helicopter now (during the outbreak). */
-    supplyDrop: () => this.sim.callSupplyDrop()?.flight ?? null,
+    supplyDrop: () => (this.link ? (this.link.debug({ cmd: 'supplyDrop' }), null) : this.sim.callSupplyDrop()?.flight ?? null),
+    hurt: (amount: number) => this.link?.debug({ cmd: 'hurt', amount }),
+    /** Online: health stays full (the server's test mode only). */
+    god: (on = true) => this.link?.debug({ cmd: 'god', on }),
   };
 
   dispose(): void {
@@ -1219,6 +1504,10 @@ export class SoloSession {
     for (const el of [...this.letterbox, this.skip, this.clickToPlay]) el.remove();
     this.table?.el.remove();
     this.results?.dispose();
+    this.teamResults?.dispose();
+    this.spectateLine.remove();
+    this.reconnectLine.remove();
+    this.remotes?.dispose();
     this.inventory.dispose();
     this.engine.canvas.style.cursor = '';
     this.input.enabled = false;
