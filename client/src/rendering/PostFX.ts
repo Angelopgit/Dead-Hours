@@ -36,6 +36,8 @@ const GradeShader = {
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec3 c = texture2D(tDiffuse, vUv).rgb;
+      // A stray NaN/Inf pixel shows as black instead of a white speck.
+      if (any(greaterThanEqual(floatBitsToUint(c) & 0x7fffffffu, uvec3(0x7f800000u)))) c = vec3(0.0);
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
       c = mix(vec3(l), c, uSaturation);
       c *= mix(uShadowTint, uHighlightTint, smoothstep(0.05, 0.6, l));
@@ -70,15 +72,26 @@ export class PostFX {
     this.renderPass = new RenderPass(scene, camera);
     this.composer.addPass(this.renderPass);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.55, 0.55, 0.9);
-    // A single NaN/Inf pixel (driver precision edge cases) would smear across the whole
-    // bloom mip chain and black out the frame; sanitize at the bloom's input.
+    // A single NaN/Inf pixel (driver precision edge cases) would smear across the whole bloom
+    // mip chain. The high pass runs at half resolution, so read the four full-resolution texels
+    // under each output pixel one by one and drop bad ones before any filtering mixes them in:
+    // texture filtering can turn Inf into a huge finite value that slips past the check. Tested
+    // on the bits, because some shader compilers fold isnan()/isinf() away as "can't happen".
     const hp = this.bloom.materialHighPassFilter;
     hp.fragmentShader = hp.fragmentShader.replace(
       'vec4 texel = texture2D( tDiffuse, vUv );',
-      `vec4 texel = texture2D( tDiffuse, vUv );
-       if (any(isnan(texel)) || any(isinf(texel))) texel = vec4(0.0);
-       texel.rgb = min(texel.rgb, vec3(48.0));`,
+      `ivec2 size = textureSize( tDiffuse, 0 );
+       ivec2 p = ivec2( vUv * vec2( size ) - 0.5 );
+       vec4 texel = vec4( 0.0 );
+       for ( int i = 0; i < 4; i ++ ) {
+         vec4 t = texelFetch( tDiffuse, clamp( p + ivec2( i & 1, i >> 1 ), ivec2( 0 ), size - 1 ), 0 );
+         bool bad = any( greaterThanEqual( floatBitsToUint( t ) & 0x7fffffffu, uvec4( 0x7f800000u ) ) )
+           || max( max( t.r, t.g ), t.b ) > 4096.0;
+         texel += bad ? vec4( 0.0 ) : clamp( t, vec4( 0.0 ), vec4( 48.0 ) );
+       }
+       texel *= 0.25;`,
     );
+    if (!hp.fragmentShader.includes('texelFetch')) console.warn('PostFX: bloom input guard not applied');
     hp.needsUpdate = true;
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
