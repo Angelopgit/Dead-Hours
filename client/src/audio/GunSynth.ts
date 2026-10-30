@@ -272,6 +272,30 @@ export function renderShot(s: ShotSpec, sr: number, seed: number): Channels {
 }
 
 /** The action cycling as each round fires, heard only by the shooter. Mono. */
+/**
+ * A bullet flying past: its shock cone sweeps over the ear as an N-wave, a sharp crack with no
+ * low end, then the ground's copy of it a moment later. Mono (it is panned from where it passed).
+ * `strength` 0..1 is how far over the speed of sound the round is.
+ */
+export function renderCrack(nWave: number, strength: number, sr: number, seed: number): Channels {
+  const r = rng(seed);
+  const n = Math.round(sr * 0.06);
+  const out = new Float32Array(n);
+  const len = Math.max(3, Math.round(nWave * (1.6 + r() * 0.4) * sr));
+  const i0 = Math.round(0.001 * sr);
+  for (const [at, g] of [[0, 1], [0.0016 + r() * 0.0015, -0.35]] as const) {
+    const j = i0 + Math.round(at * sr);
+    for (let k = 0; k <= len && j + k < n; k++) out[j + k] += g * (1 - (2 * k) / len);
+  }
+  // Air rings briefly behind the shock: a thin, bright sizzle.
+  const hiss = new Float32Array(n);
+  for (let k = i0; k < n; k++) hiss[k] = (r() * 2 - 1) * 0.12 * Math.exp(-(k - i0) / (0.004 * sr));
+  filter(hiss, 'highpass', sr, 3500, 0.7);
+  for (let k = 0; k < n; k++) out[k] = (out[k] + hiss[k]) * (0.4 + 0.6 * strength);
+  filter(out, 'highpass', sr, 400, 0.7);
+  return [out];
+}
+
 export interface MechSpec {
   /** [time s, modes, level, contact tick level] for each impact of the moving parts. */
   hits: [number, Mode[], number, number][];
@@ -300,6 +324,8 @@ export interface GunSound {
   echo: number;
   /** Level of the action sound under the shot. */
   mechLevel: number;
+  /** Muzzle velocity of the round, m/s: faster than sound (343) and it cracks as it flies past. */
+  velocity: number;
 }
 
 /**
@@ -321,7 +347,7 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
       ],
       spring: { at: 0.026, modes: [[760, 0.09, 0.25], [779, 0.09, 0.2], [1530, 0.05, 0.1]], level: 0.5 },
     },
-    level: 0.85, echo: 1, mechLevel: 0.1,
+    level: 0.85, echo: 1, mechLevel: 0.1, velocity: 880,
   },
   // MP5, 9 mm from an 8.9" barrel: a rounder bark with little crack and the roller bolt clacking.
   smg: {
@@ -336,7 +362,7 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
         [0.048, [[1700, 0.01, 0.6], [2900, 0.008, 0.5], [4400, 0.005, 0.3]], 1, 0.6],
       ],
     },
-    level: 0.7, echo: 0.65, mechLevel: 0.14,
+    level: 0.7, echo: 0.65, mechLevel: 0.14, velocity: 400,
   },
   // M870, 12 gauge buckshot: a long deep boom, no crack, the heaviest echo.
   shotgun: {
@@ -346,7 +372,7 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
       rumbleTau: 0.07, rumble: 0.2, ring: [[1100, 0.014, 0.04], [2300, 0.01, 0.03]], drive: 2.2,
     },
     mech: null,
-    level: 1, echo: 1.2, mechLevel: 0,
+    level: 1, echo: 1.2, mechLevel: 0, velocity: 400,
   },
   // MK14, 7.62 mm NATO from an 18" barrel: the biggest crack and a deep, thundering report.
   marksman: {
@@ -361,7 +387,7 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
         [0.066, [[1500, 0.012, 0.5], [2600, 0.008, 0.4], [3900, 0.005, 0.25]], 0.8, 0.5],
       ],
     },
-    level: 1, echo: 1.3, mechLevel: 0.09,
+    level: 1, echo: 1.3, mechLevel: 0.09, velocity: 840,
   },
   // M17, 9 mm from a 4.7" barrel: a short snappy pop with the slide snapping back and home.
   pistol: {
@@ -376,7 +402,7 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
         [0.036, [[1800, 0.01, 0.6], [3000, 0.008, 0.5], [5200, 0.004, 0.3]], 1, 0.5],
       ],
     },
-    level: 0.75, echo: 0.8, mechLevel: 0.12,
+    level: 0.75, echo: 0.8, mechLevel: 0.12, velocity: 365,
   },
 };
 
@@ -447,36 +473,90 @@ export function streetIR(sr: number, seed: number): Channels {
   return out;
 }
 
-/**
- * Impulse response of a room in a house: close hard walls answer within milliseconds, the room
- * booms at its own low resonances, and the ring dies in well under a second. Stereo, unit energy.
- */
-export function roomIR(sr: number, seed: number): Channels {
+/** What shapes an enclosed space's answer to a shot. */
+interface EnclosureSpec {
+  /** Length of the response, s. */
+  length: number;
+  /** Early reflections: how many, and the range of their delays (s). */
+  reflections: number;
+  early: [number, number];
+  /** How bright the walls send it back (lowpass on the reflections, Hz). */
+  wallCut: number;
+  /** Diffuse decay per band: [kind, Hz, T60 s, level]. */
+  bands: [FilterKind, number, number, number][];
+  /** When the diffuse tail starts and how fast it builds, s. */
+  tailFrom: number;
+  tailRise: number;
+  /** The space's own low resonances and how loud they boom. */
+  modes: Mode[];
+  modeGain: number;
+  /** Lowest frequency it keeps, Hz. */
+  floor: number;
+}
+
+function enclosureIR(sr: number, seed: number, e: EnclosureSpec): Channels {
   const r = rng(seed);
-  const n = Math.round(sr * 1.2);
+  const n = Math.round(sr * e.length);
   const out: Channels = [new Float32Array(n), new Float32Array(n)];
-  for (let k = 0; k < 14; k++) {
-    const delay = 0.0025 + r() ** 1.5 * 0.03;
-    const g = (0.5 + 0.5 * r()) * (0.004 / delay) ** 0.5 * (r() < 0.75 ? 1 : -1);
+  const [d0, d1] = e.early;
+  for (let k = 0; k < e.reflections; k++) {
+    const delay = d0 + r() ** 1.5 * (d1 - d0);
+    const g = (0.5 + 0.5 * r()) * (d0 * 1.6 / delay) ** 0.5 * (r() < 0.75 ? 1 : -1);
     const [gl, gr] = pan(r() * 2 - 1);
     const i = Math.round(delay * sr);
     out[0][i] += g * gl;
     out[1][i] += g * gr;
   }
-  for (const ch of out) filter(ch, 'lowpass', sr, 7000, 0.6);
-  const bands: [FilterKind, number, number, number][] = [
-    ['lowpass', 400, 0.6, 0.05],
-    ['bandpass', 1200, 0.55, 0.09],
-    ['highpass', 3000, 0.3, 0.035],
-  ];
-  const room: Mode[] = [[38, 0.2, 1], [49, 0.22, 0.9], [69, 0.18, 0.8], [77, 0.16, 0.7], [98, 0.14, 0.6], [118, 0.12, 0.5]];
+  for (const ch of out) filter(ch, 'lowpass', sr, e.wallCut, 0.6);
   for (const ch of out) {
-    addBands(ch, sr, r, 0.006, 0.015, bands, null);
-    modes(ch, sr, 0.004, room, 0.004, r);
-    filter(ch, 'highpass', sr, 75, 0.7);
+    addBands(ch, sr, r, e.tailFrom, e.tailRise, e.bands, null);
+    modes(ch, sr, e.tailFrom * 0.7, e.modes, e.modeGain, r);
+    filter(ch, 'highpass', sr, e.floor, 0.7);
   }
   unitEnergy(out);
   return out;
+}
+
+/**
+ * The enclosed spaces of Maple Hollow, each answering a shot its own way (stereo, unit energy):
+ * - room: a furnished room in a house. Close plaster walls answer within milliseconds, the room
+ *   booms at its own low resonances and soft furnishings kill the ring in well under a second.
+ * - hall: the Quik-Stop's shop floor or a garage. Farther, harder walls: later reflections and a
+ *   longer, brighter ring with weaker low modes.
+ * - basement: poured concrete under a low ceiling. Hard, bright, immediate slaps, a long ring for
+ *   a small room and a heavy low boom, the harshest place to fire a gun.
+ */
+export const ENCLOSURES = {
+  room: {
+    length: 1.2, reflections: 14, early: [0.0025, 0.0325], wallCut: 7000,
+    bands: [['lowpass', 400, 0.6, 0.05], ['bandpass', 1200, 0.55, 0.09], ['highpass', 3000, 0.3, 0.035]],
+    tailFrom: 0.006, tailRise: 0.015,
+    modes: [[38, 0.2, 1], [49, 0.22, 0.9], [69, 0.18, 0.8], [77, 0.16, 0.7], [98, 0.14, 0.6], [118, 0.12, 0.5]], modeGain: 0.004, floor: 75,
+  },
+  hall: {
+    length: 1.9, reflections: 18, early: [0.008, 0.07], wallCut: 8000,
+    bands: [['lowpass', 400, 1.3, 0.06], ['bandpass', 1200, 1.1, 0.09], ['highpass', 3000, 0.6, 0.03]],
+    tailFrom: 0.014, tailRise: 0.045,
+    modes: [[27, 0.32, 0.6], [35, 0.3, 0.5], [46, 0.26, 0.4], [54, 0.22, 0.35]], modeGain: 0.003, floor: 55,
+  },
+  basement: {
+    length: 1.6, reflections: 16, early: [0.002, 0.024], wallCut: 9500,
+    bands: [['lowpass', 350, 1.1, 0.07], ['bandpass', 1100, 0.95, 0.1], ['highpass', 3000, 0.7, 0.05]],
+    tailFrom: 0.004, tailRise: 0.012,
+    modes: [[42, 0.36, 1.2], [56, 0.3, 1], [71, 0.28, 0.9], [88, 0.24, 0.8], [104, 0.2, 0.6]], modeGain: 0.005, floor: 55,
+  },
+} satisfies Record<string, EnclosureSpec>;
+
+export type Enclosure = keyof typeof ENCLOSURES;
+
+/** Impulse response of an enclosed space (see ENCLOSURES). */
+export function enclosedIR(kind: Enclosure, sr: number, seed: number): Channels {
+  return enclosureIR(sr, seed, ENCLOSURES[kind] as EnclosureSpec);
+}
+
+/** A furnished room in a house (kept for callers that only know rooms). */
+export function roomIR(sr: number, seed: number): Channels {
+  return enclosedIR('room', sr, seed);
 }
 
 // ---------------------------------------------------------------------- foley

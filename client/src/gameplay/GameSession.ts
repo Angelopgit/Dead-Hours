@@ -31,6 +31,7 @@ import { Inventory } from '../ui/Inventory';
 import { ResultsScreen, TeamResults } from '../ui/ResultsScreen';
 import { WeaponTablePanel } from '../ui/WeaponTablePanel';
 import { audio } from '../audio/AudioEngine';
+import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
@@ -185,6 +186,8 @@ export class GameSession {
     const spawn = online ? online.begin.spawn : NEIGHBORHOOD.playerSpawns[0];
     doors.reset();
     for (const b of doors.bodies) if (b) this.doorColliders.add(b.collider.handle);
+    // Shots echo by the space they're in and are muffled by the walls they come through.
+    audio.setAcoustics(new Acoustics(physics));
 
     // The simulation: authoritative here (solo), or the copy of the server's (online).
     this.sim = new Simulation({
@@ -822,7 +825,7 @@ export class GameSession {
     const muzzle = this.weapon.muzzleWorld(this.tmpA);
     const dir = this.weapon.muzzleDir(this.tmpB);
     this.effects.muzzle(muzzle, dir, weapon);
-    audio.gunshot(weapon, muzzle, this.indoors, true);
+    audio.gunshot(weapon, muzzle, true);
     this.weapon.fired(def);
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
@@ -842,7 +845,7 @@ export class GameSession {
       if (e.pellets.length > 1 && i % 3 !== 0) continue;
       this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
     }
-    audio.gunshot(e.weapon, muzzle, this.indoors, false);
+    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end));
     const w = r.weaponOf(e.player);
     if (w) {
       w.fired(WEAPONS[e.weapon]);
@@ -1498,6 +1501,7 @@ export class GameSession {
 
   dispose(): void {
     this.abort.abort();
+    audio.setAcoustics(null);
     this.unsubSettings();
     this.intro?.kill();
     this.tableTween?.kill();

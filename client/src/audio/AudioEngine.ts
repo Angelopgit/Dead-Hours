@@ -1,15 +1,25 @@
 import * as THREE from 'three';
 import { settings } from '../core/Settings';
-import { GUN_SOUNDS, renderFoley, renderMech, renderShot, roomIR, streetIR, type Channels, type FoleyKind } from './GunSynth';
+import type { Vec3 } from '@dead-hours/shared';
+import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from './GunSynth';
+import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 const SHOT_TAKES = 4;
 const FOLEY_TAKES = 2;
-/** How hard a shot drives the street echo, and the room echo when the listener is inside. */
-const STREET_SEND = 0.4;
-const ROOM_SEND = 0.5;
-/** Indoors the street still answers faintly through the doors and windows. */
+/** How hard a shot drives the echo of the space it is fired in. */
+const SEND: Record<Space, number> = { street: 0.4, room: 0.5, hall: 0.5, basement: 0.55 };
+/** A shot inside still sets the street answering faintly through the doors and windows. */
 const STREET_INDOORS = 0.18;
+/** Sound escaping a building through its openings, and coming into one from the street. */
+const LEAK_OUT: Muffle = { gain: 0.6, cutoff: 2500, walls: 1 };
+const LEAK_IN: Muffle = { gain: 0.5, cutoff: 1500, walls: 1 };
+/** Other people's shots playing at once; past this the farthest gives way. */
+const MAX_REMOTE_SHOTS = 10;
+const CRACK_TAKES = 2;
+const CRACK_LEVEL = 0.55;
+/** Slower than this and a round makes no crack worth hearing (m/s). */
+const CRACK_SPEED = 380;
 const SPEED_OF_SOUND = 343;
 /** Playback level of each handling sound. */
 const FOLEY_LEVEL: Record<FoleyKind, number> = {
@@ -36,7 +46,7 @@ function seedOf(key: string): number {
  * GunSynth renders at startup, with convolution echo of the street or the room around the listener.
  */
 export class AudioEngine {
-  ctx: AudioContext | null = null;
+  ctx: BaseAudioContext | null = null;
   private master!: GainNode;
   private music!: GainNode;
   private effects!: GainNode;
@@ -48,8 +58,15 @@ export class AudioEngine {
   private pulseGain!: GainNode;
   private reverb!: ConvolverNode;
   private reverbSend!: GainNode;
-  private streetVerb!: ConvolverNode;
-  private roomVerb!: ConvolverNode;
+  /** Each bus's share of the shared reverb, scaled by that bus's volume so a muted bus stays silent. */
+  private sends!: Record<'music' | 'effects' | 'ambient', GainNode>;
+  /** One echo per kind of space, fed by every shot fired in (or heard from) it. */
+  private verbs!: Record<Space, ConvolverNode>;
+  private acoustics: Acoustics | null = null;
+  /** The kind of space the listener is in. */
+  private here: Space = 'street';
+  private nextSpace = 0;
+  private readonly voices: { end: number; dist: number; level: GainNode }[] = [];
   private readonly bank = new Map<string, AudioBuffer>();
   private bankTimer = 0;
   private readonly listenerPos = new THREE.Vector3();
@@ -64,13 +81,16 @@ export class AudioEngine {
   /** 0..1 musical tension, driven by the survival director from Phase 5. */
   tension = 0;
 
-  /** Must be called from a user gesture. Safe to call repeatedly. */
-  unlock(): void {
+  /**
+   * Must be called from a user gesture. Safe to call repeatedly. `context` renders into another
+   * context instead (an OfflineAudioContext for listening tests).
+   */
+  unlock(context?: BaseAudioContext): void {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      if (this.ctx instanceof AudioContext && this.ctx.state === 'suspended') void this.ctx.resume();
       return;
     }
-    const ctx = new AudioContext();
+    const ctx = context ?? new AudioContext();
     this.ctx = ctx;
     this.master = ctx.createGain();
     this.master.connect(ctx.destination);
@@ -106,14 +126,17 @@ export class AudioEngine {
     this.reverbSend = ctx.createGain();
     this.reverbSend.gain.value = 0.5;
     this.reverbSend.connect(this.reverb);
+    this.sends = { music: ctx.createGain(), effects: ctx.createGain(), ambient: ctx.createGain() };
+    for (const send of Object.values(this.sends)) send.connect(this.reverbSend);
     this.reverb.connect(comp);
 
-    this.streetVerb = ctx.createConvolver();
-    this.roomVerb = ctx.createConvolver();
-    for (const v of [this.streetVerb, this.roomVerb]) {
+    const verb = () => {
+      const v = ctx.createConvolver();
       v.normalize = false;
       v.connect(this.effects);
-    }
+      return v;
+    };
+    this.verbs = { street: verb(), room: verb(), hall: verb(), basement: verb() };
     this.prepareGuns();
 
     this.startWind();
@@ -132,6 +155,9 @@ export class AudioEngine {
     this.music.gain.setTargetAtTime(a.music, t, 0.05);
     this.effects.gain.setTargetAtTime(a.effects, t, 0.05);
     this.ambient.gain.setTargetAtTime(a.ambient, t, 0.05);
+    this.sends.music.gain.setTargetAtTime(a.music, t, 0.05);
+    this.sends.effects.gain.setTargetAtTime(a.effects, t, 0.05);
+    this.sends.ambient.gain.setTargetAtTime(a.ambient, t, 0.05);
   }
 
   private noiseSource(loop = true): AudioBufferSourceNode {
@@ -173,7 +199,7 @@ export class AudioEngine {
     lp.frequency.value = 260;
     lp.Q.value = 2;
     lp.connect(this.droneGain).connect(this.music);
-    this.droneGain.connect(this.reverbSend);
+    this.droneGain.connect(this.sends.music);
     for (const [f, type, g] of [[43.65, 'sawtooth', 0.22], [65.4, 'triangle', 0.3], [43.9, 'sawtooth', 0.18], [98.0, 'sine', 0.06]] as const) {
       const o = ctx.createOscillator();
       o.type = type;
@@ -214,7 +240,7 @@ export class AudioEngine {
     lp.frequency.exponentialRampToValueAtTime(500, t + 3);
     out.connect(lp);
     lp.connect(this.music);
-    lp.connect(this.reverbSend);
+    lp.connect(this.sends.music);
     for (const [mult, g] of [[1, 1], [2, 0.35], [3, 0.12], [4.02, 0.06]] as const) {
       const o = ctx.createOscillator();
       o.type = 'sine';
@@ -258,7 +284,7 @@ export class AudioEngine {
     g.gain.setTargetAtTime(0.35 * power, t + 0.3, 0.4);
     g.gain.exponentialRampToValueAtTime(0.001, t + 6);
     src.connect(lp).connect(g).connect(this.ambient);
-    g.connect(this.reverbSend);
+    g.connect(this.sends.ambient);
     src.start(t);
     src.stop(t + 6.5);
   }
@@ -359,7 +385,7 @@ export class AudioEngine {
     g.gain.setTargetAtTime(0, t + dur * 0.7, 0.2);
     const panner = this.makePanner(position);
     o.connect(f1).connect(g).connect(panner).connect(this.effects);
-    g.connect(this.reverbSend);
+    g.connect(this.sends.effects);
     o.start(t);
     vib.start(t);
     o.stop(t + dur + 1);
@@ -459,7 +485,7 @@ export class AudioEngine {
         src.connect(lp).connect(gain).connect(panner).connect(this.effects);
         const send = ctx.createGain();
         send.gain.value = 0.25;
-        gain.connect(send).connect(this.reverbSend);
+        gain.connect(send).connect(this.sends.effects);
         src.start(t, Math.random());
         r = { src, gain, lp, panner };
         this.rotors.set(id, r);
@@ -545,6 +571,10 @@ export class AudioEngine {
       L.upZ.setTargetAtTime(up.z, t, 0.02);
     }
     for (const s of this.spatial) s.gain.gain.setTargetAtTime(s.level(), ctx.currentTime, 0.015);
+    if (this.time > this.nextSpace) {
+      this.here = this.spaceOf(p);
+      this.nextSpace = this.time + 0.2;
+    }
 
     // Wind gusts.
     const gust = 0.1 + Math.max(0, Math.sin(this.time * 0.21) * Math.sin(this.time * 0.53 + 1)) * 0.16;
@@ -601,7 +631,7 @@ export class AudioEngine {
         o.stop(bt + 0.2);
       }
       panner.connect(this.ambient);
-      panner.connect(this.reverbSend);
+      panner.connect(this.sends.ambient);
     } else {
       // Wooden creak.
       const o = ctx.createOscillator();
@@ -639,7 +669,7 @@ export class AudioEngine {
     if (reverb > 0) {
       const s = ctx.createGain();
       s.gain.value = reverb;
-      g.connect(s).connect(this.reverbSend);
+      g.connect(s).connect(this.sends.effects);
     }
     return g;
   }
@@ -706,22 +736,30 @@ export class AudioEngine {
     return this.sample(key, () => renderFoley(kind, id, this.ctx!.sampleRate, seedOf(key)));
   }
 
-  private streetEcho(): ConvolverNode {
-    if (!this.streetVerb.buffer) this.streetVerb.buffer = this.sample('ir:street', () => streetIR(this.ctx!.sampleRate, 7));
-    return this.streetVerb;
+  private echo(space: Space): ConvolverNode {
+    const v = this.verbs[space];
+    if (!v.buffer) {
+      v.buffer = this.sample(`ir:${space}`, () => space === 'street'
+        ? streetIR(this.ctx!.sampleRate, 7)
+        : enclosedIR(space, this.ctx!.sampleRate, 11));
+    }
+    return v;
   }
 
-  private roomEcho(): ConvolverNode {
-    if (!this.roomVerb.buffer) this.roomVerb.buffer = this.sample('ir:room', () => roomIR(this.ctx!.sampleRate, 11));
-    return this.roomVerb;
+  private crackBuffer(id: string, take: number): AudioBuffer {
+    const key = `crack:${id}:${take}`;
+    const gun = GUN_SOUNDS[id];
+    const strength = Math.min(1, (gun.velocity - 343) / 500);
+    return this.sample(key, () => renderCrack(gun.shot.crack || 0.00015, strength, this.ctx!.sampleRate, seedOf(key)));
   }
 
   /** Renders the gun bank one buffer per task, so startup never stalls a frame for long. */
   private prepareGuns(): void {
-    const jobs: (() => void)[] = [() => this.streetEcho(), () => this.roomEcho()];
+    const jobs: (() => void)[] = (['street', ...Object.keys(ENCLOSURES) as Enclosure[]] as Space[]).map((s) => () => this.echo(s));
     for (const id of Object.keys(GUN_SOUNDS)) {
       for (let k = 0; k < SHOT_TAKES; k++) jobs.push(() => this.shotBuffer(id, k));
       jobs.push(() => this.mechBuffer(id));
+      if (GUN_SOUNDS[id].velocity >= CRACK_SPEED) for (let k = 0; k < CRACK_TAKES; k++) jobs.push(() => this.crackBuffer(id, k));
     }
     for (const [id, kinds] of Object.entries(FOLEY_SET)) {
       for (const kind of kinds) for (let k = 0; k < FOLEY_TAKES; k++) jobs.push(() => this.foleyBuffer(kind, id, k));
@@ -735,46 +773,110 @@ export class AudioEngine {
     this.bankTimer = window.setTimeout(run, 0);
   }
 
-  private send(from: AudioNode, to: AudioNode, amount: number): void {
+  /** The map's acoustics (spaces and walls) for the game in progress; null in the menu. */
+  setAcoustics(a: Acoustics | null): void {
+    this.acoustics = a;
+    this.here = 'street';
+    this.nextSpace = 0;
+  }
+
+  private spaceOf(p: Vec3): Space {
+    return this.acoustics?.spaceAt(p.x, p.y, p.z) ?? 'street';
+  }
+
+  /** Through walls: darker and quieter (nothing is added when the way is clear). */
+  private muffled(from: AudioNode, m: Muffle): AudioNode {
+    if (!m.walls) return from;
+    const ctx = this.ctx!;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = m.cutoff;
+    lp.Q.value = 0.5;
+    const g = ctx.createGain();
+    g.gain.value = m.gain;
+    from.connect(lp).connect(g);
+    return g;
+  }
+
+  /** Feeds a space's echo (muffling before the convolution is the same as after, and cheaper). */
+  private sendTo(from: AudioNode, space: Space, amount: number, m: Muffle = CLEAR): void {
     if (amount <= 0.001) return;
     const g = this.ctx!.createGain();
     g.gain.value = amount;
-    from.connect(g).connect(to);
+    this.muffled(from, m).connect(g).connect(this.echo(space));
   }
 
   /**
-   * Gunshot: the close report, the action cycling under it for the shooter, and the street or the
-   * room answering. Someone else's shot arrives late and dulled by the air, mostly as echo.
+   * Someone else's shot takes a voice: when too many fire at once the farthest gives way
+   * (false: this one is the farthest and is dropped).
    */
-  gunshot(weapon: string, position: THREE.Vector3, indoor: boolean, local: boolean): void {
+  private claimVoice(dist: number, end: number, level: GainNode): boolean {
+    const now = this.ctx!.currentTime;
+    for (let i = this.voices.length - 1; i >= 0; i--) if (this.voices[i].end < now) this.voices.splice(i, 1);
+    if (this.voices.length >= MAX_REMOTE_SHOTS) {
+      let far = 0;
+      for (let i = 1; i < this.voices.length; i++) if (this.voices[i].dist > this.voices[far].dist) far = i;
+      if (this.voices[far].dist <= dist) return false;
+      this.voices[far].level.gain.setTargetAtTime(0, now, 0.008);
+      this.voices.splice(far, 1);
+    }
+    this.voices.push({ end, dist, level });
+    return true;
+  }
+
+  /**
+   * Gunshot, built the way it reaches the ear:
+   * - the report, at the shooter's face for your own gun; for anyone else's, late by the speed of
+   *   sound, dulled by the air and panned from where they stand, and darker and quieter through
+   *   every wall and closed door in between;
+   * - the space the gun is in answering (street, room, store or garage, basement), heard directly
+   *   when you're in it and through the walls when you're not; what escapes a building sets the
+   *   street ringing, and a shot outside shakes the room you're in a little;
+   * - far away the direct sound fades faster than the echo, so distant shots are mostly echo;
+   * - a supersonic round passing near you cracks before its report arrives.
+   */
+  gunshot(weapon: string, position: THREE.Vector3, local: boolean, bullets?: Vec3[]): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
     const gun = GUN_SOUNDS[id];
+    const L = this.listenerPos;
+    const here = this.here;
+    const there = local ? here : this.spaceOf(position);
+    const d = local ? 0 : position.distanceTo(L);
     const src = ctx.createBufferSource();
     src.buffer = this.shotBuffer(id, Math.floor(Math.random() * SHOT_TAKES));
     src.playbackRate.value = 1 + (Math.random() * 2 - 1) * 0.03;
     const level = ctx.createGain();
     level.gain.value = gun.level;
     src.connect(level);
-    let t = ctx.currentTime;
-    let echo = gun.echo;
+    const t = ctx.currentTime + d / SPEED_OF_SOUND;
+    if (!local && !this.claimVoice(d, t + src.buffer.duration, level)) return;
+    const echo = gun.echo / (1 + d / 200);
     if (local) {
       // The gun is at the shooter's face: no panning, the shot fills both ears.
       level.connect(this.effects);
+      this.sendTo(level, here, echo * SEND[here]);
+      if (here !== 'street') this.sendTo(level, 'street', echo * SEND.street * STREET_INDOORS, LEAK_OUT);
     } else {
-      const d = position.distanceTo(this.listenerPos);
-      t += d / SPEED_OF_SOUND;
-      echo /= 1 + d / 80;
+      const wall = this.acoustics ? this.acoustics.occlusion(position.x, position.y, position.z, L.x, L.y, L.z) : CLEAR;
       const air = ctx.createBiquadFilter();
       air.type = 'lowpass';
       air.frequency.value = Math.max(1200, 16000 / (1 + d / 30));
       const p = this.makePanner(position);
       p.refDistance = 8;
-      level.connect(air).connect(p).connect(this.effects);
+      level.connect(air);
+      this.muffled(air, wall).connect(p).connect(this.effects);
+      // Echo finds its way round through doors and windows: less muffled than the straight line.
+      const apart = there !== here || wall.walls > 0;
+      const leak: Muffle = !apart ? CLEAR : wall.walls
+        ? { gain: Math.max(wall.gain, 0.2), cutoff: Math.max(wall.cutoff, 1200), walls: wall.walls }
+        : LEAK_IN;
+      this.sendTo(level, there, echo * SEND[there], leak);
+      if (there !== 'street') this.sendTo(level, 'street', echo * SEND.street * STREET_INDOORS, here === 'street' ? LEAK_OUT : leak);
+      else if (here !== 'street') this.sendTo(level, here, echo * SEND[here] * 0.15, LEAK_IN);
+      if (bullets && gun.velocity >= CRACK_SPEED) this.flyby(id, position, bullets, ctx.currentTime);
     }
-    this.send(level, this.streetEcho(), echo * STREET_SEND * (indoor ? STREET_INDOORS : 1));
-    if (indoor) this.send(level, this.roomEcho(), echo * ROOM_SEND);
     src.start(t);
     const mech = local ? this.mechBuffer(id) : null;
     if (mech) {
@@ -786,6 +888,42 @@ export class AudioEngine {
       m.connect(mg).connect(this.effects);
       m.start(t);
     }
+  }
+
+  private readonly flyAt = new THREE.Vector3();
+
+  /**
+   * A supersonic bullet passing within a few metres: its shock wave cracks from the point of
+   * closest approach as soon as the bullet gets there, ahead of the report from the gun.
+   */
+  private flyby(id: string, from: THREE.Vector3, ends: Vec3[], now: number): void {
+    const ctx = this.ctx!;
+    const gun = GUN_SOUNDS[id];
+    const L = this.listenerPos;
+    let miss = Infinity, along = 0;
+    for (const e of ends) {
+      const dx = e.x - from.x, dy = e.y - from.y, dz = e.z - from.z;
+      const len = Math.hypot(dx, dy, dz);
+      if (len < 1e-3) continue;
+      const s = Math.max(0, Math.min(len, ((L.x - from.x) * dx + (L.y - from.y) * dy + (L.z - from.z) * dz) / len));
+      const px = from.x + (dx / len) * s, py = from.y + (dy / len) * s, pz = from.z + (dz / len) * s;
+      const m = Math.hypot(L.x - px, L.y - py, L.z - pz);
+      if (m < miss) {
+        miss = m;
+        along = s;
+        this.flyAt.set(px, py, pz);
+      }
+    }
+    // Close enough to hear it pass, and past the gun's own blast (which hides it).
+    if (miss > 10 || along < 3) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.crackBuffer(id, Math.floor(Math.random() * CRACK_TAKES));
+    const g = ctx.createGain();
+    g.gain.value = CRACK_LEVEL * Math.min(1, (1.2 / Math.max(0.4, miss)) ** 0.75);
+    const p = this.makePanner(this.flyAt);
+    p.rolloffFactor = 0;
+    src.connect(g).connect(p).connect(this.effects);
+    src.start(now + along / gun.velocity + miss / SPEED_OF_SOUND);
   }
 
   dryFire(position: THREE.Vector3, weapon = 'ar'): void {
@@ -1144,7 +1282,7 @@ export class AudioEngine {
     g.gain.exponentialRampToValueAtTime(0.001, t + 6.5);
     lp.connect(g);
     g.connect(this.music);
-    g.connect(this.reverbSend);
+    g.connect(this.sends.music);
     for (const f of [55, 55.4, 82.4, 110.3, 130.8]) {
       const o = ctx.createOscillator();
       o.type = 'sawtooth';
@@ -1169,7 +1307,7 @@ export class AudioEngine {
     bp.type = 'bandpass';
     bp.frequency.value = 700;
     s.connect(bp).connect(sg).connect(this.ambient);
-    sg.connect(this.reverbSend);
+    sg.connect(this.sends.ambient);
     s.start(t + 0.5);
     s.stop(t + 10);
   }
@@ -1205,7 +1343,7 @@ export class AudioEngine {
     this.unsub?.();
     window.clearTimeout(this.bankTimer);
     this.bank.clear();
-    void this.ctx?.close();
+    if (this.ctx instanceof AudioContext) void this.ctx.close();
     this.ctx = null;
   }
 }

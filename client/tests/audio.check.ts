@@ -6,7 +6,7 @@
  * sounds, every handling sound for every gun, both echo impulse responses, and the per-gun
  * character the engine relies on (louder guns echo harder, rifles crack, the shotgun booms longest).
  */
-import { GUN_SOUNDS, renderFoley, renderMech, renderShot, roomIR, streetIR, type Channels, type FoleyKind } from '../src/audio/GunSynth';
+import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
 
 const SR = 44100;
 let failures = 0;
@@ -79,7 +79,9 @@ for (const id of [...Object.keys(GUN_SOUNDS), 'knife']) {
 if (rendered === kinds.length * 6) ok(`${rendered} handling sounds, every kind for every gun (and an unknown id)`);
 
 console.log('Echo');
-for (const [name, ir, len] of [['street', streetIR(SR, 7), 2.6], ['room', roomIR(SR, 11), 1.2]] as const) {
+const spaces: [string, Channels, number][] = [['street', streetIR(SR, 7), 2.6]];
+for (const k of Object.keys(ENCLOSURES) as Enclosure[]) spaces.push([k, enclosedIR(k, SR, 11), ENCLOSURES[k].length]);
+for (const [name, ir, len] of spaces) {
   const s = stats(ir);
   const e = ir.reduce((sum, c) => sum + c.reduce((a, v) => a + v * v, 0), 0) / ir.length;
   const early = stats(ir, 0, 0.04).rms, late = stats(ir, len - 0.3, len).rms;
@@ -91,6 +93,16 @@ for (const [name, ir, len] of [['street', streetIR(SR, 7), 2.6], ['room', roomIR
 const street = streetIR(SR, 7);
 if (stats(street, 0, 0.04).peak > stats(street, 0.04, 0.5).peak * 0.1) fail('street IR answers before the nearest facade could');
 else ok('street stays quiet until the first facade (45 ms)');
+// Each space rings as long as its materials say: soft rooms die first, concrete and big rooms last.
+const t30 = (ir: Channels): number => {
+  const n = ir[0].length, e = new Float64Array(n);
+  for (let i = n - 1, acc = 0; i >= 0; i--) e[i] = acc += ir[0][i] ** 2 + ir[1][i] ** 2;
+  const at = (db: number) => e.findIndex((v) => 10 * Math.log10(v / e[0]) < db) / SR;
+  return (at(-35) - at(-5)) * 2;
+};
+const decay = Object.fromEntries((Object.keys(ENCLOSURES) as Enclosure[]).map((k) => [k, t30(enclosedIR(k, SR, 11))]));
+if (!(decay.room < decay.basement && decay.room < decay.hall)) fail(`ring times out of order: ${JSON.stringify(decay)}`);
+else ok(`ring time (T60 from T30): room ${decay.room.toFixed(2)} s, basement ${decay.basement.toFixed(2)} s, hall ${decay.hall.toFixed(2)} s`);
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL AUDIO CHECKS PASSED');
 process.exit(failures ? 1 : 0);

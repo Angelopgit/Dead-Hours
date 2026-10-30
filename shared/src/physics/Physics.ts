@@ -176,6 +176,24 @@ export class Physics {
     return { distance: d, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, surface, collider: hit.collider };
   }
 
+  /**
+   * Materials of everything a straight line crosses between two points, each piece once and at most
+   * eight (sound through walls).
+   */
+  crossings(ax: number, ay: number, az: number, bx: number, by: number, bz: number, filter = WORLD_FILTER): Surface[] {
+    const dx = bx - ax, dy = by - ay, dz = bz - az;
+    const len = Math.hypot(dx, dy, dz);
+    const out: Surface[] = [];
+    if (len < 1e-3) return out;
+    const ray = new RAPIER.Ray({ x: ax, y: ay, z: az }, { x: dx / len, y: dy / len, z: dz / len });
+    this.world.intersectionsWithRay(ray, len, true, (hit) => {
+      const s = this.surfaces.get(hit.collider.handle) ?? 'concrete';
+      out.push(s === 'ground' ? 'dirt' : s);
+      return out.length < 8;
+    }, undefined, filter);
+    return out;
+  }
+
   /** Swept sphere cast (camera collision). Returns distance travelled before contact. */
   sphereCast(
     ox: number, oy: number, oz: number,

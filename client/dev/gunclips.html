@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Gun clips (dev)</title>
+    <style>
+      html, body { margin: 0; background: #1a1d22; font: 13px system-ui, sans-serif; color: #ddd; }
+      main { padding: 16px; }
+      li { margin: 4px 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Gun clips</h1>
+      <p>Renders each listening scenario through the game's own audio engine into WAV files (see gunclips.ts).</p>
+      <button id="render">Render clips</button>
+      <ol id="list"></ol>
+    </main>
+    <script type="module" src="./gunclips.ts"></script>
+  </body>
+</html>

@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { MAPLE_HOLLOW as map, PLAYER, propColliders } from '@dead-hours/shared';
 import { Physics, initPhysics, RAPIER, GROUP, groups } from '../src/core/Physics';
 import { DoorSystem } from '../src/gameplay/Doors';
+import { Acoustics, type Space } from '../src/audio/Acoustics';
 
 type V = [number, number];
 const DT = 1 / 60;
@@ -235,6 +236,32 @@ console.log('Props clipping into walls or floors (deeper than 6 cm; vehicles may
     }
   }
   if (!n) console.log('  ok   no furniture or fixtures inside walls');
+}
+
+console.log('Acoustics: the space around each place, and walls between gun and ear');
+{
+  const ac = new Acoustics(phys);
+  const ear = (x: number, y: number, z: number): [number, number, number] => [x, y + 1.6, z];
+  const places: [string, [number, number, number], Space][] = [
+    ['Elm Street', ear(-40, 0.15, -4.6), 'street'],
+    ['safehouse living room', ear(4.8, 0.32, -22.3), 'room'],
+    ['safehouse basement', ear(-3.5, -2.68, -21), 'basement'],
+    ['safehouse garage', ear(10, 0.15, -19), 'hall'],
+    ['Quik-Stop shop floor', ear(92, 0.2, -36), 'hall'],
+    ['park gazebo', ear(100, 0.4, 39), 'street'],
+  ];
+  for (const [name, at, want] of places) {
+    const got = ac.spaceAt(...at);
+    if (got !== want) fail(`${name}: heard as ${got}, expected ${want}`);
+    else console.log(`  ok   ${name}: ${got}`);
+  }
+  const open = ac.occlusion(-40, 1.6, -4.6, -30, 1.6, -4.6);
+  const walled = ac.occlusion(-40, 1.6, -4.6, ...ear(4.8, 0.32, -22.3));
+  const deep = ac.occlusion(-40, 1.6, -4.6, ...ear(-3.5, -2.68, -21));
+  if (open.walls) fail(`10 m down an empty street crosses ${open.walls} wall(s)`);
+  else if (!walled.walls || walled.gain >= 0.5 || walled.cutoff > 2000) fail(`street to living room isn't muffled (${JSON.stringify(walled)})`);
+  else if (!(deep.gain < walled.gain && deep.cutoff <= walled.cutoff)) fail(`basement isn't more muffled than the living room (${JSON.stringify(deep)})`);
+  else console.log(`  ok   open street clear; living room through ${walled.walls} wall(s) at ${(20 * Math.log10(walled.gain)).toFixed(0)} dB below ${walled.cutoff.toFixed(0)} Hz; basement ${(20 * Math.log10(deep.gain)).toFixed(0)} dB below ${deep.cutoff.toFixed(0)} Hz`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
