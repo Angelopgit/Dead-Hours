@@ -2,8 +2,10 @@ import { h } from './dom';
 import { settings, ACTION_LABELS, type Action, type SettingsData } from '../core/Settings';
 import { codeLabel, type Input } from '../core/Input';
 import { audio } from '../audio/AudioEngine';
+import { MicTest } from '../network/Voice';
+import { comms } from '../network/Comms';
 
-type Tab = 'graphics' | 'audio' | 'controls' | 'accessibility';
+type Tab = 'graphics' | 'audio' | 'voice' | 'controls' | 'accessibility';
 
 function seg<T extends string | number>(options: [T, string][], get: () => T, set: (v: T) => void): HTMLElement {
   const wrap = h('div', { class: 'seg' });
@@ -70,7 +72,7 @@ export class SettingsPanel {
   private setG = <K extends keyof SettingsData['graphics']>(k: K) => (v: SettingsData['graphics'][K]) => settings.update((s) => { s.graphics[k] = v; });
 
   render(): void {
-    const tabs: [Tab, string][] = [['graphics', 'Graphics'], ['audio', 'Audio'], ['controls', 'Controls'], ['accessibility', 'Accessibility']];
+    const tabs: [Tab, string][] = [['graphics', 'Graphics'], ['audio', 'Audio'], ['voice', 'Voice'], ['controls', 'Controls'], ['accessibility', 'Accessibility']];
     this.tabs.replaceChildren(...tabs.map(([t, label]) =>
       h('button', { class: `tab ${this.tab === t ? 'active' : ''}`, onclick: () => { this.tab = t; audio.ui('click'); this.render(); } }, label)));
     const content: HTMLElement[] = [];
@@ -92,7 +94,9 @@ export class SettingsPanel {
       );
     } else if (this.tab === 'audio') {
       const a = (k: keyof SettingsData['audio']) => slider(0, 1, 0.01, () => settings.value.audio[k], (v) => settings.update((s) => { s.audio[k] = v; }), pct);
-      content.push(row('Master', a('master')), row('Music', a('music')), row('Effects', a('effects')), row('Ambient', a('ambient')));
+      content.push(row('Master', a('master')), row('Music', a('music')), row('Effects', a('effects')), row('Ambient', a('ambient')), row('Voice chat', a('voice')));
+    } else if (this.tab === 'voice') {
+      content.push(...this.voiceRows());
     } else if (this.tab === 'controls') {
       const c = settings.value.controls;
       content.push(
@@ -113,6 +117,103 @@ export class SettingsPanel {
       );
     }
     this.body.replaceChildren(...content);
+  }
+
+  private v = <K extends keyof SettingsData['voice']>(k: K) => () => settings.value.voice[k];
+  private setV = <K extends keyof SettingsData['voice']>(k: K) => (val: SettingsData['voice'][K]) => settings.update((s) => { s.voice[k] = val; });
+
+  /** Voice chat in online games: how it sends, the microphone and its processing, the relay, blocked players. */
+  private voiceRows(): HTMLElement[] {
+    const blocked = comms.blockList;
+    return [
+      row('Voice chat', toggle(this.v('enabled'), this.setV('enabled')), 'Talk with the others in online games'),
+      row('Transmit', seg([['ptt', 'Push to talk'], ['vad', 'Voice activation']], this.v('mode'), (m) => { this.setV('mode')(m); this.render(); })),
+      row('Push to talk', this.bindingControl('talk'), 'Heard by survivors near you, from where you stand'),
+      row('Team radio', this.bindingControl('radio'), 'Heard by the whole team, wherever they are'),
+      row('Text chat', this.bindingControl('chat')),
+      row('Microphone', this.deviceSelect()),
+      row('Mic level', this.micMeter(), settings.value.voice.mode === 'vad' ? 'Speak: the bar turns green where voice activation opens' : 'Speak to see your level'),
+      row('Activation level', slider(-70, -20, 1, this.v('threshold'), this.setV('threshold'), (x) => `${x} dB`), 'Voice activation sends above this level'),
+      row('Echo cancellation', toggle(this.v('echoCancellation'), this.setV('echoCancellation')), 'Headphones still work best'),
+      row('Noise suppression', toggle(this.v('noiseSuppression'), this.setV('noiseSuppression'))),
+      row('Automatic gain', toggle(this.v('autoGainControl'), this.setV('autoGainControl'))),
+      row('Hear team radio', toggle(this.v('radio'), this.setV('radio'))),
+      row('Relay only (TURN)', toggle(this.v('relayOnly'), this.setV('relayOnly')), 'For strict networks, and hides your address from other players. Needs a game server with a TURN relay'),
+      h('h3', {}, 'Blocked players'),
+      blocked.length
+        ? h('div', { class: 'blocked-list' }, ...blocked.map(([pid, name]) => h('div', { class: 'row' }, h('label', {}, name),
+          h('button', { class: 'btn', onclick: () => { comms.setBlocked(pid, name, false); audio.ui('click'); this.render(); } }, 'UNBLOCK'))))
+        : h('p', { class: 'hint' }, 'Nobody. Block a player from the lobby or the pause menu\'s Players list.'),
+    ];
+  }
+
+  private deviceSelect(): HTMLElement {
+    const select = h('select', { class: 'device-select', 'aria-label': 'Microphone' }) as HTMLSelectElement;
+    const fill = async () => {
+      const list = navigator.mediaDevices?.enumerateDevices ? await navigator.mediaDevices.enumerateDevices().catch(() => []) : [];
+      const mics = list.filter((d) => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default');
+      const current = settings.value.voice.device;
+      select.replaceChildren(
+        h('option', { value: '' }, 'System default'),
+        ...mics.map((d, i) => h('option', { value: d.deviceId }, d.label || `Microphone ${i + 1} (names show after allowing the mic)`)),
+      );
+      select.value = mics.some((d) => d.deviceId === current) ? current : '';
+    };
+    select.addEventListener('change', () => this.setV('device')(select.value));
+    void fill();
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (select.isConnected) void fill(); });
+    this.refillDevices = fill;
+    return select;
+  }
+
+  private refillDevices: (() => Promise<void>) | null = null;
+
+  /** Live microphone level against the activation level (stops when the panel closes). */
+  private micMeter(): HTMLElement {
+    const fill = h('i');
+    const mark = h('b');
+    const out = h('output', {}, '');
+    const bar = h('div', { class: 'mic-meter' }, fill, mark);
+    const btn = h('button', { class: 'btn' }, 'TEST MIC');
+    const wrap = h('div', { class: 'mic-test' }, bar, out, btn);
+    const at = (db: number) => `${Math.min(100, Math.max(0, ((db + 80) / 80) * 100))}%`;
+    let test: MicTest | null = null;
+    const stop = () => {
+      test?.stop();
+      test = null;
+      btn.textContent = 'TEST MIC';
+      fill.style.width = '0%';
+    };
+    const loop = () => {
+      const threshold = settings.value.voice.threshold;
+      mark.style.left = at(threshold);
+      if (!test) return;
+      if (!wrap.isConnected) {
+        stop();
+        return;
+      }
+      if (test.state === 'on') {
+        const db = test.read();
+        fill.style.width = at(db);
+        fill.classList.toggle('open', db > threshold);
+        out.textContent = `${Math.max(-99, Math.round(db))} dB`;
+      } else out.textContent = test.state === 'denied' ? 'BLOCKED' : test.state === 'unsupported' ? 'NO MIC ACCESS' : 'ASKING…';
+      requestAnimationFrame(loop);
+    };
+    btn.addEventListener('click', () => {
+      audio.ui('click');
+      if (test) {
+        stop();
+        return;
+      }
+      audio.unlock();
+      test = new MicTest();
+      btn.textContent = 'STOP';
+      void test.start().then(() => this.refillDevices?.());
+      loop();
+    });
+    loop();
+    return wrap;
   }
 
   private bindingControl(action: Action): HTMLElement {

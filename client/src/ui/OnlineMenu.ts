@@ -6,6 +6,8 @@ import { audio } from '../audio/AudioEngine';
 import { net } from '../network/Net';
 import { NetLink } from '../network/NetLink';
 import { account } from '../network/Account';
+import { ChatBox } from './ChatBox';
+import { playerComms } from './PlayerComms';
 
 export interface OnlineCallbacks {
   /** The host started the night. */
@@ -42,6 +44,10 @@ export class OnlineMenu {
   private poll: ReturnType<typeof setInterval> | null = null;
   private busy = false;
   private disposed = false;
+  /** The room's chat panel (kept across lobby redraws) and the speaking lights' refresh. */
+  private chatBox: ChatBox | null = null;
+  private comms: (() => void)[] = [];
+  private commsTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(start: 'browse' | 'host', private readonly cb: OnlineCallbacks, link?: NetLink) {
     this.close = h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.back(); } }, 'CLOSE ✕');
@@ -54,6 +60,7 @@ export class OnlineMenu {
   /** ESC / CLOSE: out of the lobby means out of the room. */
   back(): void {
     if (this.link) {
+      this.dropComms();
       this.link.leave();
       this.link = null;
       this.view = 'browse';
@@ -193,15 +200,22 @@ export class OnlineMenu {
   private attach(link: NetLink): void {
     this.link = link;
     this.view = 'lobby';
+    this.dropComms();
+    this.chatBox = new ChatBox(link, 'lobby');
+    this.commsTimer = setInterval(() => {
+      for (const f of this.comms) f();
+    }, 150);
     link.handlers = {
       lobby: () => this.view === 'lobby' && this.renderLobby(),
       begin: (b) => {
+        this.dropComms();
         this.link = null;
         this.cb.onBegin(link, b);
       },
       notice: (t) => this.say(t, 'bad'),
       closed: () => {
         if (this.link !== link) return;
+        this.dropComms();
         this.link = null;
         this.view = 'browse';
         this.render();
@@ -224,14 +238,22 @@ export class OnlineMenu {
     const copy = this.button('COPY', () => {
       void navigator.clipboard?.writeText(m.code).then(() => this.say('CODE COPIED'), () => this.say('SELECT THE CODE TO COPY IT'));
     });
-    const players = m.players.map((p) => h('div', { class: 'lobby-player' },
-      h('span', {}, p.name.toUpperCase()),
-      h('small', {}, WEAPONS[p.primary as WeaponId]?.model ?? ''),
-      p.id === m.host ? h('em', {}, 'HOST') : p.ready ? h('em', { class: 'ok' }, 'READY') : h('em', { class: 'dim' }, 'NOT READY'),
-      p.id === link.id ? h('em', { class: 'dim' }, 'YOU') : null,
-    ));
+    this.comms = [];
+    const players = m.players.map((p) => {
+      const c = playerComms(link, p, () => this.renderLobby());
+      this.comms.push(c.refresh);
+      return h('div', { class: 'lobby-entry' },
+        h('div', { class: 'lobby-player' },
+          h('span', {}, p.name.toUpperCase()),
+          h('small', {}, WEAPONS[p.primary as WeaponId]?.model ?? ''),
+          p.id === m.host ? h('em', {}, 'HOST') : p.ready ? h('em', { class: 'ok' }, 'READY') : h('em', { class: 'dim' }, 'NOT READY'),
+          p.id === link.id ? h('em', { class: 'dim' }, 'YOU') : null,
+        ),
+        c.el,
+      );
+    });
     const waiting = m.players.filter((p) => p.id !== m.host && !p.ready).length;
-    this.body.replaceChildren(
+    const draw = () => this.body.replaceChildren(
       h('h2', {}, m.name.toUpperCase()),
       h('div', { class: 'code-box' }, h('span', {}, m.private ? 'PRIVATE · JOIN CODE' : 'JOIN CODE'), codeEl, copy),
       h('h3', {}, `Survivors ${m.players.length}/${GAME.maxPlayers}`),
@@ -242,11 +264,24 @@ export class OnlineMenu {
           : this.button(me?.ready ? 'NOT READY' : 'READY', () => link.setReady(!me?.ready), 'btn primary'),
       ),
       h('p', { class: 'lobby-hint' }, link.isHost ? 'Send your friends the code. Everyone plays the survivor and rifle they joined with.' : 'Waiting for the host to start the night.'),
+      h('h3', {}, 'Chat'),
+      ...(this.chatBox ? [this.chatBox.el] : []),
     );
+    if (this.chatBox) this.chatBox.preserve(draw);
+    else draw();
+  }
+
+  private dropComms(): void {
+    this.chatBox?.dispose();
+    this.chatBox = null;
+    this.comms = [];
+    if (this.commsTimer) clearInterval(this.commsTimer);
+    this.commsTimer = null;
   }
 
   dispose(): void {
     this.disposed = true;
+    this.dropComms();
     if (this.poll) clearInterval(this.poll);
     this.link?.leave();
     this.link = null;

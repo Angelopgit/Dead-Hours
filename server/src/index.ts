@@ -31,6 +31,8 @@ const gameServer = new Server({ transport: new WebSocketTransport({
   // few seconds; it is dropped only after about 12-16 s without answering.
   pingInterval: 4000,
   pingMaxRetries: 3,
+  // Voice negotiation passes WebRTC descriptions (a few kB) through the room.
+  maxPayload: 16 * 1024,
 }), greet: false });
 gameServer.define(ROOMS.survival, SurvivalRoom);
 

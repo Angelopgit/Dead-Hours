@@ -6,18 +6,22 @@ export type AimMode = 'hold' | 'toggle';
 /** Aiming looks down the sights in first person, or zooms over the shoulder. */
 export type AimView = 'sights' | 'shoulder';
 export type GoreLevel = 'off' | 'reduced' | 'full';
+/** Voice goes out while a key is held, or whenever the microphone hears speech. */
+export type VoiceMode = 'ptt' | 'vad';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
   | 'sprint' | 'crouch' | 'jump' | 'interact'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2'
-  | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal';
+  | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
+  | 'talk' | 'radio' | 'chat';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
   sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact',
   reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon',
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
+  talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat',
 };
 
 export interface SettingsData {
@@ -36,7 +40,22 @@ export interface SettingsData {
     fpsLimit: number;
     showFps: boolean;
   };
-  audio: { master: number; music: number; effects: number; ambient: number };
+  audio: { master: number; music: number; effects: number; ambient: number; voice: number };
+  voice: {
+    enabled: boolean;
+    mode: VoiceMode;
+    /** Voice activation opens above this microphone level (dBFS). */
+    threshold: number;
+    /** Microphone deviceId ('' for the system default). */
+    device: string;
+    echoCancellation: boolean;
+    noiseSuppression: boolean;
+    autoGainControl: boolean;
+    /** Hear survivors who talk on the team radio. */
+    radio: boolean;
+    /** Send voice through the server's TURN relay only (strict networks, hides your address). */
+    relayOnly: boolean;
+  };
   controls: {
     sensitivity: number;
     invertY: boolean;
@@ -71,6 +90,9 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   fire: ['Mouse0'],
   aim: ['Mouse2'],
   heal: ['KeyQ'],
+  talk: ['KeyT'],
+  radio: ['KeyB'],
+  chat: ['Enter'],
 };
 
 export const DEFAULT_SETTINGS: SettingsData = {
@@ -89,7 +111,11 @@ export const DEFAULT_SETTINGS: SettingsData = {
     fpsLimit: 0,
     showFps: false,
   },
-  audio: { master: 0.8, music: 0.6, effects: 0.9, ambient: 0.8 },
+  audio: { master: 0.8, music: 0.6, effects: 0.9, ambient: 0.8, voice: 1 },
+  voice: {
+    enabled: true, mode: 'ptt', threshold: -48, device: '',
+    echoCancellation: true, noiseSuppression: true, autoGainControl: true, radio: true, relayOnly: false,
+  },
   controls: { sensitivity: 1, invertY: false, aimMode: 'hold', aimView: 'sights', bindings: DEFAULT_BINDINGS },
   accessibility: { reducedShake: false, reducedFlashing: false, uiScale: 1 },
   profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE } },

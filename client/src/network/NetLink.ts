@@ -1,8 +1,12 @@
 import type { Room } from 'colyseus.js';
 import {
-  C2S, S2C, type ActMsg, type BeginMsg, type DebugMsg, type LobbyMsg, type OverMsg, type SimEvent, type Snapshot, type Vec3,
+  C2S, S2C, type ActMsg, type BeginMsg, type ChatLine, type DebugMsg, type IceConfig, type LobbyMsg, type OverMsg, type RtcIn,
+  type SimEvent, type Snapshot, type TalkMsg, type Vec3,
 } from '@dead-hours/shared';
 import { net } from './Net';
+import { Chat } from './Chat';
+import { Voice } from './Voice';
+import { comms } from './Comms';
 
 /** What arrived for the game in progress, in order. */
 export type Inbound =
@@ -35,6 +39,7 @@ const wait = (s: number) => new Promise((r) => setTimeout(r, s * 1000));
  * snapshots, events and corrections queue up for the session to take each frame (in the order
  * they arrived), and a ping every two seconds keeps the round trip measured. A connection that
  * drops mid-night is restored with the room's reconnection token while the server holds the place.
+ * The room's text chat and voice live here too, from the lobby through every night until leaving.
  */
 export class NetLink {
   lobby: LobbyMsg | null = null;
@@ -51,10 +56,19 @@ export class NetLink {
   private snaps = 0;
   handlers: LinkHandlers = {};
   room: Room;
+  readonly chat: Chat;
+  readonly voice: Voice;
+  private readonly unblock: () => void;
 
   constructor(room: Room) {
     this.room = room;
+    this.chat = new Chat((type, msg) => this.send(type, msg));
+    this.voice = new Voice(() => this.id, (type, msg) => this.send(type, msg));
     this.bind(room);
+    // The server keeps blocked players apart (chat, voice and its negotiation).
+    const blocks = () => this.send(C2S.blocks, comms.blockList.map(([pid]) => pid));
+    blocks();
+    this.unblock = comms.subscribe(blocks);
     this.pinger = setInterval(() => this.send(C2S.ping, now()), 2000);
     this.send(C2S.ping, now());
   }
@@ -63,8 +77,13 @@ export class NetLink {
     this.room = room;
     room.onMessage(S2C.lobby, (m: LobbyMsg) => {
       this.lobby = m;
+      this.voice.setMembers(m.players);
       this.handlers.lobby?.(m);
     });
+    room.onMessage(S2C.chat, (m: ChatLine) => this.chat.receive(m));
+    room.onMessage(S2C.talk, (m: TalkMsg) => this.voice.remoteTalk(m));
+    room.onMessage(S2C.rtc, (m: RtcIn) => this.voice.signal(m));
+    room.onMessage(S2C.ice, (m: IceConfig) => this.voice.setIce(m));
     room.onMessage(S2C.begin, (m: BeginMsg) => {
       this.queue.length = 0;
       this.snaps = 0;
@@ -123,6 +142,7 @@ export class NetLink {
     this.reconnecting = false;
     this.left = true;
     clearInterval(this.pinger);
+    this.closeComms();
     this.handlers.closed?.(code);
   }
 
@@ -189,8 +209,14 @@ export class NetLink {
 
   leave(): void {
     if (this.left) return;
+    this.closeComms();
     this.left = true;
     clearInterval(this.pinger);
     void this.room.leave(true).catch(() => undefined);
+  }
+
+  private closeComms(): void {
+    this.unblock();
+    this.voice.dispose();
   }
 }

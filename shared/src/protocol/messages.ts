@@ -23,6 +23,14 @@ export const C2S = {
   ping: 'ping',
   /** Test commands (only when the server runs with DEAD_HOURS_DEBUG=1). */
   debug: 'debug',
+  /** A line of text chat (lobby or in play). */
+  chat: 'chat',
+  /** Voice: what this survivor is transmitting now (TalkMode or null). */
+  talk: 'talk',
+  /** Voice: WebRTC negotiation for one other survivor (RtcOut). */
+  rtc: 'rtc',
+  /** The lasting player ids this player blocks (string[]): no chat or voice either way. */
+  blocks: 'blocks',
 } as const;
 
 /** Server → client messages. */
@@ -42,6 +50,14 @@ export const S2C = {
   pos: 'pos',
   /** Something the player should be told (only the host can start, ...). */
   notice: 'notice',
+  /** A line of text chat (ChatLine). */
+  chat: 'chat',
+  /** Someone started or stopped transmitting voice (TalkMsg). */
+  talk: 'talk',
+  /** WebRTC negotiation from another survivor (RtcIn). */
+  rtc: 'rtc',
+  /** How to reach the others for voice: STUN and TURN servers (IceConfig), sent on joining. */
+  ice: 'ice',
 } as const;
 
 /** One thing a survivor does. The server validates every one against its own state. */
@@ -96,6 +112,8 @@ export interface RoomListing {
 
 export interface LobbyPlayer {
   id: string;
+  /** Lasting player id (from the player key; per connection without one): mute and block lists use it. */
+  pid: string;
   name: string;
   ready: boolean;
   primary: string;
@@ -134,4 +152,51 @@ export interface RunResult {
 
 export interface OverMsg {
   results: RunResult[];
+}
+
+/** Where a voice goes: to whoever is near (from where the speaker stands) or over the team radio. */
+export type TalkMode = 'near' | 'radio';
+
+export interface ChatLine {
+  /** Session id of the sender ('' for the room's own lines). */
+  id: string;
+  /** The sender's lasting player id. */
+  pid: string;
+  name: string;
+  /** Cleaned and filtered by the server: plain text, to be shown as text. */
+  text: string;
+  /** Said by the room itself (joined, left, slow down). */
+  sys?: boolean;
+}
+
+export interface TalkMsg {
+  id: string;
+  mode: TalkMode | null;
+}
+
+/** WebRTC negotiation for voice, passed through the room to one other survivor. */
+export interface RtcSignal {
+  description?: { type: 'offer' | 'answer' | 'rollback'; sdp?: string };
+  /** An ICE candidate (null: no more candidates). */
+  candidate?: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null; usernameFragment?: string | null } | null;
+}
+
+export interface RtcOut extends RtcSignal {
+  to: string;
+}
+
+export interface RtcIn extends RtcSignal {
+  from: string;
+}
+
+export interface IceServer {
+  urls: string[];
+  username?: string;
+  credential?: string;
+}
+
+export interface IceConfig {
+  iceServers: IceServer[];
+  /** The server offers a TURN relay (players on strict networks can force voice through it). */
+  relay: boolean;
 }

@@ -170,6 +170,21 @@ export class RemoteSurvivors {
     return r ? out.copy(r.pos).setY(r.pos.y + 1.2) : null;
   }
 
+  /** Lights the name tag while they speak (radio in another color). */
+  speaking(id: string, on: boolean, radio: boolean): void {
+    const r = this.remotes.get(id);
+    if (!r) return;
+    r.tag.classList.toggle('speaking', on);
+    r.tag.classList.toggle('radio', on && radio);
+  }
+
+  /** Where their mouth is (alive) or null. */
+  mouthOf(id: string, out: THREE.Vector3): THREE.Vector3 | null {
+    const r = this.remotes.get(id);
+    if (!r || r.ragdoll) return null;
+    return out.copy(r.pos).setY(r.pos.y + PLAYER.height - 0.12);
+  }
+
   hurt(id: string, from: THREE.Vector3, amount: number): void {
     const r = this.remotes.get(id);
     if (!r) return;

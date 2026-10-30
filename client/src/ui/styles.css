@@ -422,3 +422,50 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .team-table { margin: 0.8em 0 1.4em; }
   .team-row { padding: 0.5em 0; }
 }
+
+/* Voice and text chat */
+.lobby-entry { border-bottom: 1px solid var(--line); padding-bottom: 0.45em; }
+.lobby-entry .lobby-player { border-bottom: 0; padding-bottom: 0.3em; }
+.player-comms { display: flex; align-items: center; gap: 0.6em; flex-wrap: wrap; font-size: 0.8em; }
+.vox-dot { display: inline-block; width: 0.62em; height: 0.62em; border-radius: 50%; background: rgba(255,255,255,0.14); flex: none; transition: background 0.1s, box-shadow 0.1s; }
+.vox-dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.vox-dot.on.radio { background: #7fc4e8; box-shadow: 0 0 8px #7fc4e8; }
+.vox-state { flex: 1; min-width: 10em; font-size: 0.85em; letter-spacing: 0.12em; color: var(--fg-faint); }
+.chip { font: inherit; font-size: 0.78em; letter-spacing: 0.14em; padding: 0.3em 0.65em; color: var(--fg-dim); background: transparent; border: 1px solid var(--line); border-radius: 2px; cursor: pointer; }
+.chip:hover { color: var(--fg); border-color: var(--fg-faint); }
+.chip.on { color: var(--danger); border-color: var(--danger); }
+.vox-vol { width: 6.5em; accent-color: var(--accent); }
+.chat-lobby { display: flex; flex-direction: column; gap: 0.5em; }
+.chat-log { max-height: 11em; overflow-y: auto; overflow-x: hidden; padding: 0.4em 0.6em; background: rgba(0,0,0,0.25); border: 1px solid var(--line); border-radius: 3px; user-select: text; }
+.chat-lobby .chat-log { min-height: 6em; }
+.chat-line { font-size: 0.86em; line-height: 1.45; overflow-wrap: anywhere; color: var(--fg); }
+.chat-line b { font-weight: 600; }
+.chat-line.sys { color: var(--fg-faint); font-style: italic; }
+.chat-row { display: flex; gap: 0.5em; }
+.chat-input { flex: 1; min-width: 0; font: inherit; font-size: 0.9em; padding: 0.5em 0.7em; color: var(--fg); background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 3px; outline: none; user-select: text; }
+.chat-input:focus { border-color: var(--accent); }
+.chat-game { position: absolute; left: 3vw; bottom: calc(4vh + 7.5em); width: min(30em, 40vw); z-index: 30; pointer-events: none; }
+.chat-game .chat-log { max-height: 10em; overflow: hidden; background: transparent; border-color: transparent; transition: background 0.2s; }
+.chat-game .chat-line { text-shadow: 0 1px 3px #000, 0 0 2px #000; transition: opacity 0.8s; }
+.chat-game .chat-line.old { opacity: 0; }
+.chat-game .chat-input { display: none; width: 100%; margin-top: 0.4em; background: rgba(0,0,0,0.55); }
+.chat-game.open { pointer-events: auto; }
+.chat-game.open .chat-log { overflow-y: auto; background: rgba(0,0,0,0.45); border-color: var(--line); }
+.chat-game.open .chat-input { display: block; }
+.vox-list { position: absolute; left: 3vw; bottom: calc(4vh + 19.5em); display: flex; flex-direction: column; gap: 0.3em; z-index: 30; pointer-events: none;
+  font-family: var(--font-display); font-size: 0.78em; letter-spacing: 0.2em; color: var(--fg); text-shadow: 0 1px 3px #000; }
+.vox { display: flex; align-items: center; gap: 0.6em; }
+.vox i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.vox.radio { color: #a9d8f0; }
+.vox.radio i { background: #7fc4e8; box-shadow: 0 0 6px #7fc4e8; }
+.name-tag.speaking span::before { content: '\25C9  '; color: var(--ok); }
+.name-tag.speaking.radio span::before { color: #7fc4e8; }
+.row:has(.mic-test) { grid-template-columns: 1fr auto; }
+.mic-test { display: flex; align-items: center; gap: 0.7em; }
+.mic-test output { min-width: 4.5em; font-size: 0.8em; color: var(--fg-dim); letter-spacing: 0.1em; }
+.mic-meter { position: relative; width: 9em; height: 0.55em; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.mic-meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--fg-dim); transition: width 0.05s linear; }
+.mic-meter i.open { background: var(--ok); }
+.mic-meter b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); }
+.device-select { font: inherit; font-size: 0.85em; width: 100%; padding: 0.35em 0.5em; color: var(--fg); background: rgba(0,0,0,0.45); border: 1px solid var(--line); border-radius: 3px; }
+.blocked-list .row { grid-template-columns: 1fr auto; }

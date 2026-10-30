@@ -68,6 +68,8 @@ export class Input {
       return;
     }
     if (!this.enabled) return;
+    // Typing in a text box (chat) is not playing.
+    if (isDown && typing(e)) return;
     if (e.code === 'Tab' || e.code === 'Space' || (e.ctrlKey && e.code !== 'KeyW')) e.preventDefault();
     this.setState(e.code, isDown);
   }
@@ -136,6 +138,12 @@ export class Input {
   }
 }
 
+/** The key went to a text field (chat, names), not to the game. */
+export function typing(e: Event): boolean {
+  const t = e.target as HTMLElement | null;
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+}
+
 export function codeLabel(code: string): string {
   if (code.startsWith('Mouse')) return ['LMB', 'MMB', 'RMB', 'M4', 'M5'][Number(code.slice(5))] ?? code;
   if (code.startsWith('Key')) return code.slice(3);
@@ -143,7 +151,7 @@ export function codeLabel(code: string): string {
   const map: Record<string, string> = {
     ShiftLeft: 'L-Shift', ShiftRight: 'R-Shift', ControlLeft: 'L-Ctrl', ControlRight: 'R-Ctrl',
     AltLeft: 'L-Alt', Space: 'Space', Tab: 'Tab', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
-    CapsLock: 'Caps', Backquote: '`',
+    CapsLock: 'Caps', Backquote: '`', Enter: 'Enter',
   };
   return map[code] ?? code;
 }

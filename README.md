@@ -14,7 +14,7 @@ npm run check:world  # walks a character through the real map collision (doors, 
 npm run check:houses # every enterable home: rooms reachable, stairs walkable, basements connected
 npm run check:audio  # renders every gun, action and handling sound and the echo responses, checks level and shape
 npm run check:sim    # headless combat simulation: navigation, weapons, damage, zombie AI, supplies, death, appearance wire format
-npm run check:server # starts a real server and plays it over WebSocket and HTTP: rooms, codes, a night, boards, profiles
+npm run check:server # starts a real server and plays it over WebSocket and HTTP: rooms, codes, a night, boards, profiles, chat, voice setup
 npm run build        # production client build into client/dist
 ```
 
@@ -108,6 +108,15 @@ Main menu → Play → **Host game** makes a room on the game server: give it a 
 
 **Survivors and stats.** Each browser makes a player key (kept in local storage). The survivor's name, look and primary weapon are saved under it on the server whenever they change, along with lifetime stats: runs, kills, headshots, arms torn off, time survived, best time and most kills. Main menu → Leaderboards → Your survivor shows the key; entering it on another device brings the same survivor and stats there.
 
+**Voice and text chat.**
+
+- Voice goes straight between the players' browsers (WebRTC); the game server only passes the connection setup along and never hears it. Opus, mono, up to 40 kb/s, with in-band error correction and silence suppression, and the browser's echo cancellation, noise suppression and auto gain (each can be turned off in Settings → Voice).
+- Push to talk (hold T) by default, or voice activation with an activation level. Settings → Voice has the microphone list, a mic meter with TEST MIC, the keys, and a list of blocked players.
+- In play each voice comes from that survivor's mouth in 3D, gets quieter with distance, fades out between 35 and 50 m and is muffled through walls. Hold B for the team radio: everyone hears it at full level through a narrow radio sound with a squelch, and a survivor who has fallen is heard over it whenever they talk (Settings → Voice → Hear team radio turns it off). In the lobby everyone is heard plainly.
+- Speaking lights show in the lobby list, over name tags and in a list at the left of the screen. Each player can be muted, turned down or up (0 to 200 %), have their chat hidden, or be blocked, from the lobby or Esc → Players. These choices stay in the browser by the player's lasting id. Blocking is also enforced by the server: no chat or voice either way.
+- Text chat works in the lobby and in play (Enter opens it, Enter sends, Esc closes). The server cleans every line (control, direction and invisible characters, stacked accents), cuts it to 160 characters, allows a burst of 4 lines and then one every 1.5 s, drops a repeat sent within 4 s, and stars out a word list (including spaced-out and number-for-letter spellings). Lines are put on the page as text, never as HTML.
+- Players behind strict networks (some offices, schools, mobile carriers) can only connect through a TURN relay: set `TURN_URLS` (see Deploying). Settings → Voice → Relay only sends all voice through it, which also hides a player's address from the others.
+
 **Leaderboards.** Longest survival and most kills, one entry per player (their best run). Online runs are recorded by the server. Solo runs are reported by the browser at the end and marked SOLO: the server refuses ones that can't be right (more kills than the time allows, more hits than shots) and limits how often a key can post, but it cannot replay a solo run, so treat those as honest-player scores.
 
 ### Deploying
@@ -120,13 +129,17 @@ The client is a static site (`npm run build`, publish `client/dist`). The server
 | `PORT` | server | Port to listen on (default 2567). |
 | `DATABASE_URL` | server | Postgres connection string. Tables are created on start. TLS is used for remote hosts unless `sslmode` or `PGSSLMODE` says otherwise. |
 | `DATA_FILE` | server | Without `DATABASE_URL`: the JSON file for profiles and boards (default `server/data/dead-hours.json`). |
+| `STUN_URLS` | server | Comma-separated STUN servers given to browsers for voice. Unset: Google's public `stun:stun.l.google.com:19302`. Set empty: none. |
+| `TURN_URLS` | server | Comma-separated TURN relays for voice, e.g. `turn:turn.example.com:3478,turns:turn.example.com:5349?transport=tcp`. Needs one of the two logins below. |
+| `TURN_SECRET` | server | coturn's `static-auth-secret` (`use-auth-secret`): each player gets their own TURN login that expires after 24 hours. |
+| `TURN_USERNAME`, `TURN_CREDENTIAL` | server | A fixed TURN login instead of `TURN_SECRET`. |
 | `DEAD_HOURS_DEBUG` | server | `1` enables test commands in rooms (skip preparation, spawn zombies, hurt, full health). Never in production. |
 
-`GET /health` answers `{ ok, version, store }`. The server logs one line per room event (opened, joined, left, lost connection, reconnected, night started, night over with each survivor's time and kills). The HTTP API sends CORS headers for any origin, and Colyseus answers `/matchmake` with its own. The server builds the map's navigation once at start (about two seconds) and each room builds its own physics.
+`GET /health` answers `{ ok, version, store }`. The server logs one line per room event (opened, joined, left, lost connection, reconnected, night started, night over with each survivor's time and kills). The HTTP API sends CORS headers for any origin, and Colyseus answers `/matchmake` with its own. Messages to the game server are capped at 16 kB (voice setup needs a few kB). A TURN relay needs open UDP ports, which web app hosts such as Render don't offer: run coturn on a small VPS or use a managed TURN service, and keep the secret out of the client. The server builds the map's navigation once at start (about two seconds) and each room builds its own physics.
 
 ## Controls
 
-WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact · F melee · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. All bindings are editable in Settings → Controls.
+WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact · F melee · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
 
 ## Roadmap status
 
@@ -134,5 +147,5 @@ WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB
 - **Phase 2 Environment**: done. Maple Hollow, 250 × 250 m: Elm Street and Birch Lane with sidewalks, alleys and fourteen streetlights (a few dead, one flickering); ten houses (eight closed homes, the two-storey safehouse with kitchen, living room, three bedrooms, basement, garage and four ways in, and the enterable Henderson house); the Quik-Stop gas station with an enterable store; a park with playground and gazebo; a police checkpoint with a barrier chicane and floodlights; fenced backyards with sheds and tight side passages; woods around the edge. Baked AO, shadows and bounce light plus fog and dynamic lights.
 - **Phase 3 Combat**: done. Six weapons with real models, hand IK, reload animations, recoil and holsters; muzzle flashes, tracers, shell casings and surface impacts; pooled blood, wounds, hit reactions and ragdoll deaths; zombie AI; weapon table, ammo crates and first aid; HUD with weapon panel, dynamic crosshair, hit markers, damage direction, timers and ammunition warning; inventory and results screen.
 - **Character customization**: done (see Survivors).
-- **Phase 4 Multiplayer**: done (see Online play). Hosted rooms with codes and a public list, the night run on the server, leaderboards and saved survivors.
+- **Phase 4 Multiplayer**: done (see Online play). Hosted rooms with codes and a public list, the night run on the server, leaderboards and saved survivors, proximity voice with team radio, and text chat.
 - Phase 5 Survival director · Phase 6 Defenses · Phase 7 Helicopter drops · Phase 8 Polish.

@@ -1,16 +1,21 @@
+import { createHash } from 'node:crypto';
 import { Room, type Client } from 'colyseus';
 import {
-  C2S, GAME, S2C, type BeginMsg, type CreateOptions, type JoinOptions, type LobbyMsg, type OverMsg, type PlayerStats,
-  type RoomStatus, type RunResult, type WeaponId,
+  C2S, CHAT, GAME, S2C, censor, cleanChat, type BeginMsg, type ChatLine, type CreateOptions, type JoinOptions, type LobbyMsg,
+  type OverMsg, type PlayerStats, type RoomStatus, type RtcIn, type RunResult, type TalkMsg, type WeaponId,
 } from '@dead-hours/shared';
 import { Night } from '../game/Night';
 import { claimCode, releaseCode } from '../net/codes';
 import { cleanAppearance, cleanName, cleanPrimary, cleanToken } from '../net/clean';
+import { iceConfig } from '../net/ice';
+import { Bucket } from '../net/limit';
 import { services } from '../services';
 import type { Ranks } from '../store';
 
 interface Member {
   id: string;
+  /** Lasting player id shared with the others (mute and block lists): from the player key, else per connection. */
+  pid: string;
   name: string;
   primary: WeaponId;
   appearance: string;
@@ -21,6 +26,55 @@ interface Member {
   spawn: BeginMsg['spawn'] | null;
   /** This night's run once it ended for them (died or left), and its leaderboard places. */
   run: { survived: number; stats: PlayerStats; ranks: Promise<Ranks> } | null;
+  /** Player ids this player blocks: no chat, voice or negotiation passes between them either way. */
+  blocks: Set<string>;
+  limits: { chat: Bucket; talk: Bucket; rtc: Bucket };
+  /** Last chat line and when (repeats are dropped), and when they were last told to slow down. */
+  said: { text: string; at: number; warned: number };
+}
+
+/** Longest WebRTC description and candidate passed on (a voice-only SDP is 2 to 6 kB; messages are capped at 16 kB). */
+const MAX_SDP = 12000;
+const MAX_CANDIDATE = 1000;
+
+/** A lasting id that others may see: derived from the player key, which itself never leaves the server. */
+function publicId(token: string | null, session: string): string {
+  return token ? createHash('sha256').update(`dead-hours player id:${token}`).digest('base64url').slice(0, 12) : `s-${session}`;
+}
+
+const text = (v: unknown, max: number) => (typeof v === 'string' && v.length <= max ? v : undefined);
+const nullableText = (v: unknown, max: number) => (v === null ? null : text(v, max));
+
+/** A negotiation message from the client, rebuilt from known fields only (or null when malformed). */
+function cleanSignal(msg: unknown): Omit<RtcIn, 'from'> & { to: string } | null {
+  if (typeof msg !== 'object' || msg === null) return null;
+  const m = msg as Record<string, unknown>;
+  const to = text(m.to, 64);
+  if (!to) return null;
+  const out: Omit<RtcIn, 'from'> & { to: string } = { to };
+  if (m.description !== undefined) {
+    const d = m.description as Record<string, unknown> | null;
+    const type = d?.type;
+    if (type !== 'offer' && type !== 'answer' && type !== 'rollback') return null;
+    const sdp = d?.sdp === undefined ? undefined : text(d.sdp, MAX_SDP);
+    if (type !== 'rollback' && sdp === undefined) return null;
+    out.description = sdp === undefined ? { type } : { type, sdp };
+  } else if (m.candidate !== undefined) {
+    if (m.candidate === null) out.candidate = null;
+    else {
+      const c = m.candidate as Record<string, unknown>;
+      const candidate = text(c.candidate, MAX_CANDIDATE);
+      if (candidate === undefined) return null;
+      const index = c.sdpMLineIndex;
+      out.candidate = {
+        candidate,
+        sdpMid: nullableText(c.sdpMid, 64) ?? null,
+        sdpMLineIndex: typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < 16 ? index : null,
+        usernameFragment: nullableText(c.usernameFragment, 256) ?? null,
+      };
+    }
+  } else return null;
+  return out;
 }
 
 const NO_RANK: Ranks = { rankSurvival: null, rankKills: null };
@@ -73,6 +127,31 @@ export class SurvivalRoom extends Room {
     this.onMessage(C2S.debug, (c, msg: unknown) => {
       if (services.debug && this.status === 'playing') this.night?.debug(c.sessionId, msg);
     });
+    this.onMessage(C2S.chat, (c, msg: unknown) => this.chat(c, msg));
+    this.onMessage(C2S.talk, (c, mode: unknown) => {
+      const m = this.members.get(c.sessionId);
+      if (!m || !m.limits.talk.take()) return;
+      const talk: TalkMsg = { id: m.id, mode: mode === 'near' || mode === 'radio' ? mode : null };
+      for (const other of this.clients) {
+        const o = this.members.get(other.sessionId);
+        if (o && o !== m && !this.apart(m, o)) other.send(S2C.talk, talk);
+      }
+    });
+    this.onMessage(C2S.rtc, (c, msg: unknown) => {
+      const m = this.members.get(c.sessionId);
+      const signal = cleanSignal(msg);
+      if (!m || !signal || !m.limits.rtc.take()) return;
+      const { to, ...rest } = signal;
+      const target = this.members.get(to);
+      const client = this.clients.find((x) => x.sessionId === to);
+      if (!target || target === m || !client || this.apart(m, target)) return;
+      client.send(S2C.rtc, { from: m.id, ...rest } satisfies RtcIn);
+    });
+    this.onMessage(C2S.blocks, (c, list: unknown) => {
+      const m = this.members.get(c.sessionId);
+      if (!m || !Array.isArray(list)) return;
+      m.blocks = new Set(list.slice(0, 500).filter((p): p is string => typeof p === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(p)));
+    });
     this.setSimulationInterval((ms) => this.tick(ms), 1000 / 60);
     this.log(`opened "${this.title}"${this.hidden ? ' (private)' : ''}`);
   }
@@ -83,19 +162,28 @@ export class SurvivalRoom extends Room {
   }
 
   onJoin(client: Client, o: Partial<JoinOptions>): void {
+    const token = cleanToken(o.token);
+    const pid = publicId(token, client.sessionId);
     this.members.set(client.sessionId, {
       id: client.sessionId,
+      pid,
       name: cleanName(o.name) || 'Survivor',
       primary: cleanPrimary(o.primary),
       appearance: cleanAppearance(o.appearance),
-      token: cleanToken(o.token),
+      token,
       ready: false,
       loaded: false,
       spawn: null,
       run: null,
+      blocks: new Set(),
+      limits: { chat: new Bucket(CHAT.burst, CHAT.refillSeconds), talk: new Bucket(20, 0.1), rtc: new Bucket(120, 0.05) },
+      said: { text: '', at: 0, warned: 0 },
     });
     if (!this.host) this.host = client.sessionId;
-    this.log(`${this.members.get(client.sessionId)!.name} joined (${this.members.size}/${this.maxClients})`);
+    const name = this.members.get(client.sessionId)!.name;
+    this.log(`${name} joined (${this.members.size}/${this.maxClients})`);
+    client.send(S2C.ice, iceConfig(pid));
+    this.announce(`${name} joined`, client.sessionId);
     this.sendLobby();
     this.updateMeta();
   }
@@ -130,8 +218,10 @@ export class SurvivalRoom extends Room {
       this.record(id);
       night.removeSurvivor(id);
     }
-    this.log(`${this.members.get(id)?.name ?? id} left`);
+    const name = this.members.get(id)?.name ?? id;
+    this.log(`${name} left`);
     this.members.delete(id);
+    this.announce(`${name} left`);
     if (this.host === id) this.host = this.members.keys().next().value ?? '';
     if (night && this.status === 'playing' && (night.allDead || night.sim.players.size === 0)) void this.end();
     this.sendLobby();
@@ -234,10 +324,45 @@ export class SurvivalRoom extends Room {
     this.updateMeta();
   }
 
+  /** Two players kept apart because one blocks the other. */
+  private apart(a: Member, b: Member): boolean {
+    return a.blocks.has(b.pid) || b.blocks.has(a.pid);
+  }
+
+  /** A chat line from a player: cleaned, filtered, rate limited, and kept from anyone either side blocks. */
+  private chat(client: Client, msg: unknown): void {
+    const m = this.members.get(client.sessionId);
+    if (!m) return;
+    const clean = cleanChat(msg);
+    if (!clean) return;
+    const now = Date.now() / 1000;
+    // The same line again within a few seconds is a repeat, not a message.
+    if (clean === m.said.text && now - m.said.at < 4) return;
+    if (!m.limits.chat.take(now)) {
+      if (now - m.said.warned > 3) {
+        m.said.warned = now;
+        client.send(S2C.chat, { id: '', pid: '', name: '', text: 'Slow down: too many messages.', sys: true } satisfies ChatLine);
+      }
+      return;
+    }
+    m.said = { text: clean, at: now, warned: m.said.warned };
+    const line: ChatLine = { id: m.id, pid: m.pid, name: m.name, text: censor(clean) };
+    for (const c of this.clients) {
+      const o = this.members.get(c.sessionId);
+      if (o && !this.apart(m, o)) c.send(S2C.chat, line);
+    }
+  }
+
+  /** A line from the room itself to everyone (but `except`). */
+  private announce(text: string, except?: string): void {
+    const line: ChatLine = { id: '', pid: '', name: '', text, sys: true };
+    for (const c of this.clients) if (c.sessionId !== except) c.send(S2C.chat, line);
+  }
+
   private sendLobby(): void {
     const msg: LobbyMsg = {
       code: this.code, name: this.title, host: this.host, status: this.status, private: this.hidden,
-      players: [...this.members.values()].map((m) => ({ id: m.id, name: m.name, ready: m.ready, primary: m.primary, appearance: m.appearance })),
+      players: [...this.members.values()].map((m) => ({ id: m.id, pid: m.pid, name: m.name, ready: m.ready, primary: m.primary, appearance: m.appearance })),
     };
     this.broadcast(S2C.lobby, msg);
   }

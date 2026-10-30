@@ -6,7 +6,7 @@ import type { BoardKind } from '../store';
 import { roomForCode } from './codes';
 import { cleanAppearance, cleanName, cleanPrimary, cleanToken } from './clean';
 
-const VERSION = '0.3.8';
+const VERSION = '0.3.9';
 
 /** The game is played from another address (the static site): every route allows any origin. */
 function cors(res: ServerResponse): void {

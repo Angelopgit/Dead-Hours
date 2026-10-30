@@ -10,6 +10,7 @@ export * from './map/builder';
 export * from './map/colliders';
 export * from './map/maple-hollow';
 export * from './protocol/messages';
+export * from './chat/filter';
 
 import { MAPLE_HOLLOW } from './map/maple-hollow';
 /** The map every session plays on. */

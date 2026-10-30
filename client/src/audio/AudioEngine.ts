@@ -51,6 +51,8 @@ export class AudioEngine {
   private music!: GainNode;
   private effects!: GainNode;
   private ambient!: GainNode;
+  /** Other players' voices: straight to the master, past the compressor (gunfire doesn't pump them). */
+  private voiceBus!: GainNode;
   private noise!: AudioBuffer;
   private windGain!: GainNode;
   private windFilter!: BiquadFilterNode;
@@ -102,6 +104,8 @@ export class AudioEngine {
     this.effects = ctx.createGain();
     this.ambient = ctx.createGain();
     for (const b of [this.music, this.effects, this.ambient]) b.connect(comp);
+    this.voiceBus = ctx.createGain();
+    this.voiceBus.connect(this.master);
 
     // Noise buffer shared by wind, footsteps, thunder.
     const len = ctx.sampleRate * 3;
@@ -155,6 +159,7 @@ export class AudioEngine {
     this.music.gain.setTargetAtTime(a.music, t, 0.05);
     this.effects.gain.setTargetAtTime(a.effects, t, 0.05);
     this.ambient.gain.setTargetAtTime(a.ambient, t, 0.05);
+    this.voiceBus.gain.setTargetAtTime(a.voice, t, 0.05);
     this.sends.music.gain.setTargetAtTime(a.music, t, 0.05);
     this.sends.effects.gain.setTargetAtTime(a.effects, t, 0.05);
     this.sends.ambient.gain.setTargetAtTime(a.ambient, t, 0.05);
@@ -778,6 +783,22 @@ export class AudioEngine {
     this.acoustics = a;
     this.here = 'street';
     this.nextSpace = 0;
+  }
+
+  /** Where other players' voices are mixed in (null until audio is unlocked). */
+  get voiceOut(): AudioNode | null {
+    return this.ctx ? this.voiceBus : null;
+  }
+
+  /** Where the listener (the camera) is. */
+  get listener(): Vec3 {
+    return this.listenerPos;
+  }
+
+  /** What a voice at `from` loses through the walls on its way to the listener. */
+  muffle(from: Vec3): Muffle {
+    const l = this.listenerPos;
+    return this.acoustics?.occlusion(from.x, from.y, from.z, l.x, l.y, l.z) ?? CLEAR;
   }
 
   private spaceOf(p: Vec3): Space {

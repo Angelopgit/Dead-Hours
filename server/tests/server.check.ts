@@ -2,17 +2,21 @@
  * End-to-end checks for online play against a real server process: hosting with a private
  * join code, the game list, joining by code, host-only start, snapshots mirrored into a
  * client's copy of the world, shooting a zombie, movement checks, the night ending, runs on
- * the leaderboards, saved survivors and solo run checks. Run with `npm run check -w server`.
+ * the leaderboards, saved survivors and solo run checks, text chat (cleaning, filter, limits,
+ * blocks) and the voice negotiation relay. Run with `npm run check -w server`.
  */
 import { spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, type Room } from 'colyseus.js';
 import {
   C2S, Mirror, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
-  type BeginMsg, type LobbyMsg, type OverMsg, type SimEvent, type Snapshot, type Vec3,
+  type BeginMsg, type ChatLine, type IceConfig, type LobbyMsg, type OverMsg, type RtcIn, type SimEvent, type Snapshot,
+  type TalkMsg, type Vec3,
 } from '@dead-hours/shared';
+import { TURN_TTL, iceConfig } from '../src/net/ice';
 
 let failures = 0;
 let passes = 0;
@@ -61,6 +65,10 @@ class Player {
   notices: string[] = [];
   corrections: Vec3[] = [];
   pongs = 0;
+  chat: ChatLine[] = [];
+  talk: TalkMsg[] = [];
+  rtc: RtcIn[] = [];
+  ice: IceConfig | null = null;
   /** Says the scene is up as soon as the night begins (a browser does once it has drawn it). */
   autoLoad = true;
   constructor(readonly name: string, readonly key: string) {}
@@ -77,6 +85,10 @@ class Player {
     room.onMessage(S2C.notice, (m: string) => this.notices.push(m));
     room.onMessage(S2C.pos, (m: Vec3) => this.corrections.push(m));
     room.onMessage(S2C.pong, () => this.pongs++);
+    room.onMessage(S2C.chat, (m: ChatLine) => this.chat.push(m));
+    room.onMessage(S2C.talk, (m: TalkMsg) => this.talk.push(m));
+    room.onMessage(S2C.rtc, (m: RtcIn) => this.rtc.push(m));
+    room.onMessage(S2C.ice, (m: IceConfig) => (this.ice = m));
     return this;
   }
   get options() {
@@ -117,6 +129,81 @@ try {
   check(await until(() => a.lobby?.players.length === 2 && b.lobby?.players.length === 2), 'both see two survivors in the lobby');
   b.room.send(C2S.ready, true);
   check(await until(() => !!a.lobby?.players.find((p) => p.name === 'Bravo')?.ready), 'ready shows for everyone');
+
+  section('Text chat');
+  const said = (p: Player, from: Player) => p.chat.filter((l) => l.id === from.room.sessionId).map((l) => l.text);
+  check(a.chat.some((l) => l.sys && l.text === 'Bravo joined'), 'the room says who joined');
+  const pa = a.lobby?.players.find((p) => p.name === 'Alpha')?.pid ?? '', pb = a.lobby?.players.find((p) => p.name === 'Bravo')?.pid ?? '';
+  check(/^[A-Za-z0-9_-]{12}$/.test(pa) && pa !== pb && !pa.includes('alpha'), `lobby gives each player a lasting id that isn't their key (${pa})`);
+  a.room.send(C2S.chat, '  hello\u202e   there\n\u200b ');
+  check(await until(() => said(b, a).length === 1), 'a chat line reaches the other player');
+  const first = b.chat.find((l) => l.id === a.room.sessionId);
+  check(first?.text === 'hello there' && first.name === 'Alpha' && first.pid === pa, `cleaned: direction marks, invisible and control characters, extra spaces ("${first?.text}")`);
+  check(said(a, a)[0] === 'hello there', 'the sender sees their own line from the server');
+  a.room.send(C2S.chat, 'what the fuck, sh1t');
+  a.room.send(C2S.chat, 'x'.repeat(400));
+  a.room.send(C2S.chat, { evil: true });
+  check(await until(() => said(b, a).length === 3), 'lines arrive in order');
+  check(said(b, a)[1] === 'what the ****, ****', `profanity is filtered on the server ("${said(b, a)[1]}")`);
+  check(said(b, a)[2]?.length === 160, 'a line is cut to 160 characters');
+  for (let i = 0; i < 7; i++) b.room.send(C2S.chat, `spam ${i}`);
+  await sleep(400);
+  check(said(a, b).length === 4, `rate limit: 4 at once, then one every 1.5 s (${said(a, b).length} of 7 delivered)`);
+  check(b.chat.filter((l) => l.sys && l.text.startsWith('Slow down')).length === 1, 'the sender is told to slow down, once');
+  await sleep(1600);
+  b.room.send(C2S.chat, 'again');
+  b.room.send(C2S.chat, 'again');
+  await sleep(400);
+  check(said(a, b).filter((t) => t === 'again').length === 1, 'a repeated line is dropped');
+
+  section('Blocking');
+  a.room.send(C2S.blocks, [pb, 42, '../../etc']);
+  await sleep(200);
+  await sleep(1600);
+  const before = said(a, b).length;
+  b.room.send(C2S.chat, 'can you hear me');
+  a.room.send(C2S.chat, 'not you');
+  await sleep(400);
+  check(said(a, b).length === before, 'a blocked player\'s lines don\'t reach the blocker');
+  check(!said(b, a).includes('not you'), 'and the blocker\'s lines don\'t reach them either');
+  b.room.send(C2S.talk, 'near');
+  b.room.send(C2S.rtc, { to: a.room.sessionId, description: { type: 'offer', sdp: 'v=0' } });
+  await sleep(300);
+  check(a.talk.length === 0 && a.rtc.length === 0, 'no voice or negotiation passes between them');
+  a.room.send(C2S.blocks, []);
+  await sleep(1600);
+  b.room.send(C2S.chat, 'better now');
+  check(await until(() => said(a, b).includes('better now')), 'unblocking lets lines through again');
+
+  section('Voice negotiation');
+  check(a.ice?.iceServers[0]?.urls[0] === 'stun:stun.l.google.com:19302' && a.ice.relay === false, 'joining sends the STUN server (no TURN configured)');
+  a.room.send(C2S.rtc, { to: b.room.sessionId, description: { type: 'offer', sdp: 'v=0 offer' }, evil: 'x' });
+  check(await until(() => b.rtc.length === 1), 'an offer is passed to the one survivor it is for');
+  const offer = b.rtc[0];
+  check(offer?.from === a.room.sessionId && offer.description?.sdp === 'v=0 offer' && !('evil' in offer), 'it comes from the sender\'s id, unknown fields dropped');
+  a.room.send(C2S.rtc, { to: b.room.sessionId, candidate: { candidate: 'candidate:1 1 udp 2122260223 10.0.0.2 50000 typ host', sdpMid: '0', sdpMLineIndex: 0 } });
+  a.room.send(C2S.rtc, { to: b.room.sessionId, candidate: null });
+  check(await until(() => b.rtc.length === 3), 'ICE candidates and the end of candidates pass');
+  a.room.send(C2S.rtc, { to: b.room.sessionId, description: { type: 'evil', sdp: 'x' } });
+  a.room.send(C2S.rtc, { to: b.room.sessionId, description: { type: 'offer', sdp: 'x'.repeat(13000) } });
+  a.room.send(C2S.rtc, { to: a.room.sessionId, description: { type: 'offer', sdp: 'v=0' } });
+  a.room.send(C2S.rtc, { to: 'nobody', description: { type: 'offer', sdp: 'v=0' } });
+  await sleep(300);
+  check(b.rtc.length === 3 && a.rtc.length === 0, 'malformed, oversized, self and unknown targets are dropped');
+  a.room.send(C2S.talk, 'radio');
+  a.room.send(C2S.talk, 'shout');
+  check(await until(() => b.talk.length === 2), `talk state reaches the others (${JSON.stringify(b.talk)} ${JSON.stringify(a.talk)})`);
+  check(b.talk[0]?.mode === 'radio' && b.talk[1]?.mode === null && b.talk[0].id === a.room.sessionId, 'radio passes, anything else means stopped');
+  const at = 1_700_000_000_000;
+  const secret = iceConfig('pid1', { TURN_URLS: 'turn:turn.example.com:3478, turns:turn.example.com:5349', TURN_SECRET: 's3cret' }, at);
+  const turn = secret.iceServers[1];
+  const user = `${at / 1000 + TURN_TTL}:pid1`;
+  check(secret.relay && turn?.urls.length === 2 && turn.username === user && turn.credential === createHmac('sha1', 's3cret').update(user).digest('base64'),
+    'TURN_SECRET gives coturn-style credentials that expire in a day');
+  const fixed = iceConfig('pid1', { TURN_URLS: 'turn:t.example.com', TURN_USERNAME: 'u', TURN_CREDENTIAL: 'p', STUN_URLS: '' });
+  check(fixed.relay && fixed.iceServers.length === 1 && fixed.iceServers[0].username === 'u', 'fixed TURN credentials, STUN turned off');
+  check(!iceConfig('pid1', { TURN_URLS: 'turn:t.example.com' }).relay, 'a TURN address without credentials is not offered');
+
   const pub = client.create('survival', { ...c.options, lobbyName: 'Open house' });
   c.attach(await pub);
   await until(() => !!c.lobby);

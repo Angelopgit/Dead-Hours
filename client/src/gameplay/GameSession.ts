@@ -6,7 +6,7 @@ import {
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
-import { codeLabel, type Input } from '../core/Input';
+import { codeLabel, typing, type Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
 import { settings } from '../core/Settings';
 import { PlayerController } from './PlayerController';
@@ -27,6 +27,7 @@ import { ZombieView } from '../zombies/ZombieView';
 import { LimbView } from '../zombies/LimbView';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
+import { ChatBox } from '../ui/ChatBox';
 import { Inventory } from '../ui/Inventory';
 import { ResultsScreen, TeamResults } from '../ui/ResultsScreen';
 import { WeaponTablePanel } from '../ui/WeaponTablePanel';
@@ -168,6 +169,11 @@ export class GameSession {
   private readonly tmpB = new THREE.Vector3();
   private readonly tmpC = new THREE.Vector3();
   private readonly tmpD = new THREE.Vector3();
+  private readonly tmpVoice = new THREE.Vector3();
+  /** Online: the room's chat over the game, and who is talking. */
+  private chatBox: ChatBox | null = null;
+  private voxList: HTMLElement | null = null;
+  private voxKey = '';
 
   constructor(
     private readonly engine: Engine,
@@ -251,7 +257,13 @@ export class GameSession {
     this.hud = new HUD(profile.name);
     this.hud.el.style.opacity = '0';
     ui.append(this.hud.el);
-    this.pause = new PauseMenu(input, () => this.resume(), () => this.quit(), !!online);
+    this.pause = new PauseMenu(input, () => this.resume(), () => this.quit(), !!online, online?.link ?? null);
+    if (online) {
+      this.chatBox = new ChatBox(online.link, 'game', () => this.input.clear());
+      this.voxList = h('div', { class: 'vox-list' });
+      ui.append(this.chatBox.el, this.voxList);
+      online.link.voice.setInGame(true);
+    }
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
     this.skip = h('div', { class: 'skip' }, 'PRESS ANY KEY TO SKIP');
     this.clickToPlay = h('div', { class: 'click-to-play' }, 'CLICK TO CONTINUE');
@@ -285,6 +297,12 @@ export class GameSession {
   // ------------------------------------------------------------------ phases
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    // Fallen (watching or on the results), the chat still opens.
+    if (this.phase === 'dead' && this.chatBox && !this.chatBox.isOpen && !typing(e) && settings.value.controls.bindings.chat.includes(e.code)) {
+      e.preventDefault();
+      this.chatBox.open();
+      return;
+    }
     if (this.phase === 'dead' && this.watching && e.code === 'Escape') {
       this.watching = null;
       this.showResults();
@@ -306,7 +324,11 @@ export class GameSession {
   };
 
   private onLockChange = (): void => {
-    if (this.phase === 'playing' && !this.input.locked) this.openPause();
+    // Escape while typing closes the chat (the browser lets go of the mouse too): back in with a click.
+    if (this.phase === 'playing' && !this.input.locked && this.chatBox?.isOpen) {
+      this.chatBox.close();
+      this.ui.append(this.clickToPlay);
+    } else if (this.phase === 'playing' && !this.input.locked) this.openPause();
     if (this.input.locked) this.clickToPlay.remove();
   };
 
@@ -388,6 +410,8 @@ export class GameSession {
 
   private openPause(): void {
     this.phase = 'paused';
+    // Normally the mouse is already free (letting it go is what opens this); make sure the menu can be clicked.
+    this.input.releaseLock();
     this.input.clear();
     this.player.clearInput();
     this.clearIntents();
@@ -577,7 +601,10 @@ export class GameSession {
     const renderTime = m ? this.sim.time : this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
-    if (m) this.remotes!.update(live, this.sim, m, this.engine.camera);
+    if (m) {
+      this.remotes!.update(live, this.sim, m, this.engine.camera);
+      this.updateVoices();
+    }
     this.bleedHeldLimb(live);
     if (running) this.drops.update(live, renderTime);
     this.drops.helicopters(this.helis);
@@ -594,6 +621,28 @@ export class GameSession {
       this.area = area;
       this.areaCooldown = 2.5;
       this.hud.notify(area, '', 1.6);
+    }
+  }
+
+  /** Voices from where each survivor stands; who is talking lights up (name tags and the list). */
+  private updateVoices(): void {
+    const link = this.link;
+    const r = this.remotes;
+    if (!link || !r) return;
+    const voice = link.voice;
+    const talking: [string, boolean][] = [];
+    for (const p of this.sim.players.values()) {
+      const radio = voice.talkOf(p.id) === 'radio';
+      const on = voice.speaking(p.id);
+      if (on) talking.push([p.id === this.myId ? 'YOU' : p.name.toUpperCase(), radio]);
+      if (p.id === this.myId) continue;
+      voice.place(p.id, r.mouthOf(p.id, this.tmpVoice), p.alive);
+      r.speaking(p.id, on, radio);
+    }
+    const key = talking.map(([n, radio]) => `${n}${radio ? '*' : ''}`).join('|');
+    if (key !== this.voxKey && this.voxList) {
+      this.voxKey = key;
+      this.voxList.replaceChildren(...talking.map(([name, radio]) => h('div', { class: `vox${radio ? ' radio' : ''}` }, h('i'), radio ? `${name} · RADIO` : name)));
     }
   }
 
@@ -644,6 +693,10 @@ export class GameSession {
     const wheel = input.consumeWheel();
     if (wheel !== 0) this.wantSlot = a.active === 'primary' ? 'secondary' : 'primary';
     if (input.pressed('melee')) this.wantMelee = true;
+    if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
+      this.chatBox.open();
+      input.clear();
+    }
     if (input.pressed('heal')) {
       if (this.me.bandages <= 0) this.hud.feedLine('NO BANDAGES');
       else if (this.me.health >= PLAYER.maxHealth) this.hud.feedLine('HEALTH FULL');
@@ -1502,6 +1555,9 @@ export class GameSession {
   dispose(): void {
     this.abort.abort();
     audio.setAcoustics(null);
+    this.link?.voice.setInGame(false);
+    this.chatBox?.dispose();
+    this.voxList?.remove();
     this.unsubSettings();
     this.intro?.kill();
     this.tableTween?.kill();
