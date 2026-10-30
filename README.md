@@ -10,6 +10,7 @@ npm run dev          # client on http://localhost:5173
 npm run dev:server   # multiplayer server on ws://localhost:2567 (lobbies wire up in Phase 4)
 npm run typecheck    # shared + client + server
 npm run check:world  # walks a character through the real map collision (doors, stairs, passages)
+npm run check:audio  # renders every gun, action and handling sound and the echo responses, checks level and shape
 npm run check:sim    # headless combat simulation: navigation, weapons, damage, zombie AI, supplies, death, appearance wire format
 npm run build        # production client build into client/dist
 ```
@@ -32,9 +33,9 @@ client/   Vite + Three.js game
   src/effects      particles, decals (holes, blood), shell casings, muzzle light
   src/zombies      zombie rendering: pooled bodies, interpolation, hit reactions, corpses
   src/gameplay     player controller, shoulder camera, doors, weapon table, menu cinematic, solo session
-  src/audio        procedural Web Audio engine (no external assets)
+  src/audio        procedural Web Audio engine and offline gun synthesis (no external assets)
   src/ui           main menu, settings, loadout, HUD, pause, inventory, weapon table, results
-  tests/           headless world checks (npm run check:world)
+  tests/           headless world and audio checks (npm run check:world, check:audio)
   dev/lineup.html  dev-only page that renders survivors side by side for checking outfits (not in the build)
 server/   Colyseus server
   src/rooms        SurvivalRoom + schema
@@ -62,6 +63,7 @@ Solo play runs the same authoritative simulation the Phase 4 server will run (`s
 - Zombies have head, torso, arm and leg hit zones (head ×2.5). They hear gunfire and footsteps, spot you in their sight cone (crouching shortens it), path through houses, pound and break doors, stagger and get knocked down.
 - 45 seconds of preparation, then the outbreak: a growing population of walkers and no waves. Death ends a solo run with the results screen.
 - Gore can be set to Off, Reduced or Full in Settings → Graphics.
+- Gun sounds are modeled per weapon and rendered into buffers at startup (`client/src/audio/GunSynth.ts`): the muzzle blast pressure wave, the gas jet, the supersonic crack for the rifles, the steel ringing, a ground bounce and an overload stage. The M4A1 is sharp with a hard crack, the MP5 a rounder bark with the roller bolt clacking, the M870 a long deep boom, the MK14 the biggest crack and report, the M17 a short snappy pop with the slide snapping. Each gun has four takes picked at random with slight pitch variation, the action cycling under each shot (buffer spring, roller bolt, op-rod, slide), and its own reload, pump, charging handle and dry fire sounds. Every shot drives a convolution echo: outdoors the house facades slap it back one by one and the block rolls on for about two seconds; inside, the room rings short and hard. A shot from someone else arrives late (sound travels at 343 m/s), dulled by distance, mostly as echo. These are synthesized, not recordings.
 - Aiming looks down the sights in first person: the camera moves into the survivor's eye and the weapon's sights line up with it. The M4A1 has a red dot, the MP5 a peep sight and hooded post, the M870 a fiber-optic bead, the M17 three-dot night sights and the MK14 a scope (zoomed view with a duplex reticle). Settings → Controls → Aim view switches back to the over-the-shoulder zoom.
 
 ## Survivors

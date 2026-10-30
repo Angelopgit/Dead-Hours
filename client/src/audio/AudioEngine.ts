@@ -1,9 +1,39 @@
 import * as THREE from 'three';
 import { settings } from '../core/Settings';
+import { GUN_SOUNDS, renderFoley, renderMech, renderShot, roomIR, streetIR, type Channels, type FoleyKind } from './GunSynth';
+
+/** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
+const SHOT_TAKES = 4;
+const FOLEY_TAKES = 2;
+/** How hard a shot drives the street echo, and the room echo when the listener is inside. */
+const STREET_SEND = 0.4;
+const ROOM_SEND = 0.5;
+/** Indoors the street still answers faintly through the doors and windows. */
+const STREET_INDOORS = 0.18;
+const SPEED_OF_SOUND = 343;
+/** Playback level of each handling sound. */
+const FOLEY_LEVEL: Record<FoleyKind, number> = {
+  magOut: 0.3, magIn: 0.42, bolt: 0.45, pump: 0.45, slide: 0.42, shellIn: 0.3, shellGrab: 0.08, holster: 0.16, draw: 0.16, dryFire: 0.3,
+};
+/** Handling sounds each gun makes, rendered ahead of time. */
+const FOLEY_SET: Record<string, FoleyKind[]> = {
+  ar: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
+  smg: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
+  marksman: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
+  pistol: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'slide'],
+  shotgun: ['draw', 'holster', 'dryFire', 'pump', 'shellIn', 'shellGrab'],
+};
+
+function seedOf(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
 
 /**
- * Procedural Web Audio engine. Every sound is synthesized at runtime (no external assets),
- * routed through master → {music, effects, ambient} buses with a spatial listener.
+ * Web Audio engine, routed through master → {music, effects, ambient} buses with a spatial
+ * listener. Ambience, music and voices are synthesized live; guns play from a bank of buffers that
+ * GunSynth renders at startup, with convolution echo of the street or the room around the listener.
  */
 export class AudioEngine {
   ctx: AudioContext | null = null;
@@ -18,6 +48,11 @@ export class AudioEngine {
   private pulseGain!: GainNode;
   private reverb!: ConvolverNode;
   private reverbSend!: GainNode;
+  private streetVerb!: ConvolverNode;
+  private roomVerb!: ConvolverNode;
+  private readonly bank = new Map<string, AudioBuffer>();
+  private bankTimer = 0;
+  private readonly listenerPos = new THREE.Vector3();
   private nextNote = 0;
   private nextAmbientEvent = 0;
   private nextPulse = 0;
@@ -70,6 +105,14 @@ export class AudioEngine {
     this.reverbSend.gain.value = 0.5;
     this.reverbSend.connect(this.reverb);
     this.reverb.connect(comp);
+
+    this.streetVerb = ctx.createConvolver();
+    this.roomVerb = ctx.createConvolver();
+    for (const v of [this.streetVerb, this.roomVerb]) {
+      v.normalize = false;
+      v.connect(this.effects);
+    }
+    this.prepareGuns();
 
     this.startWind();
     this.startDrone();
@@ -376,6 +419,7 @@ export class AudioEngine {
     this.time += dt;
     const L = ctx.listener;
     const p = camera.position;
+    this.listenerPos.copy(p);
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
     if (L.positionX) {
@@ -472,7 +516,7 @@ export class AudioEngine {
   // ------------------------------------------------------------------ combat
 
   /** Output chain for a one-shot: spatial when a position is given, with a reverb send. */
-  private out(position: THREE.Vector3 | null, reverb = 0, ref = 3): AudioNode {
+  private out(position: THREE.Vector3 | null, reverb = 0, ref = 3): GainNode {
     const ctx = this.ctx!;
     const g = ctx.createGain();
     if (position) {
@@ -525,83 +569,129 @@ export class AudioEngine {
     o.stop(t + attack + decay + 0.05);
   }
 
-  private static readonly GUNS: Record<string, { crack: number; hp: number; body: number; boom: number; tail: number; gain: number }> = {
-    ar: { crack: 0.9, hp: 1500, body: 150, boom: 0.5, tail: 1.3, gain: 1 },
-    smg: { crack: 0.7, hp: 2400, body: 190, boom: 0.35, tail: 0.9, gain: 0.8 },
-    shotgun: { crack: 0.75, hp: 900, body: 105, boom: 1, tail: 1.9, gain: 1.2 },
-    marksman: { crack: 1.1, hp: 1300, body: 130, boom: 0.7, tail: 2.1, gain: 1.25 },
-    pistol: { crack: 0.85, hp: 2600, body: 210, boom: 0.3, tail: 0.9, gain: 0.85 },
-  };
+  /** A rendered buffer from the bank, rendering it now if the background pass hasn't yet. */
+  private sample(key: string, make: () => Channels): AudioBuffer {
+    let b = this.bank.get(key);
+    if (!b) {
+      const chs = make();
+      b = this.ctx!.createBuffer(chs.length, chs[0].length, this.ctx!.sampleRate);
+      for (let i = 0; i < chs.length; i++) b.copyToChannel(chs[i], i);
+      this.bank.set(key, b);
+    }
+    return b;
+  }
 
-  /** Gunshot: crack, body punch, boom and an outdoor echo tail (rooms ring instead). */
+  private shotBuffer(id: string, take: number): AudioBuffer {
+    const key = `shot:${id}:${take}`;
+    return this.sample(key, () => renderShot(GUN_SOUNDS[id].shot, this.ctx!.sampleRate, seedOf(key)));
+  }
+
+  private mechBuffer(id: string): AudioBuffer | null {
+    const mech = GUN_SOUNDS[id].mech;
+    return mech ? this.sample(`mech:${id}`, () => renderMech(mech, this.ctx!.sampleRate, seedOf(id))) : null;
+  }
+
+  private foleyBuffer(kind: FoleyKind, id: string, take: number): AudioBuffer {
+    const key = `foley:${kind}:${id}:${take}`;
+    return this.sample(key, () => renderFoley(kind, id, this.ctx!.sampleRate, seedOf(key)));
+  }
+
+  private streetEcho(): ConvolverNode {
+    if (!this.streetVerb.buffer) this.streetVerb.buffer = this.sample('ir:street', () => streetIR(this.ctx!.sampleRate, 7));
+    return this.streetVerb;
+  }
+
+  private roomEcho(): ConvolverNode {
+    if (!this.roomVerb.buffer) this.roomVerb.buffer = this.sample('ir:room', () => roomIR(this.ctx!.sampleRate, 11));
+    return this.roomVerb;
+  }
+
+  /** Renders the gun bank one buffer per task, so startup never stalls a frame for long. */
+  private prepareGuns(): void {
+    const jobs: (() => void)[] = [() => this.streetEcho(), () => this.roomEcho()];
+    for (const id of Object.keys(GUN_SOUNDS)) {
+      for (let k = 0; k < SHOT_TAKES; k++) jobs.push(() => this.shotBuffer(id, k));
+      jobs.push(() => this.mechBuffer(id));
+    }
+    for (const [id, kinds] of Object.entries(FOLEY_SET)) {
+      for (const kind of kinds) for (let k = 0; k < FOLEY_TAKES; k++) jobs.push(() => this.foleyBuffer(kind, id, k));
+    }
+    const run = () => {
+      const job = jobs.shift();
+      if (!job || !this.ctx) return;
+      job();
+      this.bankTimer = window.setTimeout(run, 0);
+    };
+    this.bankTimer = window.setTimeout(run, 0);
+  }
+
+  private send(from: AudioNode, to: AudioNode, amount: number): void {
+    if (amount <= 0.001) return;
+    const g = this.ctx!.createGain();
+    g.gain.value = amount;
+    from.connect(g).connect(to);
+  }
+
+  /**
+   * Gunshot: the close report, the action cycling under it for the shooter, and the street or the
+   * room answering. Someone else's shot arrives late and dulled by the air, mostly as echo.
+   */
   gunshot(weapon: string, position: THREE.Vector3, indoor: boolean, local: boolean): void {
     if (!this.ctx) return;
-    const w = AudioEngine.GUNS[weapon] ?? AudioEngine.GUNS.ar;
-    const t = this.ctx.currentTime;
-    const dest = this.out(position, indoor ? 0.9 : 0.35, local ? 6 : 10);
-    const v = w.gain * (local ? 0.55 : 0.7);
-    this.burst(dest, t, 'highpass', w.hp * (0.9 + Math.random() * 0.2), 0.7, 0.9 * w.crack * v, 0.001, 0.07);
-    this.burst(dest, t, 'bandpass', 700, 0.8, 0.7 * v, 0.002, 0.16 + w.boom * 0.12);
-    this.tone(dest, t, 'triangle', w.body * 1.6, w.body * 0.35, 0.9 * v, 0.002, 0.16 + w.boom * 0.1);
-    if (w.boom > 0.6) this.tone(dest, t, 'sine', 70, 32, 0.7 * v * w.boom, 0.004, 0.35);
-    // Echo off the houses / room ring.
-    const tail = indoor ? w.tail * 0.45 : w.tail;
-    this.burst(dest, t + (indoor ? 0.012 : 0.07), 'lowpass', indoor ? 1400 : 700, 0.5, (indoor ? 0.3 : 0.22) * v, 0.03, tail, 0.6);
-    // Mechanism.
-    if (local) this.burst(dest, t + 0.03, 'bandpass', 3200, 3, 0.06, 0.001, 0.03);
-  }
-
-  dryFire(position: THREE.Vector3): void {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    const dest = this.out(position);
-    this.burst(dest, t, 'bandpass', 2800, 4, 0.25, 0.001, 0.025);
-    this.tone(dest, t, 'square', 1900, 1500, 0.04, 0.001, 0.02);
-  }
-
-  /** Reload and handling foley. */
-  foley(kind: 'magOut' | 'magIn' | 'bolt' | 'pump' | 'slide' | 'shellIn' | 'holster' | 'draw' | 'shellGrab', position: THREE.Vector3): void {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    const d = this.out(position, 0.05, 2);
-    switch (kind) {
-      case 'magOut':
-        this.burst(d, t, 'bandpass', 1800, 2, 0.22, 0.002, 0.05);
-        this.burst(d, t + 0.06, 'bandpass', 900, 1.5, 0.18, 0.005, 0.12);
-        break;
-      case 'magIn':
-        this.burst(d, t, 'bandpass', 1300, 2, 0.18, 0.003, 0.05);
-        this.burst(d, t + 0.07, 'bandpass', 2400, 3, 0.4, 0.001, 0.04);
-        this.tone(d, t + 0.07, 'triangle', 420, 260, 0.12, 0.001, 0.05);
-        break;
-      case 'bolt':
-        this.burst(d, t, 'bandpass', 2600, 3, 0.35, 0.001, 0.035);
-        this.burst(d, t + 0.09, 'bandpass', 3400, 3, 0.45, 0.001, 0.04);
-        this.tone(d, t + 0.09, 'square', 900, 600, 0.05, 0.001, 0.03);
-        break;
-      case 'pump':
-        this.burst(d, t, 'bandpass', 1100, 2, 0.4, 0.002, 0.06);
-        this.tone(d, t, 'triangle', 260, 180, 0.15, 0.001, 0.06);
-        this.burst(d, t + 0.15, 'bandpass', 1500, 2, 0.45, 0.002, 0.06);
-        this.tone(d, t + 0.15, 'triangle', 320, 200, 0.18, 0.001, 0.06);
-        break;
-      case 'slide':
-        this.burst(d, t, 'bandpass', 2200, 2.5, 0.3, 0.002, 0.05);
-        this.burst(d, t + 0.07, 'bandpass', 3000, 3, 0.35, 0.001, 0.04);
-        break;
-      case 'shellIn':
-        this.burst(d, t, 'bandpass', 1600, 2.5, 0.25, 0.002, 0.04);
-        this.tone(d, t + 0.02, 'triangle', 700, 500, 0.08, 0.001, 0.04);
-        break;
-      case 'shellGrab':
-        this.burst(d, t, 'bandpass', 2400, 1.5, 0.06, 0.01, 0.06);
-        break;
-      case 'holster':
-      case 'draw':
-        this.burst(d, t, 'lowpass', 900, 0.7, 0.12, 0.03, 0.14, 1.4);
-        this.burst(d, t + 0.1, 'bandpass', 2000, 2, 0.08, 0.002, 0.04);
-        break;
+    const ctx = this.ctx;
+    const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
+    const gun = GUN_SOUNDS[id];
+    const src = ctx.createBufferSource();
+    src.buffer = this.shotBuffer(id, Math.floor(Math.random() * SHOT_TAKES));
+    src.playbackRate.value = 1 + (Math.random() * 2 - 1) * 0.03;
+    const level = ctx.createGain();
+    level.gain.value = gun.level;
+    src.connect(level);
+    let t = ctx.currentTime;
+    let echo = gun.echo;
+    if (local) {
+      // The gun is at the shooter's face: no panning, the shot fills both ears.
+      level.connect(this.effects);
+    } else {
+      const d = position.distanceTo(this.listenerPos);
+      t += d / SPEED_OF_SOUND;
+      echo /= 1 + d / 80;
+      const air = ctx.createBiquadFilter();
+      air.type = 'lowpass';
+      air.frequency.value = Math.max(1200, 16000 / (1 + d / 30));
+      const p = this.makePanner(position);
+      p.refDistance = 8;
+      level.connect(air).connect(p).connect(this.effects);
     }
+    this.send(level, this.streetEcho(), echo * STREET_SEND * (indoor ? STREET_INDOORS : 1));
+    if (indoor) this.send(level, this.roomEcho(), echo * ROOM_SEND);
+    src.start(t);
+    const mech = local ? this.mechBuffer(id) : null;
+    if (mech) {
+      const m = ctx.createBufferSource();
+      m.buffer = mech;
+      m.playbackRate.value = src.playbackRate.value;
+      const mg = ctx.createGain();
+      mg.gain.value = gun.mechLevel;
+      m.connect(mg).connect(this.effects);
+      m.start(t);
+    }
+  }
+
+  dryFire(position: THREE.Vector3, weapon = 'ar'): void {
+    this.foley('dryFire', position, weapon);
+  }
+
+  /** Reload and handling foley, voiced for the gun in hand. */
+  foley(kind: FoleyKind, position: THREE.Vector3, weapon = 'ar'): void {
+    if (!this.ctx) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.foleyBuffer(kind, GUN_SOUNDS[weapon] ? weapon : 'ar', Math.floor(Math.random() * FOLEY_TAKES));
+    src.playbackRate.value = 1 + (Math.random() * 2 - 1) * 0.04;
+    const d = this.out(position, 0.05, 2);
+    d.gain.value = FOLEY_LEVEL[kind];
+    src.connect(d);
+    src.start();
   }
 
   casing(position: THREE.Vector3, shell: boolean, strength: number): void {
@@ -890,6 +980,8 @@ export class AudioEngine {
 
   dispose(): void {
     this.unsub?.();
+    window.clearTimeout(this.bankTimer);
+    this.bank.clear();
     void this.ctx?.close();
     this.ctx = null;
   }

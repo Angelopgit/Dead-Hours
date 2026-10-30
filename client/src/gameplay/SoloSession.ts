@@ -167,7 +167,7 @@ export class SoloSession {
     this.weapon = new PlayerWeapon(engine.scene, this.player.character);
     this.probe.attach(this.weapon.materials());
     this.weapon.onMaterials = (m) => this.probe.attach(m);
-    this.weapon.onCue = (cue) => audio.foley(cue, this.handPos());
+    this.weapon.onCue = (cue, weapon) => audio.foley(cue, this.handPos(), weapon);
     this.cam = new ThirdPersonCamera(engine.camera, physics);
     this.cam.yaw = spawn.yaw;
     this.focus.copy(this.player.position);
@@ -691,7 +691,7 @@ export class SoloSession {
         break;
       }
       case 'dryFire':
-        if (e.player === ME) audio.dryFire(this.handPos());
+        if (e.player === ME) audio.dryFire(this.handPos(), e.weapon);
         break;
       case 'impact': {
         v3(e.pos, A);
@@ -765,10 +765,10 @@ export class SoloSession {
         break;
       case 'reload':
         if (e.player !== ME) break;
-        if (e.stage === 'shell') audio.foley('shellIn', this.handPos());
+        if (e.stage === 'shell') audio.foley('shellIn', this.handPos(), e.weapon);
         if (e.stage === 'end' && e.weapon === 'shotgun' && this.reloadFromEmpty) {
           this.weapon.cycleAction();
-          this.later.push({ t: 0.12, fn: () => audio.foley('pump', this.handPos()) });
+          this.later.push({ t: 0.12, fn: () => audio.foley('pump', this.handPos(), 'shotgun') });
         }
         if (e.stage === 'end' || e.stage === 'cancel') this.reloadFromEmpty = false;
         break;
