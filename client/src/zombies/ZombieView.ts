@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { SPAWNING, type HitZone, type Simulation, type Zombie } from '@dead-hours/shared';
-import { Humanoid, ZOMBIE_LOOK_COUNT, zombieLook } from '../characters/Humanoid';
+import { SPAWNING, type HitZone, type Simulation, type Zombie, type ZombieKind } from '@dead-hours/shared';
+import { Humanoid, ZOMBIE_LOOKS, zombieLook, type ZombieGait } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import type { Physics } from '../core/Physics';
 import type { LightField } from '../lighting/LightField';
@@ -9,6 +9,7 @@ import { DynamicProbe } from '../lighting/Probes';
 interface View {
   id: number;
   look: number;
+  gait: ZombieGait;
   body: Humanoid;
   probe: DynamicProbe;
   facing: number;
@@ -24,6 +25,12 @@ interface View {
 
 const MAX_CORPSES = 14;
 
+/** Crawlers aren't spawned yet; until they have their own body they walk like walkers. */
+const gaitOf = (kind: ZombieKind): ZombieGait => (kind === 'runner' || kind === 'brute' ? kind : 'walker');
+
+/** Voice pitch per kind: brutes rumble, runners shriek. */
+const VOICE_PITCH: Record<ZombieGait, number> = { walker: 1, runner: 1.32, brute: 0.62 };
+
 /**
  * Renders the simulation's zombies: pooled skinned bodies per look, positions interpolated
  * between simulation steps, animation channels from the AI state, hit flinches and wounds,
@@ -32,8 +39,8 @@ const MAX_CORPSES = 14;
 export class ZombieView {
   private readonly views = new Map<number, View>();
   private readonly corpses: View[] = [];
-  /** Bodies are pooled with their light probe: the probe is patched into the material once. */
-  private readonly pool: { body: Humanoid; probe: DynamicProbe }[][] = Array.from({ length: ZOMBIE_LOOK_COUNT }, () => []);
+  /** Bodies are pooled per kind and look with their light probe: the probe is patched into the material once. */
+  private readonly pool = new Map<string, { body: Humanoid; probe: DynamicProbe }[]>();
   private readonly root = new THREE.Group();
   private readonly tmp = new THREE.Vector3();
   gore = true;
@@ -45,11 +52,17 @@ export class ZombieView {
     scene.add(this.root);
   }
 
-  private acquire(look: number): { body: Humanoid; probe: DynamicProbe } {
-    const k = look % ZOMBIE_LOOK_COUNT;
-    let entry = this.pool[k].pop();
+  private poolOf(gait: ZombieGait, look: number) {
+    const key = `${gait}:${look % ZOMBIE_LOOKS[gait]}`;
+    let list = this.pool.get(key);
+    if (!list) this.pool.set(key, (list = []));
+    return list;
+  }
+
+  private acquire(gait: ZombieGait, look: number): { body: Humanoid; probe: DynamicProbe } {
+    let entry = this.poolOf(gait, look).pop();
     if (!entry) {
-      const body = new Humanoid(zombieLook(k));
+      const body = new Humanoid(zombieLook(look, gait));
       const probe = new DynamicProbe(this.field, 0.3 + Math.random() * 0.1);
       probe.attach(body.surfaces());
       entry = { body, probe };
@@ -71,7 +84,7 @@ export class ZombieView {
   private release(v: View): void {
     v.body.root.removeFromParent();
     v.body.ragdoll = false;
-    this.pool[v.look % ZOMBIE_LOOK_COUNT].push({ body: v.body, probe: v.probe });
+    this.poolOf(v.gait, v.look).push({ body: v.body, probe: v.probe });
   }
 
   get count(): number {
@@ -120,6 +133,12 @@ export class ZombieView {
     this.release(v);
   }
 
+  /** Voice pitch of a zombie on screen (1 when unknown). */
+  pitchOf(id: number): number {
+    const v = this.views.get(id);
+    return v ? VOICE_PITCH[v.gait] : 1;
+  }
+
   /** Spatial anchor for zombie audio. */
   headOf(id: number, out: THREE.Vector3): THREE.Vector3 | null {
     const v = this.views.get(id);
@@ -139,8 +158,9 @@ export class ZombieView {
       seen.add(z.id);
       let v = this.views.get(z.id);
       if (!v) {
-        const { body, probe } = this.acquire(z.look);
-        v = { id: z.id, look: z.look, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false };
+        const gait = gaitOf(z.kind);
+        const { body, probe } = this.acquire(gait, z.look);
+        v = { id: z.id, look: z.look, gait, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false };
         this.views.set(z.id, v);
       }
       this.animate(v, z, dt, renderTime, cam, camera);
@@ -214,7 +234,7 @@ export class ZombieView {
 
   dispose(): void {
     this.clear();
-    for (const list of this.pool) for (const e of list) e.body.dispose();
+    for (const list of this.pool.values()) for (const e of list) e.body.dispose();
     this.root.removeFromParent();
   }
 }

@@ -120,6 +120,8 @@ export interface DressOptions {
   /** Skin color (hex), overriding the palette (zombies). */
   skin?: number;
   rand: () => number;
+  /** Widens torso and limbs beyond the broadest build (brutes). */
+  girth?: number;
 }
 
 export interface DressResult {
@@ -161,7 +163,8 @@ const COVERS_FACE = new Set(['moto', 'knight']);
  */
 export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResult {
   const build = BUILD[a.build] ?? BUILD.average;
-  const b: Body = { bx: build[0], bz: build[1], arm: build[2], skin: o.skin ?? paletteColor('skin', a.skin), zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0 };
+  const g = o.girth ?? 1;
+  const b: Body = { bx: build[0] * g, bz: build[1] * g, arm: build[2] * g, skin: o.skin ?? paletteColor('skin', a.skin), zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0 };
   const kit = (bone: number) => new Kit(sink, bone);
   const head = kit(BONE.head), spine = kit(BONE.spine), hips = kit(BONE.hips);
   const cloth = (i: number) => paletteColor('cloth', i);

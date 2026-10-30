@@ -34,7 +34,7 @@ const METAL_PROPS = new Set<PropKind>([
   'washer', 'waterHeater', 'ironFence', 'bbq', 'trampoline', 'cooler', 'storeShelf', 'patioTable', 'floorLamp',
 ]);
 const SOFT_PROPS = new Set<PropKind>(['sofa', 'armchair', 'bed', 'mattress', 'tent', 'cone', 'trashBin', 'iceChest', 'tireStack', 'trashBag']);
-const CONCRETE_PROPS = new Set<PropKind>(['jerseyBarrier']);
+const CONCRETE_PROPS = new Set<PropKind>(['jerseyBarrier', 'toilet', 'bathtub', 'vanity']);
 const DIRT_PROPS = new Set<PropKind>(['sandbags']);
 
 function propSurface(kind: PropKind): Surface {

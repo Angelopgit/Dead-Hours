@@ -2,6 +2,15 @@ import { RAPIER, GROUP, groups, type Physics } from './Physics';
 import { STORY } from '../map/builder';
 import type { DoorSpec, MapDefinition } from '../types/world';
 
+/** A closed (or closing) leaf blocks everyone. */
+const CLOSED_GROUPS = groups(GROUP.dynamic, 0xffff);
+/**
+ * An open leaf still stops players and bullets, but zombies walk past it: the nav grid can't
+ * see door leaves, and a leaf standing out into a room or a porch is exactly what crowds used
+ * to snag on.
+ */
+const OPEN_GROUPS = groups(GROUP.dynamic, 0xffff & ~GROUP.zombie);
+
 /**
  * The physical part of an exterior door: a kinematic leaf that characters collide with,
  * its open/closed state and how hard zombies have pounded on it. The client wraps it with
@@ -40,7 +49,7 @@ export class DoorBody {
     this.collider = physics.world.createCollider(
       RAPIER.ColliderDesc.cuboid(spec.w / 2 - 0.02, spec.h / 2, this.thickness / 2)
         .setTranslation(spec.w / 2, spec.h / 2, 0)
-        .setCollisionGroups(groups(GROUP.dynamic, 0xffff)),
+        .setCollisionGroups(CLOSED_GROUPS),
       this.body,
     );
     physics.setSurface(this.collider, this.rollup ? 'metal' : spec.style === 'glass' ? 'glass' : 'wood');
@@ -60,6 +69,7 @@ export class DoorBody {
     if (open === this.open) return;
     this.open = open;
     this.changed = true;
+    this.collider.setCollisionGroups(open ? OPEN_GROUPS : CLOSED_GROUPS);
     if (!open) this.strain = Math.max(0, this.strain - 0.35);
     if (this.rollup) {
       this.target = open ? 1 : 0;
@@ -114,6 +124,7 @@ export class DoorBody {
     this.target = 0;
     this.angle = 0;
     this.strain = 0;
+    this.collider.setCollisionGroups(CLOSED_GROUPS);
     this.body.setTranslation({ x: this.hinge.x, y: this.hinge.y, z: this.hinge.z }, true);
     this.body.setRotation(this.quat(this.baseYaw), true);
     this.body.setNextKinematicTranslation({ x: this.hinge.x, y: this.hinge.y, z: this.hinge.z });

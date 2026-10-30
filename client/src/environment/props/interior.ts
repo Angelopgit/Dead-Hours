@@ -253,6 +253,50 @@ export const INTERIOR: Partial<Record<PropKind, Builder>> = {
     k.block(len + 0.06, 0.06, 0.08, w, 0, 0.95, 0);
     k.block(len, 0.04, 0.03, w, 0, 0.5, 0);
   },
+  toilet(k) {
+    const china = k.mat(0xd9d6cc, 0.25);
+    const seat = k.mat(0xcfcac0, 0.4);
+    k.block(0.22, 0.27, 0.34, china, 0, 0, -0.02);
+    k.cyl(0.2, 0.15, 0.16, 16, china, 0, 0.34, 0.08);
+    k.cyl(0.17, 0.17, 0.01, 16, k.mat(0x6f6a58, 0.2), 0, 0.42, 0.08, { cast: false });
+    k.cyl(0.21, 0.21, 0.03, 16, seat, 0, 0.435, 0.08);
+    k.block(0.42, 0.36, 0.19, china, 0, 0.44, -0.245);
+    k.block(0.44, 0.03, 0.21, china, 0, 0.8, -0.245);
+    // Lid left up against the tank.
+    k.block(0.38, 0.4, 0.025, seat, 0, 0.45, -0.13, { rx: -0.12 });
+    k.block(0.05, 0.02, 0.03, k.mat(0x9a9a96, 0.3, 0.8), -0.15, 0.72, -0.14);
+  },
+  bathtub(k) {
+    const enamel = k.mat(0xe2ded4, 0.22);
+    k.block(1.7, 0.08, 0.76, enamel, 0, 0, 0);
+    for (const sz of [-1, 1]) k.block(1.7, 0.5, 0.08, enamel, 0, 0.08, sz * 0.34);
+    for (const sx of [-1, 1]) k.block(0.08, 0.5, 0.6, enamel, sx * 0.81, 0.08, 0);
+    for (const sz of [-1, 1]) k.block(1.72, 0.04, 0.1, enamel, 0, 0.56, sz * 0.34, { cast: false });
+    for (const sx of [-1, 1]) k.block(0.1, 0.04, 0.6, enamel, sx * 0.81, 0.56, 0, { cast: false });
+    // Some still hold grey, scummy water.
+    k.block(1.54, 0.01, 0.6, k.mat(0xb8b4aa, 0.3), 0, 0.08, 0, { cast: false });
+    if (k.rand(4) < 0.5) k.block(1.54, 0.01, 0.6, k.mat(0x2e2a22, 0.08), 0, 0.3, 0, { cast: false });
+    const chrome = k.mat(0xa8acb0, 0.2, 0.9);
+    k.cyl(0.02, 0.02, 0.16, 8, chrome, 0.76, 0.66, -0.3);
+    k.block(0.04, 0.03, 0.14, chrome, 0.76, 0.72, -0.24);
+    k.cyl(0.035, 0.035, 0.03, 10, chrome, 0.68, 0.62, -0.3);
+  },
+  vanity(k) {
+    const wood = k.mat(0x5a4636, 0.7);
+    k.block(0.9, 0.8, 0.48, wood, 0, 0, -0.01);
+    k.block(0.01, 0.66, 0.01, k.mat(0x2a1f17, 0.8), 0, 0.08, 0.235);
+    const knob = k.mat(0x8d7a4a, 0.3, 0.9);
+    for (const sx of [-1, 1]) k.block(0.03, 0.08, 0.03, knob, sx * 0.06, 0.55, 0.245);
+    k.block(0.94, 0.05, 0.52, k.mat(0xcfccc4, 0.3), 0, 0.8, 0);
+    k.cyl(0.19, 0.19, 0.012, 16, k.mat(0xe6e3da, 0.2), 0, 0.85, 0.03, { cast: false });
+    k.cyl(0.15, 0.15, 0.01, 16, k.mat(0x9a968c, 0.25), 0, 0.852, 0.03, { cast: false });
+    const chrome = k.mat(0xa8acb0, 0.2, 0.9);
+    k.cyl(0.018, 0.018, 0.16, 8, chrome, 0, 0.93, -0.19);
+    k.block(0.03, 0.03, 0.13, chrome, 0, 0.99, -0.13);
+    // Mirror on the wall behind.
+    k.block(0.66, 0.8, 0.03, k.mat(0x2a2c2e, 0.6), 0, 1.1, -0.255);
+    k.block(0.6, 0.74, 0.01, k.mat(0x8a929a, 0.06, 0.95), 0, 1.13, -0.237);
+  },
   ceilingLamp(k) {
     k.box(1.1, 0.05, 0.35, k.mat(0x2a2c30, 0.6), 0, -0.03, 0, { cast: false });
   },

@@ -13,7 +13,15 @@ export interface HumanoidLook {
   zombie?: boolean;
   /** Skin color override (zombies' palette isn't a living one). */
   skin?: number;
+  /** Zombie kind's way of moving: shambling walker, sprinting runner, lumbering brute. */
+  gait?: ZombieGait;
+  /** Body width beyond the broadest build; shoulders and hips sit wider to match. */
+  girth?: number;
+  /** Zombie eye glow color. */
+  eyeGlow?: number;
 }
+
+export type ZombieGait = 'walker' | 'runner' | 'brute';
 
 export interface LocomotionState {
   /** Horizontal speed in m/s. */
@@ -142,7 +150,7 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
     geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
     parts.push(geo);
   };
-  const result = dress(sink, look.outfit, { zombie: !!look.zombie, skin: look.skin, rand });
+  const result = dress(sink, look.outfit, { zombie: !!look.zombie, skin: look.skin, rand, girth: look.girth });
   const merged = mergeGeometries(parts, false)!;
   for (const p of parts) p.dispose();
   merged.computeBoundingSphere();
@@ -273,6 +281,7 @@ export class Humanoid {
   onFootstep: ((loudness: number) => void) | null = null;
   private lastStepSign = 0;
   readonly zombie: boolean;
+  readonly gait: ZombieGait;
   private readonly seed = Math.random() * 100;
   private hipYaw = 0;
   private moveDir = 1;
@@ -311,6 +320,8 @@ export class Humanoid {
 
   constructor(look: HumanoidLook) {
     this.zombie = !!look.zombie;
+    this.gait = look.gait ?? 'walker';
+    const girth = look.girth ?? 1;
     const limb = (parent: THREE.Bone, x: number, y: number, upperLen: number, lowerLen: number): Limb => {
       const upper = new THREE.Bone();
       upper.position.set(x, y, 0);
@@ -329,10 +340,10 @@ export class Humanoid {
     this.spine.position.y = 0.08;
     this.spine.add(this.head);
     this.head.position.y = 0.58;
-    this.armL = limb(this.spine, 0.22, 0.48, 0.31, 0.29);
-    this.armR = limb(this.spine, -0.22, 0.48, 0.31, 0.29);
-    this.legL = limb(this.hips, 0.1, -0.04, 0.44, 0.44);
-    this.legR = limb(this.hips, -0.1, -0.04, 0.44, 0.44);
+    this.armL = limb(this.spine, 0.22 * girth, 0.48, 0.31, 0.29);
+    this.armR = limb(this.spine, -0.22 * girth, 0.48, 0.31, 0.29);
+    this.legL = limb(this.hips, 0.1 * girth, -0.04, 0.44, 0.44);
+    this.legR = limb(this.hips, -0.1 * girth, -0.04, 0.44, 0.44);
     this.bones = [
       this.hips, this.spine, this.head,
       this.armL.upper, this.armL.lower, this.armR.upper, this.armR.lower,
@@ -354,7 +365,7 @@ export class Humanoid {
     this.mesh.bind(this.skeleton);
 
     if (this.zombie) {
-      this.eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xc8d27a, emissiveIntensity: 1.2 });
+      this.eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: look.eyeGlow ?? 0xc8d27a, emissiveIntensity: 1.2 });
       const l = new THREE.SphereGeometry(0.014, 4, 3).translate(-0.045, 0.13, 0.12);
       const r = new THREE.SphereGeometry(0.014, 4, 3).translate(0.045, 0.13, 0.12);
       const g = mergeGeometries([l, r])!;
@@ -422,9 +433,11 @@ export class Humanoid {
     s.strafe += (target.strafe - s.strafe) * k;
     s.grounded = target.grounded;
     const z = this.zombie;
+    const runner = z && this.gait === 'runner';
+    const brute = z && this.gait === 'brute';
 
     const speed = s.speed;
-    const run = THREE.MathUtils.smoothstep(speed, z ? 1.3 : 3.6, z ? 2.2 : 6);
+    const run = runner ? THREE.MathUtils.smoothstep(speed, 2.0, 4.2) : THREE.MathUtils.smoothstep(speed, z ? 1.3 : 3.6, z ? 2.2 : 6);
     let moving = THREE.MathUtils.smoothstep(speed, 0.1, 1.0);
 
     // Travel direction: hips swing toward it (strafing), and walk backwards when backpedalling.
@@ -442,14 +455,14 @@ export class Humanoid {
     this.shuffle += (shuffleTarget - this.shuffle) * (1 - Math.exp(-dt * 8));
     moving = Math.max(moving, this.shuffle * 0.45);
 
-    const strideFreq = z ? 0.9 + speed * 0.55 : 1.35 + speed * 0.32;
+    const strideFreq = runner ? 1.0 + speed * 0.42 : brute ? 0.72 + speed * 0.42 : z ? 0.9 + speed * 0.55 : 1.35 + speed * 0.32;
     this.phase += dt * strideFreq * Math.PI * 2 * (moving > 0.01 ? 1 : 0.25) * this.moveDir;
     const p = this.phase;
     const sin = Math.sin(p);
     const cos = Math.cos(p);
 
-    const legAmp = (0.42 + run * 0.35) * moving;
-    const kneeAmp = (0.55 + run * 0.6) * moving;
+    const legAmp = (0.42 + run * (runner ? 0.55 : 0.35)) * moving * (brute ? 0.85 : 1);
+    const kneeAmp = (0.55 + run * (runner ? 0.95 : 0.6)) * moving;
     const armAmp = (0.35 + run * 0.6) * moving;
     const crouch = s.crouch;
 
@@ -467,11 +480,13 @@ export class Humanoid {
 
     // Hips bob and crouch.
     const bob = Math.abs(cos) * 0.045 * moving * (1 + run);
-    const lean = run * (z ? 0.3 : 0.22) + moving * 0.05 + crouch * 0.35;
-    const zLean = z ? 0.34 + Math.sin(p * 0.5 + this.seed) * 0.03 : 0;
+    const lean = run * (runner ? 0.5 : z ? 0.3 : 0.22) + moving * 0.05 + crouch * 0.35;
+    // Walkers stoop, runners hunt low, brutes hunch over their own bulk.
+    const zLean = z ? (runner ? 0.24 : brute ? 0.46 : 0.34) + Math.sin(p * 0.5 + this.seed) * 0.03 : 0;
     const sv = this.stagger;
     this.hips.position.set(0, 0.95 - crouch * 0.33 + bob - (z ? 0.05 : 0), 0);
-    this.hips.rotation.set(0, -sin * 0.1 * moving + this.hipYaw, 0);
+    // A brute rolls its weight from foot to foot.
+    this.hips.rotation.set(0, -sin * 0.1 * moving + this.hipYaw, brute ? sin * 0.07 * moving : 0);
     // Spine: lean, look pitch, bladed stance, recoil, flinches and stagger.
     let spineX = lean + zLean - s.aim * 0.05 - this.lookPitch * 0.45 + this.kick + ft[0].x * 0.08 - sv * this.staggerDir.y * 0.45;
     let spineZ = -s.strafe * 0.06 * moving + ft[1].x * 0.08 + sv * this.staggerDir.x * 0.3;
@@ -487,11 +502,16 @@ export class Humanoid {
     this.spine.rotation.set(spineX, spineY, spineZ);
 
     // Legs.
-    const limp = z ? 0.55 : 1;
+    const limp = runner ? 0.94 : brute ? 0.8 : z ? 0.55 : 1;
     this.legL.upper.rotation.set(-sin * legAmp - crouch * 0.9, 0, 0);
     this.legR.upper.rotation.set(sin * legAmp * limp - crouch * 0.9, 0, 0);
     this.legL.lower.rotation.set(Math.max(0, cos) * kneeAmp + crouch * 1.5 + (s.grounded ? 0 : 0.6), 0, 0);
     this.legR.lower.rotation.set(Math.max(0, -cos) * kneeAmp * limp + crouch * 1.5 + (s.grounded ? 0 : 0.3), 0, 0);
+    if (brute) {
+      // Wide, heavy stance.
+      this.legL.upper.rotation.z = 0.09;
+      this.legR.upper.rotation.z = -0.09;
+    }
     if (!s.grounded) {
       this.legL.upper.rotation.x -= 0.5;
       this.legR.upper.rotation.x += 0.1;
@@ -501,9 +521,19 @@ export class Humanoid {
 
     // Arms: free swing (survivors' are overridden by IK when holding a weapon).
     if (z) {
-      const reach = 1.25 + Math.sin(p * 0.7 + this.seed) * 0.12 + run * 0.25;
+      const reach = brute ? 0.55 + Math.sin(p * 0.7 + this.seed) * 0.08 : 1.25 + Math.sin(p * 0.7 + this.seed) * 0.12 + run * 0.25;
       // `spread` swings the arms outward (negative converges the reaching hands).
-      let ux = -reach, lx = -0.3, spread = -0.12;
+      let ux = -reach, lx = brute ? -0.45 : -0.3, spread = brute ? 0.32 : -0.12;
+      let swing = 0.1;
+      if (runner && run > 0.01) {
+        // Sprinting: arms pump and flail instead of reaching.
+        ux = THREE.MathUtils.lerp(ux, -0.75, run * 0.85);
+        lx = THREE.MathUtils.lerp(lx, -1.35, run);
+        spread = THREE.MathUtils.lerp(spread, 0.18, run);
+        swing = 0.1 + run * 0.95;
+      } else if (brute) {
+        swing = 0.28 * moving + 0.04;
+      }
       if (this.attack >= 0) {
         const a = this.attack;
         if (a < 0.5) { ux = THREE.MathUtils.lerp(-reach, -2.5, a / 0.5); lx = THREE.MathUtils.lerp(-0.3, -1.1, a / 0.5); spread = 0.25; }
@@ -519,12 +549,12 @@ export class Humanoid {
       // Staggering throws the arms out.
       ux = THREE.MathUtils.lerp(ux, -0.6, sv * 0.6);
       spread += sv * 0.8;
-      this.armL.upper.rotation.set(ux + sin * 0.1 - fl[0].x * 0.05, 0, spread);
-      this.armR.upper.rotation.set(ux * 0.92 - sin * 0.1 - fl[1].x * 0.05, 0, -spread);
+      this.armL.upper.rotation.set(ux + sin * swing - fl[0].x * 0.05, 0, spread);
+      this.armR.upper.rotation.set(ux * 0.92 - sin * swing - fl[1].x * 0.05, 0, -spread);
       this.armL.lower.rotation.set(lx, 0, 0);
       this.armR.lower.rotation.set(lx - 0.1, 0, 0);
       this.head.rotation.set(
-        0.12 + Math.sin(p * 0.3) * 0.1 - zLean * 0.4 + fh[0].x * 0.1 - sv * this.staggerDir.y * 0.4,
+        (runner ? -0.08 * run : brute ? 0.1 : 0) + 0.12 + Math.sin(p * 0.3) * 0.1 - zLean * 0.4 + fh[0].x * 0.1 - sv * this.staggerDir.y * 0.4,
         Math.sin(p * 0.21 + this.seed) * 0.3,
         0.25 * Math.sin(this.seed) + fh[1].x * 0.1,
       );
@@ -641,8 +671,9 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 const _e = new THREE.Vector3(), _f = new THREE.Vector3(), _g = new THREE.Vector3(), _h = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion();
 
-/** Number of distinct zombie looks (looks repeat beyond this). */
+/** Number of distinct zombie looks per kind (looks repeat beyond this). */
 export const ZOMBIE_LOOK_COUNT = 12;
+export const ZOMBIE_LOOKS: Record<ZombieGait, number> = { walker: ZOMBIE_LOOK_COUNT, runner: 6, brute: 4 };
 
 const ZOMBIE_SKINS = [0x7d8a72, 0x8b8a76, 0x6f7a6a, 0x948f7e, 0x86806c, 0x6a7466];
 const ZOMBIE_HATS = ['cap', 'beanie', 'hardhat', 'army', 'bandana', 'fire', 'capback', 'bike'] as const;
@@ -651,7 +682,9 @@ const ZOMBIE_HATS = ['cap', 'beanie', 'hardhat', 'army', 'bandana', 'fire', 'cap
  * The neighborhood's dead wear what the living wear: everyday clothes from the same catalog,
  * now filthy and torn, with the odd work helmet. One in twelve died at a party.
  */
-export function zombieLook(i: number): HumanoidLook {
+export function zombieLook(i: number, kind: ZombieGait = 'walker'): HumanoidLook {
+  if (kind === 'runner') return runnerLook(i);
+  if (kind === 'brute') return bruteLook(i);
   const k = i % ZOMBIE_LOOK_COUNT;
   const rand = rng(0x5eed + k * 7919);
   const a = randomAppearance(rand);
@@ -663,6 +696,49 @@ export function zombieLook(i: number): HumanoidLook {
   a.neck = 'none';
   a.gloves = 'none';
   return { outfit: a, zombie: true, skin: ZOMBIE_SKINS[k % ZOMBIE_SKINS.length] };
+}
+
+/**
+ * Runners turned recently and fast: lean, light clothes (gym kit, joggers, sneakers), less rot,
+ * and rabid red eyes.
+ */
+function runnerLook(i: number): HumanoidLook {
+  const k = i % ZOMBIE_LOOKS.runner;
+  const rand = rng(0x7a11 + k * 104729);
+  const a = randomAppearance(rand);
+  const pick = <T,>(xs: readonly T[]) => xs[Math.floor(rand() * xs.length)];
+  a.build = 'slim';
+  a.top = (['tank', 'tee', 'track', 'hoodie', 'longsleeve', 'tee'] as const)[k];
+  a.pants = pick(['joggers', 'shorts', 'joggers', 'jeans'] as const);
+  a.shoes = pick(['sneakers', 'hightops'] as const);
+  a.headwear = k === 2 ? 'sweatband' : k === 4 ? 'capback' : 'none';
+  if (a.hair === 'afro' || a.hair === 'mohawk') a.hair = 'short';
+  a.facialHair = 'none';
+  a.face = a.neck = a.gloves = a.back = a.gear = 'none';
+  return { outfit: a, zombie: true, skin: [0x9a9684, 0x8e8a7a, 0xa39d8a][k % 3], gait: 'runner', eyeGlow: 0xff3a22 };
+}
+
+/**
+ * Brutes were big to begin with and something made them bigger: broad and bulky, in the
+ * heavy gear they died in (riot police, road crew, firefighter, biker), with orange eyes.
+ */
+function bruteLook(i: number): HumanoidLook {
+  const k = i % ZOMBIE_LOOKS.brute;
+  const rand = rng(0xb2a7e + k * 15485863);
+  const a = randomAppearance(rand);
+  a.build = 'broad';
+  a.face = a.neck = a.gloves = a.back = 'none';
+  a.hair = 'buzz';
+  if (k === 0) {
+    Object.assign(a, { headwear: 'army', headwearColor: 1, top: 'longsleeve', topColor: 1, pants: 'cargo', pantsColor: 1, shoes: 'combat', shoesColor: 1, gear: 'tactical', gearColor: 0 });
+  } else if (k === 1) {
+    Object.assign(a, { headwear: 'hardhat', headwearColor: 15, top: 'flannel', topColor: 13, topAccent: 1, pants: 'work', pantsColor: 9, shoes: 'work', shoesColor: 10, gear: 'hivis', gearColor: 16 });
+  } else if (k === 2) {
+    Object.assign(a, { headwear: 'fire', headwearColor: 13, top: 'raincoat', topColor: 15, pants: 'overalls', pantsColor: 15, shoes: 'rain', shoesColor: 1, gear: 'none' });
+  } else {
+    Object.assign(a, { headwear: 'none', hair: 'bald', facialHair: 'beard', top: 'leather', topColor: 1, topAccent: 3, pants: 'jeans', pantsColor: 4, shoes: 'combat', shoesColor: 11, gear: 'none' });
+  }
+  return { outfit: a, zombie: true, skin: [0x6d7563, 0x7a7766, 0x69705f, 0x75705f][k], gait: 'brute', girth: 1.15, eyeGlow: 0xff9a2a };
 }
 
 /** A survivor wearing an appearance. */

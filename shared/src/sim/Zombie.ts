@@ -1,7 +1,7 @@
 import { RAPIER, GROUP, groups } from '../physics/Physics';
 import { ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
-import { NAV_INDOOR } from './NavGrid';
+import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
 import { angleDiff, clamp, dist2D, rng, v3, type Vec3 } from './math';
 import type { SimPlayer, Simulation } from './Simulation';
 
@@ -40,6 +40,8 @@ export class Zombie {
   private goal: Vec3 | null = null;
   private home: Vec3;
   private path: Vec3[] = [];
+  /** Doors the current path goes through. */
+  private pathDoors: number[] = [];
   private pathI = 0;
   private needPath = false;
   private repathAt = 0;
@@ -57,6 +59,10 @@ export class Zombie {
   private readonly push = v3();
   private downT = 0;
   private stuckT = 0;
+  /** Sidestep around whatever it is stuck on: direction, and until when. */
+  private detourX = 0;
+  private detourZ = 0;
+  private detourUntil = 0;
   private readonly progressRef: Vec3;
   private progressT = 0;
   private alertAt = 0;
@@ -434,6 +440,12 @@ export class Zombie {
         }
         faceX = door.center.x - this.pos.x;
         faceZ = door.center.z - this.pos.z;
+        // The one it hunts is out here after all (left by another door): go after them.
+        if (target && sim.time - this.lastSeen < 1.5 && door.side(target.motion.pos.x, target.motion.pos.z) === door.side(this.pos.x, this.pos.z)) {
+          this.setState('chase');
+          this.needPath = true;
+          break;
+        }
         if (sim.time > this.bashAt) {
           this.bashAt = sim.time + 0.85 + this.rand() * 0.35;
           this.attackT = 0;
@@ -473,6 +485,10 @@ export class Zombie {
         break;
     }
 
+    if (sim.time < this.detourUntil && (wishX !== 0 || wishZ !== 0)) {
+      wishX = this.detourX;
+      wishZ = this.detourZ;
+    }
     this.move(dt, wishX, wishZ, speed, faceX, faceZ);
   }
 
@@ -506,7 +522,8 @@ export class Zombie {
           return d && !d.open ? (this.state === 'wander' ? 60 : 6) : 0;
         },
       });
-      this.path = res ? res.points : [];
+      this.path = res ? this.alignDoors(res.points) : [];
+      this.pathDoors = res ? res.doors : [];
       this.pathI = this.path.length > 1 ? 1 : 0;
       this.pathTarget = { ...this.goal };
       if (res && !res.complete) this.repathAt = sim.time + 0.6;
@@ -613,19 +630,23 @@ export class Zombie {
       this.progressRef.z = this.pos.z;
       if (wants && moved < 0.25) this.stuckT += 0.8;
       else this.stuckT = 0;
-      if (this.stuckT > 0) this.unstick();
+      if (this.stuckT > 0) this.unstick(tx, tz);
     }
   }
 
-  private unstick(): void {
+  private unstick(wx: number, wz: number): void {
     const sim = this.sim;
     const door = sim.closedDoorNear(this.pos, 1.6);
-    if (door && (this.state === 'chase' || this.state === 'investigate' || this.state === 'approach')) {
+    // Only a door it means to go through: one on its route, or one between it and its quarry.
+    const wanted = door && (this.pathDoors.includes(door.index)
+      || (this.lastKnown !== null && door.side(this.lastKnown.x, this.lastKnown.z) !== door.side(this.pos.x, this.pos.z)));
+    if (door && wanted && (this.state === 'chase' || this.state === 'investigate' || this.state === 'approach')) {
       this.setState('bash');
       this.bashDoor = door.index;
       this.bashAt = sim.time + 0.3;
       return;
     }
+    this.sidestep(wx, wz);
     if (this.stuckT >= 1.6) {
       // Try a slightly different route, then give up on the goal.
       this.needPath = true;
@@ -635,6 +656,98 @@ export class Zombie {
         this.stuckT = 0;
       }
     }
+  }
+
+  /**
+   * Stuck against something the grid thinks it can walk past (a car's corner, a crowd, a
+   * jamb): step for a moment toward an open neighbouring cell well off the blocked heading.
+   */
+  private sidestep(wx: number, wz: number): void {
+    const sim = this.sim;
+    const nav = sim.nav;
+    const n = nav.nodeAt(this.pos.x, this.pos.y, this.pos.z, 1);
+    const wl = Math.hypot(wx, wz);
+    if (n < 0 || wl < 1e-3) return;
+    wx /= wl;
+    wz /= wl;
+    const px = nav.nodeX(n), pz = nav.nodeZ(n);
+    // Keep circling the same way while stuck on the same thing.
+    const hand = this.detourX * wz - this.detourZ * wx > 0 ? 1 : this.detourX || this.detourZ ? -1 : this.rand() < 0.5 ? 1 : -1;
+    let best = -Infinity, bx = 0, bz = 0;
+    for (let d = 0; d < 8; d++) {
+      const m = nav.link(n, d);
+      if (m < 0 || !nav.reachable(m)) continue;
+      let dx = nav.nodeX(m) - px, dz = nav.nodeZ(m) - pz;
+      const l = Math.hypot(dx, dz) || 1;
+      dx /= l;
+      dz /= l;
+      const along = dx * wx + dz * wz;
+      if (along > 0.75 || along < -0.35) continue;
+      const beyond = nav.link(m, d);
+      let score = along;
+      if (nav.flags[m] & NAV_NEAR_WALL) score -= 0.6;
+      score += beyond >= 0 && nav.reachable(beyond) ? 0.3 : -0.5;
+      score += 0.2 * hand * Math.sign(dx * wz - dz * wx) + this.rand() * 0.1;
+      if (score > best) {
+        best = score;
+        bx = dx;
+        bz = dz;
+      }
+    }
+    if (best === -Infinity) return;
+    this.detourX = bx;
+    this.detourZ = bz;
+    this.detourUntil = sim.time + 0.6 + this.rand() * 0.4;
+  }
+
+  /**
+   * Door cells sit on the 0.5 m grid, which rarely lines up with the opening, so a doorway
+   * waypoint can be a quarter metre off its centre: enough for a broad zombie to catch the
+   * frame. Each run of waypoints in one doorway becomes a point just before and one just past
+   * the opening, on its centre line.
+   */
+  private alignDoors(points: Vec3[]): Vec3[] {
+    const sim = this.sim;
+    const nav = sim.nav;
+    const doorAt = (p: Vec3) => {
+      const n = nav.nodeAt(p.x, p.y, p.z, 0);
+      return n >= 0 ? nav.door[n] : -1;
+    };
+    const out: Vec3[] = [];
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const di = i > 0 && i < points.length - 1 ? doorAt(p) : -1;
+      if (di < 0) {
+        out.push(p);
+        continue;
+      }
+      let j = i;
+      while (j + 1 < points.length - 1 && doorAt(points[j + 1]) === di) j++;
+      const spec = sim.map.doors[di];
+      const nx = spec.axis === 'x' ? 0 : 1, nz = spec.axis === 'x' ? 1 : 0;
+      const prev = out[out.length - 1];
+      const side = Math.sign((prev.x - spec.x) * nx + (prev.z - spec.z) * nz) || 1;
+      const y = spec.floorY ?? p.y;
+      const at = (k: number): Vec3 | null => {
+        const x = spec.x + nx * k, z = spec.z + nz * k;
+        const m = nav.nodeAt(x, y, z, 0.3);
+        return nav.reachable(m) ? { x, y: nav.nodeY[m], z } : null;
+      };
+      const before = at(side * 0.7), after = at(-side * 0.7);
+      if (before && after) {
+        // Already at the opening: don't step back to line up.
+        if (Math.hypot(prev.x - spec.x, prev.z - spec.z) > 0.9) out.push(before);
+        out.push(after);
+      } else {
+        // Something stands right behind the door: keep the grid's waypoints, centred in the opening.
+        for (let k = i; k <= j; k++) {
+          const q = points[k];
+          out.push(spec.axis === 'x' ? { x: spec.x, y: q.y, z: q.z } : { x: q.x, y: q.y, z: spec.z });
+        }
+      }
+      i = j;
+    }
+    return out;
   }
 
   /** Whether it stands inside a building (for the spawner and despawning). */

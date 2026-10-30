@@ -2,8 +2,8 @@
  * Headless world checks: walks a character controller (configured like PlayerController)
  * through the shared map's real collision. Run with `npm run check:world -w client`.
  *
- * Covers spawn clearance, every doorway in both directions, stairs to the upper floor and
- * basement, the backyard passages, routes into each district, door leaves blocking when
+ * Covers spawn clearance, every doorway in both directions, every staircase both ways, the
+ * safehouse routes, the backyard passages, routes into each district, door leaves blocking when
  * closed and clearing when open, and furniture clipping into walls.
  */
 import * as THREE from 'three';
@@ -132,6 +132,17 @@ route(phys, 'kitchen -> basement', [-4.0, 0.32, -16.6], [[-6.15, -16.6], [-6.15,
 route(phys, 'basement -> kitchen', [-3.5, -2.68, -21], [[-6.15, -23.1], [-6.15, -17.0], [-5.6, -16.8], [-3.5, -16.8]], 0.3);
 route(phys, 'front door -> living -> kitchen -> back door', [2.4, 0.05, -13.0], [[2.4, -16.0], [1.0, -16.7], [-1.4, -16.7], [-2.0, -17.6], [-2.0, -22.8], [-2.4, -23.6], [-2.4, -26.5]]);
 route(phys, 'east door -> garage interior', [6.0, 0.32, -22.5], [[7.6, -22.5], [8.6, -21.6], [10, -19]]);
+
+console.log('Every staircase, both ways');
+for (const st of map.stairs) {
+  const dir = Math.sign(st.to - st.from);
+  const mid = (st.a0 + st.a1) / 2;
+  const pt = (along: number): V => (st.axis === 'z' ? [mid, along] : [along, mid]);
+  const below = pt(st.from - dir * 0.45), above = pt(st.to + dir * 0.7);
+  const tag = `${st.houseId ?? 'stairs'} ${st.y0.toFixed(2)} -> ${st.y1.toFixed(2)}`;
+  route(phys, `${tag} up`, [below[0], st.y0 + 0.05, below[1]], [above], st.y1);
+  route(phys, `${tag} down`, [above[0], st.y1 + 0.05, above[1]], [below], st.y0);
+}
 
 console.log('Narrow backyard passages');
 // Sheds sit ~1.2 m from a lot divider; walk the gap between the shed's side and the fence.

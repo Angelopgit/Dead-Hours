@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, PLAYER, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, PLAYER, ZOMBIES, SUPPLY_DROPS, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
 } from '../src/index';
@@ -144,6 +144,10 @@ section('Hit zones');
   check(shoot(1.15)?.zone === 'torso', 'ray at chest height hits the torso');
   check(['legL', 'legR'].includes(shoot(0.5, 0.1)?.zone ?? ''), 'ray at knee height hits a leg');
   check(shoot(1.2, 0.8) === null, 'ray beside the body misses');
+  const broad = zombieZones(pos, 0, ZOMBIES.brute.height / 1.75, 'standing', [], ZOMBIES.brute.girth);
+  const narrow = zombieZones(pos, 0, 1, 'standing', []);
+  const side = (zones: typeof broad) => rayZones({ x: 0.3, y: 1.3, z: 10 }, { x: 0, y: 0, z: -1 }, zones, 50);
+  check(side(broad)?.zone === 'torso' && side(narrow) === null, 'a brute is broader than a walker: a shot 30 cm off centre still hits its torso');
 }
 
 // ---------------------------------------------------------------------------- simulation
@@ -330,6 +334,150 @@ section('Spawner and survival clock');
   check(msPerStep < 4, `simulation step with ${sim.zombies.length} zombies costs ${msPerStep.toFixed(2)} ms`);
   const closer = sim.zombies.map((z) => Math.hypot(z.pos.x - sp.motion.pos.x, z.pos.z - sp.motion.pos.z));
   check(closer.reduce((a, b) => a + b, 0) / closer.length < dists.reduce((a, b) => a + b, 0) / dists.length, 'zombies approach the survivors');
+  cleanup(sim, body);
+}
+
+section('Zombie kinds and getting unstuck');
+{
+  const { sim, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
+  const count = (t: number) => {
+    sim.phaseTime = t;
+    const n = { walker: 0, runner: 0, brute: 0, crawler: 0 };
+    for (let i = 0; i < 2000; i++) n[sim.pickKind()]++;
+    return n;
+  };
+  sim.phase = 'survival';
+  const early = count(10);
+  check(early.walker === 2000, 'the first seconds of the outbreak are all walkers');
+  const later = count(300);
+  check(later.runner > 300 && later.runner < 600, `runners join the mix (${later.runner} of 2000 after five minutes)`);
+  check(later.brute > 120 && later.brute < 320, `some brutes too (${later.brute} of 2000)`);
+  for (let i = 0; i < 3; i++) sim.spawnZombie('brute', { x: 40 + i * 3, y: 0.02, z: 8 }, 'idle');
+  check(count(300).brute === 0, 'no more brutes while the cap is reached');
+  const r = ZOMBIES.runner, w = ZOMBIES.walker, b = ZOMBIES.brute;
+  check(r.chaseSpeed[1] < PLAYER.sprintSpeed && r.chaseSpeed[0] > w.chaseSpeed[1] * 1.8, 'runners are much faster than walkers, still slower than a sprinting survivor');
+  check(b.health >= w.health * 4 && b.damage[0] > w.damage[1], 'brutes are tanky and hit hard');
+  check(b.radius * 2 + 0.04 < 1.0, 'a brute fits through a 1 m back door');
+  cleanup(sim, body);
+}
+const chaseFrom = (sim: Simulation, kind: 'walker' | 'runner' | 'brute', at: Vec3, target: Vec3) => {
+  const z = sim.spawnZombie(kind, at, 'idle');
+  z.target = 'p1';
+  z.lastKnown = { ...target };
+  z.lastSeen = sim.time;
+  z.setState('chase');
+  return z;
+};
+{
+  // A brute comes in through the safehouse's narrow back door.
+  const goal = { x: -2.4, y: 0.32, z: -21.6 };
+  const { sim, body } = makeSim(goal);
+  const back = doors.find((d) => d && d.spec.houseId === 'safehouse' && Math.abs(d.spec.z + 25) < 0.3)!;
+  back.setOpen(true, goal.x, goal.z);
+  run(sim, 0.5);
+  const z = chaseFrom(sim, 'brute', { x: -2.4, y: 0.02, z: -29 }, goal);
+  const res = run(sim, 30, () => Math.hypot(z.pos.x - goal.x, z.pos.z - goal.z) < 1.9 && z.pos.y > 0.2);
+  check(res.time < 30, `brute squeezes through the 1 m back door (${res.time.toFixed(1)} s)`);
+  cleanup(sim, body);
+}
+{
+  // A crowd pours into the store through its open doors: nobody snags on a door leaf.
+  const goal = { x: 92, y: 0.22, z: -36.5 };
+  const { sim, body } = makeSim(goal);
+  for (const d of doors) if (d && d.spec.houseId === 'store') d.setOpen(true, goal.x, goal.z);
+  run(sim, 0.5);
+  const starts: Vec3[] = [];
+  for (const [dx, dz] of [[-8, 9], [-3, 11], [3, 11], [8, 9], [12, -2], [11, -7], [-12, -1], [-11, -6], [6, -10], [0, 14]]) {
+    const n = nav.nodeAt(goal.x + dx, 0.1, goal.z + dz, 1.2);
+    if (nav.reachable(n)) starts.push(nav.nodePos(n));
+  }
+  const crowd = starts.map((p, i) => chaseFrom(sim, i % 4 === 1 ? 'runner' : i === 6 ? 'brute' : 'walker', { x: p.x, y: p.y + 0.02, z: p.z }, goal));
+  const reached = new Set<number>();
+  let shotAt = 0;
+  run(sim, 40, () => {
+    // The survivor keeps shooting, so the slow ones that never see them still know where they are.
+    if (sim.time - shotAt > 2) {
+      shotAt = sim.time;
+      sim.noise(goal, 30, 'p1');
+    }
+    // Inside the store (the ones at the back of the crowd can't all touch the survivor).
+    for (const z of crowd) if (Math.abs(z.pos.x - 92) < 8.8 && Math.abs(z.pos.z + 38) < 4.8 && z.pos.y > 0.1) reached.add(z.id);
+    return reached.size === crowd.length;
+  });
+  for (const z of crowd) if (!reached.has(z.id) && process.env.DEBUG_CROWD) console.log('     outside:', z.kind, z.state, z.pos.x.toFixed(1), z.pos.y.toFixed(2), z.pos.z.toFixed(1));
+  check(crowd.length >= 8 && reached.size === crowd.length, `zombies get into the store through open doors (${reached.size} of ${crowd.length} in 40 s)`);
+  cleanup(sim, body);
+}
+{
+  // Chasing someone outside, a zombie walks past the closed safehouse door instead of pounding it.
+  const goal = { x: 6, y: 0.15, z: -13.2 };
+  const { sim, body } = makeSim(goal);
+  run(sim, 0.5);
+  const z = chaseFrom(sim, 'walker', { x: -3.5, y: 0.17, z: -13.2 }, goal);
+  const res = run(sim, 15, () => Math.hypot(z.pos.x - goal.x, z.pos.z - goal.z) < 1.6);
+  check(!res.events.some((e) => e.type === 'doorPound') && res.time < 15, `no pounding on a door its quarry isn't behind (${res.time.toFixed(1)} s to reach them)`);
+  cleanup(sim, body);
+}
+
+section('Helicopter supply drops');
+{
+  const at = { x: 0, y: 0.15, z: 6 };
+  const { sim, sp, body } = makeSim(at, 0.5);
+  run(sim, 1);
+  check(sim.phase === 'survival', 'outbreak under way');
+  sim.phaseTime = SUPPLY_DROPS.firstAt - 0.5;
+  // Only the test's own zombie: the spawner's would get in the way.
+  const clear = () => {
+    for (const z of [...sim.zombies]) if (z !== lure) z.removeBody();
+    sim.zombies.splice(0, sim.zombies.length, ...sim.zombies.filter((z) => z === lure));
+    sp.health = PLAYER.maxHealth;
+    return false;
+  };
+  let lure: ReturnType<typeof sim.spawnZombie> | null = null;
+  clear();
+  let res = run(sim, 1, clear);
+  const heli = res.events.find((e) => e.type === 'heli');
+  check(!!heli && res.events.some((e) => e.type === 'notice' && e.text === 'SUPPLY DROP INBOUND'), 'a supply helicopter is announced on schedule');
+  if (heli && heli.type === 'heli') {
+    const f = heli.flight;
+    const g = f.ground;
+    const d = Math.hypot(g.x - at.x, g.z - at.z);
+    check(d >= SUPPLY_DROPS.minDistance && d <= SUPPLY_DROPS.maxDistance, `drop lands ${d.toFixed(0)} m from the survivor`);
+    check(Math.hypot(f.from.x - g.x, f.from.z - g.z) > map.halfExtent && Math.hypot(f.to.x - g.x, f.to.z - g.z) > map.halfExtent, 'helicopter comes in from beyond the map edge and leaves the same way');
+    check(f.start < f.arrive && f.arrive < f.release && f.release < f.leave && f.leave < f.end && f.release < f.land, 'flight timeline is in order');
+    check(physics.raycast(g.x, g.y + 0.6, g.z, 0, 1, 0, 60) === null, 'nothing overhead where the crate comes down');
+    // A zombie a fair way off the drop, facing away: it can only hear it.
+    // On the far side of the drop from the survivor, so it can't have seen them.
+    const ux = (g.x - at.x) / d, uz = (g.z - at.z) / d;
+    const ln = nav.nodeAt(g.x + ux * 20, g.y, g.z + uz * 20, 3);
+    const lp = nav.reachable(ln) ? nav.nodePos(ln) : { x: g.x + ux * 20, y: g.y, z: g.z + uz * 20 };
+    lure = sim.spawnZombie('walker', { x: lp.x, y: lp.y + 0.02, z: lp.z }, 'idle');
+    lure.facing = Math.atan2(ux, uz);
+    const z = lure;
+    res = run(sim, f.release - sim.time + 0.6, clear);
+    const heard = z.state === 'investigate';
+    const events = res.events;
+    res = run(sim, f.land - sim.time + 0.2, clear);
+    res.events.unshift(...events);
+    check(res.events.some((e) => e.type === 'supplyDrop' && e.stage === 'released') && res.events.some((e) => e.type === 'supplyDrop' && e.stage === 'landed'), 'crate is released and lands');
+    check(heard, `the rotor noise over the drop draws the dead (zombie ${z.state})`);
+    const crate = sim.interactables.find((it) => it.kind === 'supply')!;
+    check(!!crate && crate.supply === SUPPLY_DROPS.baseUses + 1, `landed crate has ${crate?.supply} uses for one survivor`);
+    sim.setMotion('p1', { pos: { x: g.x + 1.3, y: g.y, z: g.z } });
+    sp.arsenal.primary.reserve = 0;
+    sp.arsenal.secondary.reserve = 3;
+    check(sim.reachable('p1').some((it) => it.kind === 'supply'), 'crate is in reach beside it');
+    check(sim.use('p1', crate.id) && sp.arsenal.primary.reserve === WEAPONS.ar.maxReserve && sp.arsenal.secondary.reserve === WEAPONS.pistol.maxReserve, 'universal ammo fills every weapon');
+    sp.arsenal.replacePrimary('shotgun');
+    sp.arsenal.primary.reserve = 0;
+    check(sim.use('p1', crate.id) && sp.arsenal.primary.reserve === WEAPONS.shotgun.maxReserve, 'and works for whatever gun you switched to');
+    sp.arsenal.primary.reserve = 0;
+    const left = crate.supply;
+    check(!sim.use('p1', crate.id) && crate.supply === left, `one survivor can take two refills; the rest waits for the others (${left} left)`);
+    const solid = physics.raycast(g.x + 2, g.y + 0.3, g.z, -1, 0, 0, 3);
+    check(solid !== null && solid < 1.9, 'the crate is solid');
+  }
+  for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
   cleanup(sim, body);
 }
 

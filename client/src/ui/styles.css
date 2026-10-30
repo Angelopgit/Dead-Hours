@@ -156,6 +156,16 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   opacity: 0; transition: opacity 0.2s; text-shadow: 0 1px 6px rgba(0,0,0,0.9); white-space: nowrap; }
 .prompt .k { display: inline-block; border: 1px solid rgba(255,255,255,0.45); border-radius: 3px; padding: 0.05em 0.45em; margin-right: 0.6em; font-size: 0.9em; }
 .prompt.show { opacity: 1; }
+.waypoint { position: absolute; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 0.35em;
+  opacity: 0; transition: opacity 0.3s; color: #e8c25a; text-shadow: 0 1px 6px rgba(0,0,0,0.95); white-space: nowrap; }
+.waypoint.show { opacity: 1; }
+.waypoint .wp-icon { width: 14px; height: 14px; border: 2px solid currentColor; transform: rotate(45deg); box-shadow: 0 0 8px rgba(232, 194, 90, 0.5);
+  background: rgba(232, 194, 90, 0.18); animation: wp-pulse 1.2s ease-in-out infinite; }
+.waypoint .wp-text { font-size: 0.72em; letter-spacing: 0.22em; }
+.waypoint.edge { transform: translate(-50%, -50%); }
+.waypoint.edge .wp-icon { width: 0; height: 0; border: 9px solid transparent; border-bottom: 16px solid currentColor; border-top: 0; background: none; box-shadow: none;
+  transform: rotate(var(--wp-angle, 0rad)); animation: none; }
+@keyframes wp-pulse { 50% { box-shadow: 0 0 16px rgba(232, 194, 90, 0.9); } }
 .notice { position: absolute; left: 50%; top: 12vh; transform: translateX(-50%); text-align: center; letter-spacing: 0.4em; font-size: 1.15em;
   color: #ece6dc; text-shadow: 0 1px 10px rgba(0,0,0,0.9); white-space: nowrap; }
 .notice.danger { color: #e2725f; }

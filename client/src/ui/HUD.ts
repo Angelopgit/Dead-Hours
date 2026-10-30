@@ -54,6 +54,9 @@ export class HUD {
   private readonly slot2: HTMLElement;
   private readonly bandages: HTMLElement;
   private readonly feed: HTMLElement;
+  private readonly waypoint: HTMLElement;
+  private readonly waypointText: HTMLElement;
+  private waypointShown = false;
   private promptKey = '';
   private health = 100;
   private timerText = '';
@@ -81,6 +84,8 @@ export class HUD {
     this.warning = h('div', { class: 'warning' });
     this.arcs = h('div', { class: 'damage-arcs' });
     this.feed = h('div', { class: 'feed' });
+    this.waypointText = h('span', { class: 'wp-text' });
+    this.waypoint = h('div', { class: 'waypoint' }, h('i', { class: 'wp-icon' }), this.waypointText);
     this.wModel = h('div', { class: 'w-model' });
     this.wMag = h('span', { class: 'w-mag' }, '0');
     this.wReserve = h('span', { class: 'w-reserve' }, '0');
@@ -95,6 +100,7 @@ export class HUD {
       this.arcs,
       this.crosshair,
       this.marker,
+      this.waypoint,
       this.prompt,
       this.timer,
       this.warning,
@@ -245,6 +251,25 @@ export class HUD {
     gsap.timeline()
       .fromTo(this.notice, { opacity: 0, letterSpacing: '0.6em' }, { opacity: 1, letterSpacing: '0.4em', duration: 0.9, ease: 'power2.out' })
       .to(this.notice, { opacity: 0, duration: 1.2, delay: hold });
+  }
+
+  /**
+   * World waypoint (supply drop): at its screen position, or pinned to the screen edge with an
+   * arrow when it is off screen or behind. `x`/`y` are 0..1 across the viewport.
+   */
+  setWaypoint(show: boolean, x = 0, y = 0, offscreen = false, angle = 0, text = ''): void {
+    if (!show) {
+      if (this.waypointShown) this.waypoint.classList.remove('show');
+      this.waypointShown = false;
+      return;
+    }
+    if (!this.waypointShown) this.waypoint.classList.add('show');
+    this.waypointShown = true;
+    this.waypoint.style.left = `${(x * 100).toFixed(2)}%`;
+    this.waypoint.style.top = `${(y * 100).toFixed(2)}%`;
+    this.waypoint.classList.toggle('edge', offscreen);
+    this.waypoint.style.setProperty('--wp-angle', `${angle.toFixed(3)}rad`);
+    if (this.waypointText.textContent !== text) this.waypointText.textContent = text;
   }
 
   setFps(fps: number): void {

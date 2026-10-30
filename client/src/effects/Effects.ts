@@ -277,6 +277,36 @@ export class Effects {
     }
   }
 
+  /** Red signal smoke and sparks from a flare on a supply crate. */
+  flareSmoke(pos: THREE.Vector3, strong: boolean): void {
+    const k = this.scale(pos);
+    if (Math.random() < 0.35 + 0.65 * k) {
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z, vx: rand(-0.25, 0.25), vy: rand(0.7, 1.2), vz: rand(-0.25, 0.25),
+        life: rand(2.6, 4.2), size: 0.12, size1: rand(1.3, 2.2), r: 0.78, g: 0.13, b: 0.11, alpha: strong ? 0.3 : 0.14, drag: 0.55, gravity: -0.06,
+      });
+    }
+    if (this.reducedFlashing) return;
+    for (let i = 0; i < this.n(2, k); i++) {
+      this.glow.emit({
+        x: pos.x, y: pos.y, z: pos.z, vx: rand(-0.6, 0.6), vy: rand(0.8, 2.2), vz: rand(-0.6, 0.6),
+        life: rand(0.12, 0.3), size: 0.035, r: 6, g: 1.4, b: 0.5, alpha: 1, gravity: 0.6, stretch: 0.02, shape: SHAPE.spark,
+      });
+    }
+  }
+
+  /** Dust kicked up by something heavy landing on the ground. */
+  landingDust(pos: THREE.Vector3): void {
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + rand(-0.2, 0.2);
+      const s = rand(1.2, 2.6);
+      this.emitSoft({
+        x: pos.x + Math.cos(a) * 0.5, y: pos.y + 0.05, z: pos.z + Math.sin(a) * 0.5, vx: Math.cos(a) * s, vy: rand(0.1, 0.5), vz: Math.sin(a) * s,
+        life: rand(1.2, 2.2), size: 0.2, size1: rand(0.8, 1.3), r: 0.42, g: 0.38, b: 0.32, alpha: 0.32, drag: 2.2, gravity: -0.02,
+      });
+    }
+  }
+
   clear(): void {
     this.soft.clear();
     this.glow.clear();

@@ -71,7 +71,22 @@ const SIMPLE: Partial<Record<PropKind, LocalBox>> = {
   floorLamp: [0, 0.8, 0, 0.15, 0.8, 0.15],
   storeCounter: [0, 0.5, 0, 1.2, 0.5, 0.35],
   cooler: [0, 1.0, 0, 1.0, 1.0, 0.4],
+  toilet: [0, 0.4, 0, 0.2, 0.4, 0.35],
+  bathtub: [0, 0.29, 0, 0.85, 0.29, 0.38],
+  vanity: [0, 0.44, 0, 0.45, 0.44, 0.25],
 };
+
+/** Half extents of a prop's footprint in its own frame (along its length, front to back). */
+export function propHalfExtents(kind: PropKind, length?: number): [number, number] {
+  const boxes = propColliders({ kind, x: 0, z: 0, rotY: 0, length });
+  if (!boxes.length) return [0, 0];
+  let hx = 0, hz = 0;
+  for (const b of boxes) {
+    hx = Math.max(hx, Math.abs(b.x) + b.hx);
+    hz = Math.max(hz, Math.abs(b.z) + b.hz);
+  }
+  return [hx, hz];
+}
 
 /** Collision for props, built identically on client and server. */
 export function propColliders(p: PropSpec): OrientedBox[] {

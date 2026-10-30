@@ -55,29 +55,31 @@ export type HitPosture = 'standing' | 'down';
  * reaching pose the client animates: head forward of the hips, arms out in front. Local +X is
  * the zombie's left (it faces +Z), so 'armL' sits at +X.
  */
-export function zombieZones(pos: Vec3, facing: number, scale: number, posture: HitPosture, out: ZoneShape[]): ZoneShape[] {
+export function zombieZones(pos: Vec3, facing: number, scale: number, posture: HitPosture, out: ZoneShape[], girth = 1): ZoneShape[] {
   const fx = Math.sin(facing), fz = Math.cos(facing);
   const rx = Math.cos(facing), rz = -Math.sin(facing);
+  // Girth widens the body sideways and front to back (brutes), not the height.
+  const w = scale * girth;
   const P = (lx: number, ly: number, lz: number): Vec3 => ({
-    x: pos.x + (rx * lx + fx * lz) * scale,
+    x: pos.x + (rx * lx + fx * lz) * w,
     y: pos.y + ly * scale,
-    z: pos.z + (rz * lx + fz * lz) * scale,
+    z: pos.z + (rz * lx + fz * lz) * w,
   });
   out.length = 0;
   if (posture === 'down') {
     // Lying on its back, head away from the feet.
-    out.push({ zone: 'torso', a: P(0, 0.22, -0.25), b: P(0, 0.24, -0.8), r: 0.24 * scale });
+    out.push({ zone: 'torso', a: P(0, 0.22, -0.25), b: P(0, 0.24, -0.8), r: 0.24 * w });
     out.push({ zone: 'head', a: P(0, 0.24, -0.98), b: P(0, 0.24, -0.98), r: 0.15 * scale });
-    out.push({ zone: 'legL', a: P(0.15, 0.15, 0.6), b: P(0.1, 0.18, -0.16), r: 0.1 * scale });
-    out.push({ zone: 'legR', a: P(-0.15, 0.15, 0.6), b: P(-0.1, 0.18, -0.16), r: 0.1 * scale });
+    out.push({ zone: 'legL', a: P(0.15, 0.15, 0.6), b: P(0.1, 0.18, -0.16), r: 0.1 * w });
+    out.push({ zone: 'legR', a: P(-0.15, 0.15, 0.6), b: P(-0.1, 0.18, -0.16), r: 0.1 * w });
     return out;
   }
   out.push({ zone: 'head', a: P(0, 1.62, 0.3), b: P(0, 1.62, 0.3), r: 0.15 * scale });
-  out.push({ zone: 'torso', a: P(0, 0.97, 0.02), b: P(0, 1.4, 0.2), r: 0.21 * scale });
-  out.push({ zone: 'armL', a: P(0.21, 1.43, 0.2), b: P(0.12, 1.14, 0.71), r: 0.08 * scale });
-  out.push({ zone: 'armR', a: P(-0.21, 1.43, 0.2), b: P(-0.12, 1.14, 0.71), r: 0.08 * scale });
-  out.push({ zone: 'legL', a: P(0.1, 0.88, 0), b: P(0.1, 0.06, 0), r: 0.095 * scale });
-  out.push({ zone: 'legR', a: P(-0.1, 0.88, 0), b: P(-0.1, 0.06, 0), r: 0.095 * scale });
+  out.push({ zone: 'torso', a: P(0, 0.97, 0.02), b: P(0, 1.4, 0.2), r: 0.21 * w });
+  out.push({ zone: 'armL', a: P(0.21, 1.43, 0.2), b: P(0.12, 1.14, 0.71), r: 0.08 * w });
+  out.push({ zone: 'armR', a: P(-0.21, 1.43, 0.2), b: P(-0.12, 1.14, 0.71), r: 0.08 * w });
+  out.push({ zone: 'legL', a: P(0.1, 0.88, 0), b: P(0.1, 0.06, 0), r: 0.095 * w });
+  out.push({ zone: 'legR', a: P(-0.1, 0.88, 0), b: P(-0.1, 0.06, 0), r: 0.095 * w });
   return out;
 }
 

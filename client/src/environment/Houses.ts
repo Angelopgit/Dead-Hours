@@ -225,6 +225,48 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     }
   }
 
+  // Inside window trim of enterable buildings: casing, a stool to rest on and the apron under it.
+  const metalFrame = lib.standard(0x2a2c2e, 0.5, 0.6);
+  for (const w of map.windows) {
+    const house = map.houses.find((h) => h.id === w.houseId)!;
+    if (!house.enterable) continue;
+    const inward = w.axis === 'x' ? new THREE.Vector3(0, 0, -w.outward) : new THREE.Vector3(-w.outward, 0, 0);
+    const along = w.axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+    const at = (offAlong: number, offY: number, lenAlong: number, lenY: number, depth: number, push: number) => {
+      const p = new THREE.Vector3(w.x, w.y + offY, w.z).addScaledVector(along, offAlong).addScaledVector(inward, push);
+      return w.axis === 'x' ? worldBox(p.x, p.y, p.z, lenAlong, lenY, depth, 1, null) : worldBox(p.x, p.y, p.z, depth, lenY, lenAlong, 1, null);
+    };
+    const face = STORY.wall / 2;
+    const cw = w.plain ? 0.05 : 0.08;
+    const frame = w.plain ? metalFrame : trim;
+    batch.add(at(0, w.h / 2 + cw / 2, w.w + cw * 2, cw, 0.024, face + 0.012), frame);
+    for (const sx of [-1, 1]) batch.add(at(sx * (w.w / 2 + cw / 2), 0, cw, w.h, 0.024, face + 0.012), frame);
+    if (w.plain) {
+      batch.add(at(0, -w.h / 2 - cw / 2, w.w + cw * 2, cw, 0.024, face + 0.012), frame);
+      continue;
+    }
+    batch.add(at(0, -w.h / 2 - 0.02, w.w + cw * 2 + 0.08, 0.04, 0.16, face + 0.05), trim);
+    batch.add(at(0, -w.h / 2 - 0.1, w.w + cw * 2, 0.12, 0.02, face + 0.01), trim);
+  }
+
+  // Interior doorways: casings on both faces of the partition (the openings have no leaves).
+  for (const d of map.doors) {
+    if (d.exterior) continue;
+    const house = map.houses.find((h) => h.id === d.houseId)!;
+    if (!house.enterable) continue;
+    const floor = d.floorY ?? d.y - d.h / 2;
+    for (const side of [-1, 1]) {
+      const n = 0.07 + 0.012;
+      const cx = d.axis === 'x' ? d.x : d.x + side * n;
+      const cz = d.axis === 'x' ? d.z + side * n : d.z;
+      const box = (offAlong: number, y: number, lenAlong: number, lenY: number) => d.axis === 'x'
+        ? worldBox(cx + offAlong, y, cz, lenAlong, lenY, 0.024, 1, null)
+        : worldBox(cx, y, cz + offAlong, 0.024, lenY, lenAlong, 1, null);
+      batch.add(box(0, floor + d.h + 0.045, d.w + 0.18, 0.09), trim);
+      for (const sx of [-1, 1]) batch.add(box(sx * (d.w / 2 + 0.045), floor + d.h / 2, 0.09, d.h), trim);
+    }
+  }
+
   // Exterior door frames (leaves of enterable houses are dynamic, see Doors.ts).
   for (const d of map.doors) {
     const house = map.houses.find((h) => h.id === d.houseId)!;
@@ -239,10 +281,20 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
         ? worldBox(p.x, p.y + offY, p.z, lenAlong, lenY, depth, 1, null)
         : worldBox(p.x, p.y + offY, p.z, depth, lenY, lenAlong, 1, null);
     };
-    const frame = d.style === 'glass' || d.style === 'rollup' ? lib.standard(0x2a2c2e, 0.5, 0.6) : trim;
+    const frame = d.style === 'glass' || d.style === 'rollup' ? metalFrame : trim;
     batch.add(box(0, d.h / 2 + 0.06, d.w + 0.24, 0.12, 0.12), frame);
     batch.add(box(-d.w / 2 - 0.06, 0, 0.12, d.h, 0.12), frame);
     batch.add(box(d.w / 2 + 0.06, 0, 0.12, d.h, 0.12), frame);
-    if (!house.enterable) batch.add(box(0, 0, d.w, d.h, 0.05), darkWood);
+    if (!house.enterable) {
+      batch.add(box(0, 0, d.w, d.h, 0.05), darkWood);
+      continue;
+    }
+    // Casing on the inside face too.
+    const inside = c.clone().addScaledVector(out, -(push + STORY.wall / 2 + 0.012));
+    const ibox = (offAlong: number, offY: number, lenAlong: number, lenY: number) => d.axis === 'x'
+      ? worldBox(inside.x + offAlong, inside.y + offY, inside.z, lenAlong, lenY, 0.024, 1, null)
+      : worldBox(inside.x, inside.y + offY, inside.z + offAlong, 0.024, lenY, lenAlong, 1, null);
+    batch.add(ibox(0, d.h / 2 + 0.05, d.w + 0.2, 0.1), frame);
+    for (const sx of [-1, 1]) batch.add(ibox(sx * (d.w / 2 + 0.05), 0, 0.1, d.h), frame);
   }
 }

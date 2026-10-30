@@ -1,17 +1,19 @@
-import { RAPIER, type Physics } from '../physics/Physics';
+import { RAPIER, GROUP, groups, type Physics } from '../physics/Physics';
 import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
 import { SPAWNING, type ZombieKind } from '../config/zombies';
+import { SUPPLY_DROPS } from '../config/drops';
+import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
 import type { MapDefinition } from '../types/world';
 import { Arsenal, type ArsenalTick } from './Arsenal';
-import { NAV_INDOOR, NAV_REACHABLE, type NavGrid } from './NavGrid';
+import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
 import { zombieZones, rayZones, type ZoneShape } from './hitzones';
 import { Zombie } from './Zombie';
 import { clamp, dist2D, rng, v3, type Vec3 } from './math';
-import type { PelletTrace, SimEvent, SimPhase } from './events';
+import type { HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -79,7 +81,7 @@ export interface Noise {
   source: string | null;
 }
 
-export type InteractKind = 'weapons' | 'ammo' | 'medical';
+export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply';
 
 export interface Interactable {
   id: number;
@@ -88,6 +90,18 @@ export interface Interactable {
   /** Uses left (ammo crates, first aid boxes); weapon tables are unlimited. */
   supply: number;
   range: number;
+  /** Supply crates: how many times each survivor has taken from it. */
+  takenBy?: Map<string, number>;
+}
+
+/** One helicopter supply drop, from the flight in to the crate being emptied or taken away. */
+export interface SupplyDrop {
+  id: number;
+  flight: HeliFlight;
+  stage: 'inbound' | 'falling' | 'landed' | 'gone';
+  /** Interactable index once landed, else -1. */
+  interactable: number;
+  body: RAPIER.RigidBody | null;
 }
 
 export interface SimOptions {
@@ -148,10 +162,16 @@ export class Simulation {
   private nextZombieId = 1;
   private spawnAt = 0;
   private pathBudget = 0;
+  private stepDt = 1 / 60;
   private readonly rand: () => number;
   private readonly outdoorNodes: Int32Array;
   private readonly zones: ZoneShape[] = [];
   private lookCounter = 0;
+  readonly drops: SupplyDrop[] = [];
+  /** Survival time of the next supply drop. */
+  private nextDropAt: number = SUPPLY_DROPS.firstAt;
+  /** Things a drop must not come down on: tree crowns, lamp arms, poles, canopies. */
+  private readonly overhead: { x: number; z: number; r: number }[] = [];
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -183,6 +203,12 @@ export class Simulation {
       if (p.kind === 'ammoCrate') this.interactables.push({ id: id++, kind: 'ammo', pos: { x: p.x, y: y + 0.45, z: p.z }, supply: COMBAT.crateUses, range: COMBAT.interactRange });
       else if (p.kind === 'firstAid') this.interactables.push({ id: id++, kind: 'medical', pos: { x: p.x, y: y, z: p.z }, supply: COMBAT.aidBoxBandages, range: COMBAT.interactRange });
       else if (p.use === 'weapons') this.interactables.push({ id: id++, kind: 'weapons', pos: { x: p.x, y: y + 0.95, z: p.z }, supply: Infinity, range: 2.1 });
+      for (const o of propOccluders(p)) this.overhead.push({ x: o.x, z: o.z, r: o.r });
+      if (p.kind === 'streetlight' || p.kind === 'utilityPole' || p.kind === 'floodlight' || p.kind === 'signPylon' || p.kind === 'parkLamp') {
+        this.overhead.push({ x: p.x, z: p.z, r: 2.8 });
+      } else if (p.kind === 'gazebo' || p.kind === 'tent' || p.kind === 'shed') {
+        this.overhead.push({ x: p.x, z: p.z, r: 3.4 });
+      }
     }
   }
 
@@ -339,7 +365,7 @@ export class Simulation {
       if (along < -1 || along > worldD + 1) continue;
       const px = cx - d.x * along, py = cy - d.y * along, pz = cz - d.z * along;
       if (px * px + py * py + pz * pz > 2.6) continue;
-      const h = rayZones(o, d, zombieZones(z.pos, z.facing, z.scale, z.state === 'down' ? 'down' : 'standing', this.zones), worldD);
+      const h = rayZones(o, d, zombieZones(z.pos, z.facing, z.scale, z.state === 'down' ? 'down' : 'standing', this.zones, z.def.girth), worldD);
       if (h) hits.push({ z, zone: h.zone, t: h.t });
     }
     hits.sort((a, b) => a.t - b.t);
@@ -469,6 +495,28 @@ export class Simulation {
       this.emit({ type: 'pickup', player: id, item: 'ammo', amount: got, source: it.id });
       return true;
     }
+    if (it.kind === 'supply') {
+      if (it.supply <= 0) return false;
+      const taken = it.takenBy?.get(id) ?? 0;
+      if (taken >= SUPPLY_DROPS.perPlayerLimit) {
+        this.emit({ type: 'notice', player: id, text: 'YOU TOOK YOUR SHARE', sub: 'The rest is for the others' });
+        return false;
+      }
+      // Universal rounds: whatever the survivor carries, every weapon is filled up.
+      const a = p.arsenal;
+      const got = a.addReserve('primary', WEAPONS[a.primary.id].maxReserve) + a.addReserve('secondary', WEAPONS[a.secondary.id].maxReserve);
+      if (got <= 0) {
+        this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
+        return false;
+      }
+      it.supply--;
+      it.takenBy?.set(id, taken + 1);
+      p.stats.suppliesCollected++;
+      this.emit({ type: 'pickup', player: id, item: 'supply', amount: got, source: it.id });
+      const drop = this.drops.find((d) => d.interactable === it.id);
+      if (drop && it.supply <= 0) this.emit({ type: 'supplyDrop', drop: drop.id, stage: 'empty', pos: { ...drop.flight.ground } });
+      return true;
+    }
     if (it.kind === 'medical') {
       if (it.supply <= 0) return false;
       const room = COMBAT.maxBandages - p.bandages;
@@ -551,6 +599,7 @@ export class Simulation {
 
   /** Removes every zombie body and the shared zombie controller from the physics world. */
   dispose(): void {
+    for (const d of this.drops) if (d.body) this.physics.world.removeRigidBody(d.body);
     for (const z of this.zombies) z.removeBody();
     this.zombies.length = 0;
     this.physics.world.removeCharacterController(this.zombieController);
@@ -564,6 +613,7 @@ export class Simulation {
 
   step(dt: number): void {
     this.time += dt;
+    this.stepDt = dt;
     this.pathBudget = 1;
     if (this.phase === 'preparation') {
       this.phaseTime -= dt;
@@ -572,10 +622,12 @@ export class Simulation {
         this.phaseTime = 0;
         this.emit({ type: 'phase', phase: 'survival' });
         this.spawnAt = this.time + 1;
+        this.nextDropAt = SUPPLY_DROPS.firstAt;
       }
     } else if (this.phase === 'survival') {
       this.phaseTime += dt;
       this.runSpawner();
+      this.runDrops();
     }
 
     for (const d of this.doors) d?.update(dt);
@@ -646,7 +698,145 @@ export class Simulation {
     const [lo, hi] = SPAWNING.interval;
     this.spawnAt = this.time + (alive < target * 0.5 ? 0.35 : lo + this.rand() * (hi - lo));
     if (!at) return;
-    this.spawnZombie('walker', at, this.rand() < 0.78 ? 'approach' : 'wander');
+    this.spawnZombie(this.pickKind(), at, this.rand() < 0.78 ? 'approach' : 'wander');
+  }
+
+  /** Kind of the next spawn: walkers, with runners and brutes mixed in as the night goes on. */
+  pickKind(): ZombieKind {
+    const t = this.phaseTime;
+    const share = (m: { from: number; full: number; start: number; end: number }) =>
+      t < m.from ? 0 : m.start + (m.end - m.start) * clamp((t - m.from) / (m.full - m.from), 0, 1);
+    const r = this.rand();
+    const runner = share(SPAWNING.mix.runner);
+    if (r < runner) return 'runner';
+    if (r < runner + share(SPAWNING.mix.brute)) {
+      const brutes = this.zombies.filter((z) => z.alive && z.kind === 'brute').length;
+      if (brutes < SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) return 'brute';
+    }
+    return 'walker';
+  }
+
+  // ---------------------------------------------------------------- supply drops
+
+  private runDrops(): void {
+    const D = SUPPLY_DROPS;
+    if (this.phaseTime >= this.nextDropAt) {
+      const flight = this.planFlight();
+      if (flight) {
+        const id = this.drops.length;
+        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null });
+        this.emit({ type: 'heli', drop: id, flight });
+        this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: 'Universal ammo · refills every weapon' });
+        const [lo, hi] = D.interval;
+        this.nextDropAt = this.phaseTime + lo + this.rand() * (hi - lo);
+      } else {
+        this.nextDropAt = this.phaseTime + 5;
+      }
+    }
+    for (const d of this.drops) {
+      const f = d.flight;
+      if (d.stage === 'inbound') {
+        if (this.time >= f.arrive && this.time - this.lastDt() < f.arrive) this.noise(f.ground, D.hoverNoise, null);
+        if (this.time >= f.release) {
+          d.stage = 'falling';
+          this.noise(f.ground, D.hoverNoise, null);
+          this.emit({ type: 'supplyDrop', drop: d.id, stage: 'released', pos: { x: f.over.x, y: f.ground.y + f.releaseHeight, z: f.over.z } });
+        }
+      } else if (d.stage === 'falling' && this.time >= f.land) {
+        d.stage = 'landed';
+        const g = f.ground;
+        const alive = [...this.players.values()].filter((p) => p.alive).length;
+        d.interactable = this.interactables.length;
+        this.interactables.push({
+          id: d.interactable, kind: 'supply', pos: { x: g.x, y: g.y + 0.5, z: g.z },
+          supply: D.baseUses + alive, range: 2.1, takenBy: new Map(),
+        });
+        // A solid crate: people walk around it, not through it.
+        const w = this.physics.world;
+        d.body = w.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(g.x, g.y + 0.36, g.z));
+        w.createCollider(RAPIER.ColliderDesc.cuboid(0.55, 0.36, 0.38).setCollisionGroups(groups(GROUP.dynamic, 0xffff)), d.body);
+        this.noise(g, D.landNoise, null);
+        this.emit({ type: 'supplyDrop', drop: d.id, stage: 'landed', pos: { ...g } });
+      } else if (d.stage === 'landed' && this.time - f.land > D.lifetime) {
+        this.removeDrop(d);
+      }
+    }
+  }
+
+  private lastDt(): number {
+    return this.stepDt;
+  }
+
+  private removeDrop(d: SupplyDrop): void {
+    if (d.stage === 'gone') return;
+    d.stage = 'gone';
+    if (d.interactable >= 0) this.interactables[d.interactable].supply = 0;
+    if (d.body) this.physics.world.removeRigidBody(d.body);
+    d.body = null;
+    this.emit({ type: 'supplyDrop', drop: d.id, stage: 'gone', pos: { ...d.flight.ground } });
+  }
+
+  /** Open ground for a crate to land on: flat walkable cells all around, nothing overhead. */
+  private openGround(pos: Vec3): boolean {
+    const nav = this.nav;
+    const r = SUPPLY_DROPS.clearRadius;
+    for (let dz = -r; dz <= r; dz += 0.5) {
+      for (let dx = -r; dx <= r; dx += 0.5) {
+        if (dx * dx + dz * dz > r * r) continue;
+        const m = nav.nodeAt(pos.x + dx, pos.y, pos.z + dz, 0);
+        if (!nav.reachable(m) || nav.flags[m] & (NAV_INDOOR | NAV_NEAR_WALL) || Math.abs(nav.nodeY[m] - pos.y) > 0.2) return false;
+      }
+    }
+    for (const o of this.overhead) if (Math.hypot(o.x - pos.x, o.z - pos.z) < o.r + 1.4) return false;
+    for (const [dx, dz] of [[0, 0], [1.2, 0], [-1.2, 0], [0, 1.2], [0, -1.2]]) {
+      if (this.physics.raycast(pos.x + dx, pos.y + 0.6, pos.z + dz, 0, 1, 0, 60) !== null) return false;
+    }
+    return true;
+  }
+
+  /** Picks a landing spot near the survivors and plans the helicopter's flight over it. */
+  private planFlight(): HeliFlight | null {
+    const D = SUPPLY_DROPS;
+    const alive = [...this.players.values()].filter((p) => p.alive);
+    if (!alive.length || !this.outdoorNodes.length) return null;
+    for (let tries = 0; tries < 200; tries++) {
+      // Somewhere in the distance band around one of the survivors.
+      const who = alive[Math.floor(this.rand() * alive.length)].motion.pos;
+      const ang = this.rand() * Math.PI * 2, dd = D.minDistance + this.rand() * (D.maxDistance - D.minDistance);
+      const n = this.nav.nodeAt(who.x + Math.cos(ang) * dd, 0.1, who.z + Math.sin(ang) * dd, 0.5);
+      if (!this.nav.reachable(n) || this.nav.flags[n] & NAV_INDOOR) continue;
+      const pos = this.nav.nodePos(n);
+      let nearest = Infinity;
+      for (const p of alive) nearest = Math.min(nearest, dist2D(p.motion.pos, pos));
+      if (nearest < D.minDistance || nearest > D.maxDistance) continue;
+      if (!this.openGround(pos)) continue;
+      const a = this.rand() * Math.PI * 2;
+      const b = a + (this.rand() < 0.5 ? -1 : 1) * (0.5 + this.rand() * 0.6);
+      const reach = this.map.halfExtent + 45;
+      const over = { x: pos.x, y: pos.y + D.altitude, z: pos.z };
+      const from = { x: over.x - Math.cos(a) * reach, y: over.y + 6, z: over.z - Math.sin(a) * reach };
+      const to = { x: over.x + Math.cos(b) * reach, y: over.y + 10, z: over.z + Math.sin(b) * reach };
+      const start = this.time;
+      // Cruise, then a few seconds slowing into the hover (the client eases the same way).
+      const arrive = start + dist2D(from, over) / D.speed + 2.5;
+      const release = arrive + D.hover;
+      const leave = release + D.linger;
+      const end = leave + dist2D(over, to) / D.speed + 2.5;
+      return {
+        from, over, to, start, arrive, release, leave, end,
+        ground: { x: pos.x, y: pos.y, z: pos.z }, land: release + D.releaseHeight / D.fallSpeed, releaseHeight: D.releaseHeight,
+      };
+    }
+    return null;
+  }
+
+  /** Starts a supply drop now (debugging and tests). */
+  callSupplyDrop(): SupplyDrop | null {
+    if (this.phase !== 'survival') return null;
+    this.nextDropAt = this.phaseTime;
+    this.runDrops();
+    const d = this.drops[this.drops.length - 1];
+    return d && d.stage === 'inbound' && d.flight.start === this.time ? d : null;
   }
 
   private onArsenal(p: SimPlayer, t: ArsenalTick): void {

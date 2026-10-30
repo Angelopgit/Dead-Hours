@@ -12,6 +12,7 @@ import { PlayerController } from './PlayerController';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
 import type { Door, DoorSystem } from './Doors';
 import { WeaponRack } from './WeaponRack';
+import { SupplyDrops } from './SupplyDrops';
 import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
@@ -82,6 +83,8 @@ export class SoloSession {
   private readonly weapon: PlayerWeapon;
   private readonly effects: Effects;
   private readonly zombies: ZombieView;
+  private readonly drops: SupplyDrops;
+  private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
   private table: WeaponTablePanel | null = null;
   private results: ResultsScreen | null = null;
@@ -186,6 +189,12 @@ export class SoloSession {
     this.effects.casings.onBounce = (pos, shell, strength) => audio.casing(pos, shell, strength);
     this.zombies = new ZombieView(engine.scene, physics, field);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
+    this.drops = new SupplyDrops(engine.scene);
+    this.drops.onSmoke = (pos, strong) => this.effects.flareSmoke(pos, strong);
+    this.drops.onLand = (pos) => {
+      this.effects.landingDust(pos);
+      audio.crateLand(pos);
+    };
     const bench = NEIGHBORHOOD.props.find((p) => p.use === 'weapons');
     if (bench) {
       this.rack = new WeaponRack(engine.scene, bench, field);
@@ -502,6 +511,9 @@ export class SoloSession {
     // World.
     const renderTime = this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
+    if (running) this.drops.update(live, renderTime);
+    this.drops.helicopters(this.helis);
+    audio.helicopters(this.phase === 'paused' ? new Map() : this.helis);
     this.effects.update(live, this.engine.camera);
     this.rack?.update(dt, this.engine.camera);
 
@@ -619,6 +631,7 @@ export class SoloSession {
     if (best.kind === 'door') this.hud.setPrompt('interact', best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR');
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
+    else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
     else this.hud.setPrompt('interact', 'SELECT WEAPON');
     if (!this.input.pressed('interact')) return;
     if (best.kind === 'door') {
@@ -715,12 +728,12 @@ export class SoloSession {
           this.hud.hitMarker(kind);
           audio.hitMarker(kind);
         }
-        if (!e.killed && Math.random() < 0.4) audio.zombieHurt(this.zombies.headOf(e.zombie, C) ?? A);
+        if (!e.killed && Math.random() < 0.4) audio.zombieHurt(this.zombies.headOf(e.zombie, C) ?? A, this.zombies.pitchOf(e.zombie));
         break;
       }
       case 'zombieDied': {
         const head = this.zombies.headOf(e.zombie, C);
-        if (head) audio.zombieDeath(head);
+        if (head) audio.zombieDeath(head, this.zombies.pitchOf(e.zombie));
         this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force);
         break;
       }
@@ -728,15 +741,15 @@ export class SoloSession {
         this.zombies.removed(e.zombie);
         break;
       case 'zombieAlert':
-        audio.zombieAlert(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A));
+        audio.zombieAlert(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A), this.zombies.pitchOf(e.zombie));
         break;
       case 'zombieAttack': {
         const head = this.zombies.headOf(e.zombie, C);
-        if (head) audio.zombieAttack(head);
+        if (head) audio.zombieAttack(head, this.zombies.pitchOf(e.zombie));
         break;
       }
       case 'zombieGroan':
-        audio.groan(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A), 0.8);
+        audio.groan(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A), 0.8, this.zombies.pitchOf(e.zombie));
         break;
       case 'doorPound':
         audio.doorPound(v3(e.pos, A));
@@ -789,11 +802,25 @@ export class SoloSession {
         if (e.player !== ME) break;
         audio.pickup(e.item);
         if (e.item === 'ammo') this.hud.feedLine(`AMMUNITION +${e.amount}`);
+        else if (e.item === 'supply') {
+          this.hud.feedLine(`UNIVERSAL AMMO +${e.amount}`);
+          this.hud.notify('ALL WEAPONS RESUPPLIED', 'Every gun you carry is full', 2.2);
+        }
         else if (e.item === 'bandage') this.hud.feedLine(`BANDAGE +${e.amount}`);
         else if (e.weapon) this.hud.feedLine(`${WEAPONS[e.weapon].model} EQUIPPED`);
         break;
       case 'notice':
-        if (e.player === ME || e.player === null) this.hud.feedLine(e.text);
+        if (e.player === ME || e.player === null) {
+          if (e.text === 'SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 3.2);
+          else this.hud.feedLine(e.text);
+        }
+        break;
+      case 'heli':
+        this.drops.flight(e.drop, e.flight);
+        break;
+      case 'supplyDrop':
+        if (e.stage === 'empty') this.drops.emptied(e.drop, this.sim.time);
+        else if (e.stage === 'gone') this.drops.gone(e.drop);
         break;
       case 'phase':
         if (e.phase === 'survival' && !this.outbreakAnnounced) {
@@ -979,6 +1006,8 @@ export class SoloSession {
     const s = this.sim;
     hud.setTimer(this.timerText(), s.phase === 'preparation' && s.phaseTime <= 10);
 
+    this.updateWaypoint();
+
     // Ammunition warning: the active gun is down to its last magazine in total.
     const total = (w: { mag: number; reserve: number }) => w.mag + w.reserve;
     const allEmpty = total(a.primary) === 0 && total(a.secondary) === 0;
@@ -1005,6 +1034,40 @@ export class SoloSession {
     audio.setVitals(me.alive ? low : 0);
   }
 
+  /** Points the HUD at the newest supply drop that still has ammunition. */
+  private updateWaypoint(): void {
+    const m = this.phase === 'playing' && this.me.alive ? this.drops.marker() : null;
+    if (!m) {
+      this.hud.setWaypoint(false);
+      return;
+    }
+    const cam = this.engine.camera;
+    const dist = m.pos.distanceTo(this.player.position);
+    if (dist < 2.6) {
+      this.hud.setWaypoint(false);
+      return;
+    }
+    const v = this.tmpA.copy(m.pos).project(cam);
+    const behind = this.tmpB.subVectors(m.pos, cam.position).dot(cam.getWorldDirection(this.tmpC)) < 0;
+    let x = v.x, y = v.y;
+    if (behind) {
+      x = -x;
+      y = -y;
+    }
+    const off = behind || Math.abs(x) > 0.92 || Math.abs(y) > 0.88;
+    let angle = 0;
+    if (off) {
+      // Pin to the screen edge in the direction of the drop.
+      const k = 1 / Math.max(Math.abs(x) / 0.92, Math.abs(y) / 0.88, 1e-3);
+      if (behind && Math.abs(x) < 0.2) x = x < 0 ? -0.2 : 0.2;
+      x *= k;
+      y *= k;
+      angle = Math.atan2(x, y);
+    }
+    const label = m.stage === 'landed' ? 'UNIVERSAL AMMO' : 'SUPPLY DROP';
+    this.hud.setWaypoint(true, (x + 1) / 2, (1 - y) / 2, off, angle, `${label} · ${Math.round(dist)} M`);
+  }
+
   // ------------------------------------------------------------------ debugging (dev hook)
 
   /** Dev/test helpers: jump to the outbreak, place zombies around the survivor. */
@@ -1017,6 +1080,8 @@ export class SoloSession {
       return this.sim.spawnZombie(kind, at, 'approach').id;
     },
     phase: () => this.phase,
+    /** Calls a supply helicopter now (during the outbreak). */
+    supplyDrop: () => this.sim.callSupplyDrop()?.flight ?? null,
   };
 
   dispose(): void {
@@ -1036,6 +1101,8 @@ export class SoloSession {
     this.pause.hide();
     this.sim.dispose();
     this.zombies.dispose();
+    this.drops.dispose();
+    audio.helicopters(new Map());
     this.effects.dispose();
     this.rack?.dispose();
     this.weapon.dispose();

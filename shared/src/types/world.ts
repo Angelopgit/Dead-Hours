@@ -131,7 +131,7 @@ export type PropKind =
   | 'sofa' | 'armchair' | 'coffeeTable' | 'tvStand' | 'bed' | 'wardrobe' | 'bookshelf' | 'counter' | 'fridge'
   | 'stove' | 'diningTable' | 'chair' | 'workbench' | 'metalShelf' | 'crate' | 'ammoCrate' | 'washer'
   | 'waterHeater' | 'desk' | 'dresser' | 'rug' | 'floorLamp' | 'storeShelf' | 'storeCounter' | 'cooler'
-  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress' | 'firstAid';
+  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress' | 'firstAid' | 'toilet' | 'bathtub' | 'vanity';
 
 export interface PropSpec {
   kind: PropKind;
@@ -186,6 +186,19 @@ export interface Rect {
   z1: number;
 }
 
+/** A straight staircase built from stacked steps: it climbs from `from` (y0) to `to` (y1) along `axis`. */
+export interface StairSpec {
+  houseId?: string;
+  axis: 'x' | 'z';
+  from: number;
+  to: number;
+  /** Width span across the run. */
+  a0: number;
+  a1: number;
+  y0: number;
+  y1: number;
+}
+
 export interface AreaSpec extends Rect {
   name: string;
   /** Vertical band, for basements and upper floors. */
@@ -205,6 +218,7 @@ export interface MapDefinition {
   lights: LightSpec[];
   /** Ground removed from the terrain collider (basements). */
   excavations: Rect[];
+  stairs: StairSpec[];
   areas: AreaSpec[];
   playerSpawns: { x: number; y: number; z: number; yaw: number }[];
 }

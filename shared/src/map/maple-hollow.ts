@@ -1,5 +1,6 @@
-import type { HouseSpec, LightSpec, MapDefinition, PropKind } from '../types/world';
-import { MapBuilder, STORY, STREET, door, doorway, seededRandom, storeWin, upWin, win, type StoreyLayout } from './builder';
+import type { HouseSpec, MapDefinition, PropKind } from '../types/world';
+import { MapBuilder, STORY, STREET, door, doorway, seededRandom, storeWin, upWin, win } from './builder';
+import { buildHome, type HomePlan } from './homes';
 
 /**
  * Maple Hollow: a 250 x 250 m suburban block on the edge of town.
@@ -22,8 +23,6 @@ const T = STORY.wall;
 
 const STREETLIGHT = { color: 0xffb36b, intensity: 260, range: 24, angle: 0.95, penumbra: 0.65, decay: 1.6 } as const;
 const WARM_BULB = 0xffa35a;
-
-const NONE: StoreyLayout = { front: [], back: [], west: [], east: [] };
 
 function rotate(x: number, z: number, rotY: number, lx: number, lz: number): [number, number] {
   const c = Math.cos(rotY);
@@ -120,74 +119,62 @@ function streetDressing(b: MapBuilder): void {
   leaves.forEach(([x, z], i) => b.prop('leafPile', x, z, i * 1.3, { variant: i }));
 }
 
-interface HouseEntry {
-  spec: HouseSpec;
-  ground: StoreyLayout;
-  upper: StoreyLayout | null;
-  doorAt: number;
+interface HomeEntry extends HomePlan {
   driveX: number | null;
 }
 
-function closedHouses(): HouseEntry[] {
-  const two = (front: number[], back: number[], west: number[], east: number[]): StoreyLayout => ({
-    front: front.map((a) => upWin(a)), back: back.map((a) => upWin(a)), west: west.map((a) => upWin(a)), east: east.map((a) => upWin(a)),
-  });
+/** The family homes on both sides of Elm Street (the safehouse and the Hendersons' are built by hand). */
+function homes(): HomeEntry[] {
+  const base = { enterable: true, litWindows: 1 } as const;
   return [
     {
-      spec: { id: 'house-nfw', x: -50, z: -19.5, w: 11, d: 10, floors: 1, facing: 'south', siding: 'sidingGreen',
-        roofColor: 0x2a2a28, enterable: false, litWindows: 0.3, seed: 95 },
-      ground: { front: [win(-3), door(1), win(3.5)], back: [win(-2), win(2.5)], west: [win(0)], east: [win(0)] },
-      upper: null, doorAt: 1, driveX: -42.3,
+      spec: { ...base, id: 'house-nfw', x: -50, z: -19.5, w: 11, d: 10, floors: 1, facing: 'south', siding: 'sidingGreen',
+        roofColor: 0x2a2a28, seed: 95, label: 'THE MILLER HOUSE' },
+      layout: 'ranch', door: 1, basement: true, cache: true, driveX: -42.3,
     },
     {
-      spec: { id: 'house-nw', x: -28, z: -19.5, w: 12, d: 10, floors: 2, facing: 'south', siding: 'sidingBlue',
-        roofColor: 0x22262c, enterable: false, litWindows: 0.15, seed: 21 },
-      ground: { front: [win(-3.5), door(1), win(4)], back: [win(-3), win(3)], west: [win(0)], east: [win(-1)] },
-      upper: two([-3.5, 3.5], [0], [0], [0]), doorAt: 1, driveX: -19.8,
+      spec: { ...base, id: 'house-nw', x: -28, z: -19.5, w: 12, d: 10, floors: 2, facing: 'south', siding: 'sidingBlue',
+        roofColor: 0x22262c, seed: 21, label: 'THE OKAFOR HOUSE' },
+      layout: 'twoStorey', door: 1, basement: true, driveX: -19.8,
     },
     {
-      spec: { id: 'house-nfe', x: 52, z: -19.5, w: 11, d: 10, floors: 2, facing: 'south', siding: 'sidingGray',
-        roofColor: 0x24272b, enterable: false, litWindows: 0.0, seed: 47 },
-      ground: { front: [win(-3), door(1.5), win(3.8, 1.2)], back: [win(0)], west: [win(0)], east: [win(0)] },
-      upper: two([-2.5, 2.5], [0], [], []), doorAt: 1.5, driveX: 59.7,
+      spec: { ...base, id: 'house-nfe', x: 52, z: -19.5, w: 11, d: 10, floors: 2, facing: 'south', siding: 'sidingGray',
+        roofColor: 0x24272b, seed: 47, label: 'THE BRANDT HOUSE' },
+      layout: 'twoStorey', door: 1.2, mirror: true, driveX: 59.7,
     },
     {
-      spec: { id: 'house-sfw', x: -44, z: 19, w: 11, d: 9, floors: 1, facing: 'north', siding: 'stucco',
-        roofColor: 0x2a2a28, enterable: false, litWindows: 0.0, seed: 89 },
-      ground: { front: [win(-3), door(1), win(3.2)], back: [win(0)], west: [win(0)], east: [win(0)] },
-      upper: null, doorAt: 1, driveX: -36.3,
+      spec: { ...base, id: 'house-sfw', x: -44, z: 19, w: 11, d: 9, floors: 1, facing: 'north', siding: 'stucco',
+        roofColor: 0x2a2a28, seed: 89, label: 'THE REYES HOUSE' },
+      layout: 'ranch', door: 1, mirror: true, driveX: -36.3,
     },
     {
-      spec: { id: 'house-sw', x: -18, z: 19.5, w: 12, d: 10, floors: 2, facing: 'north', siding: 'sidingGray',
-        roofColor: 0x26282c, enterable: false, litWindows: 0.2, seed: 58 },
-      ground: { front: [win(-3.6), door(0.5), win(3.6)], back: [win(-2), win(2)], west: [win(0)], east: [win(0)] },
-      upper: two([-3.5, 0, 3.5], [0], [0], []), doorAt: 0.5, driveX: -9.8,
+      spec: { ...base, id: 'house-sw', x: -18, z: 19.5, w: 12, d: 10, floors: 2, facing: 'north', siding: 'sidingGray',
+        roofColor: 0x26282c, seed: 58, label: 'THE COLLINS HOUSE' },
+      layout: 'twoStorey', door: 0.5, driveX: -9.8,
     },
     {
-      spec: { id: 'house-s', x: 10, z: 19, w: 11, d: 9, floors: 1, facing: 'north', siding: 'brick',
-        roofColor: 0x2a2624, enterable: false, litWindows: 0.0, seed: 63 },
-      ground: { front: [win(-3), door(1), win(3.4)], back: [win(0)], west: [win(0)], east: [win(0)] },
-      upper: null, doorAt: 1, driveX: 17.7,
+      spec: { ...base, id: 'house-s', x: 10, z: 19, w: 11, d: 9, floors: 1, facing: 'north', siding: 'brick',
+        roofColor: 0x2a2624, seed: 63, label: 'THE NGUYEN HOUSE' },
+      layout: 'ranch', door: 1, driveX: 17.7,
     },
     {
-      spec: { id: 'house-se', x: 38, z: 20, w: 12, d: 10, floors: 2, facing: 'north', siding: 'sidingBlue',
-        roofColor: 0x202429, enterable: false, litWindows: 0.35, seed: 71 },
-      ground: { front: [win(-3.5), door(-0.5), win(3.5)], back: [win(0)], west: [win(0)], east: [win(0)] },
-      upper: two([-3, 3], [0], [0], [0]), doorAt: -0.5, driveX: 29.8,
+      spec: { ...base, id: 'house-se', x: 38, z: 20, w: 12, d: 10, floors: 2, facing: 'north', siding: 'sidingBlue',
+        roofColor: 0x202429, seed: 71, label: 'THE HALVORSEN HOUSE' },
+      layout: 'twoStorey', door: 0.5, mirror: true, basement: true, cache: true, driveX: 29.8,
     },
     {
-      spec: { id: 'house-w', x: -90, z: -20, w: 12, d: 10, floors: 2, facing: 'south', siding: 'sidingBeige',
-        roofColor: 0x27292d, enterable: false, litWindows: 0.4, seed: 103 },
-      ground: { front: [win(-3.6), door(0.8), win(3.8)], back: [win(0)], west: [win(0)], east: [win(-1)] },
-      upper: two([-3.5, 3.5], [0], [0], [0]), doorAt: 0.8, driveX: -81.8,
+      spec: { ...base, id: 'house-w', x: -90, z: -20, w: 12, d: 10, floors: 2, facing: 'south', siding: 'sidingBeige',
+        roofColor: 0x27292d, seed: 103, label: 'THE WALSH HOUSE' },
+      layout: 'twoStorey', door: 0.8, mirror: true, basement: true, driveX: -81.8,
     },
   ];
 }
 
-function frontageFor(b: MapBuilder, e: HouseEntry): void {
+function home(b: MapBuilder, e: HomeEntry): void {
+  const doorAt = buildHome(b, e);
   const south = e.spec.facing === 'south';
   const curbZ = south ? -(RW + SW) - 0.6 : RW + SW + 0.6;
-  b.frontage(e.spec, e.doorAt, curbZ, e.driveX, south ? -(RW + SW) : RW + SW);
+  b.frontage(e.spec, doorAt, curbZ, e.driveX, south ? -(RW + SW) : RW + SW);
 }
 
 /** The safehouse: two storeys, a basement and an attached garage. Spawn point for every session. */
@@ -199,7 +186,8 @@ function safehouse(b: MapBuilder): void {
   const F1 = STORY.slab;
   const F2 = STORY.slab + STORY.ground + STORY.floorThickness;
   const basementFloor = -2.7;
-  const stairHoleUp = { x0: -1.3, x1: -0.1, z0: -23.2, z1: -19.2 };
+  // The stairwell opens far enough down the flight for a brute to clear the ceiling.
+  const stairHoleUp = { x0: -1.3, x1: -0.1, z0: -23.2, z1: -18.6 };
   const stairHoleDown = { x0: -6.75, x1: -5.5, z0: -22.6, z1: -17.4 };
 
   b.house(
@@ -222,8 +210,8 @@ function safehouse(b: MapBuilder): void {
         { storey: 0, axis: 'z', c: -1.4, a0: -5 + T, a1: 5 - T, openings: [doorway(3.3, 1.3)] },
         // Upper floor: west bedroom, bathroom, front bedroom, open landing over the stairs.
         { storey: 1, axis: 'z', c: -1.45, a0: -5 + T, a1: 5 - T, openings: [doorway(-4.0, 1.0)] },
-        { storey: 1, axis: 'x', c: 1.0, a0: -1.45, a1: 7 - T, openings: [doorway(1.2, 1.0), doorway(4.5, 1.0)] },
-        { storey: 1, axis: 'z', c: 2.0, a0: 1.07, a1: 5 - T, openings: [] },
+        { storey: 1, axis: 'x', c: 1.5, a0: -1.45, a1: 7 - T, openings: [doorway(1.2, 1.0), doorway(4.5, 1.0)] },
+        { storey: 1, axis: 'z', c: 2.0, a0: 1.57, a1: 5 - T, openings: [] },
       ],
       slabHoles: [stairHoleDown],
       ceilingHoles: [[stairHoleUp]],
@@ -232,9 +220,9 @@ function safehouse(b: MapBuilder): void {
   b.frontage(spec, 2.4, -(RW + SW) - 0.6, null, -(RW + SW));
 
   // Stairs up (along -Z) and down to the basement (rising along +Z).
-  b.stairs('z', -18.0, -23.2, -1.27, -0.12, F1, F2, 'darkWood');
-  b.stairs('z', -22.6, -17.4, -6.75, -5.55, basementFloor, F1, 'concrete');
-  b.prop('railing', -0.06, -21.2, Math.PI / 2, { y: F2, length: 4.0 });
+  b.stairs('z', -18.0, -23.2, -1.27, -0.12, F1, F2, 'darkWood', spec.id);
+  b.stairs('z', -22.6, -17.4, -6.75, -5.55, basementFloor, F1, 'concrete', spec.id);
+  b.prop('railing', -0.06, -20.9, Math.PI / 2, { y: F2, length: 4.6 });
   b.prop('railing', -5.46, -20.0, Math.PI / 2, { y: F1, length: 5.2 });
   b.prop('railing', -6.12, -22.64, 0, { y: F1, length: 1.25 });
 
@@ -266,7 +254,7 @@ function safehouse(b: MapBuilder): void {
   b.prop('coffeeTable', 3.75, -19.8, Math.PI / 2, { movable: true });
   b.prop('tvStand', 6.47, -19.8, -Math.PI / 2);
   b.prop('armchair', 4.1, -23.7, -0.5, { movable: true });
-  b.prop('floorLamp', 1.0, -24.2, 0);
+  b.prop('floorLamp', 0.55, -24.2, 0);
   b.prop('bookshelf', 6.55, -16.9, -Math.PI / 2, { movable: true });
   b.light({ kind: 'point', x: 3.2, y: 2.85, z: -20, color: WARM_BULB, intensity: 10, range: 11, decay: 1.7, fixture: 'bulb' });
   // Porch light.
@@ -343,8 +331,8 @@ function houseNe(b: MapBuilder): void {
   b.frontage(spec, 0.6, -(RW + SW) - 0.6, 35.2, -(RW + SW));
   b.prop('sofa', 30.4, -15.8, Math.PI, { movable: true });
   b.prop('coffeeTable', 30.3, -17.3, 0.3, { movable: true });
-  b.prop('armchair', 32.2, -19.6, -Math.PI / 2 - 0.9, { movable: true });
-  b.prop('tvStand', 30.0, -22.5, 0.05);
+  b.prop('armchair', 31.9, -19.6, -Math.PI / 2 - 0.9, { movable: true });
+  b.prop('tvStand', 31.4, -22.5, 0.05);
   b.prop('bed', 22.3, -21.45, Math.PI / 2, { variant: 1 });
   b.prop('dresser', 21.62, -17.5, Math.PI / 2, { movable: true });
   b.prop('counter', 26.0, -22.42, 0, { length: 1.6 });
@@ -606,27 +594,12 @@ function woods(b: MapBuilder): void {
   b.area('THE WOODS', -HALF, HALF, 52, HALF);
 }
 
-/** Spill light from lit windows of closed houses onto their lawns. */
-function windowGlow(b: MapBuilder): void {
-  const closed = new Set(b.houses.filter((h) => !h.enterable).map((h) => h.id));
-  for (const w of b.windows) {
-    if (!w.lit || !closed.has(w.houseId)) continue;
-    const ox = w.axis === 'z' ? w.outward * 0.5 : 0;
-    const oz = w.axis === 'x' ? w.outward * 0.5 : 0;
-    const l: LightSpec = { kind: 'point', x: w.x + ox, y: w.y, z: w.z + oz, color: 0xffa456, intensity: 1.4, range: 6, decay: 1.8, fixture: 'none' };
-    b.light(l);
-  }
-}
-
 function build(): MapDefinition {
   const b = new MapBuilder();
   roads(b);
   safehouse(b);
   houseNe(b);
-  for (const e of closedHouses()) {
-    b.house(e.spec, e.ground, e.upper ?? NONE);
-    frontageFor(b, e);
-  }
+  for (const e of homes()) home(b, e);
   streetDressing(b);
   gasStation(b);
   park(b);
@@ -634,7 +607,6 @@ function build(): MapDefinition {
   backyards(b);
   frontYards(b);
   woods(b);
-  windowGlow(b);
   b.area('BIRCH LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, HALF);
   b.area('ELM STREET', -HALF, HALF, -16, 16);
   b.area('MAPLE HOLLOW', -HALF, HALF, -HALF, HALF);

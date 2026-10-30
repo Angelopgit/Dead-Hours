@@ -35,7 +35,31 @@ export type SimEvent =
   | { type: 'draw'; player: string; slot: WeaponSlot; weapon: WeaponId }
   | { type: 'melee'; player: string; stage: 'swing' | 'hit' | 'miss' }
   | { type: 'bandage'; player: string; stage: 'start' | 'end' | 'cancel' }
-  | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon'; amount: number; source: number; weapon?: WeaponId }
+  | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon' | 'supply'; amount: number; source: number; weapon?: WeaponId }
   | { type: 'doorPound'; door: number; pos: Vec3 }
   | { type: 'doorForced'; door: number; pos: Vec3 }
-  | { type: 'notice'; player: string | null; text: string; sub?: string };
+  | { type: 'notice'; player: string | null; text: string; sub?: string }
+  | { type: 'heli'; drop: number; flight: HeliFlight }
+  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'gone'; pos: Vec3 };
+
+/**
+ * A supply helicopter's flight, in simulation time: in from `from` to the hover point `over`,
+ * crate out at `release`, away to `to`. Clients animate the aircraft and the falling crate
+ * from this alone, so every screen shows the same flight.
+ */
+export interface HeliFlight {
+  from: Vec3;
+  over: Vec3;
+  to: Vec3;
+  start: number;
+  /** Arrives over the drop (decelerating into the hover). */
+  arrive: number;
+  release: number;
+  /** Starts flying away. */
+  leave: number;
+  end: number;
+  /** Ground under the hover point (where the crate lands) and when it touches down. */
+  ground: Vec3;
+  land: number;
+  releaseHeight: number;
+}

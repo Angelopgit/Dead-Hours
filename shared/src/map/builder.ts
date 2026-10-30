@@ -8,6 +8,7 @@ import type {
   PropKind,
   PropSpec,
   Rect,
+  StairSpec,
   StaticBox,
   WallSide,
   WindowSpec,
@@ -147,6 +148,7 @@ export class MapBuilder {
   readonly props: PropSpec[] = [];
   readonly lights: LightSpec[] = [];
   readonly excavations: Rect[] = [];
+  readonly stairways: StairSpec[] = [];
   readonly areas: AreaSpec[] = [];
 
   box(b: StaticBox): void {
@@ -207,14 +209,16 @@ export class MapBuilder {
    * Straight staircase as stacked solid steps (the character controller climbs them with autostep).
    * The run goes from `from` (bottom step) to `to` (top) along `axis`; `a0..a1` is the width.
    */
-  stairs(axis: 'x' | 'z', from: number, to: number, a0: number, a1: number, y0: number, y1: number, mat: MaterialKey = 'darkWood'): void {
+  stairs(axis: 'x' | 'z', from: number, to: number, a0: number, a1: number, y0: number, y1: number, mat: MaterialKey = 'darkWood', houseId?: string): void {
+    this.stairways.push({ houseId, axis, from, to, a0: Math.min(a0, a1), a1: Math.max(a0, a1), y0, y1 });
     const rise = y1 - y0;
     const n = Math.max(2, Math.round(rise / 0.19));
     const dir = Math.sign(to - from);
     const run = Math.abs(to - from) / n;
     for (let i = 0; i < n; i++) {
       const s0 = from + dir * i * run;
-      const s1 = from + dir * (i + 1) * run;
+      // Each step tucks 4 mm under the next so no ray or query can slip down the seam between them.
+      const s1 = from + dir * ((i + 1) * run + 0.004);
       const top = y0 + ((i + 1) * rise) / n;
       const lo = Math.min(s0, s1), hi = Math.max(s0, s1);
       if (axis === 'z') this.boxMinMax(a0, y0, lo, a1, top, hi, mat);
@@ -286,6 +290,11 @@ export class MapBuilder {
               );
             }
           } else {
+            // Threshold: floorboards carried through the wall under the door.
+            if (spec.enterable) {
+              const sill = { x: px, y: storey.y0 + 0.006, z: pz, h: 0.012, mat: spec.floorMat ?? 'woodFloor', collide: false } as const;
+              this.solids.push(p.axis === 'x' ? { ...sill, w: o.width, d: t } : { ...sill, w: t, d: o.width });
+            }
             this.doors.push({
               id: `${spec.id}-d${this.doors.length}`, houseId: spec.id,
               x: px, y: storey.y0 + (o.top - o.bottom) / 2, z: pz,
@@ -355,7 +364,7 @@ export class MapBuilder {
     return {
       name, halfExtent,
       solids: this.solids, houses: this.houses, windows: this.windows, doors: this.doors,
-      props: this.props, lights: this.lights, excavations: this.excavations, areas: this.areas, playerSpawns,
+      props: this.props, lights: this.lights, excavations: this.excavations, stairs: this.stairways, areas: this.areas, playerSpawns,
     };
   }
 }

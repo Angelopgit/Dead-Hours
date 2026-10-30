@@ -53,6 +53,8 @@ export class AudioEngine {
   private readonly bank = new Map<string, AudioBuffer>();
   private bankTimer = 0;
   private readonly listenerPos = new THREE.Vector3();
+  private rotorBuffer: AudioBuffer | null = null;
+  private readonly rotors = new Map<number, { src: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode }>();
   private nextNote = 0;
   private nextAmbientEvent = 0;
   private nextPulse = 0;
@@ -329,15 +331,15 @@ export class AudioEngine {
     o.stop(t + 0.2);
   }
 
-  /** Zombie groan: formant-filtered buzzy voice with pitch wobble, spatialized. */
-  groan(position: THREE.Vector3, volume = 1): void {
+  /** Zombie groan: formant-filtered buzzy voice with pitch wobble, spatialized. `pitch` scales voice and formants (brutes low, runners high). */
+  groan(position: THREE.Vector3, volume = 1, pitch = 1): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
     const dur = 1.2 + Math.random() * 1.3;
     const o = ctx.createOscillator();
     o.type = 'sawtooth';
-    const base = 70 + Math.random() * 40;
+    const base = (70 + Math.random() * 40) * pitch;
     o.frequency.setValueAtTime(base, t);
     o.frequency.linearRampToValueAtTime(base * 0.75, t + dur);
     const vib = ctx.createOscillator();
@@ -347,8 +349,8 @@ export class AudioEngine {
     vib.connect(vg).connect(o.frequency);
     const f1 = ctx.createBiquadFilter();
     f1.type = 'bandpass';
-    f1.frequency.setValueAtTime(500, t);
-    f1.frequency.linearRampToValueAtTime(320, t + dur);
+    f1.frequency.setValueAtTime(500 * Math.sqrt(pitch), t);
+    f1.frequency.linearRampToValueAtTime(320 * Math.sqrt(pitch), t + dur);
     f1.Q.value = 5;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0, t);
@@ -374,6 +376,113 @@ export class AudioEngine {
     p.positionY.value = position.y;
     p.positionZ.value = position.z;
     return p;
+  }
+
+  /**
+   * One second of helicopter, seamless as a loop: two-blade rotor slap (whole cycles per second),
+   * low thump, turbine whine and broadband wash.
+   */
+  private makeRotorBuffer(): AudioBuffer {
+    const ctx = this.ctx!;
+    const sr = ctx.sampleRate;
+    const n = sr;
+    const buf = ctx.createBuffer(2, n, sr);
+    const slapHz = 11;
+    const L = buf.getChannelData(0), R = buf.getChannelData(1);
+    let lpA = 0, lpB = 0, wash = 0, seed = 0x1234567;
+    const rnd = () => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return ((seed >>> 0) / 4294967296) * 2 - 1;
+    };
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      const ph = (t * slapHz) % 1;
+      // Blade slap: a sharp noisy crack with a body, every 1/11 s; alternate blades differ a little.
+      const blade = Math.floor(t * slapHz) % 2;
+      const env = Math.exp(-ph * (blade ? 30 : 26));
+      const noise = rnd();
+      lpA += (noise - lpA) * 0.22;
+      lpB += (lpA - lpB) * 0.22;
+      const slap = lpB * env * (blade ? 1.6 : 1.9);
+      const thump = Math.sin(2 * Math.PI * slapHz * t) * 0.5 * Math.exp(-ph * 6) + Math.sin(2 * Math.PI * slapHz * 2 * t) * 0.12;
+      wash += (rnd() - wash) * 0.05;
+      const whine = Math.sin(2 * Math.PI * 1310 * t) * 0.03 + Math.sin(2 * Math.PI * 2620 * t) * 0.012 + Math.sin(2 * Math.PI * 434 * t) * 0.02;
+      const v = slap + thump + wash * 0.9 + whine;
+      // A touch of stereo: the tail rotor's buzz leans one way.
+      const tail = Math.sin(2 * Math.PI * 57 * t) * 0.05 * (0.6 + 0.4 * Math.sin(2 * Math.PI * 3 * t));
+      L[i] = (v + tail) * 0.45;
+      R[i] = (v - tail * 0.5 + rnd() * 0.01) * 0.45;
+    }
+    // Ease the seam so the loop never clicks.
+    const fade = Math.floor(sr * 0.004);
+    for (let i = 0; i < fade; i++) {
+      const k = i / fade;
+      for (const ch of [L, R]) ch[n - fade + i] = ch[n - fade + i] * (1 - k) + ch[i] * k;
+    }
+    return buf;
+  }
+
+  /**
+   * Keeps a rotor loop playing for every helicopter in the air, following it. Heard from far
+   * off (a low thump), louder and brighter as it comes overhead.
+   */
+  helicopters(list: Map<number, { pos: THREE.Vector3; hover: number }>): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    for (const [id, r] of this.rotors) {
+      if (list.has(id)) continue;
+      r.gain.gain.setTargetAtTime(0, t, 0.6);
+      r.src.stop(t + 3);
+      this.rotors.delete(id);
+    }
+    for (const [id, h] of list) {
+      let r = this.rotors.get(id);
+      if (!r) {
+        this.rotorBuffer ??= this.makeRotorBuffer();
+        const src = ctx.createBufferSource();
+        src.buffer = this.rotorBuffer;
+        src.loop = true;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.Q.value = 0.5;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(1.1, t + 2.5);
+        const panner = this.makePanner(h.pos);
+        panner.refDistance = 22;
+        panner.rolloffFactor = 1;
+        panner.maxDistance = 900;
+        src.connect(lp).connect(gain).connect(panner).connect(this.effects);
+        const send = ctx.createGain();
+        send.gain.value = 0.25;
+        gain.connect(send).connect(this.reverbSend);
+        src.start(t, Math.random());
+        r = { src, gain, lp, panner };
+        this.rotors.set(id, r);
+      }
+      r.panner.positionX.setTargetAtTime(h.pos.x, t, 0.05);
+      r.panner.positionY.setTargetAtTime(h.pos.y, t, 0.05);
+      r.panner.positionZ.setTargetAtTime(h.pos.z, t, 0.05);
+      const d = h.pos.distanceTo(this.listenerPos);
+      r.lp.frequency.setTargetAtTime(500 + 11000 / (1 + d / 28), t, 0.1);
+      // Rotor speeds up a touch under load in the hover.
+      r.src.playbackRate.setTargetAtTime(1 + h.hover * 0.04, t, 0.5);
+    }
+  }
+
+  /** A supply crate hitting the ground. */
+  crateLand(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.35, 6);
+    this.tone(d, t, 'sine', 120, 42, 0.9, 0.002, 0.25);
+    this.burst(d, t, 'lowpass', 700, 0.8, 0.8, 0.002, 0.18);
+    this.burst(d, t + 0.02, 'bandpass', 2300, 2, 0.25, 0.001, 0.06);
+    // Rattle of the rounds inside.
+    for (let i = 0; i < 6; i++) this.burst(d, t + 0.08 + i * 0.035 + Math.random() * 0.02, 'bandpass', 3200 + Math.random() * 1800, 4, 0.12, 0.001, 0.03);
   }
 
   /** Persistent spatial emitters (streetlight buzz, car hazard tick). */
@@ -818,27 +927,37 @@ export class AudioEngine {
     if (rough > 0) this.burst(d, t, 'bandpass', formant * 1.6, 2, rough, 0.03, dur * 0.8);
   }
 
-  zombieAlert(position: THREE.Vector3): void {
+  zombieAlert(position: THREE.Vector3, pitch = 1): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    this.voice(position, t, 180 + Math.random() * 60, 320, 900, 0.45, 0.55, 7, 0.12);
-    this.voice(position, t + 0.4, 300, 140, 700, 0.7, 0.45, 5, 0.08);
+    const f = Math.sqrt(pitch);
+    if (pitch > 1.1) {
+      // Runners shriek: a rising scream, then a ragged gasp.
+      this.voice(position, t, 260 * pitch, 720 * pitch, 1500, 0.6, 0.6, 11, 0.2);
+      this.voice(position, t + 0.55, 520, 220, 1100, 0.35, 0.35, 16, 0.18);
+      return;
+    }
+    this.voice(position, t, (180 + Math.random() * 60) * pitch, 320 * pitch, 900 * f, 0.45 * (2 - f), 0.55, 7, 0.12);
+    this.voice(position, t + 0.4, 300 * pitch, 140 * pitch, 700 * f, 0.7 * (2 - f), 0.45, 5, 0.08);
   }
 
-  zombieAttack(position: THREE.Vector3): void {
+  zombieAttack(position: THREE.Vector3, pitch = 1): void {
     if (!this.ctx) return;
-    this.voice(position, this.ctx.currentTime, 150, 95, 650, 0.38, 0.5, 28, 0.15);
+    const f = Math.sqrt(pitch);
+    this.voice(position, this.ctx.currentTime, 150 * pitch, 95 * pitch, 650 * f, 0.38 * (2 - f), 0.5, 28, 0.15);
   }
 
-  zombieHurt(position: THREE.Vector3): void {
+  zombieHurt(position: THREE.Vector3, pitch = 1): void {
     if (!this.ctx) return;
-    this.voice(position, this.ctx.currentTime, 130 + Math.random() * 30, 100, 560, 0.18, 0.35, 12);
+    const f = Math.sqrt(pitch);
+    this.voice(position, this.ctx.currentTime, (130 + Math.random() * 30) * pitch, 100 * pitch, 560 * f, 0.18, 0.35, 12);
   }
 
-  zombieDeath(position: THREE.Vector3): void {
+  zombieDeath(position: THREE.Vector3, pitch = 1): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    this.voice(position, t, 110, 48, 420, 0.9, 0.42, 9, 0.12);
+    const f = Math.sqrt(pitch);
+    this.voice(position, t, 110 * pitch, 48 * pitch, 420 * f, 0.9 * (2 - f), 0.42, 9, 0.12);
     this.burst(this.out(position, 0.1, 3), t + 0.5, 'lowpass', 300, 0.7, 0.35, 0.01, 0.2);
   }
 
@@ -892,10 +1011,18 @@ export class AudioEngine {
     for (let i = 0; i < 4; i++) this.burst(d, t + i * 0.45, 'highpass', 1800 + Math.random() * 800, 0.8, 0.1, 0.04, 0.3, 1.2);
   }
 
-  pickup(kind: 'ammo' | 'bandage' | 'weapon'): void {
+  pickup(kind: 'ammo' | 'bandage' | 'weapon' | 'supply'): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const d = this.out(null);
+    if (kind === 'supply') {
+      // Lid, then handfuls of loose rounds and magazines going into pouches.
+      this.burst(d, t, 'bandpass', 900, 1.5, 0.35, 0.002, 0.07);
+      for (let i = 0; i < 10; i++) this.burst(d, t + 0.1 + i * 0.045 + Math.random() * 0.02, 'bandpass', 2400 + Math.random() * 2200, 3, 0.2, 0.001, 0.04);
+      this.tone(d, t + 0.55, 'triangle', 260, 170, 0.14, 0.002, 0.12);
+      this.burst(d, t + 0.62, 'bandpass', 1500, 2, 0.3, 0.002, 0.06);
+      return;
+    }
     if (kind === 'ammo') {
       for (let i = 0; i < 5; i++) this.burst(d, t + i * 0.05 + Math.random() * 0.02, 'bandpass', 2600 + Math.random() * 1500, 3, 0.18, 0.001, 0.04);
       this.tone(d, t, 'triangle', 300, 200, 0.12, 0.002, 0.1);
@@ -979,6 +1106,8 @@ export class AudioEngine {
   }
 
   dispose(): void {
+    for (const r of this.rotors.values()) r.src.stop();
+    this.rotors.clear();
     this.unsub?.();
     window.clearTimeout(this.bankTimer);
     this.bank.clear();
