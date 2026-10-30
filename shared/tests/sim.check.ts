@@ -7,7 +7,8 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, PLAYER, ZOMBIES, SUPPLY_DROPS, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SUPPLY_DROPS, LIMBS, limbClub, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
 } from '../src/index';
@@ -192,6 +193,8 @@ function run(sim: Simulation, seconds: number, until?: () => boolean): { events:
 function cleanup(sim: Simulation, body: TestPlayer) {
   for (const z of [...sim.zombies]) z.removeBody();
   sim.zombies.length = 0;
+  for (const l of sim.limbs) if (l.body) physics.world.removeRigidBody(l.body);
+  sim.limbs.length = 0;
   body.remove();
   physics.world.removeCharacterController(sim.zombieController);
 }
@@ -510,6 +513,258 @@ section('Interactables and death');
   check(sp.health === 90 && sp.bandages === 1, 'bandage heals 40');
   const res = (() => { sim.damagePlayer(sp, 200, { x: 0, y: 0, z: 0 }); return sim.drain(); })();
   check(!sp.alive && res.some((e) => e.type === 'playerDied') && sim.phase === 'over', 'death ends the solo game');
+  cleanup(sim, body);
+}
+
+section('Severed arms');
+{
+  // Zones: a stub keeps its upper half, a missing arm lets rounds through.
+  const pos = { x: 0, y: 0, z: 0 };
+  const whole = zombieZones(pos, 0, 1, 'standing', []);
+  const armOf = (zones: ZoneShape[]) => zones.find((zz) => zz.zone === 'armL')!;
+  const wa = armOf(whole);
+  const hand = along(wa.a, wa.b, 0.9), upper = along(wa.a, wa.b, 0.2);
+  const shootAt = (zones: ZoneShape[], at: Vec3) => rayZones({ x: at.x, y: at.y, z: at.z + 5 }, { x: 0, y: 0, z: -1 }, zones, 50);
+  check(shootAt(whole, hand)?.zone === 'armL', 'a whole arm is hit at the hand');
+  const stub = zombieZones(pos, 0, 1, 'standing', [], 1, { armL: 'elbow', armR: 'intact' });
+  check(shootAt(stub, hand)?.zone !== 'armL' && shootAt(stub, upper)?.zone === 'armL', 'cut at the elbow: the forearm is gone, the upper arm is still there');
+  const gone = zombieZones(pos, 0, 1, 'standing', [], 1, { armL: 'shoulder', armR: 'intact' });
+  check(!gone.some((zz) => zz.zone === 'armL') && shootAt(gone, hand)?.zone !== 'armL', 'gone at the shoulder: rounds pass where the arm was');
+  const h = shootAt(whole, upper);
+  check(!!h && h.along < LIMBS.elbowAt && (shootAt(whole, hand)?.along ?? 0) > LIMBS.elbowAt, 'hits report how far along the arm they landed');
+
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  run(sim, 0.7);
+  sp.arsenal.aim = 1;
+  sp.motion.aiming = true;
+  const place = (kind: 'walker' | 'runner' | 'brute', z = 3) => {
+    const zz = sim.spawnZombie(kind, { x: 0, y: 0.02, z }, 'idle');
+    zz.facing = 0;
+    return zz;
+  };
+  const armPoint = (zz: Zombie, arm: 'armL' | 'armR', t: number) => {
+    const shape = zz.zones([]).find((s) => s.zone === arm)!;
+    return along(shape.a, shape.b, t);
+  };
+  const dirTo = (from: Vec3, to: Vec3) => {
+    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+    const l = Math.hypot(dx, dy, dz);
+    return { x: dx / l, y: dy / l, z: dz / l };
+  };
+  const shootArm = (zz: Zombie, arm: 'armL' | 'armR', t: number, maxShots: number, seed: number) => {
+    const events: SimEvent[] = [];
+    let shots = 0;
+    while (zz.arms[arm] === 'intact' && zz.alive && shots < maxShots) {
+      zz.facing = 0;
+      if (sim.fire('p1', sp.eye, dirTo(sp.eye, armPoint(zz, arm, t)), true, seed + shots) === 'fired') shots++;
+      events.push(...run(sim, 0.13).events);
+    }
+    return { events, shots };
+  };
+
+  // Gunfire.
+  const z1 = place('walker');
+  const r1 = shootArm(z1, 'armL', 0.22, 6, 40);
+  const cut1 = r1.events.find((e) => e.type === 'limbSevered');
+  const armHits = r1.events.filter((e) => e.type === 'zombieHit' && e.zone === 'armL').length;
+  check(!!cut1 && cut1.type === 'limbSevered' && cut1.cut === 'shoulder' && z1.arms.armL === 'shoulder', `two rifle rounds to the upper arm take the whole arm off (${armHits} hits)`);
+  check(armHits === 2 && z1.alive && z1.health === 100 - 36, 'losing the arm does not kill it; the arm hits still hurt');
+  check(sp.stats.limbsSevered === 1 && sim.limbs.length === 1 && !!sim.limbs[0].body, 'the arm becomes a loose physics body');
+  const order = r1.events.map((e) => e.type).filter((t) => t === 'zombieHit' || t === 'limbSevered');
+  check(order.indexOf('limbSevered') === order.length - 1, 'the hit is reported before the arm coming off');
+  const torsoShot = (() => {
+    z1.facing = 0;
+    const e = sp.eye;
+    sim.fire('p1', e, dirTo(e, { x: z1.pos.x, y: z1.pos.y + 1.1, z: z1.pos.z + 0.1 }), true, 77);
+    return run(sim, 0.2).events;
+  })();
+  check(torsoShot.some((e) => e.type === 'zombieHit' && e.zone === 'torso') && z1.armDamage.armR === 0 && z1.arms.armR === 'intact', 'body shots do nothing to the arms');
+
+  const z2 = place('walker', 2.6);
+  z2.pos.x = 1.4;
+  const r2 = shootArm(z2, 'armR', 0.85, 6, 90);
+  const cut2 = r2.events.find((e) => e.type === 'limbSevered');
+  check(!!cut2 && cut2.type === 'limbSevered' && cut2.cut === 'elbow' && z2.arms.armR === 'elbow', 'rounds to the forearm take it off at the elbow');
+  const stubHits = shootArm(z2, 'armR', 0.85, 2, 120).events.filter((e) => e.type === 'limbSevered').length;
+  check(stubHits === 0 && z2.arms.armR === 'elbow', 'the stub left at the elbow does not come off again');
+
+  // The arm tumbles down and settles on the ground.
+  run(sim, 3);
+  const l1 = sim.limbs.find((l) => l.id === (cut1 as { limb: number }).limb)!;
+  const ground = physics.raycast(l1.pos.x, l1.pos.y + 1, l1.pos.z, 0, -1, 0, 4);
+  const restY = ground === null ? -99 : l1.pos.y + 1 - ground;
+  check(!!l1.body && Math.abs(l1.pos.y - restY) < l1.radius * 3 + 0.05 && Math.hypot(l1.body.linvel().x, l1.body.linvel().y, l1.body.linvel().z) < 0.3, `the severed arm comes to rest on the ground (${l1.pos.y.toFixed(2)} m, floor ${restY.toFixed(2)} m)`);
+  const through = physics.raycast(l1.pos.x, l1.pos.y + 2, l1.pos.z, 0, -1, 0, 5);
+  check(through !== null && through > 2, 'bullets and sight lines pass through a loose arm');
+  const cg = l1.body.collider(0).collisionGroups();
+  const member = cg >>> 16, filter = cg & 0xffff;
+  check(!(member & (GROUP.player | GROUP.zombie)) && !(filter & (GROUP.player | GROUP.zombie)) && !!(filter & GROUP.static), 'loose arms never trip survivors or zombies');
+
+  // Picking it up.
+  for (const zz of [...sim.zombies]) zz.removeBody();
+  sim.zombies.length = 0;
+  sim.setMotion('p1', { pos: { x: l1.pos.x + 0.9, y: restY, z: l1.pos.z }, yaw: Math.PI / 2 });
+  check(sim.limbsInReach('p1').some((l) => l.id === l1.id), 'an arm at your feet is in reach');
+  sim.setMotion('p1', { pos: { x: l1.pos.x + 4, y: restY, z: l1.pos.z } });
+  check(!sim.grabLimb('p1', l1.id), 'an arm out of reach cannot be grabbed');
+  const standAt = { x: l1.pos.x + 0.9, y: restY, z: l1.pos.z };
+  sim.setMotion('p1', { pos: standAt, yaw: Math.PI / 2 });
+  body.moveTo(standAt);
+  const grabbed = sim.grabLimb('p1', l1.id);
+  const a = sp.arsenal;
+  check(grabbed && a.limb?.id === l1.id && l1.holder === 'p1' && !l1.body, 'grabbing it puts it in your hands');
+  check(a.action === 'draw' && sim.fire('p1', sp.eye, { x: -1, y: 0, z: 0 }, true, 1) === 'busy', 'you cannot swing while still getting a grip');
+  run(sim, 0.5);
+  const magBefore = a.weapon.mag;
+  check(!sim.reload('p1') && a.spread({ speed: 0, crouching: false, grounded: true, aiming: false }) === 0, 'no reloading or gun spread while holding it');
+
+  // Clubbing.
+  const club = limbClub('shoulder', 'walker');
+  check(l1.wear === club.wear && l1.maxWear === club.wear, `a whole arm lasts ${club.wear} hits`);
+  const victim = sim.spawnZombie('walker', { x: standAt.x - 1.3, y: standAt.y + 0.02, z: standAt.z }, 'idle');
+  victim.facing = Math.PI / 2;
+  const swingAt = (zz: Zombie, y = 1.2) => {
+    const e = sp.eye;
+    return sim.fire('p1', e, dirTo(e, { x: zz.pos.x, y: zz.pos.y + y, z: zz.pos.z }), true, 7);
+  };
+  let hits: SimEvent[] = [];
+  let swings = 0;
+  while (victim.alive && swings < 6) {
+    victim.facing = Math.PI / 2;
+    if (swingAt(victim) === 'fired') swings++;
+    hits.push(...run(sim, LIMBS.duration + 0.05).events);
+  }
+  const clubbed = hits.filter((e) => e.type === 'zombieHit' && e.limb === l1.id);
+  check(clubbed.length >= 1 && clubbed[0].type === 'zombieHit' && Math.round(clubbed[0].damage) === club.damage && clubbed[0].melee, `a swing lands for ${club.damage} damage`);
+  check(!victim.alive && swings === 3 && sp.stats.limbKills === 1, `three swings beat a walker to death (took ${swings})`);
+  check(a.weapon.mag === magBefore && l1.wear === club.wear - 3, 'every landed blow wears it; no rounds are spent');
+  check(hits.some((e) => e.type === 'melee' && e.stage === 'swing' && e.limb), 'swings are reported as arm swings');
+  const missStart = l1.wear;
+  swingAt(victim);
+  run(sim, LIMBS.duration + 0.05);
+  check(l1.wear === missStart, 'a swing that hits nothing does not wear it');
+
+  // It tears another zombie's arm off.
+  const z3 = sim.spawnZombie('walker', { x: standAt.x - 1.2, y: standAt.y + 0.02, z: standAt.z }, 'idle');
+  z3.facing = Math.PI / 2;
+  run(sim, 0.05);
+  z3.facing = Math.PI / 2;
+  const e3 = sp.eye;
+  sim.fire('p1', e3, dirTo(e3, armPoint(z3, 'armR', 0.3)), true, 11);
+  hits = run(sim, LIMBS.duration + 0.05).events;
+  check(hits.some((e) => e.type === 'limbSevered' && e.melee) && z3.arms.armR !== 'intact', 'a blow with the arm can rip off another');
+  z3.removeBody();
+  sim.zombies.splice(sim.zombies.indexOf(z3), 1);
+
+  // Worn through.
+  l1.wear = 1;
+  const z4 = sim.spawnZombie('runner', { x: standAt.x - 1.3, y: standAt.y + 0.02, z: standAt.z }, 'idle');
+  z4.facing = Math.PI / 2;
+  swingAt(z4);
+  hits = run(sim, LIMBS.windup + 0.05).events;
+  check(hits.some((e) => e.type === 'limbBroke' && e.limb === l1.id) && !!a.limb?.broken && !sim.limbs.includes(l1), 'the last blow tears it apart in your hands');
+  hits = run(sim, LIMBS.duration).events;
+  check(!a.limb && a.action === 'draw' && hits.some((e) => e.type === 'draw'), 'then the gun comes back up');
+  run(sim, 0.8);
+  check(sim.fire('p1', sp.eye, { x: -1, y: 0, z: 0 }, true, 5) === 'fired', 'and fires again');
+  for (const zz of [...sim.zombies]) zz.removeBody();
+  sim.zombies.length = 0;
+
+  // Machete: one chop takes a walker's arm, a brute's takes two.
+  run(sim, 0.6);
+  sp.motion.yaw = Math.PI / 2;
+  const chop = (zz: Zombie, arm: 'armL' | 'armR') => {
+    zz.facing = Math.PI / 2;
+    const e = sp.eye;
+    sim.melee('p1', { origin: e, dir: dirTo(e, armPoint(zz, arm, 0.3)) });
+    return run(sim, 0.6).events;
+  };
+  const w5 = sim.spawnZombie('walker', { x: standAt.x - 1.2, y: standAt.y + 0.02, z: standAt.z }, 'idle');
+  let ev = chop(w5, 'armL');
+  check(ev.some((e) => e.type === 'limbSevered' && e.melee && e.arm === 'armL') && w5.alive, 'one machete chop takes off a walker\'s arm');
+  w5.removeBody();
+  sim.zombies.length = 0;
+  const b5 = sim.spawnZombie('brute', { x: standAt.x - 1.3, y: standAt.y + 0.02, z: standAt.z }, 'idle');
+  ev = chop(b5, 'armL');
+  const first = ev.some((e) => e.type === 'limbSevered');
+  ev = chop(b5, 'armL');
+  check(!first && ev.some((e) => e.type === 'limbSevered') && b5.arms.armL !== 'intact', 'a brute\'s arm takes two chops');
+  const bruteLimb = sim.limbs[sim.limbs.length - 1];
+  check(bruteLimb.maxWear > limbClub(bruteLimb.cut, 'walker').wear && bruteLimb.scale > 1.1 && limbClub(bruteLimb.cut, 'brute').damage > limbClub(bruteLimb.cut, 'walker').damage, 'a brute\'s arm is bigger, hits harder and lasts longer');
+  b5.removeBody();
+  sim.zombies.length = 0;
+
+  // Letting go.
+  run(sim, 2.5);
+  const grab = () => {
+    const l = sim.limbs.find((x) => !x.holder)!;
+    const at = { x: l.pos.x + 0.8, y: l.pos.y - 0.05, z: l.pos.z };
+    sim.setMotion('p1', { pos: at });
+    body.moveTo(at);
+    return sim.grabLimb('p1', l.id) ? l : null;
+  };
+  let held = grab();
+  run(sim, 0.5);
+  check(!!held && sim.switchWeapon('p1', 'secondary'), 'reaching for a gun works with an arm in hand');
+  ev = sim.drain();
+  check(!a.limb && !!held!.body && held!.holder === null && a.active === 'secondary', 'the arm is tossed aside and the pistol drawn');
+  run(sim, 1.5);
+  held = grab();
+  run(sim, 0.5);
+  sp.health = 50;
+  sp.bandages = 1;
+  check(!!held && sim.bandage('p1') && !a.limb && !!held!.body && a.action === 'bandage', 'bandaging puts the arm down first');
+  run(sim, 3.2);
+  held = grab();
+  const swap = sim.limbs.find((x) => !x.holder && x !== held);
+  if (swap) {
+    const at = { x: swap.pos.x + 0.8, y: swap.pos.y - 0.05, z: swap.pos.z };
+    sim.setMotion('p1', { pos: at });
+    body.moveTo(at);
+    run(sim, 0.5);
+    check(sim.grabLimb('p1', swap.id) && a.limb === swap && !!held!.body, 'grabbing another arm drops the one in hand');
+  }
+  sim.damagePlayer(sp, 500, sp.motion.pos);
+  const loose = sim.limbs.filter((l) => !l.holder);
+  check(!a.limb && loose.length === sim.limbs.length, 'dying drops what you held');
+  cleanup(sim, body);
+}
+{
+  // Armless zombies hit softer; the heap of arms stays bounded.
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  run(sim, 0.7);
+  const z = sim.spawnZombie('walker', { x: 0, y: 0.02, z: 5 }, 'approach');
+  z.arms.armL = 'shoulder';
+  z.arms.armR = 'shoulder';
+  const hurt = run(sim, 8, () => sp.health < PLAYER.maxHealth).events.find((e) => e.type === 'playerHurt');
+  const [lo, hi] = ZOMBIES.walker.damage;
+  check(!!hurt && hurt.type === 'playerHurt' && hurt.damage >= Math.round(lo * 0.5) && hurt.damage <= Math.round(hi * 0.5), `with no arms it can only bite: ${hurt && hurt.type === 'playerHurt' ? hurt.damage : '?'} damage`);
+  z.removeBody();
+  sim.zombies.length = 0;
+  sp.health = PLAYER.maxHealth;
+  sp.arsenal.replacePrimary('marksman');
+  run(sim, 1);
+  sp.arsenal.aim = 1;
+  sp.motion.aiming = true;
+  let gone = 0;
+  for (let i = 0; i < LIMBS.maxLoose + 3; i++) {
+    const zz = sim.spawnZombie('walker', { x: 0, y: 0.02, z: 2.5 }, 'idle');
+    zz.facing = 0;
+    const shape = zz.zones([]).find((s) => s.zone === 'armL')!;
+    const at = along(shape.a, shape.b, 0.25);
+    const e = sp.eye;
+    const dx = at.x - e.x, dy = at.y - e.y, dz = at.z - e.z;
+    const l = Math.hypot(dx, dy, dz);
+    sp.arsenal.primary.mag = 10;
+    sim.fire('p1', e, { x: dx / l, y: dy / l, z: dz / l }, true, 900 + i);
+    gone += run(sim, 0.45).events.filter((ev) => ev.type === 'limbGone').length;
+    zz.removeBody();
+    sim.zombies.length = 0;
+  }
+  const loose = sim.limbs.filter((l) => !l.holder).length;
+  check(sp.stats.limbsSevered === LIMBS.maxLoose + 3 && loose === LIMBS.maxLoose && gone === 3, `no more than ${LIMBS.maxLoose} arms lie around: the oldest are cleared (${sp.stats.limbsSevered} severed, ${loose} loose)`);
+  const s = sim.limbs[0] as SimLimb;
+  check(Number.isFinite(s.pos.x + s.pos.y + s.pos.z + s.rot.w), 'arm poses stay finite');
   cleanup(sim, body);
 }
 

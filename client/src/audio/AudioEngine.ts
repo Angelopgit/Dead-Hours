@@ -898,6 +898,99 @@ export class AudioEngine {
     src.stop(t + 0.3);
   }
 
+  /** Something heavy and limp swung through the air: a low, slow whoosh with a wet flap in it. */
+  heavySwing(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const d = this.out(position, 0, 2);
+    const src = this.noiseSource(false);
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 1.6;
+    f.frequency.setValueAtTime(180, t);
+    f.frequency.exponentialRampToValueAtTime(900, t + 0.22);
+    f.frequency.exponentialRampToValueAtTime(260, t + 0.42);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.42, t + 0.2);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    src.connect(f).connect(g).connect(d);
+    src.start(t);
+    src.stop(t + 0.47);
+    // The dangling end slapping about.
+    this.burst(d, t + 0.08, 'bandpass', 900, 2.5, 0.06, 0.004, 0.05, 0.6);
+  }
+
+  /** An arm coming off: bone cracking, sinew ripping, a wet gush. */
+  sever(position: THREE.Vector3, melee: boolean): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.12, 3.5);
+    // Bone: a sharp crack, then splintering.
+    this.burst(d, t, 'highpass', 2600, 0.8, 0.55, 0.001, 0.025);
+    this.tone(d, t, 'square', 950, 260, 0.08, 0.001, 0.035);
+    for (let i = 0; i < 3; i++) this.burst(d, t + 0.015 + Math.random() * 0.05, 'bandpass', 3000 + Math.random() * 2500, 2, 0.12, 0.001, 0.015);
+    // Sinew and skin tearing: a run of short wet rips.
+    for (let i = 0; i < 9; i++) {
+      const at = t + 0.02 + i * 0.018 + Math.random() * 0.012;
+      this.burst(d, at, 'bandpass', 700 + Math.random() * 1100, 4, 0.16 + Math.random() * 0.1, 0.002, 0.03, 0.7);
+    }
+    // The meat of it, and the blood coming out.
+    this.burst(d, t, 'lowpass', 650, 0.9, 0.5, 0.002, 0.12);
+    this.tone(d, t, 'sine', 150, 55, 0.45, 0.002, 0.14);
+    this.burst(d, t + 0.06, 'lowpass', 1100, 0.7, 0.22, 0.03, 0.42, 0.8);
+    if (melee) this.tone(d, t, 'sine', 210, 80, 0.4, 0.001, 0.08);
+  }
+
+  /** Clubbing with a severed arm: a heavy, wet, meaty thud. */
+  clubHit(position: THREE.Vector3, heavy: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.08, 3);
+    this.tone(d, t, 'sine', 95, 38, 0.75 * (0.7 + heavy * 0.3), 0.002, 0.16);
+    this.burst(d, t, 'lowpass', 420, 0.8, 0.6, 0.002, 0.13);
+    this.burst(d, t, 'bandpass', 1500, 1.4, 0.3, 0.001, 0.05);
+    this.burst(d, t + 0.02, 'bandpass', 850, 3, 0.22, 0.004, 0.14, 0.6);
+    if (Math.random() < 0.5) this.burst(d, t + 0.01, 'highpass', 2400, 1, 0.12, 0.001, 0.02);
+  }
+
+  /** A worn-out arm bursting apart in the hands. */
+  limbBreak(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.15, 3);
+    for (let i = 0; i < 3; i++) {
+      const at = t + i * 0.03 + Math.random() * 0.02;
+      this.burst(d, at, 'highpass', 2200 + Math.random() * 1500, 0.8, 0.35, 0.001, 0.02);
+      this.tone(d, at, 'square', 800 + Math.random() * 300, 240, 0.05, 0.001, 0.03);
+    }
+    this.burst(d, t, 'lowpass', 700, 0.8, 0.6, 0.002, 0.2);
+    this.tone(d, t, 'sine', 120, 45, 0.5, 0.002, 0.18);
+    // Wet pieces landing all around.
+    for (let i = 0; i < 10; i++) this.burst(d, t + 0.2 + Math.random() * 0.45, 'bandpass', 600 + Math.random() * 900, 3, 0.07 + Math.random() * 0.06, 0.003, 0.05, 0.7);
+  }
+
+  /** Getting a grip on a severed arm: a cold, wet squelch. */
+  limbGrab(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0, 2);
+    this.burst(d, t, 'lowpass', 520, 0.8, 0.3, 0.004, 0.09);
+    this.burst(d, t + 0.03, 'bandpass', 1100, 4, 0.16, 0.006, 0.16, 0.5);
+    this.tone(d, t, 'sine', 130, 70, 0.18, 0.003, 0.07);
+  }
+
+  /** A severed arm hitting the ground. */
+  limbLand(position: THREE.Vector3, strength: number): void {
+    if (!this.ctx || strength < 0.08) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.05, 2.5);
+    this.tone(d, t, 'sine', 125, 55, 0.35 * strength, 0.002, 0.1);
+    this.burst(d, t, 'lowpass', 480, 0.8, 0.35 * strength, 0.002, 0.08);
+    this.burst(d, t + 0.005, 'bandpass', 1300, 2, 0.14 * strength, 0.002, 0.06, 0.7);
+  }
+
   /** Formant-filtered growl for the zombie voices. */
   private voice(position: THREE.Vector3, t: number, f0: number, f1: number, formant: number, dur: number, peak: number, wobble: number, rough = 0): void {
     const ctx = this.ctx!;

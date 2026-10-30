@@ -1,5 +1,6 @@
 import type { HitZone, WeaponId, WeaponSlot } from '../config/weapons';
 import type { ZombieKind } from '../config/zombies';
+import type { ArmZone, LimbCut } from '../config/limbs';
 import type { Surface } from '../physics/Physics';
 import type { Vec3 } from './math';
 
@@ -21,7 +22,12 @@ export type SimEvent =
   | { type: 'shot'; player: string; weapon: WeaponId; origin: Vec3; pellets: PelletTrace[] }
   | { type: 'dryFire'; player: string; weapon: WeaponId }
   | { type: 'impact'; pos: Vec3; normal: Vec3; surface: Surface; dir: Vec3 }
-  | { type: 'zombieHit'; zombie: number; zone: HitZone; pos: Vec3; dir: Vec3; damage: number; killed: boolean; by: string; melee: boolean; exit: { pos: Vec3; normal: Vec3 } | null }
+  | {
+    type: 'zombieHit'; zombie: number; zone: HitZone; pos: Vec3; dir: Vec3; damage: number; killed: boolean; by: string; melee: boolean;
+    exit: { pos: Vec3; normal: Vec3 } | null;
+    /** The severed arm it was clubbed with, if any. */
+    limb?: number;
+  }
   | { type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string }
   | { type: 'zombieSpawned'; zombie: number; kind: ZombieKind }
   | { type: 'zombieRemoved'; zombie: number }
@@ -33,14 +39,23 @@ export type SimEvent =
   | { type: 'playerHealed'; player: string; amount: number; health: number }
   | { type: 'reload'; player: string; weapon: WeaponId; stage: 'start' | 'shell' | 'end' | 'cancel' }
   | { type: 'draw'; player: string; slot: WeaponSlot; weapon: WeaponId }
-  | { type: 'melee'; player: string; stage: 'swing' | 'hit' | 'miss' }
+  | { type: 'melee'; player: string; stage: 'swing' | 'hit' | 'miss'; limb?: boolean }
   | { type: 'bandage'; player: string; stage: 'start' | 'end' | 'cancel' }
   | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon' | 'supply'; amount: number; source: number; weapon?: WeaponId }
   | { type: 'doorPound'; door: number; pos: Vec3 }
   | { type: 'doorForced'; door: number; pos: Vec3 }
   | { type: 'notice'; player: string | null; text: string; sub?: string }
   | { type: 'heli'; drop: number; flight: HeliFlight }
-  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'gone'; pos: Vec3 };
+  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'gone'; pos: Vec3 }
+  /** An arm came off: `pos` is the cut, `dir` the way the blow was going. */
+  | { type: 'limbSevered'; zombie: number; limb: number; arm: ArmZone; cut: LimbCut; pos: Vec3; dir: Vec3; by: string; melee: boolean; killed: boolean }
+  | { type: 'limbGrabbed'; player: string; limb: number }
+  /** Let go of (`thrown` when tossed aside to draw a gun). */
+  | { type: 'limbDropped'; player: string; limb: number; thrown: boolean }
+  /** Worn through: it comes apart in the survivor's hands at `pos`. */
+  | { type: 'limbBroke'; player: string; limb: number; pos: Vec3; dir: Vec3 }
+  /** A loose arm was cleared away. */
+  | { type: 'limbGone'; limb: number };
 
 /**
  * A supply helicopter's flight, in simulation time: in from `from` to the hover point `over`,

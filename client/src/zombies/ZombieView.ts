@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { SPAWNING, type HitZone, type Simulation, type Zombie, type ZombieKind } from '@dead-hours/shared';
+import { SPAWNING, type ArmZone, type HitZone, type LimbCut, type Simulation, type Zombie, type ZombieKind } from '@dead-hours/shared';
 import { Humanoid, ZOMBIE_LOOKS, zombieLook, type ZombieGait } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import type { Physics } from '../core/Physics';
+import type { Effects } from '../effects/Effects';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 
@@ -21,7 +22,24 @@ interface View {
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   pooledBlood: boolean;
+  /** Stumps still bleeding. */
+  bleeds: Bleed[];
 }
+
+/** A fresh stump: pumping blood for a few seconds, then dripping, slowing to nothing. */
+interface Bleed {
+  arm: ArmZone;
+  /** Seconds since the arm came off. */
+  t: number;
+  /** Seconds to the next pulse or drop. */
+  next: number;
+  /** How hard it pumps (a shoulder opens more than an elbow). */
+  strength: number;
+}
+
+/** Pumping, then dripping, then dry. */
+const SPURT_TIME = 2.6;
+const BLEED_TIME = 40;
 
 const MAX_CORPSES = 14;
 
@@ -47,7 +65,7 @@ export class ZombieView {
   /** A body came to rest (blood pool under it). */
   onCorpseSettled: ((pos: THREE.Vector3) => void) | null = null;
 
-  constructor(scene: THREE.Scene, private readonly physics: Physics, private readonly field: LightField) {
+  constructor(scene: THREE.Scene, private readonly physics: Physics, private readonly field: LightField, private readonly effects: Effects) {
     this.root.name = 'zombies';
     scene.add(this.root);
   }
@@ -84,6 +102,7 @@ export class ZombieView {
   private release(v: View): void {
     v.body.root.removeFromParent();
     v.body.ragdoll = false;
+    v.bleeds.length = 0;
     this.poolOf(v.gait, v.look).push({ body: v.body, probe: v.probe });
   }
 
@@ -104,6 +123,21 @@ export class ZombieView {
     if (this.gore) v.body.wound(zone, 0.18 + amount * 0.45);
   }
 
+  /**
+   * An arm came off (just before any death the same blow causes): the stump shows at once and
+   * starts pumping blood. Where it was and which way it faces, for the burst at the cut.
+   */
+  severed(id: number, arm: ArmZone, cut: LimbCut, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const v = this.views.get(id);
+    if (!v) return false;
+    v.body.setArm(arm, cut);
+    v.body.root.updateMatrixWorld(true);
+    if (this.gore) v.body.wound(arm, 0.7);
+    v.bleeds = v.bleeds.filter((b) => b.arm !== arm);
+    v.bleeds.push({ arm, t: 0, next: 0.05, strength: cut === 'shoulder' ? 1 : 0.7 });
+    return v.body.stump(arm, pos, dir);
+  }
+
   /** Death: the body goes limp from its current pose, thrown by the killing hit. */
   died(id: number, zone: HitZone, dir: THREE.Vector3, force: number): void {
     const v = this.views.get(id);
@@ -114,7 +148,8 @@ export class ZombieView {
     const push = dir.clone().setY(Math.max(dir.y, 0) + 0.25).multiplyScalar(force * 2.6);
     const pushes = [{ joints: ZONE_PARTICLES[zone] ?? ZONE_PARTICLES.torso, impulse: push }];
     if (zone === 'legL' || zone === 'legR') pushes.push({ joints: ZONE_PARTICLES.torso, impulse: dir.clone().multiplyScalar(-force * 0.8) });
-    r.start(v.vel, pushes);
+    // The ragdoll reads joints from the bones: a missing arm still has its (hidden) joints.
+    v.body.withWholeArms(() => r.start(v.vel, pushes));
     v.ragdoll = r;
     v.deadT = 0;
     v.baseY = v.body.root.position.y;
@@ -160,7 +195,7 @@ export class ZombieView {
       if (!v) {
         const gait = gaitOf(z.kind);
         const { body, probe } = this.acquire(gait, z.look);
-        v = { id: z.id, look: z.look, gait, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false };
+        v = { id: z.id, look: z.look, gait, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [] };
         this.views.set(z.id, v);
       }
       this.animate(v, z, dt, renderTime, cam, camera);
@@ -181,6 +216,8 @@ export class ZombieView {
         this.onCorpseSettled?.(r.center(this.tmp).setY(r.floorY + 0.01));
       }
       c.probe.update(dt, c.body.root.position, camera, 0.4);
+      // The dead keep bleeding out of a fresh stump.
+      if (c.bleeds.length && c.deadT <= SPAWNING.corpseTime) this.bleed(c, dt, cam);
       // After a while the body sinks into the ground and is recycled.
       if (c.deadT > SPAWNING.corpseTime) {
         const t = c.deadT - SPAWNING.corpseTime;
@@ -221,8 +258,43 @@ export class ZombieView {
     const dist = Math.hypot(cam.x - x, cam.z - zz);
     // Far away: cheaper (no shadow, animation at a lower rate is not noticeable).
     b.mesh.castShadow = dist < 45;
+    // What is left of its arms (also for zombies first seen after losing one).
+    b.setArm('armL', z.arms.armL);
+    b.setArm('armR', z.arms.armR);
+    b.goreShown = this.gore;
     b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
     v.probe.update(dt, this.tmp.set(x, y, zz), camera);
+    if (v.bleeds.length) this.bleed(v, dt, cam);
+  }
+
+  /** Blood out of the stumps: pulses in time with what's left of a heartbeat, then drops. */
+  private bleed(v: View, dt: number, cam: THREE.Vector3): void {
+    for (let i = v.bleeds.length - 1; i >= 0; i--) {
+      const s = v.bleeds[i];
+      s.t += dt;
+      s.next -= dt;
+      if (s.t > BLEED_TIME || !this.gore) {
+        v.bleeds.splice(i, 1);
+        continue;
+      }
+      if (s.next > 0) continue;
+      if (!v.body.stump(s.arm, _sp, _sd)) {
+        v.bleeds.splice(i, 1);
+        continue;
+      }
+      // Far off nobody sees single drops.
+      const far = _sp.distanceTo(cam) > 40;
+      if (s.t < SPURT_TIME) {
+        const k = s.strength * (1 - s.t / SPURT_TIME) * (v.deadT >= 0 ? 0.6 : 1);
+        s.next = 0.24 + Math.random() * 0.08 + s.t * 0.06;
+        if (!far) this.effects.spurt(_sp, _sd.addScaledVector(_up, 0.15).normalize(), 0.25 + k * 0.75);
+      } else {
+        // Slowing: a drop every fraction of a second at first, every couple of seconds later.
+        const u = (s.t - SPURT_TIME) / (BLEED_TIME - SPURT_TIME);
+        s.next = 0.18 + u * 2.4 + Math.random() * 0.25;
+        if (!far) this.effects.drip(_sp.addScaledVector(_sd, 0.02), v.deadT >= 0 ? undefined : v.vel);
+      }
+    }
   }
 
   clear(): void {
@@ -238,3 +310,5 @@ export class ZombieView {
     this.root.removeFromParent();
   }
 }
+
+const _sp = new THREE.Vector3(), _sd = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);

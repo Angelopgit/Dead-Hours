@@ -1,6 +1,8 @@
 import { RAPIER, GROUP, groups } from '../physics/Physics';
 import { ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
+import { LIMBS, type ArmState, type ArmZone, type LimbCut } from '../config/limbs';
+import { zombieZones, type ZoneShape } from './hitzones';
 import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
 import { angleDiff, clamp, dist2D, rng, v3, type Vec3 } from './math';
 import type { SimPlayer, Simulation } from './Simulation';
@@ -78,6 +80,10 @@ export class Zombie {
   turnRate = 0;
   /** Most recent hit, for flinch animation. */
   lastHit: { zone: HitZone; dx: number; dz: number; at: number; amount: number } | null = null;
+  /** Its arms: whole, cut at the elbow or gone at the shoulder (renderers hide what is gone). */
+  readonly arms: Record<ArmZone, ArmState> = { armL: 'intact', armR: 'intact' };
+  /** Damage each arm has soaked toward coming off. */
+  readonly armDamage: Record<ArmZone, number> = { armL: 0, armR: 0 };
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
   readonly seed: number;
@@ -119,6 +125,36 @@ export class Zombie {
 
   get chest(): Vec3 {
     return { x: this.pos.x, y: this.pos.y + 1.2 * this.scale, z: this.pos.z };
+  }
+
+  /** Arms missing: one per arm gone at the shoulder, half per elbow stub. */
+  get armsLost(): number {
+    let n = 0;
+    for (const a of [this.arms.armL, this.arms.armR]) n += a === 'shoulder' ? 1 : a === 'elbow' ? 0.5 : 0;
+    return n;
+  }
+
+  /** Current hit zones (posture and missing arms included). */
+  zones(out: ZoneShape[]): ZoneShape[] {
+    return zombieZones(this.pos, this.facing, this.scale, this.state === 'down' ? 'down' : 'standing', out, this.def.girth, this.arms);
+  }
+
+  /** Whether an arm can still come off (a stub left at the elbow stays on). */
+  canLose(arm: ArmZone): boolean {
+    return this.arms[arm] === 'intact';
+  }
+
+  /** The arm comes off; the shock of it throws the zombie off balance. */
+  loseArm(arm: ArmZone, cut: LimbCut, dir: Vec3): void {
+    this.arms[arm] = cut;
+    this.armDamage[arm] = 0;
+    if (!this.alive || this.state === 'down') return;
+    this.setState('stagger');
+    this.staggerT = 0.85 + this.rand() * 0.3;
+    const hl = Math.hypot(dir.x, dir.z) || 1;
+    this.push.x = (dir.x / hl) * 1.4;
+    this.push.z = (dir.z / hl) * 1.4;
+    this.recentDamage = 0;
   }
 
   /** True while it is pursuing someone it knows about. */
@@ -241,8 +277,8 @@ export class Zombie {
 
   // ---------------------------------------------------------------- damage
 
-  /** Applies a hit. Returns true when it kills. */
-  takeHit(damage: number, zone: HitZone, dir: Vec3, by: SimPlayer, melee: boolean): boolean {
+  /** Applies a hit. Returns true when it kills. `knock` overrides how far a melee blow shoves it. */
+  takeHit(damage: number, zone: HitZone, dir: Vec3, by: SimPlayer, melee: boolean, knock: number = COMBAT.meleeKnockback): boolean {
     if (!this.alive) return false;
     const sim = this.sim;
     this.health -= damage;
@@ -276,7 +312,7 @@ export class Zombie {
     if (melee || zone === 'head' || this.recentDamage >= this.def.staggerAt) {
       this.setState('stagger');
       this.staggerT = melee ? 0.75 : 0.4 + this.rand() * 0.25;
-      const k = melee ? COMBAT.meleeKnockback : Math.min(1.6, damage * 0.03);
+      const k = melee ? knock : Math.min(1.6, damage * 0.03);
       this.push.x = (dir.x / hl) * k;
       this.push.z = (dir.z / hl) * k;
       this.recentDamage = 0;
@@ -420,7 +456,9 @@ export class Zombie {
             const ang = Math.abs(angleDiff(Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), this.facing));
             const clear = sim.physics.raycast(this.chest.x, this.chest.y, this.chest.z, (tp.x - this.pos.x) / (d || 1), 0, (tp.z - this.pos.z) / (d || 1), d);
             if (d < this.def.attackRange + 0.5 && ang < 1.25 && Math.abs(tp.y - this.pos.y) < 1.2 && (clear === null || clear > d - 0.4)) {
-              const dmg = Math.round(this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0]));
+              // Missing arms claw less; with none left it can only bite.
+              const reach = 1 - LIMBS.attackLoss * this.armsLost;
+              const dmg = Math.round((this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0])) * reach);
               sim.damagePlayer(target, dmg, this.pos);
             }
           }
@@ -452,7 +490,7 @@ export class Zombie {
           sim.emit({ type: 'doorPound', door: door.index, pos: { ...this.pos } });
           // The pounding carries: others nearby come to help.
           sim.noise(door.center, 14, `z${this.id}`);
-          if (door.pound(this.def.bash * 1.0, this.pos.x, this.pos.z)) {
+          if (door.pound(this.def.bash * (1 - LIMBS.bashLoss * this.armsLost), this.pos.x, this.pos.z)) {
             sim.emit({ type: 'doorForced', door: door.index, pos: { ...door.center } });
           }
         }

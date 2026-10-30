@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { HitZone } from '@dead-hours/shared';
+import type { ArmState, ArmZone, HitZone } from '@dead-hours/shared';
 import { chain } from '../lighting/BakeShader';
 import { rng, randomAppearance, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
 import { EYE_Y, dress, eyeParts, type DressResult, type PartSink } from './Outfit';
+import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 
 export interface HumanoidLook {
   /** What the character wears and looks like. */
@@ -182,7 +183,7 @@ function buildEyes(a: Appearance): THREE.BufferGeometry {
  * Patterns (plaid, stripes, camo, flowers, knit, denim) mix the vertex color with the part's
  * accent. Each bone carries a 0..1 blood amount; splotchy patches spread as it grows.
  */
-function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Array): void {
+export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Array): void {
   chain(mat, 'wounds', (shader) => {
     shader.uniforms.uWounds = { value: wounds };
     shader.vertexShader = shader.vertexShader
@@ -317,6 +318,10 @@ export class Humanoid {
   private readonly flinchLimb = [new Spring(), new Spring(), new Spring(), new Spring()];
   /** True while a ragdoll owns the bones. */
   ragdoll = false;
+  /** Zombies: what is left of each arm, and the torn ends where they came off. */
+  private readonly arms: Record<ArmZone, ArmState> = { armL: 'intact', armR: 'intact' };
+  private readonly stumps = new Map<string, THREE.Mesh>();
+  private readonly gore: THREE.MeshStandardMaterial | null = null;
 
   constructor(look: HumanoidLook) {
     this.zombie = !!look.zombie;
@@ -365,6 +370,7 @@ export class Humanoid {
     this.mesh.bind(this.skeleton);
 
     if (this.zombie) {
+      this.gore = goreMaterial();
       this.eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: look.eyeGlow ?? 0xc8d27a, emissiveIntensity: 1.2 });
       const l = new THREE.SphereGeometry(0.014, 4, 3).translate(-0.045, 0.13, 0.12);
       const r = new THREE.SphereGeometry(0.014, 4, 3).translate(0.045, 0.13, 0.12);
@@ -379,6 +385,103 @@ export class Humanoid {
       this.eyes.position.y = EYE_Y;
       this.head.add(this.eyes);
     }
+  }
+
+  /**
+   * Takes an arm off (zombies): everything past the cut collapses to nothing and a torn end
+   * takes its place. 'intact' puts it back (pooled bodies).
+   */
+  setArm(arm: ArmZone, state: ArmState): void {
+    if (this.arms[arm] === state) return;
+    this.arms[arm] = state;
+    const l = arm === 'armL' ? this.armL : this.armR;
+    l.upper.scale.setScalar(state === 'shoulder' ? 0.001 : 1);
+    l.lower.scale.setScalar(state === 'elbow' ? 0.001 : 1);
+    for (const cut of ['shoulder', 'elbow'] as const) {
+      const key = `${arm}:${cut}`;
+      let m = this.stumps.get(key);
+      if (cut !== state) {
+        if (m) m.visible = false;
+        continue;
+      }
+      if (!m && this.gore) {
+        const bone = arm === 'armL' ? (cut === 'shoulder' ? BONE.armLUpper : BONE.armLLower) : cut === 'shoulder' ? BONE.armRUpper : BONE.armRLower;
+        m = new THREE.Mesh(stumpGeometry(this.cutRadius(bone), this.seed * 1000 + bone, 1), this.gore);
+        // A shoulder stump sits on the torso and turns with the arm that was there; an elbow
+        // stump is the end of the upper arm.
+        if (cut === 'shoulder') {
+          m.position.copy(l.upper.position);
+          this.spine.add(m);
+        } else {
+          m.position.y = -l.upperLen;
+          l.upper.add(m);
+        }
+        this.stumps.set(key, m);
+      }
+      if (m) m.visible = true;
+    }
+  }
+
+  /** What is left of an arm. */
+  armState(arm: ArmZone): ArmState {
+    return this.arms[arm];
+  }
+
+  /** World position and outward direction of an arm's torn end; false while the arm is whole. */
+  stump(arm: ArmZone, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const state = this.arms[arm];
+    if (state === 'intact') return false;
+    const m = this.stumps.get(`${arm}:${state}`);
+    if (!m) return false;
+    m.updateWorldMatrix(true, false);
+    pos.setFromMatrixPosition(m.matrixWorld);
+    dir.set(0, -1, 0).transformDirection(m.matrixWorld);
+    return true;
+  }
+
+  /** Runs `fn` with every arm at full size (a ragdoll reads the real joint positions). */
+  withWholeArms(fn: () => void): void {
+    const ls = [this.armL, this.armR];
+    const saved = ls.map((l) => [l.upper.scale.x, l.lower.scale.x]);
+    for (const l of ls) {
+      l.upper.scale.setScalar(1);
+      l.lower.scale.setScalar(1);
+    }
+    this.root.updateMatrixWorld(true);
+    try {
+      fn();
+    } finally {
+      ls.forEach((l, i) => {
+        l.upper.scale.setScalar(saved[i][0]);
+        l.lower.scale.setScalar(saved[i][1]);
+      });
+      this.root.updateMatrixWorld(true);
+    }
+  }
+
+  /** Gore off: stumps go dark instead of red. */
+  set goreShown(on: boolean) {
+    if (this.gore) tintGore(this.gore, on);
+  }
+
+  /** Thickness of the body at a joint: how wide the stump left there must be. */
+  private cutRadius(bone: number): number {
+    const geo = this.mesh.geometry;
+    const pos = geo.getAttribute('position');
+    const si = geo.getAttribute('skinIndex');
+    const joint = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().copy(this.skeleton.boneInverses[bone]).invert());
+    // A shoulder cut is measured on the upper arm just below the joint; an elbow cut just above.
+    const upper = bone === BONE.armLUpper || bone === BONE.armRUpper;
+    const which = upper ? bone : bone - 1;
+    const y0 = upper ? joint.y - 0.08 : joint.y, y1 = upper ? joint.y - 0.02 : joint.y + 0.06;
+    let r = 0;
+    for (let i = 0; i < pos.count; i++) {
+      if (si.getX(i) !== which) continue;
+      const y = pos.getY(i);
+      if (y < y0 || y > y1) continue;
+      r = Math.max(r, Math.hypot(pos.getX(i) - joint.x, pos.getZ(i) - joint.z));
+    }
+    return THREE.MathUtils.clamp(r || 0.05, 0.035, 0.09);
   }
 
   /** Adds blood to the bones of a hit zone (0..1 per bone). */
@@ -597,6 +700,16 @@ export class Humanoid {
       this.onFootstep?.(Math.min(1, speed / 6) * (1 - crouch * 0.6));
     }
     this.lastStepSign = sign;
+    if (this.stumps.size) this.syncStumps();
+  }
+
+  /** Shoulder stumps turn with the (collapsed) upper arm, so they flail like the stub they are. */
+  private syncStumps(): void {
+    for (const arm of ['armL', 'armR'] as const) {
+      if (this.arms[arm] !== 'shoulder') continue;
+      const m = this.stumps.get(`${arm}:shoulder`);
+      if (m) m.quaternion.copy((arm === 'armL' ? this.armL : this.armR).upper.quaternion);
+    }
   }
 
   /**
@@ -639,6 +752,7 @@ export class Humanoid {
 
   /** Surface materials, for lighting patches (light probes). */
   surfaces(): THREE.Material[] {
+    if (this.gore) return [this.material, this.gore];
     return this.eyeMaterial && !this.zombie ? [this.material, this.eyeMaterial] : [this.material];
   }
 
@@ -653,11 +767,16 @@ export class Humanoid {
     for (const b of this.bones) b.rotation.set(0, 0, 0);
     this.hips.position.set(0, 0.95, 0);
     this.root.position.y = 0;
+    this.setArm('armL', 'intact');
+    this.setArm('armR', 'intact');
   }
 
   dispose(): void {
     this.root.removeFromParent();
     this.material.dispose();
+    for (const m of this.stumps.values()) m.geometry.dispose();
+    this.stumps.clear();
+    this.gore?.dispose();
     this.skeleton.dispose();
     releaseBody(this.bodyKey);
     if (this.eyes) {

@@ -34,3 +34,27 @@ export function rng(seed: number): () => number {
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
+
+/** Plain rotation quaternion. */
+export interface Quat {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/** Rotation taking +Y onto the unit vector `v`. */
+export function quatFromUp(v: Vec3): Quat {
+  const w = 1 + v.y;
+  if (w < 1e-6) return { x: 1, y: 0, z: 0, w: 0 };
+  const l = Math.hypot(v.z, v.x, w);
+  return { x: v.z / l, y: 0, z: -v.x / l, w: w / l };
+}
+
+/** `v` rotated by `q`. */
+export function rotate(q: Quat, v: Vec3): Vec3 {
+  // v + 2w(q × v) + 2 q × (q × v)
+  const cx = q.y * v.z - q.z * v.y, cy = q.z * v.x - q.x * v.z, cz = q.x * v.y - q.y * v.x;
+  const dx = q.y * cz - q.z * cy, dy = q.z * cx - q.x * cz, dz = q.x * cy - q.y * cx;
+  return { x: v.x + 2 * (q.w * cx + dx), y: v.y + 2 * (q.w * cy + dy), z: v.z + 2 * (q.w * cz + dz) };
+}

@@ -17,6 +17,9 @@ export interface WeaponReadout {
   bandages: number;
   /** 0..1 while bandaging. */
   healing: number | null;
+  /** Severed arm in hand: hits left, and that as a share of what it started with. */
+  hits?: number | null;
+  wear?: number | null;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -47,6 +50,7 @@ export class HUD {
   private readonly wModel: HTMLElement;
   private readonly wMag: HTMLElement;
   private readonly wReserve: HTMLElement;
+  private readonly wSep: HTMLElement;
   private readonly wMode: HTMLElement;
   private readonly wBar: HTMLElement;
   private readonly wBarFill: HTMLElement;
@@ -89,6 +93,7 @@ export class HUD {
     this.wModel = h('div', { class: 'w-model' });
     this.wMag = h('span', { class: 'w-mag' }, '0');
     this.wReserve = h('span', { class: 'w-reserve' }, '0');
+    this.wSep = h('span', { class: 'w-sep' }, '/');
     this.wMode = h('div', { class: 'w-mode' });
     this.wBarFill = h('i');
     this.wBar = h('div', { class: 'w-bar' }, this.wBarFill);
@@ -114,7 +119,7 @@ export class HUD {
       h('div', { class: 'weapon-panel' },
         h('div', { class: 'w-slots' }, this.slot1, this.slot2),
         this.wModel,
-        h('div', { class: 'w-ammo' }, this.wMag, h('span', { class: 'w-sep' }, '/'), this.wReserve),
+        h('div', { class: 'w-ammo' }, this.wMag, this.wSep, this.wReserve),
         this.wMode,
         this.wBar,
         this.bandages,
@@ -182,14 +187,20 @@ export class HUD {
     if (key === this.lastReadout) return;
     this.lastReadout = key;
     this.wModel.textContent = r.model;
-    this.wMag.textContent = r.mode === 'MELEE' ? '—' : String(r.mag);
-    this.wReserve.textContent = r.mode === 'MELEE' ? '' : String(r.reserve);
-    this.wMag.classList.toggle('low', r.magazine > 0 && r.mag <= Math.max(1, Math.floor(r.magazine * 0.25)));
-    this.wReserve.classList.toggle('low', r.reserve === 0);
-    this.wMode.textContent = r.reload !== null ? 'RELOADING' : r.mode;
-    this.wBar.classList.toggle('show', r.reload !== null || r.healing !== null);
-    this.wBarFill.style.width = `${Math.round((r.reload ?? r.healing ?? 0) * 100)}%`;
+    const club = r.hits != null && r.wear != null;
+    this.wMag.textContent = club ? String(r.hits) : r.mode === 'MELEE' ? '—' : String(r.mag);
+    this.wReserve.textContent = club ? (r.hits === 1 ? 'HIT LEFT' : 'HITS LEFT') : r.mode === 'MELEE' ? '' : String(r.reserve);
+    this.wSep.style.display = club ? 'none' : '';
+    this.wReserve.style.marginLeft = club ? '0.45em' : '';
+    this.wMag.classList.toggle('low', club ? r.hits! <= 2 : r.magazine > 0 && r.mag <= Math.max(1, Math.floor(r.magazine * 0.25)));
+    this.wReserve.classList.toggle('low', !club && r.reserve === 0);
+    this.wMode.textContent = r.reload !== null ? 'RELOADING' : club ? 'MELEE · CLUB' : r.mode;
+    // The bar: reload or bandage progress, or how much is left of the arm.
+    const bar = r.reload ?? r.healing ?? (club && r.healing === null ? r.wear! : null);
+    this.wBar.classList.toggle('show', bar !== null);
+    this.wBarFill.style.width = `${Math.round((bar ?? 0) * 100)}%`;
     this.wBar.classList.toggle('heal', r.healing !== null);
+    this.wBar.classList.toggle('wear', club && r.reload === null && r.healing === null);
     const key1 = settings.value.controls.bindings.weapon1[0];
     const key2 = settings.value.controls.bindings.weapon2[0];
     const keyH = settings.value.controls.bindings.heal[0];

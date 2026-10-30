@@ -203,6 +203,164 @@ export class Effects {
     }
   }
 
+  /** Height of whatever is below a point (where falling blood lands). */
+  private floorBelow(pos: THREE.Vector3, reach = 4): number {
+    const d = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, reach);
+    return d === null ? pos.y - reach : pos.y - d + 0.01;
+  }
+
+  /** Blood droplets in a cone around `dir`. */
+  private droplets(pos: THREE.Vector3, dir: THREE.Vector3, count: number, speed: [number, number], spread: number, floor: number, size: [number, number] = [0.016, 0.036]): void {
+    for (let i = 0; i < count; i++) {
+      const s = rand(speed[0], speed[1]);
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: (dir.x + rand(-spread, spread)) * s, vy: (dir.y + rand(-spread, spread)) * s + rand(0, 0.6), vz: (dir.z + rand(-spread, spread)) * s,
+        life: rand(0.7, 1.3), size: rand(size[0], size[1]),
+        r: BLOOD[0], g: BLOOD[1], b: BLOOD[2], alpha: 0.95, gravity: 1, drag: 0.35, stretch: 0.022, shape: SHAPE.hard,
+        floor, onLand: 1,
+      });
+    }
+  }
+
+  /** Lumps of meat (they land as big splats) and pale splinters of bone. */
+  private chunks(pos: THREE.Vector3, dir: THREE.Vector3, meat: number, bone: number, floor: number): void {
+    for (let i = 0; i < meat; i++) {
+      const s = rand(1.2, 3.6);
+      const dark = rand(0.55, 1);
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: dir.x * s + rand(-1.3, 1.3), vy: rand(0.6, 2.6), vz: dir.z * s + rand(-1.3, 1.3),
+        life: rand(0.8, 1.4), size: rand(0.03, 0.065), r: 0.3 * dark, g: 0.03 * dark, b: 0.025 * dark, alpha: 1,
+        gravity: 1, drag: 0.25, shape: SHAPE.hard, floor, onLand: 2,
+      });
+    }
+    for (let i = 0; i < bone; i++) {
+      const s = rand(1.5, 4);
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: dir.x * s + rand(-1.5, 1.5), vy: rand(0.8, 2.8), vz: dir.z * s + rand(-1.5, 1.5),
+        life: rand(0.7, 1.2), size: rand(0.012, 0.024), r: 0.82, g: 0.77, b: 0.64, alpha: 1,
+        gravity: 1, drag: 0.3, stretch: 0.01, shape: SHAPE.hard, floor,
+      });
+    }
+  }
+
+  /**
+   * An arm torn off at `pos`: a burst of blood and mist both ways from the cut, scraps of meat
+   * and bone, and a splash on whatever is behind and below.
+   */
+  sever(pos: THREE.Vector3, dir: THREE.Vector3, melee: boolean): void {
+    if (this.gore === 'off') {
+      this.emitSoft({ x: pos.x, y: pos.y, z: pos.z, vx: dir.x * 0.6, vy: 0.3, vz: dir.z * 0.6, life: 0.5, size: 0.1, size1: 0.4, r: 0.22, g: 0.2, b: 0.18, alpha: 0.35, drag: 3 });
+      return;
+    }
+    const full = this.gore === 'full' ? 1 : 0.45;
+    const k = this.scale(pos) * full;
+    const floor = this.floorBelow(pos);
+    for (let i = 0; i < (full === 1 ? 4 : 2); i++) {
+      this.emitSoft({
+        x: pos.x + rand(-0.05, 0.05), y: pos.y + rand(-0.05, 0.05), z: pos.z + rand(-0.05, 0.05),
+        vx: dir.x * rand(0.3, 1.2) + rand(-0.3, 0.3), vy: rand(0, 0.5), vz: dir.z * rand(0.3, 1.2) + rand(-0.3, 0.3),
+        life: rand(0.5, 0.9), size: 0.12, size1: rand(0.45, 0.75),
+        r: BLOOD[0] * 1.35, g: BLOOD[1], b: BLOOD[2], alpha: 0.6, drag: 3.5,
+      });
+    }
+    this.droplets(pos, dir, this.n(34, k), [2, 5.5], 0.45, floor);
+    const back = this.tmp.copy(dir).negate();
+    this.droplets(pos, back, this.n(12, k), [1, 2.5], 0.6, floor);
+    this.chunks(pos, dir, this.n(melee ? 7 : 5, k), this.n(melee ? 2 : 4, k), floor);
+    // Splashes: along the blow onto a wall, and down onto the floor.
+    const ray = new THREE.Vector3(dir.x, dir.y * 0.3 - 0.25, dir.z).normalize();
+    const hit = this.physics.raycastHit(pos.x, pos.y, pos.z, ray.x, ray.y, ray.z, 2.8);
+    if (hit) {
+      const at = new THREE.Vector3().copy(pos).addScaledVector(ray, hit.distance);
+      const n = new THREE.Vector3(hit.nx, hit.ny, hit.nz);
+      if (!this.isMoving?.(at, n)) this.decals.add(DECAL.splat, at, n, rand(0.5, 0.8) * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 70, 0, dir);
+    }
+  }
+
+  /** One pulse of blood from a fresh stump (several a second, weakening). */
+  spurt(pos: THREE.Vector3, dir: THREE.Vector3, strength: number): void {
+    if (this.gore === 'off' || strength <= 0) return;
+    const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.4);
+    const floor = this.floorBelow(pos);
+    this.droplets(pos, dir, Math.max(1, this.n(3 + strength * 9, k)), [1 + strength * 1.5, 2 + strength * 3.2], 0.16, floor, [0.014, 0.03]);
+    if (strength > 0.4 && Math.random() < 0.5) {
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z, vx: dir.x * 0.6, vy: dir.y * 0.6, vz: dir.z * 0.6,
+        life: 0.35, size: 0.05, size1: rand(0.18, 0.28), r: BLOOD[0] * 1.3, g: BLOOD[1], b: BLOOD[2], alpha: 0.45, drag: 4,
+      });
+    }
+  }
+
+  /** Blood thrown off something being swung: the drops fly on with its velocity. */
+  fling(pos: THREE.Vector3, vel: THREE.Vector3, count: number): void {
+    if (this.gore === 'off') return;
+    const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.4);
+    // A hitch in the frame rate would make a swing look impossibly fast.
+    const speed = vel.length();
+    const cap = speed > 9 ? 9 / speed : 1;
+    const floor = this.floorBelow(pos);
+    for (let i = 0, n = this.n(count, k); i < n; i++) {
+      const s = rand(0.45, 0.95) * cap;
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: vel.x * s + rand(-0.4, 0.4), vy: vel.y * s + rand(-0.2, 0.5), vz: vel.z * s + rand(-0.4, 0.4),
+        life: rand(0.6, 1.1), size: rand(0.012, 0.03), r: BLOOD[0], g: BLOOD[1], b: BLOOD[2], alpha: 0.95,
+        gravity: 1, drag: 0.35, stretch: 0.024, shape: SHAPE.hard, floor, onLand: 1,
+      });
+    }
+  }
+
+  /** A single drop falling from a wound (they leave a trail on the ground). */
+  drip(pos: THREE.Vector3, vel?: THREE.Vector3): void {
+    if (this.gore === 'off') return;
+    this.emitSoft({
+      x: pos.x, y: pos.y, z: pos.z, vx: (vel?.x ?? 0) * 0.6, vy: (vel?.y ?? 0) * 0.3 - 0.2, vz: (vel?.z ?? 0) * 0.6,
+      life: 1.4, size: rand(0.012, 0.022), r: BLOOD[0], g: BLOOD[1], b: BLOOD[2], alpha: 0.95,
+      gravity: 1, drag: 0.2, stretch: 0.03, shape: SHAPE.hard, floor: this.floorBelow(pos), onLand: 1,
+    });
+  }
+
+  /** A severed arm landing: a wet splat where it hit. */
+  splat(pos: THREE.Vector3, size: number): void {
+    if (this.gore === 'off') return;
+    this.tmp.set(pos.x, this.floorBelow(this.tmp.set(pos.x, pos.y + 0.2, pos.z), 0.6), pos.z);
+    this.decals.add(DECAL.splat, this.tmp, this.up, size * (this.gore === 'full' ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.9, 60);
+  }
+
+  /** Clubbing with a severed arm: the torn end splashes blood along the swing. */
+  clubSplash(pos: THREE.Vector3, dir: THREE.Vector3): void {
+    if (this.gore === 'off') return;
+    const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.4);
+    const floor = this.floorBelow(pos);
+    this.droplets(pos, dir, this.n(16, k), [1.5, 4], 0.55, floor);
+    this.chunks(pos, dir, this.n(2, k), 0, floor);
+    this.emitSoft({
+      x: pos.x, y: pos.y, z: pos.z, vx: dir.x, vy: 0.2, vz: dir.z,
+      life: 0.45, size: 0.1, size1: 0.5, r: BLOOD[0] * 1.3, g: BLOOD[1], b: BLOOD[2], alpha: 0.5, drag: 4,
+    });
+  }
+
+  /** A worn-out arm bursting apart in the hands. */
+  gibs(pos: THREE.Vector3, dir: THREE.Vector3): void {
+    if (this.gore === 'off') {
+      this.emitSoft({ x: pos.x, y: pos.y, z: pos.z, vx: 0, vy: 0.3, vz: 0, life: 0.6, size: 0.12, size1: 0.5, r: 0.22, g: 0.2, b: 0.18, alpha: 0.35, drag: 3 });
+      return;
+    }
+    const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.45);
+    const floor = this.floorBelow(pos);
+    this.chunks(pos, dir, this.n(14, k), this.n(7, k), floor);
+    this.droplets(pos, dir, this.n(30, k), [1.2, 4.5], 0.8, floor);
+    for (let i = 0; i < 3; i++) {
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z, vx: rand(-0.5, 0.5) + dir.x * 0.5, vy: rand(0, 0.5), vz: rand(-0.5, 0.5) + dir.z * 0.5,
+        life: rand(0.5, 0.9), size: 0.12, size1: rand(0.5, 0.8), r: BLOOD[0] * 1.35, g: BLOOD[1], b: BLOOD[2], alpha: 0.6, drag: 3.5,
+      });
+    }
+  }
+
   private landed(kind: number, x: number, y: number, z: number): void {
     if (this.gore === 'off') return;
     // Not every drop leaves a mark.

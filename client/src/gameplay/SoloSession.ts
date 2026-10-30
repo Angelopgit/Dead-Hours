@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import {
   GAME, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, sanitizeAppearance,
-  type Interactable, type MapDefinition, type NavGrid, type SimEvent, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
+  type ArmZone, type Interactable, type LimbCut, type MapDefinition, type NavGrid, type SimEvent, type SimLimb, type SimPlayer, type Vec3,
+  type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
-import type { Input } from '../core/Input';
+import { codeLabel, type Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
 import { settings } from '../core/Settings';
 import { PlayerController } from './PlayerController';
@@ -16,9 +17,11 @@ import { SupplyDrops } from './SupplyDrops';
 import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
+import { clearSeveredCache } from '../characters/Severed';
 import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../weapons/WeaponModels';
 import { Effects } from '../effects/Effects';
 import { ZombieView } from '../zombies/ZombieView';
+import { LimbView } from '../zombies/LimbView';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { Inventory } from '../ui/Inventory';
@@ -51,10 +54,13 @@ export interface SessionOptions {
 }
 
 interface Candidate {
-  kind: 'door' | Interactable['kind'];
+  kind: 'door' | 'limb' | Interactable['kind'];
   pos: THREE.Vector3;
   door?: Door;
   it?: Interactable;
+  limb?: SimLimb;
+  /** How near it counts as (default: straight-line distance from the chest). */
+  near?: number;
 }
 
 /** A dropped weapon tumbling to the floor when its owner dies. */
@@ -83,6 +89,7 @@ export class SoloSession {
   private readonly weapon: PlayerWeapon;
   private readonly effects: Effects;
   private readonly zombies: ZombieView;
+  private readonly limbs: LimbView;
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -128,6 +135,14 @@ export class SoloSession {
   private readonly raycaster = new THREE.Raycaster();
   private readonly mouse = new THREE.Vector2();
   private outbreakAnnounced = false;
+  /** First arm torn off / first picked up: say once what can be done with it. */
+  private limbHinted = false;
+  private gripHinted = false;
+  /** Blood off the arm in hand: seconds to the next drop, and where its torn end was. */
+  private limbDrip = 0;
+  private readonly limbEnd = new THREE.Vector3();
+  private limbEndValid = false;
+  private readonly liftQ = new THREE.Quaternion();
 
   private readonly tmpA = new THREE.Vector3();
   private readonly tmpB = new THREE.Vector3();
@@ -187,8 +202,10 @@ export class SoloSession {
       return hit !== null && this.doorColliders.has(hit.collider.handle);
     };
     this.effects.casings.onBounce = (pos, shell, strength) => audio.casing(pos, shell, strength);
-    this.zombies = new ZombieView(engine.scene, physics, field);
+    this.zombies = new ZombieView(engine.scene, physics, field, this.effects);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
+    this.limbs = new LimbView(engine.scene, field, this.effects);
+    this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     this.drops = new SupplyDrops(engine.scene);
     this.drops.onSmoke = (pos, strong) => this.effects.flareSmoke(pos, strong);
     this.drops.onLand = (pos) => {
@@ -224,6 +241,8 @@ export class SoloSession {
     const g = settings.value.graphics;
     this.effects.setQuality(g.particleQuality, g.gore, settings.value.accessibility.reducedFlashing);
     this.zombies.gore = g.gore !== 'off';
+    this.limbs.gore = g.gore !== 'off';
+    this.weapon.gore = g.gore !== 'off';
   }
 
   /** Under a roof: sky mostly hidden (drives footstep and gunshot acoustics). */
@@ -511,6 +530,8 @@ export class SoloSession {
     // World.
     const renderTime = this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
+    this.limbs.update(live, this.sim, alpha, this.engine.camera, step);
+    this.bleedHeldLimb(live);
     if (running) this.drops.update(live, renderTime);
     this.drops.helicopters(this.helis);
     audio.helicopters(this.phase === 'paused' ? new Map() : this.helis);
@@ -542,13 +563,14 @@ export class SoloSession {
   private adsSight(): Sight | null {
     if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing') return null;
     const a = this.me.arsenal;
-    if (a.action === 'reload' || a.action === 'draw') return null;
+    if (a.action === 'reload' || a.action === 'draw' || a.limb) return null;
     return this.sightFor(a.weapon.id);
   }
 
   private get canAim(): boolean {
-    const action = this.me.arsenal.action;
-    return action !== 'melee' && action !== 'bandage';
+    const a = this.me.arsenal;
+    // Nothing to aim down while both hands are on a severed arm.
+    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb;
   }
 
   private fovTo(dt: number, fov: number): void {
@@ -596,7 +618,9 @@ export class SoloSession {
     }
     if (this.wantMelee) {
       this.wantMelee = false;
-      sim.melee(ME);
+      // The blow goes where the crosshair is (which arm, the head).
+      const o = this.cam.aimOrigin, d = this.cam.aimDir;
+      sim.melee(ME, { origin: { x: o.x, y: o.y, z: o.z }, dir: { x: d.x, y: d.y, z: d.z } });
     }
     if (this.wantHeal) {
       this.wantHeal = false;
@@ -632,13 +656,19 @@ export class SoloSession {
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
     else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
-    else this.hud.setPrompt('interact', 'SELECT WEAPON');
+    else if (best.kind === 'limb') {
+      const l = best.limb!;
+      const what = l.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM';
+      this.hud.setPrompt('interact', `${this.me.arsenal.limb ? 'SWAP FOR' : 'PICK UP'} ${what} · ${l.wear} HIT${l.wear === 1 ? '' : 'S'}`);
+    } else this.hud.setPrompt('interact', 'SELECT WEAPON');
     if (!this.input.pressed('interact')) return;
     if (best.kind === 'door') {
       best.door!.toggle(this.player.position);
       audio.door(best.door!.open);
     } else if (best.kind === 'weapons') {
       this.openTable();
+    } else if (best.kind === 'limb') {
+      this.sim.grabLimb(ME, best.limb!.id);
     } else {
       this.sim.use(ME, best.it!.id);
     }
@@ -656,6 +686,14 @@ export class SoloSession {
       if (it.supply <= 0) continue;
       cands.push({ kind: it.kind, pos: new THREE.Vector3(it.pos.x, it.pos.y, it.pos.z), it });
     }
+    // Severed arms within reach (not mid-swing or mid-bandage, when the hands are busy).
+    const busy = this.me.arsenal.action === 'melee' || this.me.arsenal.action === 'bandage';
+    if (!busy) {
+      for (const l of this.sim.limbsInReach(ME)) {
+        // Lying on the floor they are never close to the chest: count how near they are underfoot.
+        cands.push({ kind: 'limb', pos: new THREE.Vector3(l.pos.x, l.pos.y, l.pos.z), limb: l, near: Math.hypot(l.pos.x - p.x, l.pos.z - p.z) });
+      }
+    }
     if (!cands.length) return null;
     const camPos = this.engine.camera.position;
     const fwd = this.cam.aimDir;
@@ -665,7 +703,7 @@ export class SoloSession {
       const toC = this.tmpB.subVectors(c.pos, camPos);
       const dist = toC.length();
       const angle = Math.acos(THREE.MathUtils.clamp(toC.divideScalar(dist || 1).dot(fwd), -1, 1));
-      const near = c.pos.distanceTo(eye);
+      const near = c.near ?? c.pos.distanceTo(eye);
       // What the crosshair is on wins; something right beside you still counts.
       if (angle > 0.75 && near > 1.0) continue;
       const score = -angle * 3 - near * 0.4;
@@ -722,7 +760,16 @@ export class SoloSession {
         const exit = e.exit ? { pos: new THREE.Vector3(e.exit.pos.x, e.exit.pos.y, e.exit.pos.z), normal: new THREE.Vector3(e.exit.normal.x, e.exit.normal.y, e.exit.normal.z) } : null;
         this.effects.blood(A, B, e.damage, { exit, killed: e.killed, head: e.zone === 'head', melee: e.melee });
         this.zombies.hit(e.zombie, e.zone, B, e.damage, e.melee);
-        audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
+        if (e.limb !== undefined) {
+          // Clubbed with a severed arm: a wet, heavy thud, blood flung off its torn end.
+          audio.clubHit(A, Math.min(1, e.damage / 50));
+          this.effects.clubSplash(A, B);
+          const held = e.by === ME ? this.weapon.heldLimb : null;
+          if (held) this.effects.clubSplash(held.cutEnd(C), B);
+          if (e.by === ME) this.cam.addTrauma(0.1 + Math.min(0.1, e.damage / 400));
+        } else {
+          audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
+        }
         if (e.by === ME) {
           const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
           this.hud.hitMarker(kind);
@@ -731,6 +778,38 @@ export class SoloSession {
         if (!e.killed && Math.random() < 0.4) audio.zombieHurt(this.zombies.headOf(e.zombie, C) ?? A, this.zombies.pitchOf(e.zombie));
         break;
       }
+      case 'limbSevered':
+        this.onSevered(e.zombie, e.arm, e.cut, v3(e.pos, A), v3(e.dir, B), e.melee, e.by === ME);
+        break;
+      case 'limbGrabbed':
+        if (e.player !== ME) break;
+        // Lifted from where it lay.
+        if (this.limbs.liftPose(e.limb, A, this.liftQ)) this.weapon.liftFrom(e.limb, A, this.liftQ);
+        audio.limbGrab(this.handPos());
+        this.limbEndValid = false;
+        if (!this.gripHinted) {
+          this.gripHinted = true;
+          const b = settings.value.controls.bindings;
+          const key = (codes: string[]) => (codes[0] ? codeLabel(codes[0]) : '?');
+          this.hud.notify('BEAT THEM WITH IT', `${key(b.fire)} OR ${key(b.melee)} SWING · ${key(b.weapon1)} / ${key(b.weapon2)} DROP IT FOR A GUN`, 3.2);
+        }
+        break;
+      case 'limbDropped':
+        break;
+      case 'limbBroke': {
+        v3(e.pos, A);
+        v3(e.dir, B);
+        this.effects.gibs(A, B);
+        audio.limbBreak(A);
+        if (e.player === ME) {
+          this.hud.feedLine('THE ARM CAME APART');
+          this.cam.addTrauma(0.12);
+        }
+        break;
+      }
+      case 'limbGone':
+        this.limbs.gone(e.limb);
+        break;
       case 'zombieDied': {
         const head = this.zombies.headOf(e.zombie, C);
         if (head) audio.zombieDeath(head, this.zombies.pitchOf(e.zombie));
@@ -788,9 +867,10 @@ export class SoloSession {
       case 'melee':
         if (e.player !== ME) break;
         if (e.stage === 'swing') {
-          audio.meleeSwing(this.handPos());
+          if (e.limb) audio.heavySwing(this.handPos());
+          else audio.meleeSwing(this.handPos());
           this.player.faceCamera(0.6);
-          this.player.blockSprint(0.6);
+          this.player.blockSprint(e.limb ? 0.85 : 0.6);
         }
         break;
       case 'bandage':
@@ -832,6 +912,49 @@ export class SoloSession {
       default:
         break;
     }
+  }
+
+  /**
+   * An arm torn off: the stump shows, blood bursts out of it both ways, the arm goes flying
+   * (drawn from the simulation as it tumbles).
+   */
+  private onSevered(zombie: number, arm: ArmZone, cut: LimbCut, at: THREE.Vector3, dir: THREE.Vector3, melee: boolean, mine: boolean): void {
+    // The torn end as drawn, where there is one on screen.
+    this.zombies.severed(zombie, arm, cut, at, this.tmpC);
+    this.effects.sever(at, dir, melee);
+    audio.sever(at, melee);
+    if (!mine) return;
+    this.cam.addTrauma(melee ? 0.12 : 0.06);
+    this.hud.feedLine(cut === 'shoulder' ? 'ARM TORN OFF' : 'FOREARM TORN OFF');
+    if (!this.limbHinted) {
+      this.limbHinted = true;
+      this.hud.notify('ARM TORN OFF', 'PICK IT UP AND BEAT THEM WITH IT', 2.8);
+    }
+  }
+
+  /** The arm in hand bleeds from its torn end, and flings blood off it when swung. */
+  private bleedHeldLimb(dt: number): void {
+    const held = this.phase !== 'dead' ? this.weapon.heldLimb : null;
+    if (!held || dt <= 0) {
+      this.limbEndValid = false;
+      return;
+    }
+    const a = this.me.arsenal;
+    const end = held.cutEnd(this.tmpA, this.tmpB);
+    const vel = this.tmpC.subVectors(end, this.limbEnd).divideScalar(dt);
+    const moving = this.limbEndValid && vel.lengthSq() > 9;
+    this.limbEnd.copy(end);
+    this.limbEndValid = true;
+    const l = a.limb ? this.sim.limb(a.limb.id) : undefined;
+    const fresh = l ? THREE.MathUtils.clamp(1 - (this.sim.time - l.bornAt) / 60, 0.2, 1) : 0.3;
+    if (a.action === 'melee' && moving) {
+      this.effects.fling(end, vel, 1.2 + fresh * 1.5);
+      return;
+    }
+    this.limbDrip -= dt;
+    if (this.limbDrip > 0) return;
+    this.limbDrip = 0.14 + (1 - fresh) * 0.9 + Math.random() * 0.25;
+    this.effects.drip(end.addScaledVector(this.tmpB, 0.02), this.player.velocity);
   }
 
   private ejectCasing(shell: boolean): void {
@@ -990,8 +1113,9 @@ export class SoloSession {
     const p = this.player;
 
     hud.setHealth(me.health, PLAYER.maxHealth);
+    const limb = a.limb && !a.limb.broken ? a.limb : null;
     hud.weapon({
-      model: def.model,
+      model: limb ? (limb.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM') : def.model,
       mag: a.weapon.mag,
       magazine: def.magazine,
       reserve: a.weapon.reserve,
@@ -1002,6 +1126,8 @@ export class SoloSession {
       secondaryModel: WEAPONS[a.secondary.id].model,
       bandages: me.bandages,
       healing: a.action === 'bandage' ? a.progress : null,
+      hits: limb ? limb.wear : null,
+      wear: limb ? limb.wear / limb.maxWear : null,
     });
     const s = this.sim;
     hud.setTimer(this.timerText(), s.phase === 'preparation' && s.phaseTime <= 10);
@@ -1012,7 +1138,8 @@ export class SoloSession {
     const total = (w: { mag: number; reserve: number }) => w.mag + w.reserve;
     const allEmpty = total(a.primary) === 0 && total(a.secondary) === 0;
     const critical = total(a.weapon) <= def.magazine && def.mode !== 'MELEE';
-    hud.setWarning(allEmpty ? 'OUT OF AMMUNITION · USE YOUR MACHETE' : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
+    // (Not while the hands are full of something else to fight with.)
+    hud.setWarning(limb ? '' : allEmpty ? 'OUT OF AMMUNITION · USE YOUR MACHETE' : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
     // Dynamic crosshair: gap follows the real spread cone.
     const hv = Math.hypot(p.velocity.x, p.velocity.z);
@@ -1101,11 +1228,13 @@ export class SoloSession {
     this.pause.hide();
     this.sim.dispose();
     this.zombies.dispose();
+    this.limbs.dispose();
     this.drops.dispose();
     audio.helicopters(new Map());
     this.effects.dispose();
     this.rack?.dispose();
     this.weapon.dispose();
+    clearSeveredCache();
     if (this.dropped) {
       this.dropped.model.dispose();
       this.dropped.model.root.removeFromParent();

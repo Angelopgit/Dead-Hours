@@ -1,4 +1,6 @@
 import { COMBAT, WEAPONS, type WeaponDef, type WeaponId, type WeaponSlot } from '../config/weapons';
+import { LIMBS, type ArmZone, type LimbCut } from '../config/limbs';
+import type { ZombieKind } from '../config/zombies';
 import { clamp } from './math';
 
 export interface WeaponState {
@@ -11,6 +13,22 @@ export type ArsenalAction = 'idle' | 'draw' | 'reload' | 'melee' | 'bandage';
 
 /** What a player is doing with their hands that the arsenal finished or advanced this step. */
 export type ArsenalTick = 'drawn' | 'shell' | 'reloaded' | 'meleeHit' | 'meleeDone' | 'bandaged';
+
+/** A severed arm in a survivor's hands. */
+export interface HeldLimb {
+  id: number;
+  arm: ArmZone;
+  cut: LimbCut;
+  /** The zombie it came from (renderers dress it the same). */
+  kind: ZombieKind;
+  look: number;
+  scale: number;
+  /** Hits left before it falls apart, out of `maxWear`. */
+  wear: number;
+  maxWear: number;
+  /** Worn through mid-swing: gone from the hands, the swing still finishing. */
+  broken: boolean;
+}
 
 export interface MotionForSpread {
   speed: number;
@@ -44,6 +62,10 @@ export class Arsenal {
   aim = 0;
   private meleeHitPending = false;
   private interruptedSlot: 'primary' | 'secondary' | null = null;
+  /** A severed arm held as a club: while it is, the guns stay slung and every swing uses it. */
+  limb: HeldLimb | null = null;
+  /** What the current (or last) melee swing is made with. */
+  meleeWith: 'machete' | 'limb' = 'machete';
 
   constructor(primary: WeaponId, secondary: WeaponId) {
     this.primary = fresh(WEAPONS[primary]?.slot === 'primary' ? primary : 'ar');
@@ -75,6 +97,7 @@ export class Arsenal {
 
   /** Cone half-angle in degrees for the next round. */
   spread(m: MotionForSpread): number {
+    if (this.limb) return 0;
     const d = this.def;
     const base = d.hipSpread + (d.aimSpread - d.hipSpread) * this.aim;
     const move = 1 + Math.min(1, m.speed / 6.2) * (this.aim > 0.5 ? 0.7 : 1.3);
@@ -85,6 +108,7 @@ export class Arsenal {
 
   /** Whether a round can be fired now; 'empty' means the trigger clicks dry. */
   fireState(): 'ok' | 'empty' | 'busy' {
+    if (this.limb) return 'busy';
     if (this.action === 'draw' || this.action === 'melee' || this.action === 'bandage') return 'busy';
     if (this.action === 'reload') {
       // Shell-by-shell reloads can be interrupted to fire what is loaded.
@@ -109,7 +133,7 @@ export class Arsenal {
   }
 
   startReload(): boolean {
-    if (this.action !== 'idle') return false;
+    if (this.action !== 'idle' || this.limb) return false;
     const d = this.def;
     const w = this.weapon;
     if (w.mag >= d.magazine || w.reserve <= 0) return false;
@@ -140,14 +164,45 @@ export class Arsenal {
     return true;
   }
 
+  /** Swings the machete, or the arm when one is in hand (not while still getting a grip on it). */
   startMelee(): boolean {
     if (this.action === 'melee' || this.action === 'bandage') return false;
+    if (this.limb && (this.action === 'draw' || this.limb.broken)) return false;
     this.cancelReload();
-    this.interruptedSlot = this.action === 'draw' ? this.active : null;
+    this.meleeWith = this.limb ? 'limb' : 'machete';
+    this.interruptedSlot = this.action === 'draw' && !this.limb ? this.active : null;
     this.action = 'melee';
-    this.actionTotal = this.actionT = COMBAT.meleeDuration;
+    this.actionTotal = this.actionT = this.limb ? LIMBS.duration : COMBAT.meleeDuration;
     this.meleeHitPending = true;
     return true;
+  }
+
+  /** Seconds into a swing at which the blow lands. */
+  get meleeWindup(): number {
+    return this.meleeWith === 'limb' ? LIMBS.windup : COMBAT.meleeWindup;
+  }
+
+  /** Takes a severed arm in hand: the gun is slung while the grip is taken. */
+  grabLimb(limb: HeldLimb): boolean {
+    if (this.action === 'melee' || this.action === 'bandage') return false;
+    this.cancelReload();
+    this.limb = limb;
+    this.action = 'draw';
+    this.actionTotal = this.actionT = LIMBS.grab;
+    this.cooldown = Math.max(this.cooldown, 0);
+    return true;
+  }
+
+  /** Lets go of the arm and brings the active gun back up. Returns what was held. */
+  releaseLimb(): HeldLimb | null {
+    const l = this.limb;
+    if (!l) return null;
+    this.limb = null;
+    this.interruptedSlot = null;
+    this.meleeHitPending = false;
+    this.action = 'draw';
+    this.actionTotal = this.actionT = this.def.draw;
+    return l;
   }
 
   startBandage(): boolean {
@@ -193,13 +248,13 @@ export class Arsenal {
     this.cooldown -= dt;
     if (this.cooldown < -0.05) this.cooldown = -0.05;
     this.bloom = Math.max(0, this.bloom - dt * (this.cooldown > -0.04 ? 0.9 : 2.4));
-    const canAim = aiming && this.action !== 'melee' && this.action !== 'bandage' && this.action !== 'draw';
+    const canAim = aiming && !this.limb && this.action !== 'melee' && this.action !== 'bandage' && this.action !== 'draw';
     this.aim = clamp(this.aim + (canAim ? dt : -dt) / COMBAT.aimTime, 0, 1);
     if (this.action === 'idle') return;
     this.actionT -= dt;
     if (this.action === 'melee') {
       const elapsed = this.actionTotal - this.actionT;
-      if (this.meleeHitPending && elapsed >= COMBAT.meleeWindup) {
+      if (this.meleeHitPending && elapsed >= this.meleeWindup) {
         this.meleeHitPending = false;
         out.push('meleeHit');
       }

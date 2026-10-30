@@ -5,14 +5,15 @@ import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
 import { SPAWNING, type ZombieKind } from '../config/zombies';
 import { SUPPLY_DROPS } from '../config/drops';
+import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
 import type { MapDefinition } from '../types/world';
-import { Arsenal, type ArsenalTick } from './Arsenal';
+import { Arsenal, type ArsenalTick, type HeldLimb } from './Arsenal';
 import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
-import { zombieZones, rayZones, type ZoneShape } from './hitzones';
+import { rayZones, along, type ZoneShape } from './hitzones';
 import { Zombie } from './Zombie';
-import { clamp, dist2D, rng, v3, type Vec3 } from './math';
+import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 
 /** Movement state of a player, fed from the character controller every step. */
@@ -37,6 +38,10 @@ export interface PlayerStats {
   damageDealt: number;
   suppliesCollected: number;
   damageTaken: number;
+  /** Arms shot or cut off zombies. */
+  limbsSevered: number;
+  /** Zombies beaten to death with a severed arm. */
+  limbKills: number;
 }
 
 export class SimPlayer {
@@ -45,7 +50,9 @@ export class SimPlayer {
   readonly arsenal: Arsenal;
   bandages: number = COMBAT.startBandages;
   readonly motion: PlayerMotion;
-  readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0 };
+  readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0 };
+  /** The crosshair ray the last melee swing was aimed with (decides what it lands on). */
+  meleeAim: { origin: Vec3; dir: Vec3 } | null = null;
   footstepT = 0;
   diedAt = 0;
   /** Wire form of the survivor's look (encodeAppearance), for the clients that render them. */
@@ -102,6 +109,26 @@ export interface SupplyDrop {
   /** Interactable index once landed, else -1. */
   interactable: number;
   body: RAPIER.RigidBody | null;
+}
+
+/**
+ * A severed arm: tumbling and lying about as a physics body, or in a survivor's hands
+ * (`holder`, no body). Its pose is the capsule's centre, with local +Y toward the cut end.
+ */
+export interface SimLimb extends HeldLimb {
+  holder: string | null;
+  body: RAPIER.RigidBody | null;
+  pos: Vec3;
+  rot: Quat;
+  /** Pose at the previous step (render interpolation). */
+  prevPos: Vec3;
+  prevRot: Quat;
+  /** Cut end to fingertips, and thickness. */
+  length: number;
+  radius: number;
+  /** When it came off, and when it was last let go of (lying-around timer). */
+  bornAt: number;
+  looseAt: number;
 }
 
 export interface SimOptions {
@@ -172,6 +199,9 @@ export class Simulation {
   private nextDropAt: number = SUPPLY_DROPS.firstAt;
   /** Things a drop must not come down on: tree crowns, lamp arms, poles, canopies. */
   private readonly overhead: { x: number; z: number; r: number }[] = [];
+  /** Severed arms, loose or held. */
+  readonly limbs: SimLimb[] = [];
+  private nextLimbId = 1;
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -231,6 +261,8 @@ export class Simulation {
   }
 
   removePlayer(id: string): void {
+    const p = this.players.get(id);
+    if (p) this.dropLimb(p, false);
     this.players.delete(id);
   }
 
@@ -300,6 +332,7 @@ export class Simulation {
       p.alive = false;
       p.diedAt = this.time;
       p.arsenal.cancelReload();
+      this.dropLimb(p, false);
       this.emit({ type: 'playerDied', player: p.id });
       if (![...this.players.values()].some((q) => q.alive)) {
         this.phase = 'over';
@@ -318,6 +351,8 @@ export class Simulation {
     const p = this.players.get(id);
     if (!p || !p.alive || this.phase === 'over') return 'busy';
     const a = p.arsenal;
+    // With an arm in hand the trigger finger swings it instead.
+    if (a.limb) return pressed && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
     const def = a.def;
     if (!def.auto && !pressed) return 'busy';
     const state = a.fireState();
@@ -356,7 +391,7 @@ export class Simulation {
     const maxD = def.range * COMBAT.maxRangeFactor;
     const world = this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
     const worldD = world ? world.distance : maxD;
-    const hits: { z: Zombie; zone: HitZone; t: number }[] = [];
+    const hits: { z: Zombie; zone: HitZone; t: number; along: number }[] = [];
     for (const z of this.zombies) {
       if (!z.alive) continue;
       // Cheap reject: distance from the zombie's middle to the ray.
@@ -365,8 +400,8 @@ export class Simulation {
       if (along < -1 || along > worldD + 1) continue;
       const px = cx - d.x * along, py = cy - d.y * along, pz = cz - d.z * along;
       if (px * px + py * py + pz * pz > 2.6) continue;
-      const h = rayZones(o, d, zombieZones(z.pos, z.facing, z.scale, z.state === 'down' ? 'down' : 'standing', this.zones, z.def.girth), worldD);
-      if (h) hits.push({ z, zone: h.zone, t: h.t });
+      const h = rayZones(o, d, z.zones(this.zones), worldD);
+      if (h) hits.push({ z, zone: h.zone, t: h.t, along: h.along });
     }
     hits.sort((a, b) => a.t - b.t);
 
@@ -388,7 +423,7 @@ export class Simulation {
     for (const h of hits) {
       const pos = { x: o.x + d.x * h.t, y: o.y + d.y * h.t, z: o.z + d.z * h.t };
       const dmg = def.damage * ZONE_MULTIPLIER[h.zone] * FALLOFF(def, h.t) * Math.pow(0.6, pierced);
-      this.hitZombie(p, h.z, dmg, h.zone, pos, d, false, def.pellets > 1 ? 0.5 : 1);
+      this.hitZombie(p, h.z, dmg, h.zone, pos, d, false, def.pellets > 1 ? 0.5 : 1, { along: h.along, armTally: dmg });
       pierced++;
       if (pierced > def.penetration) return { end: pos, hit: 'zombie' };
     }
@@ -400,19 +435,34 @@ export class Simulation {
     return { end: { x: o.x + d.x * maxD, y: o.y + d.y * maxD, z: o.z + d.z * maxD }, hit: 'none' };
   }
 
-  private hitZombie(p: SimPlayer, z: Zombie, damage: number, zone: HitZone, pos: Vec3, dir: Vec3, melee: boolean, force: number): void {
+  /**
+   * Applies a hit. `along` is where on the zone it landed (arms: 0 shoulder .. 1 hand) and
+   * `armTally` how much it counts toward taking an arm off; `limb` is the arm it was clubbed with.
+   */
+  private hitZombie(
+    p: SimPlayer, z: Zombie, damage: number, zone: HitZone, pos: Vec3, dir: Vec3, melee: boolean, force: number,
+    opts: { along?: number; armTally?: number; limb?: number; knock?: number } = {},
+  ): void {
     const before = z.health;
-    const killed = z.takeHit(damage, zone, dir, p, melee);
+    const killed = z.takeHit(damage, zone, dir, p, melee, opts.knock);
     const dealt = Math.min(before, damage);
     p.stats.damageDealt += dealt;
     // Blood sprays out the far side onto whatever is behind.
     let exit: { pos: Vec3; normal: Vec3 } | null = null;
     const back = this.physics.raycastHit(pos.x, pos.y, pos.z, dir.x, dir.y, dir.z, 2.6);
     if (back) exit = { pos: { x: pos.x + dir.x * back.distance, y: pos.y + dir.y * back.distance, z: pos.z + dir.z * back.distance }, normal: { x: back.nx, y: back.ny, z: back.nz } };
-    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit });
+    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}) });
+    // Enough punishment and the arm comes off: near the shoulder the whole arm, lower down the forearm.
+    if ((zone === 'armL' || zone === 'armR') && z.canLose(zone)) {
+      z.armDamage[zone] += opts.armTally ?? damage;
+      if (z.armDamage[zone] >= LIMBS.armHealth[z.kind]) {
+        this.severArm(p, z, zone, (opts.along ?? 0) < LIMBS.elbowAt ? 'shoulder' : 'elbow', dir, melee, damage, killed);
+      }
+    }
     if (killed) {
       p.stats.kills++;
       if (zone === 'head') p.stats.headshots++;
+      if (opts.limb !== undefined) p.stats.limbKills++;
       this.emit({ type: 'zombieDied', zombie: z.id, zone, dir: { ...dir }, force: (melee ? 1.2 : 0.6 + Math.min(1.4, damage / 60)) * force, by: p.id });
     }
   }
@@ -428,6 +478,11 @@ export class Simulation {
   switchWeapon(id: string, slot: 'primary' | 'secondary'): boolean {
     const p = this.players.get(id);
     if (!p || !p.alive) return false;
+    // Reaching for a gun means tossing the arm aside.
+    if (p.arsenal.limb) {
+      if (p.arsenal.action === 'melee') return false;
+      this.dropLimb(p, true);
+    }
     const reloading = p.arsenal.action === 'reload';
     const weaponBefore = p.arsenal.weapon.id;
     if (!p.arsenal.switchTo(slot)) return false;
@@ -436,19 +491,33 @@ export class Simulation {
     return true;
   }
 
-  melee(id: string): boolean {
+  /**
+   * Swings the machete, or the severed arm in hand. `aim` is the crosshair ray (checked like a
+   * shot's): where it crosses the zombie decides what the blow lands on.
+   */
+  melee(id: string, aim?: { origin: Vec3; dir: Vec3 }): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive) return false;
+    if (!p || !p.alive || this.phase === 'over') return false;
     const reloading = p.arsenal.action === 'reload';
     if (!p.arsenal.startMelee()) return false;
+    p.meleeAim = null;
+    if (aim) {
+      const dl = Math.hypot(aim.dir.x, aim.dir.y, aim.dir.z);
+      const eye = p.eye;
+      const near = Math.hypot(aim.origin.x - eye.x, aim.origin.y - eye.y, aim.origin.z - eye.z) <= COMBAT.maxOriginOffset;
+      if (dl > 0.5 && near) p.meleeAim = { origin: { ...aim.origin }, dir: { x: aim.dir.x / dl, y: aim.dir.y / dl, z: aim.dir.z / dl } };
+    }
     if (reloading) this.emit({ type: 'reload', player: id, weapon: p.arsenal.weapon.id, stage: 'cancel' });
-    this.emit({ type: 'melee', player: id, stage: 'swing' });
+    this.emit({ type: 'melee', player: id, stage: 'swing', limb: p.arsenal.meleeWith === 'limb' });
     return true;
   }
 
   bandage(id: string): boolean {
     const p = this.players.get(id);
     if (!p || !p.alive || p.bandages <= 0 || p.health >= PLAYER.maxHealth) return false;
+    if (p.arsenal.action === 'melee' || p.arsenal.action === 'bandage') return false;
+    // Both hands are needed for the dressing: the arm goes down at your feet.
+    this.dropLimb(p, false);
     if (!p.arsenal.startBandage()) return false;
     this.emit({ type: 'bandage', player: id, stage: 'start' });
     return true;
@@ -539,11 +608,238 @@ export class Simulation {
     const p = this.players.get(id);
     const it = this.reachable(id).find((x) => x.kind === 'weapons');
     if (!p || !it || !PRIMARY_WEAPONS.includes(weapon)) return false;
-    if (p.arsenal.primary.id === weapon) return false;
+    if (p.arsenal.primary.id === weapon || p.arsenal.action === 'melee') return false;
+    this.dropLimb(p, false);
     p.arsenal.replacePrimary(weapon);
     this.emit({ type: 'pickup', player: id, item: 'weapon', amount: 1, source: it.id, weapon });
     if (p.arsenal.active === 'primary') this.emit({ type: 'draw', player: id, slot: 'primary', weapon });
     return true;
+  }
+
+  // ---------------------------------------------------------------- severed arms
+
+  /** Takes the arm off a zombie and sends it flying. */
+  private severArm(p: SimPlayer, z: Zombie, arm: ArmZone, cut: LimbCut, dir: Vec3, melee: boolean, damage: number, killed: boolean): void {
+    // Where the arm is now: shoulder to hand, cut at the shoulder or the elbow.
+    const shape = z.zones(this.zones).find((s) => s.zone === arm);
+    if (!shape) return;
+    const start = cut === 'shoulder' ? shape.a : along(shape.a, shape.b, LIMBS.elbowAt);
+    let ux = shape.b.x - shape.a.x, uy = shape.b.y - shape.a.y, uz = shape.b.z - shape.a.z;
+    const ul = Math.hypot(ux, uy, uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    z.loseArm(arm, cut, dir);
+    const length = LIMBS.length[cut] * z.scale;
+    const radius = LIMBS.radius * z.scale * Math.sqrt(z.def.girth);
+    let center = { x: start.x + ux * length * 0.5, y: start.y + uy * length * 0.5, z: start.z + uz * length * 0.5 };
+    // Never start inside a wall the zombie was leaning on.
+    const c = z.chest;
+    const tx = center.x - c.x, ty = center.y - c.y, tz = center.z - c.z;
+    const tl = Math.hypot(tx, ty, tz);
+    if (tl > 1e-3) {
+      const hit = this.physics.raycast(c.x, c.y, c.z, tx / tl, ty / tl, tz / tl, tl + radius);
+      if (hit !== null) {
+        const k = Math.max(0, hit - radius - 0.03);
+        center = { x: c.x + (tx / tl) * k, y: c.y + (ty / tl) * k, z: c.z + (tz / tl) * k };
+      }
+    }
+    // Blown or hacked away from the blow, spinning end over end.
+    const hl = Math.hypot(dir.x, dir.z) || 1;
+    const speed = melee ? 3 : 1.6 + Math.min(3, damage / 14);
+    const vel = {
+      x: z.vel.x + (dir.x / hl) * speed + (this.rand() - 0.5) * 1.2,
+      y: 1.4 + this.rand() * 1.4,
+      z: z.vel.z + (dir.z / hl) * speed + (this.rand() - 0.5) * 1.2,
+    };
+    const spin = 7 + this.rand() * 8;
+    // Spin about an axis across the arm.
+    let sx = uy * (dir.z / hl) - uz * 0, sy = uz * (dir.x / hl) - ux * (dir.z / hl), sz = ux * 0 - uy * (dir.x / hl);
+    const sl = Math.hypot(sx, sy, sz);
+    if (sl < 1e-3) { sx = 0; sy = 1; sz = 0; } else { sx /= sl; sy /= sl; sz /= sl; }
+    const club = limbClub(cut, z.kind);
+    const rot = quatFromUp({ x: -ux, y: -uy, z: -uz });
+    const limb: SimLimb = {
+      id: this.nextLimbId++, arm, cut, kind: z.kind, look: z.look, scale: z.scale,
+      wear: club.wear, maxWear: club.wear, broken: false,
+      holder: null, body: null, pos: center, rot, prevPos: { ...center }, prevRot: { ...rot },
+      length, radius, bornAt: this.time, looseAt: this.time,
+    };
+    limb.body = this.limbBody(limb, vel, { x: sx * spin, y: sy * spin, z: sz * spin });
+    this.limbs.push(limb);
+    p.stats.limbsSevered++;
+    this.emit({ type: 'limbSevered', zombie: z.id, limb: limb.id, arm, cut, pos: { ...start }, dir: { ...dir }, by: p.id, melee, killed });
+    this.trimLimbs();
+  }
+
+  /** A tumbling physics body for a loose arm at its current pose. */
+  private limbBody(l: SimLimb, vel: Vec3, spin: Vec3): RAPIER.RigidBody {
+    const w = this.physics.world;
+    const body = w.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(l.pos.x, l.pos.y, l.pos.z)
+        .setRotation(l.rot)
+        .setLinvel(vel.x, vel.y, vel.z)
+        .setAngvel(spin)
+        .setLinearDamping(0.15)
+        .setAngularDamping(0.8)
+        .setCcdEnabled(true),
+    );
+    const half = Math.max(0.02, l.length / 2 - l.radius);
+    const volume = Math.PI * l.radius * l.radius * (2 * half) + (4 / 3) * Math.PI * l.radius ** 3;
+    const mass = LIMBS.mass[l.cut] * l.scale ** 3;
+    w.createCollider(
+      RAPIER.ColliderDesc.capsule(half, l.radius)
+        .setDensity(mass / volume)
+        .setFriction(0.9)
+        .setRestitution(0.12)
+        .setCollisionGroups(groups(GROUP.debris, GROUP.static | GROUP.dynamic | GROUP.debris)),
+      body,
+    );
+    return body;
+  }
+
+  /** Clears the oldest loose arms beyond the limit. */
+  private trimLimbs(): void {
+    let loose = this.limbs.filter((l) => !l.holder);
+    while (loose.length > LIMBS.maxLoose) {
+      const oldest = loose.reduce((a, b) => (b.looseAt < a.looseAt ? b : a));
+      this.removeLimb(oldest);
+      loose = loose.filter((l) => l !== oldest);
+    }
+  }
+
+  private removeLimb(l: SimLimb): void {
+    if (l.body) this.physics.world.removeRigidBody(l.body);
+    l.body = null;
+    const i = this.limbs.indexOf(l);
+    if (i >= 0) this.limbs.splice(i, 1);
+    this.emit({ type: 'limbGone', limb: l.id });
+  }
+
+  limb(id: number): SimLimb | undefined {
+    return this.limbs.find((l) => l.id === id);
+  }
+
+  /** Whether a loose arm is within a player's grab (any point along it counts). */
+  limbInReach(id: string, l: SimLimb): boolean {
+    const p = this.players.get(id);
+    if (!p || !p.alive || l.holder || !l.body) return false;
+    const m = p.motion.pos;
+    const dy = l.pos.y - m.y;
+    if (dy < -0.6 || dy > LIMBS.reachHeight) return false;
+    const axis = rotate(l.rot, { x: 0, y: l.length / 2, z: 0 });
+    const ax = l.pos.x - axis.x, az = l.pos.z - axis.z, bx = l.pos.x + axis.x, bz = l.pos.z + axis.z;
+    const vx = bx - ax, vz = bz - az;
+    const ll = vx * vx + vz * vz;
+    const t = ll > 1e-6 ? clamp(((m.x - ax) * vx + (m.z - az) * vz) / ll, 0, 1) : 0.5;
+    return Math.hypot(m.x - (ax + vx * t), m.z - (az + vz * t)) <= LIMBS.reach;
+  }
+
+  /** Loose arms a player can grab, nearest first. */
+  limbsInReach(id: string): SimLimb[] {
+    const p = this.players.get(id);
+    if (!p || !p.alive) return [];
+    const m = p.motion.pos;
+    return this.limbs.filter((l) => this.limbInReach(id, l)).sort((a, b) => dist2D(a.pos, m) - dist2D(b.pos, m));
+  }
+
+  /** Picks up a severed arm to fight with (swapping out one already in hand). */
+  grabLimb(id: string, limbId: number): boolean {
+    const p = this.players.get(id);
+    const l = this.limb(limbId);
+    if (!p || !p.alive || !l || !this.limbInReach(id, l)) return false;
+    const a = p.arsenal;
+    if (a.action === 'melee' || a.action === 'bandage') return false;
+    const reloading = a.action === 'reload';
+    // Claim it before letting go of the old one (which could otherwise push it over the limit).
+    if (l.body) this.physics.world.removeRigidBody(l.body);
+    l.body = null;
+    l.holder = id;
+    this.dropLimb(p, false);
+    a.grabLimb(l);
+    if (reloading) this.emit({ type: 'reload', player: id, weapon: a.weapon.id, stage: 'cancel' });
+    this.emit({ type: 'limbGrabbed', player: id, limb: l.id });
+    return true;
+  }
+
+  /**
+   * Lets go of the arm in a player's hands: dropped at their feet, or `thrown` aside to free the
+   * hands for a gun. A worn-through arm just goes.
+   */
+  dropLimb(p: SimPlayer, thrown: boolean): void {
+    const a = p.arsenal;
+    const l = a.limb as SimLimb | null;
+    if (!l) return;
+    a.releaseLimb();
+    if (p.alive) this.emit({ type: 'draw', player: p.id, slot: a.active, weapon: a.weapon.id });
+    const i = this.limbs.indexOf(l);
+    if (l.broken || i < 0) return;
+    const m = p.motion;
+    const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
+    const rx = Math.cos(m.yaw), rz = -Math.sin(m.yaw);
+    // From the right hand, kept on this side of any wall.
+    const c = p.chest;
+    let to = { x: m.pos.x + fx * 0.45 + rx * 0.25, y: m.pos.y + (p.alive ? 1.05 : 0.6), z: m.pos.z + fz * 0.45 + rz * 0.25 };
+    const tx = to.x - c.x, ty = to.y - c.y, tz = to.z - c.z;
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    const hit = this.physics.raycast(c.x, c.y, c.z, tx / tl, ty / tl, tz / tl, tl + l.radius);
+    if (hit !== null) {
+      const k = Math.max(0, hit - l.radius - 0.03);
+      to = { x: c.x + (tx / tl) * k, y: c.y + (ty / tl) * k, z: c.z + (tz / tl) * k };
+    }
+    l.holder = null;
+    l.pos = to;
+    l.prevPos = { ...to };
+    // Lengthwise across the body, cut end forward, rolled at random.
+    const dir = { x: rx * 0.8 + fx * 0.6, y: -0.15, z: rz * 0.8 + fz * 0.6 };
+    const dl = Math.hypot(dir.x, dir.y, dir.z);
+    l.rot = quatFromUp({ x: dir.x / dl, y: dir.y / dl, z: dir.z / dl });
+    l.prevRot = { ...l.rot };
+    l.looseAt = this.time;
+    const v = thrown ? 2.6 : 0.4;
+    l.body = this.limbBody(l, { x: m.vel.x * 0.5 + (fx * 0.5 + rx) * v, y: thrown ? 1.6 : 0.2, z: m.vel.z * 0.5 + (fz * 0.5 + rz) * v }, { x: (this.rand() - 0.5) * 6, y: (this.rand() - 0.5) * 4, z: (this.rand() - 0.5) * 6 });
+    this.emit({ type: 'limbDropped', player: p.id, limb: l.id, thrown });
+    this.trimLimbs();
+  }
+
+  /** Worn through: it comes apart in the hands (the swing in progress finishes empty-handed). */
+  private breakLimb(p: SimPlayer, l: HeldLimb, pos: Vec3, dir: Vec3): void {
+    l.broken = true;
+    l.wear = 0;
+    const i = this.limbs.findIndex((x) => x.id === l.id);
+    if (i >= 0) this.limbs.splice(i, 1);
+    this.emit({ type: 'limbBroke', player: p.id, limb: l.id, pos: { ...pos }, dir: { ...dir } });
+  }
+
+  /** Loose arms follow their bodies; old ones nobody is near get cleared away. */
+  private updateLimbs(): void {
+    for (let i = this.limbs.length - 1; i >= 0; i--) {
+      const l = this.limbs[i];
+      if (!l.body) continue;
+      l.prevPos.x = l.pos.x; l.prevPos.y = l.pos.y; l.prevPos.z = l.pos.z;
+      l.prevRot.x = l.rot.x; l.prevRot.y = l.rot.y; l.prevRot.z = l.rot.z; l.prevRot.w = l.rot.w;
+      const t = l.body.translation();
+      const r = l.body.rotation();
+      l.pos.x = t.x; l.pos.y = t.y; l.pos.z = t.z;
+      l.rot.x = r.x; l.rot.y = r.y; l.rot.z = r.z; l.rot.w = r.w;
+      // Fell out of the world (it should never), or lying unwanted for too long.
+      if (t.y < -30) {
+        this.removeLimb(l);
+        continue;
+      }
+      if (this.time - l.looseAt > LIMBS.lifetime) {
+        let near = false;
+        for (const p of this.players.values()) if (p.alive && dist2D(p.motion.pos, l.pos) < 25) near = true;
+        if (!near) this.removeLimb(l);
+      }
+    }
+  }
+
+  /** Crosshair ray for the swing in progress: the client's, or straight out of the eyes. */
+  private meleeRay(p: SimPlayer): { origin: Vec3; dir: Vec3 } {
+    if (p.meleeAim) return p.meleeAim;
+    const m = p.motion;
+    const cp = Math.cos(m.pitch);
+    return { origin: p.eye, dir: { x: -Math.sin(m.yaw) * cp, y: Math.sin(m.pitch), z: -Math.cos(m.yaw) * cp } };
   }
 
   // ---------------------------------------------------------------- zombies
@@ -600,6 +896,8 @@ export class Simulation {
   /** Removes every zombie body and the shared zombie controller from the physics world. */
   dispose(): void {
     for (const d of this.drops) if (d.body) this.physics.world.removeRigidBody(d.body);
+    for (const l of this.limbs) if (l.body) this.physics.world.removeRigidBody(l.body);
+    this.limbs.length = 0;
     for (const z of this.zombies) z.removeBody();
     this.zombies.length = 0;
     this.physics.world.removeCharacterController(this.zombieController);
@@ -631,6 +929,7 @@ export class Simulation {
     }
 
     for (const d of this.doors) d?.update(dt);
+    this.updateLimbs();
 
     const ticks: ArsenalTick[] = [];
     for (const p of this.players.values()) {
@@ -860,13 +1159,22 @@ export class Simulation {
       case 'meleeHit':
         this.resolveMelee(p);
         break;
+      case 'meleeDone':
+        // The arm came apart mid-swing: back to the gun.
+        if (a.limb?.broken) this.dropLimb(p, false);
+        break;
       default:
         break;
     }
   }
 
   private resolveMelee(p: SimPlayer): void {
+    const a = p.arsenal;
     const m = p.motion;
+    const limb = a.meleeWith === 'limb' ? a.limb : null;
+    const club = limb ? limbClub(limb.cut, limb.kind) : null;
+    const reach = club ? club.reach : WEAPONS.machete.range;
+    const arc = club ? LIMBS.arc : COMBAT.meleeArc;
     const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
     const chest = p.chest;
     const targets: { z: Zombie; d: number }[] = [];
@@ -874,8 +1182,8 @@ export class Simulation {
       if (!z.alive) continue;
       const dx = z.pos.x - m.pos.x, dz = z.pos.z - m.pos.z;
       const d = Math.hypot(dx, dz);
-      if (d > WEAPONS.machete.range + z.def.radius || Math.abs(z.pos.y - m.pos.y) > 1.3) continue;
-      if (d > 0.3 && Math.acos(clamp((dx * fx + dz * fz) / d, -1, 1)) > COMBAT.meleeArc / 2) continue;
+      if (d > reach + z.def.radius || Math.abs(z.pos.y - m.pos.y) > 1.3) continue;
+      if (d > 0.3 && Math.acos(clamp((dx * fx + dz * fz) / d, -1, 1)) > arc / 2) continue;
       const zc = z.chest;
       const lx = zc.x - chest.x, ly = zc.y - chest.y, lz = zc.z - chest.z;
       const ll = Math.hypot(lx, ly, lz) || 1;
@@ -884,22 +1192,44 @@ export class Simulation {
       targets.push({ z, d });
     }
     targets.sort((a, b) => a.d - b.d);
-    this.noise(m.pos, WEAPONS.machete.noise, p.id);
+    this.noise(m.pos, club ? LIMBS.noise : WEAPONS.machete.noise, p.id);
     if (!targets.length) {
-      this.emit({ type: 'melee', player: p.id, stage: 'miss' });
+      this.emit({ type: 'melee', player: p.id, stage: 'miss', limb: !!limb });
       return;
     }
-    targets.slice(0, 2).forEach(({ z }, i) => {
+    const aim = this.meleeRay(p);
+    let first: { pos: Vec3; dir: Vec3 } | null = null;
+    for (const [i, { z }] of targets.slice(0, club ? club.targets : 2).entries()) {
       const zc = z.chest;
       const dir = { x: zc.x - chest.x, y: 0, z: zc.z - chest.z };
       const l = Math.hypot(dir.x, dir.z) || 1;
       dir.x /= l;
       dir.z /= l;
-      const zone: HitZone = m.pitch > 0.12 ? 'head' : 'torso';
-      const dmg = WEAPONS.machete.damage * (zone === 'head' ? 1.4 : 1) * (i === 0 ? 1 : 0.6);
-      const at = { x: zc.x - dir.x * 0.2, y: zone === 'head' ? z.pos.y + 1.62 * z.scale : zc.y, z: zc.z - dir.z * 0.2 };
-      this.hitZombie(p, z, dmg, zone, at, dir, true, 1);
-    });
-    this.emit({ type: 'melee', player: p.id, stage: 'hit' });
+      // What the crosshair is on decides where it lands (an arm in the way gets cut).
+      const far = Math.hypot(zc.x - aim.origin.x, zc.y - aim.origin.y, zc.z - aim.origin.z) + 1.2;
+      const h = rayZones(aim.origin, aim.dir, z.zones(this.zones), far, 0.06);
+      let zone: HitZone;
+      let at: Vec3;
+      if (h) {
+        zone = h.zone;
+        at = { x: aim.origin.x + aim.dir.x * h.t, y: aim.origin.y + aim.dir.y * h.t, z: aim.origin.z + aim.dir.z * h.t };
+      } else {
+        zone = m.pitch > 0.12 ? 'head' : 'torso';
+        at = { x: zc.x - dir.x * 0.2, y: zone === 'head' ? z.pos.y + 1.62 * z.scale : zc.y, z: zc.z - dir.z * 0.2 };
+      }
+      const base = club ? club.damage : WEAPONS.machete.damage;
+      const zoneK = zone === 'head' ? (club ? LIMBS.headBonus : 1.4) : zone === 'torso' ? 1 : ZONE_MULTIPLIER[zone];
+      const share = i === 0 ? 1 : club ? 0.75 : 0.6;
+      this.hitZombie(p, z, base * zoneK * share, zone, at, dir, true, club ? 1.3 : 1, {
+        along: h?.along ?? 0.5,
+        armTally: base * (club ? LIMBS.clubTear : LIMBS.chopBonus) * share,
+        limb: limb?.id,
+        knock: club ? LIMBS.knockback : undefined,
+      });
+      first ??= { pos: at, dir };
+    }
+    this.emit({ type: 'melee', player: p.id, stage: 'hit', limb: !!limb });
+    // Every blow that lands tears it up a little more.
+    if (limb && first && --limb.wear <= 0) this.breakLimb(p, limb, first.pos, first.dir);
   }
 }

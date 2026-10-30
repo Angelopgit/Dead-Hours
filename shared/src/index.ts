@@ -4,6 +4,7 @@ export * from './config/weapons';
 export * from './config/game';
 export * from './config/zombies';
 export * from './config/drops';
+export * from './config/limbs';
 export * from './config/appearance';
 export * from './map/builder';
 export * from './map/colliders';

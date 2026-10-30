@@ -12,6 +12,8 @@ export const GROUP = {
   /** Door leaves and other moving world pieces. */
   dynamic: 0x0004,
   zombie: 0x0008,
+  /** Loose body parts: they land on the world and doors, but bullets, sight lines and characters ignore them. */
+  debris: 0x0010,
 } as const;
 
 export function groups(member: number, filter: number): number {

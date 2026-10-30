@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { COMBAT, WEAPONS, type WeaponDef, type WeaponId } from '@dead-hours/shared';
+import { COMBAT, LIMBS, WEAPONS, type HeldLimb, type WeaponDef, type WeaponId } from '@dead-hours/shared';
 import type { Humanoid } from '../characters/Humanoid';
+import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
 
 /** What the hands are doing, read from the authoritative arsenal (or a network snapshot). */
@@ -11,6 +12,10 @@ export interface HeldState {
   action: 'idle' | 'draw' | 'reload' | 'melee' | 'bandage';
   actionT: number;
   actionTotal: number;
+  /** A severed arm in the hands (the guns slung while it is). */
+  limb?: HeldLimb | null;
+  /** What the current melee swing is made with. */
+  meleeWith?: 'machete' | 'limb';
 }
 
 export interface HandsInput {
@@ -61,6 +66,27 @@ const SWING: { t: number; at: V3; rot: V3; twist: number }[] = [
   { t: 0.4, at: [0.18, 0.16, 0.26], rot: [0.9, 1.0, 1.2], twist: 0.35 },
   { t: 0.55, at: [-0.2, 0.22, 0.12], rot: [0.6, 0, 0], twist: 0 },
 ];
+
+/**
+ * Clubbing with a severed arm (spine space): where the grip is (the zombie's wrist) and how
+ * the arm points (+Z toward the torn end). Heavier than the machete: a long wind-up over the
+ * shoulder, a fast blow across, a slow recovery.
+ */
+const LIMB_SWING: { t: number; at: V3; rot: V3; twist: number }[] = [
+  { t: 0, at: [-0.2, 0.32, 0.18], rot: [-1.8, -0.3, 0], twist: 0 },
+  { t: 0.16, at: [-0.28, 0.55, -0.05], rot: [-2.6, 0.45, 0.2], twist: -0.5 },
+  { t: 0.27, at: [0.12, 0.3, 0.45], rot: [0.2, 0.7, 1.2], twist: 0.55 },
+  { t: 0.42, at: [0.26, 0.12, 0.3], rot: [0.9, 1.1, 1.3], twist: 0.4 },
+  { t: LIMBS.duration, at: [-0.2, 0.32, 0.18], rot: [-1.8, -0.3, 0], twist: 0 },
+];
+/** Ready: resting over the right shoulder like a bat. */
+const LIMB_READY: PoseDef = LIMB_SWING[0];
+/** Sprinting: dragged along by the wrist at the side. */
+const LIMB_CARRY: PoseDef = { at: [-0.26, 0.06, 0.06], rot: [1.57, 0, 0] };
+/** Picking it up when nothing says where it lay: low by the feet. */
+const LIMB_GRAB: PoseDef = { at: [-0.2, -0.45, 0.35], rot: [1.4, 0, 0] };
+/** How far up the arm the second hand closes. */
+const LIMB_HANDS = 0.09;
 
 /** Builds a rotation whose +Z is `z` and whose +Y is as close to `up` as possible. */
 function basis(z: V3, up: V3): THREE.Quaternion {
@@ -122,6 +148,19 @@ export class PlayerWeapon {
   private readonly poleR = new THREE.Vector3();
   private readonly e = new THREE.Euler();
   private held: WeaponModel | null = null;
+  /** Severed arm in the hands. */
+  private limbModel: SeveredArm | null = null;
+  private limbId = -1;
+  /** 0..1 how far the gun has gone to its holster for the arm. */
+  private limbW = 0;
+  /** Where the arm being picked up lay (held-mode root pose, world). */
+  private liftId = -1;
+  private readonly liftPos = new THREE.Vector3();
+  private readonly liftQ = new THREE.Quaternion();
+  private readonly limbPos = new THREE.Vector3();
+  private readonly limbQ = new THREE.Quaternion();
+  /** Gore setting for the arm in hand. */
+  gore = true;
 
   constructor(private readonly scene: THREE.Object3D, private readonly body: Humanoid) {
     const g = new THREE.CylinderGeometry(0.03, 0.03, 0.07, 8).rotateZ(Math.PI / 2);
@@ -188,8 +227,36 @@ export class PlayerWeapon {
     return { right: this.rightTarget, left: this.leftTarget };
   }
 
+  /** The gun in the hands (null while they hold a severed arm). */
   get heldModel(): WeaponModel | null {
     return this.held;
+  }
+
+  /** The severed arm in the hands, if any (its torn end drips and splashes). */
+  get heldLimb(): SeveredArm | null {
+    return this.limbModel;
+  }
+
+  /** The arm about to be picked up lay like this (held-mode root pose): the lift starts there. */
+  liftFrom(id: number, pos: THREE.Vector3, q: THREE.Quaternion): void {
+    this.liftId = id;
+    this.liftPos.copy(pos);
+    this.liftQ.copy(q);
+  }
+
+  private syncLimb(limb: HeldLimb | null): void {
+    if (this.limbModel && (!limb || limb.id !== this.limbId)) {
+      this.limbModel.dispose();
+      this.limbModel = null;
+      this.limbId = -1;
+    }
+    if (limb && !this.limbModel) {
+      const m = new SeveredArm({ kind: limb.kind, look: limb.look, arm: limb.arm, cut: limb.cut, scale: limb.scale }, 'held');
+      this.limbModel = m;
+      this.limbId = limb.id;
+      this.scene.add(m.root);
+      this.onMaterials?.(m.materials);
+    }
   }
 
   muzzleWorld(out: THREE.Vector3): THREE.Vector3 {
@@ -228,6 +295,10 @@ export class PlayerWeapon {
       this.lastActive = activeId;
     }
     this.cues(s, def, progress);
+    // A severed arm in hand (gone the moment it bursts; the swing it burst in still finishes).
+    const limb = s.limb && !s.limb.broken ? s.limb : null;
+    const clubbing = s.action === 'melee' && s.meleeWith === 'limb';
+    this.syncLimb(limb);
 
     // Blend weights.
     const ease = (cur: number, target: number, rate: number) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
@@ -238,13 +309,17 @@ export class PlayerWeapon {
     this.sprintW = ease(this.sprintW, input.sprinting && !busy && this.raised <= 0 ? 1 : 0, 9);
     this.reloadW = ease(this.reloadW, s.action === 'reload' ? 1 : 0, 12);
     this.meleeW = ease(this.meleeW, s.action === 'melee' ? 1 : 0, 22);
-    const stowTarget = s.action === 'bandage' ? 1 : s.action === 'draw' ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
-    this.stowW = s.action === 'draw' ? stowTarget : ease(this.stowW, stowTarget, 9);
+    // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm).
+    const drawing = s.action === 'draw' && !limb;
+    const stowTarget = s.action === 'bandage' ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
+    this.stowW = drawing ? stowTarget : ease(this.stowW, stowTarget, 9);
+    // The gun goes over the shoulder (or into the holster) while the hands hold an arm.
+    this.limbW = limb || clubbing ? ease(this.limbW, 1, 14) : 0;
 
     // Body channels.
     const twistRifle = THREE.MathUtils.lerp(-0.4, -0.55, this.aimW) * (1 - this.sprintW) * (1 - this.stowW) * (1 - this.reloadW * 0.5);
     let twist = hold === 'rifle' ? twistRifle : 0;
-    twist *= 1 - this.meleeW;
+    twist *= (1 - this.meleeW) * (1 - this.limbW);
 
     body.root.updateMatrixWorld(true);
     const spine = body.spine;
@@ -290,6 +365,11 @@ export class PlayerWeapon {
       this.tmpA.add(new THREE.Vector3().copy(stockLocal).applyQuaternion(this.tmpQ));
       this.mix(this.tmpA, this.tmpQ, this.stowW);
     }
+    if (this.limbW > 0.001) {
+      this.holsterPose(def.slot === 'primary' ? 'back' : 'thigh', this.tmpA, this.tmpQ);
+      this.tmpA.add(new THREE.Vector3().copy(stockLocal).applyQuaternion(this.tmpQ));
+      this.mix(this.tmpA, this.tmpQ, this.limbW);
+    }
 
     // Recoil springs (weapon space): kick back, muzzle climb, a little sideways wander.
     const r = this.recoil;
@@ -322,7 +402,7 @@ export class PlayerWeapon {
       this.holsterPose(WEAPONS[id].slot === 'primary' ? 'back' : 'thigh', m.root.position, m.root.quaternion);
       m.root.updateMatrixWorld(true);
     }
-    this.held = model;
+    this.held = this.limbW > 0.5 ? null : model;
 
     // Hands.
     const spineM = spine.matrixWorld;
@@ -337,7 +417,7 @@ export class PlayerWeapon {
       if (s.action === 'draw') leftW *= smooth(seg(progress, 0.55, 0.95));
     }
     const machete = this.models.get('machete')!;
-    if (s.action === 'melee') {
+    if (s.action === 'melee' && !clubbing) {
       this.swingPose(progress * COMBAT.meleeDuration, machete);
       machete.root.localToWorld(this.rightTarget.set(0, 0, 0));
       this.poleR.set(-0.8, -0.4, -0.4).transformDirection(spineM);
@@ -360,10 +440,71 @@ export class PlayerWeapon {
     } else {
       this.bandageRoll.visible = false;
     }
+    if (limb || clubbing) leftW = this.holdLimb(dt, s, limb, progress, spineM);
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
     this.lastProgress = progress;
     this.lastAction = s.action;
+  }
+
+  /**
+   * Both hands on the severed arm, like a bat: the left at the zombie's wrist, the right just
+   * above it. Places the arm and the hand targets; returns the left hand's weight.
+   */
+  private holdLimb(dt: number, s: HeldState, limb: HeldLimb | null, p: number, spineM: THREE.Matrix4): number {
+    const pos = this.limbPos, q = this.limbQ;
+    let leftW = 1;
+    if (s.action === 'melee') {
+      this.keyPose(LIMB_SWING, p * LIMBS.duration, pos, q);
+      this.poleR.set(-0.8, -0.4, -0.4).transformDirection(spineM);
+    } else {
+      this.spinePose(LIMB_READY, pos, q);
+      if (this.sprintW > 0.001) {
+        this.spinePose(LIMB_CARRY, _lp, _lq);
+        pos.lerp(_lp, this.sprintW);
+        q.slerp(_lq, this.sprintW);
+        leftW = 1 - this.sprintW;
+      }
+      if (s.action === 'draw' && limb) {
+        // Lifting it from where it lay (or from low by the feet) up into the hands.
+        if (this.liftId === limb.id) {
+          _lp.copy(this.liftPos);
+          _lq.copy(this.liftQ);
+        } else {
+          this.spinePose(LIMB_GRAB, _lp, _lq);
+        }
+        const w = smooth(seg(p, 0.1, 0.95));
+        pos.copy(_lp.lerp(pos, w));
+        q.copy(_lq.slerp(q, w));
+        leftW *= smooth(seg(p, 0.55, 0.95));
+      }
+    }
+    const m = this.limbModel;
+    const scale = limb?.scale ?? 1;
+    if (m && limb) {
+      m.root.position.copy(pos);
+      m.root.quaternion.copy(q);
+      m.root.visible = this.shown;
+      m.root.updateMatrixWorld(true);
+      m.setGore(this.gore);
+      m.setWear(limb.wear / limb.maxWear);
+      m.updateFlop(dt);
+    }
+    this.leftTarget.copy(pos);
+    this.rightTarget.copy(pos).addScaledVector(_ld.set(0, 0, 1).applyQuaternion(q), LIMB_HANDS * scale);
+    return leftW;
+  }
+
+  /** Spine-space keyframes at time `t`, as a world position and rotation. */
+  private keyPose(keys: { t: number; at: V3; rot: V3 }[], t: number, pos: THREE.Vector3, q: THREE.Quaternion): void {
+    let i = 1;
+    while (i < keys.length - 1 && t > keys[i].t) i++;
+    const a = keys[i - 1], b = keys[i];
+    const u = smooth(THREE.MathUtils.clamp((t - a.t) / (b.t - a.t), 0, 1));
+    this.body.spine.localToWorld(pos.set(...a.at).lerp(_ka.set(...b.at), u));
+    q.setFromEuler(this.e.set(...a.rot));
+    _kq.setFromEuler(this.e.set(...b.rot));
+    q.slerp(_kq, u).premultiply(this.spineQ);
   }
 
   private readonly swayQ = new THREE.Quaternion();
@@ -394,10 +535,12 @@ export class PlayerWeapon {
 
   private swingTwist(s: HeldState): number {
     if (s.action !== 'melee' || s.actionTotal <= 0) return 0;
-    const t = (1 - s.actionT / s.actionTotal) * COMBAT.meleeDuration;
-    for (let i = 1; i < SWING.length; i++) {
-      if (t <= SWING[i].t) {
-        const a = SWING[i - 1], b = SWING[i];
+    const club = s.meleeWith === 'limb';
+    const keys = club ? LIMB_SWING : SWING;
+    const t = (1 - s.actionT / s.actionTotal) * (club ? LIMBS.duration : COMBAT.meleeDuration);
+    for (let i = 1; i < keys.length; i++) {
+      if (t <= keys[i].t) {
+        const a = keys[i - 1], b = keys[i];
         return THREE.MathUtils.lerp(a.twist, b.twist, smooth((t - a.t) / (b.t - a.t)));
       }
     }
@@ -405,16 +548,7 @@ export class PlayerWeapon {
   }
 
   private swingPose(t: number, m: WeaponModel): void {
-    let i = 1;
-    while (i < SWING.length - 1 && t > SWING[i].t) i++;
-    const a = SWING[i - 1], b = SWING[i];
-    const u = smooth(THREE.MathUtils.clamp((t - a.t) / (b.t - a.t), 0, 1));
-    const spine = this.body.spine;
-    const pa = new THREE.Vector3(...a.at), pb = new THREE.Vector3(...b.at);
-    spine.localToWorld(m.root.position.copy(pa.lerp(pb, u)));
-    const qa = new THREE.Quaternion().setFromEuler(this.e.set(...a.rot));
-    const qb = new THREE.Quaternion().setFromEuler(this.e.set(...b.rot));
-    m.root.quaternion.copy(qa.slerp(qb, u)).premultiply(this.spineQ);
+    this.keyPose(SWING, t, m.root.position, m.root.quaternion);
     m.root.updateMatrixWorld(true);
   }
 
@@ -490,7 +624,8 @@ export class PlayerWeapon {
   private cues(s: HeldState, def: WeaponDef, p: number): void {
     const cross = (t: number) => this.lastAction === s.action && this.lastProgress < t && p >= t;
     const id = def.id;
-    if (s.action === 'draw' && this.lastAction !== 'draw') this.onCue?.('draw', id);
+    // Taking hold of a severed arm is its own sound, not a gun coming out.
+    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb) this.onCue?.('draw', id);
     if (s.action !== 'reload' || def.perShell) return;
     if (def.hold === 'pistol') {
       if (cross(0.15)) this.onCue?.('magOut', id);
@@ -507,14 +642,20 @@ export class PlayerWeapon {
   setVisible(v: boolean): void {
     this.shown = v;
     for (const m of this.models.values()) m.root.visible = v;
+    if (this.limbModel) this.limbModel.root.visible = v;
     if (!v) this.bandageRoll.visible = false;
   }
 
   dispose(): void {
     for (const m of this.models.values()) m.dispose();
     this.models.clear();
+    this.limbModel?.dispose();
+    this.limbModel = null;
     this.bandageRoll.removeFromParent();
     this.bandageRoll.geometry.dispose();
     (this.bandageRoll.material as THREE.Material).dispose();
   }
 }
+
+const _lp = new THREE.Vector3(), _ld = new THREE.Vector3(), _ka = new THREE.Vector3();
+const _lq = new THREE.Quaternion(), _kq = new THREE.Quaternion();

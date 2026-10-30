@@ -62,7 +62,8 @@ export class Inventory {
   private update(p: SimPlayer, survived: string): void {
     const a = p.arsenal;
     const s = p.stats;
-    const key = JSON.stringify([a.primary, a.secondary, a.active, p.bandages, p.health, s, survived]);
+    const limb = a.limb && !a.limb.broken ? a.limb : null;
+    const key = JSON.stringify([a.primary, a.secondary, a.active, p.bandages, p.health, s, survived, limb && [limb.id, limb.wear]]);
     if (key === this.last) return;
     this.last = key;
     this.title.textContent = survived;
@@ -84,7 +85,15 @@ export class Inventory {
     this.cards.replaceChildren(
       card(`PRIMARY · ${k('weapon1')}`, a.primary.id, a.primary, a.active === 'primary'),
       card(`SECONDARY · ${k('weapon2')}`, a.secondary.id, a.secondary, a.active === 'secondary'),
-      card(`MELEE · ${k('melee')}`, 'machete', null, false),
+      limb
+        ? h('div', { class: 'inv-card active' },
+          h('div', { class: 'slot' }, `MELEE · ${k('melee')}`),
+          h('span', { class: 'wname' }, limb.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM'),
+          h('span', { class: 'wmodel' }, `TORN OFF A ${limb.kind.toUpperCase()} · CLUB`),
+          h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
+          h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
+        )
+        : card(`MELEE · ${k('melee')}`, 'machete', null, false),
     );
     this.supplies.replaceChildren(
       h('div', { class: 'slot' }, `MEDICAL · ${k('heal')}`),
@@ -101,6 +110,9 @@ export class Inventory {
       cell('DAMAGE DEALT', String(Math.round(s.damageDealt))),
       cell('SUPPLIES', String(s.suppliesCollected)),
       cell('DAMAGE TAKEN', String(Math.round(s.damageTaken))),
+      cell('ARMS TORN OFF', String(s.limbsSevered)),
+      cell('ARM KILLS', String(s.limbKills)),
+      cell('SHOTS FIRED', String(s.shotsFired)),
     );
   }
 
