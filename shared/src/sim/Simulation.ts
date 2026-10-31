@@ -8,6 +8,7 @@ import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
 import { findPickupRooms, pickFoundWeapon, type PickupRoom } from './MeleePickups';
+import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
 import { encodeBuild, type Loadout, type WeaponBuild } from '../config/progression';
@@ -21,7 +22,8 @@ import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes
 import { Barricades, type BarricadeSlot } from './Barricades';
 import { BARRICADE } from '../config/barricades';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
-import type { HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
+import type { GibPart, HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
+import { Explosives } from './Explosives';
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -64,6 +66,8 @@ export class SimPlayer {
   readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0, revives: 0 };
   /** The crosshair ray the last melee swing was aimed with (decides what it lands on). */
   meleeAim: { origin: Vec3; dir: Vec3 } | null = null;
+  /** Where the throw in progress goes (the crosshair ray when it was started). */
+  throwAim: { origin: Vec3; dir: Vec3 } | null = null;
   footstepT = 0;
   diedAt = 0;
   /** On the ground at zero health, bleeding out until a teammate gets them up (still `alive`). */
@@ -261,6 +265,8 @@ export class Simulation {
   /** Boards on the doors and windows of the homes. */
   readonly barricades: Barricades;
   private readonly doorByCollider = new Map<number, DoorBody>();
+  /** Grenades and Molotovs in the air, and fires burning. */
+  readonly explosives: Explosives;
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -285,6 +291,7 @@ export class Simulation {
     for (const d of this.doors) if (d) this.doorByCollider.set(d.collider.handle, d);
     this.zombieController = controller(true);
     this.zombieWalker = controller(false);
+    this.explosives = new Explosives(this);
 
     const nodes: number[] = [];
     const nav = this.nav;
@@ -307,6 +314,11 @@ export class Simulation {
         this.overhead.push({ x: p.x, z: p.z, r: 3.4 });
       }
     }
+  }
+
+  /** The simulation's seeded random numbers (0..1). */
+  get random(): () => number {
+    return this.rand;
   }
 
   emit(e: SimEvent): void {
@@ -784,9 +796,15 @@ export class Simulation {
    * Applies a hit. `along` is where on the zone it landed (arms: 0 shoulder .. 1 hand) and
    * `armTally` how much it counts toward taking an arm off; `limb` is the arm it was clubbed with.
    */
-  private hitZombie(
+  hitZombie(
     p: SimPlayer, z: Zombie, damage: number, zone: HitZone, pos: Vec3, dir: Vec3, melee: boolean, force: number,
-    opts: { along?: number; armTally?: number; limb?: number; knock?: number; weapon?: MeleeId } = {},
+    opts: {
+      along?: number; armTally?: number; limb?: number; knock?: number; weapon?: MeleeId;
+      /** How it died, for a kill (blasts: the parts torn off). */
+      death?: { cause: 'blast' | 'fire'; gibs?: GibPart[]; shred?: boolean; blast?: Vec3 };
+      /** Overrides how hard a kill throws the body. */
+      force?: number;
+    } = {},
   ): void {
     if (!z.alive) return;
     const before = z.health;
@@ -809,7 +827,10 @@ export class Simulation {
       p.stats.kills++;
       if (zone === 'head') p.stats.headshots++;
       if (opts.limb !== undefined) p.stats.limbKills++;
-      this.emit({ type: 'zombieDied', zombie: z.id, zone, dir: { ...dir }, force: (melee ? 1.2 : 0.6 + Math.min(1.4, damage / 60)) * force, by: p.id });
+      this.emit({
+        type: 'zombieDied', zombie: z.id, zone, dir: { ...dir }, force: opts.force ?? (melee ? 1.2 : 0.6 + Math.min(1.4, damage / 60)) * force, by: p.id,
+        ...(opts.death ?? {}),
+      });
       if (z.kind === 'bloater') this.burst(z, p);
     }
   }
@@ -964,6 +985,37 @@ export class Simulation {
     return true;
   }
 
+  /**
+   * Throws a grenade or Molotov along the crosshair ray (checked like a shot's). It leaves the
+   * hand THROWING.release seconds later.
+   */
+  throwItem(id: string, kind: ThrowKind, aim: { origin: Vec3; dir: Vec3 }): boolean {
+    const p = this.players.get(id);
+    if (!p || !p.alive || this.phase === 'over' || !THROWABLES[kind]) return false;
+    const dl = Math.hypot(aim.dir.x, aim.dir.y, aim.dir.z);
+    if (!(dl > 0.5)) return false;
+    const reloading = p.arsenal.action === 'reload';
+    if (!p.arsenal.startThrow(kind)) return false;
+    p.throwAim = { origin: { ...aim.origin }, dir: { x: aim.dir.x / dl, y: aim.dir.y / dl, z: aim.dir.z / dl } };
+    if (reloading) this.emit({ type: 'reload', player: id, weapon: p.arsenal.weapon.id, stage: 'cancel' });
+    this.emit({ type: 'throwStart', player: id, kind });
+    return true;
+  }
+
+  /** A zombie burning: fire damage without blood or knockback. Returns true when it burns to death. */
+  burnZombie(p: SimPlayer, z: Zombie, damage: number): boolean {
+    if (!z.alive) return false;
+    const before = z.health;
+    const hl = Math.hypot(z.vel.x, z.vel.z);
+    const dir = hl > 0.1 ? { x: z.vel.x / hl, y: 0, z: z.vel.z / hl } : { x: Math.sin(z.facing), y: 0, z: Math.cos(z.facing) };
+    const killed = z.takeHit(damage, 'torso', dir, p, false, 0);
+    p.stats.damageDealt += Math.min(before, damage);
+    if (!killed) return false;
+    p.stats.kills++;
+    this.emit({ type: 'zombieDied', zombie: z.id, zone: 'torso', dir, force: 0.35, by: p.id, cause: 'fire' });
+    return true;
+  }
+
   bandage(id: string): boolean {
     const p = this.players.get(id);
     if (!p || !p.up || p.bandages <= 0 || p.health >= PLAYER.maxHealth || this.revivingOf(id)) return false;
@@ -1007,7 +1059,8 @@ export class Simulation {
       const a = p.arsenal;
       const pd = a.defOf(a.primary.id);
       const got = a.addReserve('primary', pd.magazine * (pd.crateMags ?? COMBAT.crateMagsPrimary))
-        + a.addReserve('secondary', a.defOf(a.secondary.id).magazine * COMBAT.crateMagsSecondary);
+        + a.addReserve('secondary', a.defOf(a.secondary.id).magazine * COMBAT.crateMagsSecondary)
+        + a.addThrowable('frag', THROWING.cratePerUse) + a.addThrowable('molotov', THROWING.cratePerUse);
       if (got <= 0) {
         this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
         return false;
@@ -1026,7 +1079,8 @@ export class Simulation {
       }
       // Universal rounds: whatever the survivor carries, every weapon is filled up.
       const a = p.arsenal;
-      const got = a.addReserve('primary', a.defOf(a.primary.id).maxReserve) + a.addReserve('secondary', a.defOf(a.secondary.id).maxReserve);
+      const got = a.addReserve('primary', a.defOf(a.primary.id).maxReserve) + a.addReserve('secondary', a.defOf(a.secondary.id).maxReserve)
+        + a.addThrowable('frag', THROWABLES.frag.max) + a.addThrowable('molotov', THROWABLES.molotov.max);
       if (got <= 0) {
         this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
         return false;
@@ -1095,7 +1149,7 @@ export class Simulation {
     const p = this.players.get(id);
     const it = this.reachable(id).find((x) => x.kind === 'weapons');
     if (!p || !it || !PRIMARY_WEAPONS.includes(weapon)) return false;
-    if (p.arsenal.primary.id === weapon || p.arsenal.action === 'melee') return false;
+    if (p.arsenal.primary.id === weapon || p.arsenal.action === 'melee' || p.arsenal.action === 'throw') return false;
     this.dropLimb(p, false);
     p.arsenal.replacePrimary(weapon);
     this.emit({ type: 'pickup', player: id, item: 'weapon', amount: 1, source: it.id, weapon });
@@ -1117,8 +1171,8 @@ export class Simulation {
 
   // ---------------------------------------------------------------- severed arms
 
-  /** Takes the arm off a zombie and sends it flying. */
-  private severArm(p: SimPlayer, z: Zombie, arm: ArmZone, cut: LimbCut, dir: Vec3, melee: boolean, damage: number, killed: boolean): void {
+  /** Takes the arm off a zombie and sends it flying (`fling` times as hard: blasts). */
+  severArm(p: SimPlayer, z: Zombie, arm: ArmZone, cut: LimbCut, dir: Vec3, melee: boolean, damage: number, killed: boolean, fling = 1): void {
     // Where the arm is now: shoulder to hand, cut at the shoulder or the elbow.
     const shape = z.zones(this.zones).find((s) => s.zone === arm);
     if (!shape) return;
@@ -1143,13 +1197,13 @@ export class Simulation {
     }
     // Blown or hacked away from the blow, spinning end over end.
     const hl = Math.hypot(dir.x, dir.z) || 1;
-    const speed = melee ? 3 : 1.6 + Math.min(3, damage / 14);
+    const speed = (melee ? 3 : 1.6 + Math.min(3, damage / 14)) * fling;
     const vel = {
       x: z.vel.x + (dir.x / hl) * speed + (this.rand() - 0.5) * 1.2,
-      y: 1.4 + this.rand() * 1.4,
+      y: 1.4 + this.rand() * 1.4 + (fling > 1 ? Math.max(0, dir.y) * speed : 0),
       z: z.vel.z + (dir.z / hl) * speed + (this.rand() - 0.5) * 1.2,
     };
-    const spin = 7 + this.rand() * 8;
+    const spin = (7 + this.rand() * 8) * Math.min(2, fling);
     // Spin about an axis across the arm.
     let sx = uy * (dir.z / hl) - uz * 0, sy = uz * (dir.x / hl) - ux * (dir.z / hl), sz = ux * 0 - uy * (dir.x / hl);
     const sl = Math.hypot(sx, sy, sz);
@@ -1248,7 +1302,7 @@ export class Simulation {
     const l = this.limb(limbId);
     if (!p || !p.up || !l || !this.limbInReach(id, l)) return false;
     const a = p.arsenal;
-    if (a.action === 'melee' || a.action === 'bandage') return false;
+    if (a.action === 'melee' || a.action === 'bandage' || a.action === 'throw') return false;
     const reloading = a.action === 'reload';
     // Claim it before letting go of the old one (which could otherwise push it over the limit).
     if (l.body) this.physics.world.removeRigidBody(l.body);
@@ -1562,6 +1616,7 @@ export class Simulation {
     for (const d of this.drops) if (d.body) this.physics.world.removeRigidBody(d.body);
     for (const l of this.limbs) if (l.body) this.physics.world.removeRigidBody(l.body);
     this.limbs.length = 0;
+    this.explosives.clear();
     for (const z of this.zombies) z.removeBody();
     this.zombies.length = 0;
     this.physics.world.removeCharacterController(this.zombieController);
@@ -1627,6 +1682,8 @@ export class Simulation {
         p.footstepT = speed > 4.5 ? 0.35 : 0.55;
       }
     }
+
+    this.explosives.step(dt);
 
     // Zombies far from everyone and not hunting update at a third of the rate.
     for (const z of this.zombies) {
@@ -1937,6 +1994,13 @@ export class Simulation {
       }
       case 'meleeHit':
         this.resolveMelee(p);
+        break;
+      case 'thrown':
+        this.explosives.release(p, a.throwKind, p.throwAim ?? this.meleeRay(p));
+        p.throwAim = null;
+        break;
+      case 'throwDone':
+        this.emit({ type: 'draw', player: p.id, slot: a.active, weapon: a.weapon.id });
         break;
       case 'meleeDone':
         // The arm came apart mid-swing: back to the gun.

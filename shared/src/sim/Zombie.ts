@@ -2,6 +2,7 @@ import { RAPIER, GROUP, groups } from '../physics/Physics';
 import { SPECIALS, ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
 import { LIMBS, type ArmState, type ArmZone, type LimbCut } from '../config/limbs';
+import { FIRE } from '../config/throwables';
 import { zombieZones, type ZoneShape } from './hitzones';
 import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
 import { BARRICADE } from '../config/barricades';
@@ -104,6 +105,9 @@ export class Zombie {
   readonly arms: Record<ArmZone, ArmState> = { armL: 'intact', armR: 'intact' };
   /** Damage each arm has soaked toward coming off. */
   readonly armDamage: Record<ArmZone, number> = { armL: 0, armR: 0 };
+  /** On fire until this simulation time, and whose fire it is (kills count to them). */
+  burnUntil = 0;
+  burnBy: SimPlayer | null = null;
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
   readonly seed: number;
@@ -185,6 +189,35 @@ export class Zombie {
     const hl = Math.hypot(dir.x, dir.z) || 1;
     this.push.x = (dir.x / hl) * speed;
     this.push.z = (dir.z / hl) * speed;
+  }
+
+  /** Catches fire (or keeps burning) until `until`. */
+  ignite(until: number, by: SimPlayer | null): void {
+    if (!this.alive) return;
+    const fresh = this.burnUntil <= this.sim.time;
+    if (until > this.burnUntil) this.burnUntil = until;
+    if (by) this.burnBy = by;
+    if (fresh) this.sim.emit({ type: 'ignite', zombie: this.id });
+  }
+
+  get burning(): boolean {
+    return this.burnUntil > this.sim.time;
+  }
+
+  /** A blast nearby threw it off its feet (`k` 0..1, how hard), facing away from it. */
+  blasted(dir: Vec3, k: number): void {
+    if (!this.alive) return;
+    const hl = Math.hypot(dir.x, dir.z) || 1;
+    this.push.x = (dir.x / hl) * (1 + k * 3);
+    this.push.z = (dir.z / hl) * (1 + k * 3);
+    if (k > 0.3 && this.state !== 'down') {
+      this.setState('down');
+      this.downT = 1.6 + k * 1.6 + this.rand() * 0.6;
+    } else if (this.state !== 'down') {
+      this.setState('stagger');
+      this.staggerT = 0.6 + k;
+    }
+    this.recentDamage = 0;
   }
 
   /** True while it is pursuing someone it knows about. */
@@ -518,7 +551,8 @@ export class Zombie {
             if (d < this.def.attackRange + 0.5 && ang < 1.25 && Math.abs(tp.y - this.pos.y) < 1.2 && (clear === null || clear > d - 0.4)) {
               // Missing arms claw less; with none left it can only bite.
               const reach = 1 - LIMBS.attackLoss * this.armsLost;
-              const dmg = Math.round((this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0])) * reach);
+              const dmg = Math.round((this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0])) * reach)
+                + (this.burning ? FIRE.burningSwipe : 0);
               sim.damagePlayer(target, dmg, this.pos);
             }
           }
@@ -756,6 +790,7 @@ export class Zombie {
         sz += dz * w;
       }
     }
+    if (this.burnUntil > sim.time) speed *= FIRE.panicSpeed;
     let tx = wishX * speed, tz = wishZ * speed;
     if (this.state !== 'stagger' && this.state !== 'down' && this.state !== 'bash' && this.state !== 'breach') {
       tx += sx * 1.4;

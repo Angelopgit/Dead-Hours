@@ -1,15 +1,16 @@
 import * as THREE from 'three';
-import { LIMBS, MELEE, WEAPONS, defaultBuild, encodeBuild, isMelee, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type WeaponDef, type WeaponId } from '@dead-hours/shared';
+import { LIMBS, MELEE, THROWING, WEAPONS, defaultBuild, encodeBuild, isMelee, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type ThrowKind, type WeaponDef, type WeaponId } from '@dead-hours/shared';
 import type { Humanoid } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
+import { createThrowableModel, type ThrowableModel } from './ThrowableModels';
 
 /** What the hands are doing, read from the authoritative arsenal (or a network snapshot). */
 export interface HeldState {
   primary: { id: WeaponId; mag: number };
   secondary: { id: WeaponId; mag: number };
   active: 'primary' | 'secondary';
-  action: 'idle' | 'draw' | 'reload' | 'melee' | 'bandage';
+  action: 'idle' | 'draw' | 'reload' | 'melee' | 'bandage' | 'throw';
   actionT: number;
   actionTotal: number;
   /** A severed arm in the hands (the guns slung while it is). */
@@ -20,6 +21,8 @@ export interface HeldState {
   meleeId?: WeaponId;
   /** Attachments and finishes on the guns (models are rebuilt when one changes). */
   builds?: Loadout;
+  /** What the current throw is. */
+  throwKind?: ThrowKind;
 }
 
 export interface HandsInput {
@@ -33,6 +36,8 @@ export interface HandsInput {
   /** Camera eye and view orientation (unshaken) the sights line up with. */
   eye?: THREE.Vector3;
   view?: THREE.Quaternion;
+  /** Holding a grenade or Molotov ready (aiming the throw, local player only). */
+  priming?: ThrowKind | null;
 }
 
 /** Turns camera space (looking down -Z) into weapon space (barrel along +Z). */
@@ -126,6 +131,17 @@ function swingClock(p: number, id: MeleeId): number {
   const w = d.windup / d.duration;
   return p < w ? (p / w) * st.impact : st.impact + ((p - w) / (1 - w)) * (1 - st.impact);
 }
+/**
+ * Overarm throw (spine space): the right hand brings it up, cocks it back over the shoulder,
+ * whips it forward and lets go at THROWING.release, follows through across the body.
+ */
+const THROW_KEYS: { t: number; at: V3; rot: V3; twist: number }[] = [
+  { t: 0, at: [-0.2, 0.46, 0.14], rot: [-0.4, 0, 0], twist: -0.1 },
+  { t: 0.15, at: [-0.27, 0.62, -0.2], rot: [-1.2, 0.2, 0], twist: -0.5 },
+  { t: THROWING.release, at: [-0.12, 0.62, 0.44], rot: [0.6, 0, 0], twist: 0.35 },
+  { t: 0.44, at: [0.1, 0.2, 0.42], rot: [1.2, 0.4, 0], twist: 0.45 },
+  { t: THROWING.duration, at: [-0.18, 0.2, 0.2], rot: [0.4, 0, 0], twist: 0 },
+];
 
 /** Ready: resting over the right shoulder like a bat. */
 const LIMB_READY: PoseDef = LIMB_SWING[0];
@@ -214,6 +230,8 @@ export class PlayerWeapon {
   private readonly limbQ = new THREE.Quaternion();
   /** Gore setting for the arm in hand. */
   gore = true;
+  private readonly throwModels = new Map<ThrowKind, ThrowableModel>();
+  private throwW = 0;
 
   constructor(private readonly scene: THREE.Object3D, private readonly body: Humanoid) {
     const g = new THREE.CylinderGeometry(0.03, 0.03, 0.07, 8).rotateZ(Math.PI / 2);
@@ -386,7 +404,8 @@ export class PlayerWeapon {
     // Blend weights.
     const ease = (cur: number, target: number, rate: number) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
     this.raised = Math.max(0, this.raised - dt);
-    const busy = s.action === 'reload' || s.action === 'melee' || s.action === 'bandage';
+    const throwing = s.action === 'throw' || (!!input.priming && !limb && s.action !== 'melee' && s.action !== 'bandage');
+    const busy = s.action === 'reload' || s.action === 'melee' || s.action === 'bandage' || throwing;
     const aimTarget = busy || s.action === 'draw' ? 0 : Math.max(input.aim, this.raised > 0 ? 1 : 0);
     this.aimW = ease(this.aimW, aimTarget, 16);
     this.sprintW = ease(this.sprintW, input.sprinting && !busy && this.raised <= 0 ? 1 : 0, 9);
@@ -395,7 +414,7 @@ export class PlayerWeapon {
     this.meleeTwoW = ease(this.meleeTwoW, s.action === 'melee' && !clubbing && style.twoHands ? 1 : 0, 26);
     // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm).
     const drawing = s.action === 'draw' && !limb;
-    const stowTarget = s.action === 'bandage' ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
+    const stowTarget = s.action === 'bandage' || throwing ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
     this.stowW = drawing ? stowTarget : ease(this.stowW, stowTarget, 9);
     // The gun goes over the shoulder (or into the holster) while the hands hold an arm.
     this.limbW = limb || clubbing ? ease(this.limbW, 1, 14) : 0;
@@ -475,7 +494,7 @@ export class PlayerWeapon {
     model.root.visible = this.shown && !this.hideHeld;
     model.root.updateMatrixWorld(true);
     body.kick = -r.pitch * 0.012;
-    body.twist = twist + this.swingTwist(s);
+    body.twist = twist + this.swingTwist(s) + this.throwTwist(s, input);
 
     // Moving parts.
     this.animateAction(dt, model);
@@ -538,6 +557,29 @@ export class PlayerWeapon {
       this.bandageRoll.visible = false;
     }
     if (limb || clubbing) leftW = this.holdLimb(dt, s, limb, progress, spineM);
+    this.throwW = throwing ? Math.min(1, this.throwW + dt * 8) : 0;
+    const kind = s.action === 'throw' ? s.throwKind ?? 'frag' : input.priming ?? null;
+    let inHand: ThrowableModel | null = null;
+    if (throwing && kind) {
+      // Overarm: the other arm points where it is going while winding up.
+      const t = s.action === 'throw' ? progress * THROWING.duration : 0;
+      this.keyPose(THROW_KEYS, t, this.tmpA, this.tmpQ);
+      this.rightTarget.lerp(this.tmpA, this.throwW);
+      this.poleR.set(-0.9, -0.2, -0.5).transformDirection(spineM);
+      const point = s.action === 'throw' ? 1 - smooth(seg(t, THROWING.release, 0.55)) : 0.6;
+      spine.localToWorld(this.leftTarget.set(0.16, 0.42, 0.46));
+      this.poleL.set(0.8, -0.5, -0.1).transformDirection(spineM);
+      leftW = point * this.throwW;
+      if (s.action !== 'throw' || t < THROWING.release) {
+        inHand = this.throwModel(kind);
+        inHand.root.position.copy(this.rightTarget).addScaledVector(_ld.set(0, 0.03, 0.04).applyQuaternion(this.tmpQ), 1);
+        inHand.root.quaternion.copy(this.tmpQ);
+      }
+    }
+    for (const m of this.throwModels.values()) {
+      m.root.visible = m === inHand && this.shown;
+      if (m.root.visible) m.root.updateMatrixWorld(true);
+    }
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
     this.lastProgress = progress;
@@ -646,6 +688,36 @@ export class PlayerWeapon {
     return 0;
   }
 
+  private throwTwist(s: HeldState, input: HandsInput): number {
+    if (s.action !== 'throw') return input.priming ? THROW_KEYS[0].twist : 0;
+    const t = (1 - s.actionT / Math.max(0.01, s.actionTotal)) * THROWING.duration;
+    for (let i = 1; i < THROW_KEYS.length; i++) {
+      if (t <= THROW_KEYS[i].t) {
+        const a = THROW_KEYS[i - 1], b = THROW_KEYS[i];
+        return THREE.MathUtils.lerp(a.twist, b.twist, smooth((t - a.t) / (b.t - a.t)));
+      }
+    }
+    return 0;
+  }
+
+  private throwModel(kind: ThrowKind): ThrowableModel {
+    let m = this.throwModels.get(kind);
+    if (!m) {
+      m = createThrowableModel(kind);
+      this.throwModels.set(kind, m);
+      this.scene.add(m.root);
+      this.onMaterials?.(m.materials);
+    }
+    return m;
+  }
+
+  /** Where the Molotov's rag is while in the hand (null when nothing is held ready). */
+  wickWorld(out: THREE.Vector3): THREE.Vector3 | null {
+    const m = this.throwModels.get('molotov');
+    if (!m || !m.root.visible) return null;
+    return m.root.localToWorld(out.copy(m.wick));
+  }
+
   /** Left wrist target for the current action (support grip, reload choreography). */
   private leftHand(s: HeldState, def: WeaponDef, m: WeaponModel, p: number, out: THREE.Vector3): void {
     const fore = m.root.localToWorld(this.tmpA.copy(m.fore));
@@ -737,6 +809,7 @@ export class PlayerWeapon {
     this.shown = v;
     for (const m of this.models.values()) m.root.visible = v;
     if (this.limbModel) this.limbModel.root.visible = v;
+    if (!v) for (const m of this.throwModels.values()) m.root.visible = false;
     if (!v) this.bandageRoll.visible = false;
   }
 
@@ -745,6 +818,8 @@ export class PlayerWeapon {
     this.models.clear();
     this.limbModel?.dispose();
     this.limbModel = null;
+    for (const m of this.throwModels.values()) m.dispose();
+    this.throwModels.clear();
     this.bandageRoll.removeFromParent();
     this.bandageRoll.geometry.dispose();
     (this.bandageRoll.material as THREE.Material).dispose();

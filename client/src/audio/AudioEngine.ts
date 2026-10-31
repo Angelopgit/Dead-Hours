@@ -1913,9 +1913,233 @@ export class AudioEngine {
     this.meleeBuffer(`mpick:${weapon}`, 2, (seed) => renderMeleePickup(weapon, this.ctx!.sampleRate, seed), position, 0.45, 0.04, 2);
   }
 
+  // ------------------------------------------------------------------ explosives
+
+  /** Pulling a frag's pin and letting the spoon fly, or flicking a lighter to a Molotov's rag. */
+  throwReady(kind: 'frag' | 'molotov', position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.04, 1.5);
+    if (kind === 'frag') {
+      // Pin out: a scrape and a ring; the spoon: a spring ping.
+      this.burst(d, t, 'bandpass', 3800, 3, 0.12, 0.002, 0.06);
+      this.tone(d, t + 0.02, 'sine', 5200, 5100, 0.035, 0.001, 0.12);
+      this.tone(d, t + 0.26, 'triangle', 2400, 1700, 0.06, 0.001, 0.09);
+      this.burst(d, t + 0.26, 'highpass', 4000, 1, 0.08, 0.001, 0.03);
+    } else {
+      // Flint wheel, then the rag catching.
+      for (let i = 0; i < 3; i++) this.burst(d, t + i * 0.012, 'highpass', 5000, 1, 0.07, 0.001, 0.015);
+      this.burst(d, t + 0.06, 'bandpass', 900, 0.7, 0.2, 0.05, 0.5, 0.6);
+      this.burst(d, t + 0.06, 'lowpass', 320, 0.7, 0.18, 0.08, 0.6, 0.5);
+    }
+  }
+
+  /** The arm whipping through the throw. */
+  throwWhoosh(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const d = this.out(position, 0.03, 1.5);
+    const src = this.noiseSource(false);
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 1.4;
+    f.frequency.setValueAtTime(500, t);
+    f.frequency.exponentialRampToValueAtTime(1800, t + 0.12);
+    f.frequency.exponentialRampToValueAtTime(700, t + 0.28);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.22, t + 0.1);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    src.connect(f).connect(g).connect(d);
+    src.start(t, Math.random() * 2);
+    src.stop(t + 0.35);
+  }
+
+  /** A frag or bottle landing and bouncing. */
+  thrownBounce(kind: 'frag' | 'molotov', surface: string, position: THREE.Vector3, speed: number): void {
+    if (!this.ctx || speed < 0.4) return;
+    const t = this.ctx.currentTime;
+    const k = Math.min(1, speed / 9);
+    const d = this.out(position, 0.06, 2);
+    const soft = surface === 'grass' || surface === 'dirt' || surface === 'fabric';
+    if (soft) {
+      this.burst(d, t, 'lowpass', 420, 0.7, 0.35 * k, 0.002, 0.07);
+      return;
+    }
+    if (kind === 'frag') {
+      // Cast iron on hard ground: a dull clank with a short ring.
+      this.tone(d, t, 'triangle', 980, 880, 0.16 * k, 0.001, 0.09);
+      this.tone(d, t, 'sine', 2350, 2300, 0.06 * k, 0.001, 0.14);
+      this.burst(d, t, 'bandpass', 1800, 1.5, 0.22 * k, 0.001, 0.035);
+    } else {
+      this.tone(d, t, 'sine', 1500, 1450, 0.08 * k, 0.001, 0.1);
+      this.burst(d, t, 'bandpass', 2600, 2, 0.12 * k, 0.001, 0.03);
+    }
+  }
+
+  /**
+   * A frag going off, built the way the gunshot is: late by the speed of sound, dulled by air
+   * and walls, the space it is in answering. A whip-crack of the blast front, the body of the
+   * explosion, a sub-bass punch felt more than heard, a long rumble rolling off the houses, and
+   * dirt and fragments pattering down. Close by it leaves the ears ringing.
+   */
+  explosion(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const L = this.listenerPos;
+    const here = this.here;
+    const there = this.spaceOf(position);
+    const dist = position.distanceTo(L);
+    const t = ctx.currentTime + dist / SPEED_OF_SOUND;
+    const near = THREE.MathUtils.clamp(1 - dist / 30, 0, 1);
+    const level = ctx.createGain();
+    level.gain.value = 1;
+    const wall = this.acoustics ? this.acoustics.occlusion(position.x, position.y, position.z, L.x, L.y, L.z) : CLEAR;
+    const air = ctx.createBiquadFilter();
+    air.type = 'lowpass';
+    air.frequency.value = Math.max(700, 18000 / (1 + dist / 25));
+    const p = this.makePanner(position);
+    p.refDistance = 14;
+    p.rolloffFactor = 0.9;
+    level.connect(air);
+    this.muffled(air, wall).connect(p).connect(this.effects);
+    // Blast front.
+    this.burst(level, t, 'highpass', 1200, 0.6, 1.1, 0.0008, 0.07);
+    this.burst(level, t, 'bandpass', 2600, 0.8, 0.7, 0.0008, 0.12);
+    // Body.
+    this.burst(level, t, 'lowpass', 1400, 0.6, 1.3, 0.003, 0.5, 0.55);
+    this.burst(level, t + 0.02, 'lowpass', 520, 0.7, 1.2, 0.01, 1.1, 0.4);
+    // Punch: a sine sweep below 80 Hz (and a second, non-spatial one up close: felt in the chest).
+    this.tone(level, t, 'sine', 90, 30, 1.2, 0.004, 0.9, 0.5);
+    if (near > 0) {
+      const chest = ctx.createGain();
+      chest.gain.value = near * near;
+      chest.connect(this.effects);
+      this.tone(chest, t, 'sine', 70, 26, 0.9, 0.006, 1.0, 0.6);
+    }
+    // Rumble rolling away.
+    this.burst(level, t + 0.08, 'lowpass', 220, 0.7, 0.55, 0.15, 2.6, 0.3);
+    // Fragments and dirt coming down.
+    for (let i = 0; i < 14; i++) {
+      const dt = 0.25 + Math.random() * 1.6;
+      this.burst(level, t + dt, 'bandpass', 1800 + Math.random() * 3500, 3, (0.05 + Math.random() * 0.08) * (1 - dt / 2.2), 0.001, 0.025 + Math.random() * 0.03);
+    }
+    // The space answers (the street echoes off every house front).
+    const apart = there !== here || wall.walls > 0;
+    const leak: Muffle = !apart ? CLEAR : wall.walls ? { gain: Math.max(wall.gain, 0.25), cutoff: Math.max(wall.cutoff, 900), walls: wall.walls } : LEAK_IN;
+    this.sendTo(level, there, 1.1 * SEND[there], leak);
+    if (there !== 'street') this.sendTo(level, 'street', 0.8 * SEND.street, here === 'street' ? LEAK_OUT : leak);
+    else if (here !== 'street') this.sendTo(level, here, 0.35 * SEND[here], LEAK_IN);
+    // Ringing ears.
+    if (dist < 9) {
+      const k = 1 - dist / 9;
+      const ring = ctx.createGain();
+      ring.connect(this.effects);
+      ring.gain.setValueAtTime(0, t);
+      ring.gain.linearRampToValueAtTime(0.035 * k, t + 0.15);
+      ring.gain.setTargetAtTime(0, t + 0.6, 1.2 + k * 1.5);
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = 4600 + Math.random() * 1600;
+      o.connect(ring);
+      o.start(t);
+      o.stop(t + 6);
+    }
+  }
+
+  /** A Molotov breaking: glass bursting and the fuel going up with a whoomp. */
+  molotov(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime + position.distanceTo(this.listenerPos) / SPEED_OF_SOUND;
+    const d = this.out(position, 0.25, 4);
+    this.impact('glass', position);
+    this.burst(d, t, 'highpass', 3200, 0.7, 0.4, 0.001, 0.18);
+    for (let i = 0; i < 9; i++) {
+      const f = 3500 + Math.random() * 5000;
+      this.tone(d, t + 0.02 + Math.random() * 0.4, 'sine', f, f * 0.99, 0.025, 0.001, 0.06 + Math.random() * 0.1);
+    }
+    // Whoomp.
+    this.burst(d, t + 0.03, 'lowpass', 380, 0.8, 1.1, 0.06, 0.8, 0.5);
+    this.burst(d, t + 0.05, 'bandpass', 900, 0.6, 0.45, 0.08, 0.9, 0.6);
+    this.tone(d, t + 0.03, 'sine', 75, 45, 0.5, 0.05, 0.5);
+  }
+
+  /** A zombie catching fire. */
+  ignite(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.1, 2.5);
+    this.burst(d, t, 'lowpass', 600, 0.7, 0.45, 0.04, 0.5, 0.6);
+    this.burst(d, t, 'bandpass', 1500, 0.8, 0.15, 0.05, 0.4);
+  }
+
+  private readonly fireLoops = new Map<number, { src: AudioBufferSourceNode; gain: GainNode; panner: PannerNode; pop: number; pos: THREE.Vector3 }>();
+
+  /**
+   * Fires burning this frame (id, where, 0..1 strength): each a looping roar with crackle
+   * and pops. Loops start and stop as fires come and go.
+   */
+  fires(list: { id: number; pos: THREE.Vector3; strength: number }[], dt: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const seen = new Set<number>();
+    for (const f of list) {
+      seen.add(f.id);
+      let l = this.fireLoops.get(f.id);
+      if (!l) {
+        const src = this.noiseSource(true);
+        src.playbackRate.value = 0.7 + Math.random() * 0.2;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 700;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = 2400;
+        bp.Q.value = 0.8;
+        const bpg = ctx.createGain();
+        bpg.gain.value = 0.18;
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        const panner = this.makePanner(f.pos);
+        panner.refDistance = 2.5;
+        src.connect(lp).connect(gain);
+        src.connect(bp).connect(bpg).connect(gain);
+        gain.connect(panner).connect(this.effects);
+        src.start(now, Math.random() * 2);
+        l = { src, gain, panner, pop: 0, pos: f.pos.clone() };
+        this.fireLoops.set(f.id, l);
+      }
+      l.pos.copy(f.pos);
+      l.panner.positionX.setTargetAtTime(f.pos.x, now, 0.05);
+      l.panner.positionY.setTargetAtTime(f.pos.y, now, 0.05);
+      l.panner.positionZ.setTargetAtTime(f.pos.z, now, 0.05);
+      l.gain.gain.setTargetAtTime(0.32 * f.strength, now, 0.15);
+      // Crackle and pops.
+      l.pop -= dt;
+      if (l.pop <= 0 && f.strength > 0.1) {
+        l.pop = 0.04 + Math.random() * 0.22 / f.strength;
+        if (f.pos.distanceTo(this.listenerPos) < 30) {
+          const d = this.out(f.pos, 0.02, 2);
+          const big = Math.random() < 0.12;
+          this.burst(d, now + Math.random() * 0.03, big ? 'bandpass' : 'highpass', big ? 900 : 2500 + Math.random() * 3000, big ? 1.5 : 1, (big ? 0.12 : 0.05) * f.strength, 0.0008, big ? 0.05 : 0.012);
+        }
+      }
+    }
+    for (const [id, l] of this.fireLoops) {
+      if (seen.has(id)) continue;
+      l.gain.gain.setTargetAtTime(0, now, 0.4);
+      l.src.stop(now + 2);
+      this.fireLoops.delete(id);
+    }
+  }
+
   dispose(): void {
     for (const r of this.rotors.values()) r.src.stop();
     this.rotors.clear();
+    for (const l of this.fireLoops.values()) l.src.stop();
+    this.fireLoops.clear();
     this.unsub?.();
     window.clearTimeout(this.bankTimer);
     this.bank.clear();

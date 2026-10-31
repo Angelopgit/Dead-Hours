@@ -234,6 +234,9 @@ export class Night {
       case 'revive':
         if (m.target === null || typeof m.target === 'string') sim.revive(id, m.target);
         break;
+      case 'throw':
+        if ((m.kind === 'frag' || m.kind === 'molotov') && isVec(m.o) && isVec(m.d)) sim.throwItem(id, m.kind, { origin: vec(m.o), dir: vec(m.d) });
+        break;
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;
         const e = p.eye;

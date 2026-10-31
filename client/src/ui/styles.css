@@ -227,6 +227,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .w-bar.wear i { background: #a3221a; }
 .w-heal { margin-top: 0.8em; font-size: 0.64em; letter-spacing: 0.26em; color: var(--fg-dim); white-space: pre; }
 .w-heal.none { color: var(--fg-faint); opacity: 0.6; }
+.w-throw { margin-top: 0.35em; }
 .vitals .name span.low { color: #e2725f; animation: pulse 0.9s ease-in-out infinite; }
 
 /* Hit confirmation and damage direction */

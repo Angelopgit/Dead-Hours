@@ -20,6 +20,9 @@ export interface WeaponReadout {
   /** Severed arm in hand: hits left, and that as a share of what it started with. */
   hits?: number | null;
   wear?: number | null;
+  /** Grenades and Molotovs carried. */
+  frags?: number;
+  molotovs?: number;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -57,6 +60,8 @@ export class HUD {
   private readonly slot1: HTMLElement;
   private readonly slot2: HTMLElement;
   private readonly bandages: HTMLElement;
+  private readonly fragLine: HTMLElement;
+  private readonly molotovLine: HTMLElement;
   private readonly feed: HTMLElement;
   private readonly waypoint: HTMLElement;
   private readonly waypointText: HTMLElement;
@@ -110,6 +115,8 @@ export class HUD {
     this.armorRow = h('div', { class: 'armor', style: 'display:none' },
       h('div', { class: 'armor-label' }, h('span', {}, 'LAZARUS SERUM'), this.armorText),
       h('div', { class: 'abar' }, this.armorFill));
+    this.fragLine = h('div', { class: 'w-heal w-throw' });
+    this.molotovLine = h('div', { class: 'w-heal w-throw' });
     this.el = h('div', { class: 'hud' },
       this.scope,
       this.arcs,
@@ -134,6 +141,8 @@ export class HUD {
         this.wMode,
         this.wBar,
         this.bandages,
+        this.fragLine,
+        this.molotovLine,
       ),
       this.fps,
     );
@@ -232,6 +241,11 @@ export class HUD {
     this.slot2.classList.toggle('on', r.slot === 'secondary');
     this.bandages.textContent = r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? `${keyH}  ` : ''}BANDAGE × ${r.bandages}`;
     this.bandages.classList.toggle('none', r.bandages === 0 && r.healing === null);
+    const keyG = actionLabel('grenade'), keyM = actionLabel('molotov');
+    this.fragLine.textContent = `${keyG ? `${keyG}  ` : ''}GRENADE × ${r.frags ?? 0}`;
+    this.fragLine.classList.toggle('none', !r.frags);
+    this.molotovLine.textContent = `${keyM ? `${keyM}  ` : ''}MOLOTOV × ${r.molotovs ?? 0}`;
+    this.molotovLine.classList.toggle('none', !r.molotovs);
   }
 
   /** "SURVIVED 18:42" or "OUTBREAK IMMINENT — 00:45". */

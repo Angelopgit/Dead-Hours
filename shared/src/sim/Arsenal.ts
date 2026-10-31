@@ -3,6 +3,7 @@ import { LIMBS, type ArmZone, type LimbCut } from '../config/limbs';
 import { MELEE, type MeleeId } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
 import { FIT_TIME, defaultBuild, sameBuild, tunedWeapon, type Loadout, type WeaponBuild } from '../config/progression';
+import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
 import { clamp } from './math';
 
 export interface WeaponState {
@@ -11,10 +12,10 @@ export interface WeaponState {
   reserve: number;
 }
 
-export type ArsenalAction = 'idle' | 'draw' | 'reload' | 'melee' | 'bandage';
+export type ArsenalAction = 'idle' | 'draw' | 'reload' | 'melee' | 'bandage' | 'throw';
 
 /** What a player is doing with their hands that the arsenal finished or advanced this step. */
-export type ArsenalTick = 'drawn' | 'shell' | 'reloaded' | 'meleeHit' | 'meleeDone' | 'bandaged';
+export type ArsenalTick = 'drawn' | 'shell' | 'reloaded' | 'meleeHit' | 'meleeDone' | 'bandaged' | 'thrown' | 'throwDone';
 
 /** A severed arm in a survivor's hands. */
 export interface HeldLimb {
@@ -72,6 +73,11 @@ export class Arsenal {
   limb: HeldLimb | null = null;
   /** What the current (or last) melee swing is made with. */
   meleeWith: 'machete' | 'limb' = 'machete';
+  /** Grenades and Molotovs carried. */
+  readonly throwables: Record<ThrowKind, number> = { frag: THROWABLES.frag.start, molotov: THROWABLES.molotov.start };
+  /** What the current (or last) throw is. */
+  throwKind: ThrowKind = 'frag';
+  private releasePending = false;
 
   constructor(primary: WeaponId, secondary: WeaponId, builds: Loadout = {}) {
     this.builds = { ...builds };
@@ -144,7 +150,7 @@ export class Arsenal {
   /** Whether a round can be fired now; 'empty' means the trigger clicks dry. */
   fireState(): 'ok' | 'empty' | 'busy' {
     if (this.limb) return 'busy';
-    if (this.action === 'draw' || this.action === 'melee' || this.action === 'bandage') return 'busy';
+    if (this.action === 'draw' || this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return 'busy';
     if (this.action === 'reload') {
       // Shell-by-shell reloads can be interrupted to fire what is loaded.
       if (!(this.def.perShell && this.weapon.mag > 0)) return 'busy';
@@ -190,7 +196,7 @@ export class Arsenal {
 
   switchTo(slot: 'primary' | 'secondary'): boolean {
     if (slot === this.active && this.action !== 'draw') return false;
-    if (this.action === 'melee' || this.action === 'bandage') return false;
+    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
     this.cancelReload();
     this.active = slot;
     this.action = 'draw';
@@ -201,7 +207,7 @@ export class Arsenal {
 
   /** Swings the machete, or the arm when one is in hand (not while still getting a grip on it). */
   startMelee(): boolean {
-    if (this.action === 'melee' || this.action === 'bandage') return false;
+    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
     if (this.limb && (this.action === 'draw' || this.limb.broken)) return false;
     this.cancelReload();
     this.meleeWith = this.limb ? 'limb' : 'machete';
@@ -219,7 +225,7 @@ export class Arsenal {
 
   /** Takes a severed arm in hand: the gun is slung while the grip is taken. */
   grabLimb(limb: HeldLimb): boolean {
-    if (this.action === 'melee' || this.action === 'bandage') return false;
+    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
     this.cancelReload();
     this.limb = limb;
     this.action = 'draw';
@@ -240,8 +246,32 @@ export class Arsenal {
     return l;
   }
 
+  /**
+   * Starts a throw: the gun goes down, the arm winds back and lets go `THROWING.release` seconds
+   * in ('thrown' tick), one fewer carried. Not with an arm in the hands, mid-swing or bandaging.
+   */
+  startThrow(kind: ThrowKind): boolean {
+    if (this.throwables[kind] <= 0 || this.limb) return false;
+    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    this.cancelReload();
+    this.throwKind = kind;
+    this.throwables[kind]--;
+    this.interruptedSlot = this.action === 'draw' ? this.active : null;
+    this.action = 'throw';
+    this.actionTotal = this.actionT = THROWING.duration;
+    this.releasePending = true;
+    return true;
+  }
+
+  /** Adds grenades or Molotovs up to the carry limit; returns how many fit. */
+  addThrowable(kind: ThrowKind, n: number): number {
+    const take = Math.max(0, Math.min(n, THROWABLES[kind].max - this.throwables[kind]));
+    this.throwables[kind] += take;
+    return take;
+  }
+
   startBandage(): boolean {
-    if (this.action === 'melee' || this.action === 'bandage') return false;
+    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
     this.cancelReload();
     this.action = 'bandage';
     this.actionTotal = this.actionT = COMBAT.bandageTime;
@@ -283,7 +313,7 @@ export class Arsenal {
     this.cooldown -= dt;
     if (this.cooldown < -0.05) this.cooldown = -0.05;
     this.bloom = Math.max(0, this.bloom - dt * (this.cooldown > -0.04 ? 0.9 : 2.4));
-    const canAim = aiming && !this.limb && this.action !== 'melee' && this.action !== 'bandage' && this.action !== 'draw';
+    const canAim = aiming && !this.limb && this.action !== 'melee' && this.action !== 'bandage' && this.action !== 'draw' && this.action !== 'throw';
     this.aim = clamp(this.aim + (canAim ? dt : -dt) / COMBAT.aimTime, 0, 1);
     if (this.action === 'idle') return;
     this.actionT -= dt;
@@ -299,6 +329,20 @@ export class Arsenal {
         if (this.interruptedSlot) this.actionTotal = this.actionT = this.def.draw * 0.6;
         this.interruptedSlot = null;
         out.push('meleeDone');
+      }
+      return;
+    }
+    if (this.action === 'throw') {
+      if (this.releasePending && this.actionTotal - this.actionT >= THROWING.release) {
+        this.releasePending = false;
+        out.push('thrown');
+      }
+      if (this.actionT <= 0) {
+        // The gun comes back up.
+        this.action = 'draw';
+        this.actionTotal = this.actionT = this.def.draw * (this.interruptedSlot ? 0.6 : 0.45);
+        this.interruptedSlot = null;
+        out.push('throwDone');
       }
       return;
     }

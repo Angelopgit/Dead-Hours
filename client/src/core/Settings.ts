@@ -19,7 +19,7 @@ export type Action =
   | 'sprint' | 'crouch' | 'jump' | 'interact' | 'barricade'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2'
   | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
-  | 'talk' | 'radio' | 'chat' | 'gunsmith';
+  | 'talk' | 'radio' | 'chat' | 'gunsmith' | 'grenade' | 'molotov';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
@@ -27,6 +27,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon',
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
   talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat', gunsmith: 'Customize weapon',
+  grenade: 'Throw grenade (hold to aim)', molotov: 'Throw Molotov (hold to aim)',
 };
 
 export interface SettingsData {
@@ -116,6 +117,8 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   radio: ['KeyB'],
   chat: ['Enter'],
   gunsmith: ['KeyH'],
+  grenade: ['Digit3'],
+  molotov: ['Digit4'],
 };
 
 export const DEFAULT_SETTINGS: SettingsData = {

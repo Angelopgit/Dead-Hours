@@ -2,6 +2,7 @@ import type { HitZone, WeaponId, WeaponSlot } from '../config/weapons';
 import type { ZombieKind } from '../config/zombies';
 import type { ArmZone, LimbCut } from '../config/limbs';
 import type { MeleeId } from '../config/melee';
+import type { ThrowKind } from '../config/throwables';
 import type { Surface } from '../physics/Physics';
 import type { Vec3 } from './math';
 
@@ -31,7 +32,16 @@ export type SimEvent =
     /** The melee weapon it was struck with (not set for arms or bullets). */
     weapon?: MeleeId;
   }
-  | { type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string }
+  | {
+    type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string;
+    /** Killed by a grenade (with the parts it tore off) or burned to death. */
+    cause?: 'blast' | 'fire';
+    gibs?: GibPart[];
+    /** Caught at the heart of a blast: it comes apart. */
+    shred?: boolean;
+    /** Where the blast was (bodies are thrown away from it). */
+    blast?: Vec3;
+  }
   | { type: 'zombieSpawned'; zombie: number; kind: ZombieKind }
   | { type: 'zombieRemoved'; zombie: number }
   | { type: 'zombieAlert'; zombie: number; pos: Vec3 }
@@ -97,7 +107,31 @@ export type SimEvent =
   /** `left`: raiders still standing or still in the van. */
   | { type: 'raiderDied'; raider: string; zone: HitZone; dir: Vec3; by: string | null; weapon: WeaponId; left: number }
   /** A dead raider's body was cleared from the simulation (renderers keep the corpse). */
-  | { type: 'raiderRemoved'; raider: string };
+  | { type: 'raiderRemoved'; raider: string }
+  /** A survivor started a throw (the hand comes back with it in `release` seconds). */
+  | { type: 'throwStart'; player: string; kind: ThrowKind }
+  /** A grenade or Molotov left the hand: where from, how fast, and (frags) when it goes off. */
+  | { type: 'thrown'; id: number; kind: ThrowKind; player: string; pos: Vec3; vel: Vec3; fuseAt: number }
+  /** It bounced (or came to rest, speed 0): its new state, for clients drawing the flight. */
+  | { type: 'bounce'; id: number; pos: Vec3; vel: Vec3; surface: Surface; speed: number }
+  /** A grenade went off (`id` 0 for blasts not from a thrown grenade). */
+  | { type: 'explosion'; id: number; kind: 'frag'; pos: Vec3; player: string }
+  /**
+   * A Molotov broke (`pos`) and its fuel caught on the floor (`ground`): burning patches
+   * [x, y, z, radius] from `start` to `end` (simulation time).
+   */
+  | { type: 'fire'; id: number; player: string; pos: Vec3; ground: Vec3; patches: [number, number, number, number][]; start: number; end: number }
+  /** A zombie caught fire. */
+  | { type: 'ignite'; zombie: number };
+
+/** A head or leg blown off a zombie a blast killed (arms come off as real limbs, see limbSevered). */
+export interface GibPart {
+  part: 'head' | 'legL' | 'legR';
+  /** Where it was on the body, which way it flies, and how fast (m/s). */
+  pos: Vec3;
+  dir: Vec3;
+  speed: number;
+}
 
 /**
  * A supply helicopter's flight, in simulation time: in from `from` to the hover point `over`,

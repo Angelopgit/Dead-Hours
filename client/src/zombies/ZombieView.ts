@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import { SPAWNING, type ArmZone, type HitZone, type LimbCut, type Simulation, type Zombie, type ZombieKind } from '@dead-hours/shared';
+import { SPAWNING, type ArmZone, type GibPart, type HitZone, type LimbCut, type Simulation, type Vec3, type Zombie, type ZombieKind } from '@dead-hours/shared';
 import { Humanoid, kindLooks, zombieLookOf, type ZombieGait } from '../characters/Humanoid';
+import { Gibs } from '../characters/Gibs';
+import type { BurnPoint } from '../effects/Pyro';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import type { Physics } from '../core/Physics';
 import type { Effects } from '../effects/Effects';
@@ -24,6 +26,19 @@ interface View {
   pooledBlood: boolean;
   /** Stumps still bleeding. */
   bleeds: Bleed[];
+  /** On fire 0..1 (flames shown), and how charred 0..1. */
+  burn: number;
+  char: number;
+  /** Corpses: seconds the body keeps burning. */
+  burnLeft: number;
+}
+
+/** How a zombie died, when it was more than a bullet. */
+export interface DeathDetail {
+  cause?: 'blast' | 'fire';
+  gibs?: GibPart[];
+  shred?: boolean;
+  blast?: Vec3;
 }
 
 /** A fresh stump: pumping blood for a few seconds, then dripping, slowing to nothing. */
@@ -74,10 +89,13 @@ export class ZombieView {
   /** Far footfalls left to play this moment (a horde would otherwise be hundreds a second). */
   private stepBudget = 8;
   private readonly ear = new THREE.Vector3();
+  /** Heads and legs blown off. */
+  readonly gibs: Gibs;
 
   constructor(scene: THREE.Scene, private readonly physics: Physics, private readonly field: LightField, private readonly effects: Effects) {
     this.root.name = 'zombies';
     scene.add(this.root);
+    this.gibs = new Gibs(this.root, physics, effects);
   }
 
   private poolOf(kind: ZombieKind, look: number) {
@@ -100,6 +118,8 @@ export class ZombieView {
     const h = entry.body;
     h.resetPose();
     h.clearWounds();
+    h.material.color.setScalar(1);
+    h.material.emissive.setScalar(0);
     // Some arrive already torn up.
     if (this.gore) {
       const r = (look * 2654435761) >>> 0;
@@ -152,18 +172,34 @@ export class ZombieView {
   }
 
   /** Death: the body goes limp from its current pose, thrown by the killing hit. */
-  died(id: number, zone: HitZone, dir: THREE.Vector3, force: number): void {
+  died(id: number, zone: HitZone, dir: THREE.Vector3, force: number, detail: DeathDetail = {}): void {
     const v = this.views.get(id);
     if (!v) return;
     this.views.delete(id);
     if (this.gore) v.body.wound(zone, 0.5);
     const r = new Ragdoll(this.physics, v.body);
-    const push = dir.clone().setY(Math.max(dir.y, 0) + 0.25).multiplyScalar(force * 2.6);
+    // A blast throws a body a few metres (up and away), not across the street.
+    const push = detail.cause === 'blast'
+      ? dir.clone().setY(Math.max(dir.y, 0) + 0.45).normalize().multiplyScalar(force * 1.35)
+      : dir.clone().setY(Math.max(dir.y, 0) + 0.25).multiplyScalar(force * 2.6);
     const pushes = [{ joints: ZONE_PARTICLES[zone] ?? ZONE_PARTICLES.torso, impulse: push }];
-    if (zone === 'legL' || zone === 'legR') pushes.push({ joints: ZONE_PARTICLES.torso, impulse: dir.clone().multiplyScalar(-force * 0.8) });
+    if (detail.cause === 'blast') {
+      // Thrown bodily, the parts nearest the blast hardest.
+      for (const j of Object.values(ZONE_PARTICLES)) pushes.push({ joints: j, impulse: push.clone().multiplyScalar(0.6) });
+    } else if (zone === 'legL' || zone === 'legR') pushes.push({ joints: ZONE_PARTICLES.torso, impulse: dir.clone().multiplyScalar(-force * 0.8) });
     // The ragdoll reads joints from the bones: a missing arm still has its (hidden) joints.
     v.body.withWholeArms(() => r.start(v.vel, pushes));
     v.ragdoll = r;
+    if (detail.cause === 'fire') {
+      v.burn = 1;
+      v.char = Math.max(v.char, 0.85);
+      v.burnLeft = 3.5 + Math.random() * 2.5;
+    } else if (detail.cause === 'blast') {
+      // Blackened by it, and torn apart.
+      v.char = Math.max(v.char, detail.shred ? 0.55 : 0.3);
+      if (this.gore) for (const z of ['torso', 'legL', 'legR', 'head'] as const) v.body.wound(z, detail.shred ? 1 : 0.6);
+      this.tear(v, detail);
+    }
     v.deadT = 0;
     v.baseY = v.body.root.position.y;
     this.corpses.push(v);
@@ -189,6 +225,32 @@ export class ZombieView {
     v.ragdoll = null;
     this.release(v);
     return out;
+  }
+
+  /** Heads and legs come off and fly; blood bursts from where they were. */
+  private tear(v: View, detail: DeathDetail): void {
+    const b = v.body;
+    b.root.updateMatrixWorld(true);
+    for (const g of detail.gibs ?? []) {
+      const bone = g.part === 'head' ? b.head : g.part === 'legL' ? b.legL.upper : b.legR.upper;
+      bone.getWorldPosition(_sp);
+      bone.getWorldQuaternion(_q);
+      _sd.set(g.dir.x, g.dir.y, g.dir.z).multiplyScalar(g.speed).add(v.vel);
+      if (this.gore) this.gibs.spawn(v.kind, v.look, g.part, b.root.scale.x, _sp, _q, _sd);
+      b.tearOff(g.part);
+      _sd.set(g.dir.x, g.dir.y, g.dir.z);
+      this.effects.sever(_sp, _sd, false);
+      if (this.gore) {
+        this.effects.gibs(_sp, _sd);
+        v.bleeds.push({ arm: g.part as unknown as ArmZone, t: 0, next: 0.05, strength: g.part === 'head' ? 1.2 : 1 });
+      }
+    }
+    if (detail.shred && this.gore) {
+      // Caught at the heart of it: the body bursts.
+      b.spine.getWorldPosition(_sp);
+      const away = detail.blast ? _sd.set(_sp.x - detail.blast.x, 0.6, _sp.z - detail.blast.z).normalize() : _sd.set(0, 1, 0);
+      for (let i = 0; i < 3; i++) this.effects.gibs(_sp, away);
+    }
   }
 
   removed(id: number): void {
@@ -226,7 +288,7 @@ export class ZombieView {
       let v = this.views.get(z.id);
       if (!v) {
         const { body, probe } = this.acquire(z.kind, z.look);
-        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [] };
+        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [], burn: 0, char: 0, burnLeft: 0 };
         body.onFootstep = (l) => this.stepped(view, l);
         this.views.set(z.id, v);
       }
@@ -238,9 +300,16 @@ export class ZombieView {
         this.release(v);
       }
     }
+    this.gibs.setGore(this.gore);
+    this.gibs.update(dt);
     for (let i = this.corpses.length - 1; i >= 0; i--) {
       const c = this.corpses[i];
       c.deadT += dt;
+      if (c.burn > 0) {
+        c.burnLeft -= dt;
+        if (c.burnLeft <= 0) c.burn = Math.max(0, c.burn - dt * 0.6);
+        this.shadeBurn(c, dt);
+      }
       const r = c.ragdoll!;
       if (!r.asleep) r.update(dt);
       else if (!c.pooledBlood) {
@@ -305,6 +374,43 @@ export class ZombieView {
     b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: state === 'vault' ? 0.6 : 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
     v.probe.update(dt, this.tmp.set(x, y, zz), camera);
     if (v.bleeds.length) this.bleed(v, dt, cam);
+    // On fire: flames all over, the skin charring black.
+    if (z.burning) v.burn = Math.min(1, v.burn + dt * 3);
+    else v.burn = Math.max(0, v.burn - dt * 1.5);
+    if (v.burn > 0) v.char = Math.min(1, v.char + dt * 0.18 * v.burn);
+    if (v.burn > 0 || v.char > 0) this.shadeBurn(v, dt);
+  }
+
+  /** Charred colour and the glow of embers in the skin while it burns. */
+  private shadeBurn(v: View, dt: number): void {
+    void dt;
+    const m = v.body.material;
+    m.color.setScalar(1 - 0.84 * v.char);
+    const flick = 0.75 + 0.25 * Math.sin(performance.now() * 0.013 + v.id);
+    m.emissive.setRGB(0.55 * v.burn * flick * v.char, 0.12 * v.burn * flick * v.char, 0.02 * v.burn * v.char);
+  }
+
+  /** Where flames are on burning bodies this frame (living and dead). */
+  flamePoints(out: BurnPoint[], camera: THREE.Camera): BurnPoint[] {
+    out.length = 0;
+    const cam = camera.position;
+    const add = (v: View) => {
+      if (v.burn <= 0.02 || !v.body.root.visible) return;
+      const b = v.body;
+      const s = b.root.scale.x;
+      const d = b.root.position.distanceTo(cam);
+      const bones = d > 45 ? [b.spine] : d > 22 ? [b.spine, b.head, b.legL.lower] : [b.spine, b.head, b.armL.lower, b.armR.lower, b.legL.lower, b.legR.lower, b.hips];
+      for (let i = 0; i < bones.length; i++) {
+        const bone = bones[i];
+        if (bone.scale.x < 0.01) continue;
+        bone.getWorldPosition(_sp);
+        const torso = bone === b.spine || bone === b.hips;
+        out.push({ x: _sp.x, y: _sp.y + (torso ? 0.15 : 0), z: _sp.z, size: s * (torso ? 1 : bone === b.head ? 0.75 : 0.6) * (d > 45 ? 1.6 : 1), strength: v.burn, seed: (v.id * 7 + i) * 0.137 % 1 });
+      }
+    };
+    for (const v of this.views.values()) add(v);
+    for (const c of this.corpses) if (c.deadT < SPAWNING.corpseTime) add(c);
+    return out;
   }
 
   private stepped(v: View, loudness: number): void {
@@ -327,7 +433,8 @@ export class ZombieView {
         continue;
       }
       if (s.next > 0) continue;
-      if (!v.body.stump(s.arm, _sp, _sd)) {
+      const torn = (s.arm as string) === 'head' || (s.arm as string) === 'legL' || (s.arm as string) === 'legR';
+      if (!(torn ? v.body.tornEnd(s.arm as unknown as 'head', _sp, _sd) : v.body.stump(s.arm, _sp, _sd))) {
         v.bleeds.splice(i, 1);
         continue;
       }
@@ -347,6 +454,7 @@ export class ZombieView {
   }
 
   clear(): void {
+    this.gibs.clear();
     for (const v of this.views.values()) this.release(v);
     this.views.clear();
     for (const c of this.corpses) this.release(c);
@@ -355,9 +463,10 @@ export class ZombieView {
 
   dispose(): void {
     this.clear();
+    this.gibs.dispose();
     for (const list of this.pool.values()) for (const e of list) e.body.dispose();
     this.root.removeFromParent();
   }
 }
 
-const _sp = new THREE.Vector3(), _sd = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+const _sp = new THREE.Vector3(), _sd = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _q = new THREE.Quaternion();

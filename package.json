@@ -21,6 +21,7 @@
     "check:raid": "tsx shared/tests/raid.check.ts",
     "check:server": "npm run check -w server",
     "check:cluster": "npm run check:cluster -w server",
-    "check:controls": "tsx client/tests/controls.check.ts"
+    "check:controls": "tsx client/tests/controls.check.ts",
+    "check:explosives": "tsx shared/tests/explosives.check.ts"
   }
 }

@@ -79,7 +79,9 @@ export type ActMsg =
   /** Hold interact on a downed teammate (null: let go). */
   | { a: 'revive'; target: string | null }
   /** New attachments or finish for a carried gun (encodeBuild); the server checks the player's unlocks. */
-  | { a: 'refit'; weapon: WeaponId; build: string };
+  | { a: 'refit'; weapon: WeaponId; build: string }
+  /** Throw a grenade or Molotov along the crosshair ray. */
+  | { a: 'throw'; kind: 'frag' | 'molotov'; o: Vec3; d: Vec3 };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

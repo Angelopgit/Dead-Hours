@@ -33,3 +33,5 @@ export * from './sim/MeleePickups';
 export * from './sim/Raid';
 export * from './sim/Simulation';
 export * from './protocol/snapshot';
+export * from './config/throwables';
+export * from './sim/Explosives';

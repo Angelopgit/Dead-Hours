@@ -443,6 +443,65 @@ export class Humanoid {
     return true;
   }
 
+  /** Zombies: head or legs blown off (by a blast): collapsed to nothing, a torn end left. */
+  private readonly torn = new Set<'head' | 'legL' | 'legR'>();
+
+  /**
+   * Blows the head or a leg off: it collapses to nothing (with anything worn on it) and a torn,
+   * bleeding end is left at the neck or hip. Call after the ragdoll has read the whole body.
+   */
+  tearOff(part: 'head' | 'legL' | 'legR'): void {
+    if (this.torn.has(part)) return;
+    this.torn.add(part);
+    const leg = part === 'legL' ? this.legL : part === 'legR' ? this.legR : null;
+    (leg ? leg.upper : this.head).scale.setScalar(0.001);
+    if (!this.gore) return;
+    let m = this.stumps.get(part);
+    if (!m) {
+      // The neck is about as thick as the forearm; a hip as the thigh.
+      const bone = part === 'head' ? BONE.head : part === 'legL' ? BONE.legLUpper : BONE.legRUpper;
+      const r = part === 'head' ? 0.065 : 0.088;
+      m = new THREE.Mesh(stumpGeometry(r, this.seed * 1000 + bone + 50, 1), this.gore);
+      if (leg) {
+        m.position.copy(leg.upper.position);
+        this.hips.add(m);
+      } else {
+        // The torn neck faces up, out of the shoulders.
+        m.position.copy(this.head.position);
+        m.rotation.x = Math.PI;
+        this.spine.add(m);
+      }
+      this.stumps.set(part, m);
+    }
+    m.visible = true;
+  }
+
+  /** What has been blown off. */
+  isTorn(part: 'head' | 'legL' | 'legR'): boolean {
+    return this.torn.has(part);
+  }
+
+  /** World position and outward direction of a torn neck or hip (false while whole). */
+  tornEnd(part: 'head' | 'legL' | 'legR', pos: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const m = this.torn.has(part) ? this.stumps.get(part) : undefined;
+    if (!m) return false;
+    m.updateWorldMatrix(true, false);
+    pos.setFromMatrixPosition(m.matrixWorld);
+    dir.set(0, -1, 0).transformDirection(m.matrixWorld);
+    return true;
+  }
+
+  /** Puts blown-off parts back (pooled bodies). */
+  private mend(): void {
+    for (const part of this.torn) {
+      const leg = part === 'legL' ? this.legL : part === 'legR' ? this.legR : null;
+      (leg ? leg.upper : this.head).scale.setScalar(1);
+      const m = this.stumps.get(part);
+      if (m) m.visible = false;
+    }
+    this.torn.clear();
+  }
+
   /** Runs `fn` with every arm at full size (a ragdoll reads the real joint positions). */
   withWholeArms(fn: () => void): void {
     const ls = [this.armL, this.armR];
@@ -790,6 +849,7 @@ export class Humanoid {
     this.root.position.y = 0;
     this.setArm('armL', 'intact');
     this.setArm('armR', 'intact');
+    this.mend();
   }
 
   dispose(): void {

@@ -4,7 +4,7 @@ import {
   BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type ArmZone, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
-  type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
+  type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
@@ -24,6 +24,9 @@ import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { clearSeveredCache } from '../characters/Severed';
 import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../weapons/WeaponModels';
 import { Effects } from '../effects/Effects';
+import { Pyro, type BurnPoint } from '../effects/Pyro';
+import { Throwables } from './Throwables';
+import { clearGibCache } from '../characters/Gibs';
 import { ZombieView } from '../zombies/ZombieView';
 import { RaidView } from './RaidView';
 import { LimbView } from '../zombies/LimbView';
@@ -127,6 +130,10 @@ export class GameSession {
   private readonly inventory = new Inventory();
   private readonly weapon: PlayerWeapon;
   private readonly effects: Effects;
+  private readonly pyro: Pyro;
+  private readonly throws: Throwables;
+  private readonly burnPoints: BurnPoint[] = [];
+  private wantThrow: ThrowKind | null = null;
   private readonly zombies: ZombieView;
   private readonly raid: RaidView;
   private readonly limbs: LimbView;
@@ -271,6 +278,11 @@ export class GameSession {
     this.raid = new RaidView(engine.scene, physics, field);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
     this.zombies.onStep = (pos, gait, loudness) => audio.zombieStep(pos, gait, loudness);
+    this.zombies.gibs.onLand = (pos, strength) => audio.limbLand(pos, strength);
+    // Grenades and Molotovs: the blasts, the fires and the throws.
+    this.pyro = new Pyro(engine.scene, physics, this.effects.decals);
+    this.pyro.onBlastNear = (k) => this.cam.addTrauma(0.15 + k * 0.75);
+    this.throws = new Throwables(engine.scene, physics, this.pyro);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
@@ -336,6 +348,8 @@ export class GameSession {
     this.zombies.gore = g.gore !== 'off';
     this.limbs.gore = g.gore !== 'off';
     this.weapon.gore = g.gore !== 'off';
+    this.zombies.gibs.setGore(g.gore !== 'off');
+    this.pyro.setQuality(g.particleQuality, settings.value.accessibility.reducedFlashing);
     this.remotes?.setGore(g.gore !== 'off');
     this.raid.setGore(g.gore !== 'off');
   }
@@ -864,7 +878,7 @@ export class GameSession {
       // would only glare off the sights an inch from the eye.
       this.fill.intensity = 1.6 * (1 - 0.8 * ads);
       this.hud.setScope(scope);
-      this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view });
+      this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming });
     }
     this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
 
@@ -886,6 +900,7 @@ export class GameSession {
     this.drops.helicopters(this.helis);
     audio.helicopters(this.phase === 'paused' && !this.link ? new Map() : this.helis);
     this.effects.update(live, this.engine.camera);
+    this.updateFire(live, renderTime);
     this.rack?.update(dt, this.engine.camera);
     this.updateGunsmith(dt);
 
@@ -998,6 +1013,7 @@ export class GameSession {
     const wheel = input.consumeWheel();
     if (wheel !== 0) this.wantSlot = a.active === 'primary' ? 'secondary' : 'primary';
     if (input.pressed('melee')) this.wantMelee = true;
+    this.throwInput();
     if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
       this.chatBox.open();
       input.clear();
@@ -1035,6 +1051,12 @@ export class GameSession {
     if (this.wantHeal) {
       this.wantHeal = false;
       sim.bandage(this.myId);
+    }
+    if (this.wantThrow) {
+      const kind = this.wantThrow;
+      this.wantThrow = null;
+      const o = this.cam.aimOrigin, d = this.cam.aimDir;
+      sim.throwItem(this.myId, kind, { origin: { x: o.x, y: o.y, z: o.z }, dir: { x: d.x, y: d.y, z: d.z } });
     }
     if (this.wantReload) {
       this.wantReload = false;
@@ -1082,7 +1104,7 @@ export class GameSession {
   /** This survivor's own actions the session already showed when they were made. */
   private predicted(e: SimEvent): boolean {
     if (!('player' in e) || e.player !== this.myId) return false;
-    return e.type === 'dryFire' || e.type === 'refit' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start');
+    return e.type === 'dryFire' || e.type === 'refit' || e.type === 'throwStart' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start');
   }
 
   /** What the server would do between snapshots: hands keep moving, doors keep swinging, zombies stay solid. */
@@ -1143,6 +1165,17 @@ export class GameSession {
       if (a.action !== 'melee' && a.action !== 'bandage' && a.startBandage()) {
         this.act({ a: 'bandage' });
         audio.bandage();
+      }
+    }
+    if (this.wantThrow) {
+      const kind = this.wantThrow;
+      this.wantThrow = null;
+      const reloading = a.action === 'reload';
+      if (a.startThrow(kind)) {
+        const { o, d } = aim();
+        this.act({ a: 'throw', kind, o, d });
+        if (reloading) this.reloadFromEmpty = false;
+        this.onEvent({ type: 'throwStart', player: this.myId, kind });
       }
     }
     if (this.wantReload) {
@@ -1400,6 +1433,68 @@ export class GameSession {
     return best;
   }
 
+  // ------------------------------------------------------------------ throwing
+
+  /**
+   * Holding the grenade (or Molotov) key gets one ready and shows where it will go; letting go
+   * throws it. Another key, a swing, a bandage or an arm in the hands puts it away again.
+   */
+  private throwInput(): void {
+    const input = this.input;
+    const a = this.me.arsenal;
+    const t = this.throws;
+    for (const kind of ['frag', 'molotov'] as const) {
+      const action = kind === 'frag' ? 'grenade' : 'molotov';
+      if (input.pressed(action) && !t.priming) {
+        if (a.throwables[kind] <= 0) this.hud.feedLine(kind === 'frag' ? 'NO GRENADES' : 'NO MOLOTOVS');
+        else if (a.limb) this.hud.feedLine('HANDS FULL');
+        else if (a.action !== 'throw') {
+          t.priming = kind;
+          audio.throwReady(kind, this.handPos());
+        }
+      }
+      if (t.priming === kind && !input.held(action)) {
+        t.priming = null;
+        this.wantThrow = kind;
+      }
+    }
+    if (t.priming && (a.limb || a.action === 'melee' || a.action === 'bandage' || !this.me.alive || a.throwables[t.priming] <= 0)) t.priming = null;
+    if (t.priming) this.player.blockSprint(0.1);
+  }
+
+  /** A survivor's throwing hand (this one's, or another's as drawn). */
+  private handOf(id: string, out: THREE.Vector3): THREE.Vector3 {
+    if (id === this.myId) return out.copy(this.handPos());
+    const p = this.sim.players.get(id);
+    return p ? out.set(p.motion.pos.x, p.motion.pos.y + 1.5, p.motion.pos.z) : out.set(0, 0, 0);
+  }
+
+  /** Flights, blasts and fires: burning zombies' flames, the aiming arc, the roar of fires. */
+  private updateFire(dt: number, renderTime: number): void {
+    const cam = this.engine.camera;
+    const priming = this.phase === 'playing' ? this.throws.priming : null;
+    if (priming) {
+      const m = this.me.motion;
+      const d = this.cam.aimDir;
+      this.throws.aim(priming, this.me.eye, { x: d.x, y: d.y, z: d.z }, m.yaw, m.vel);
+    } else {
+      this.throws.aim(null, this.me.eye, this.me.eye, 0, this.me.eye);
+    }
+    this.throws.update(dt);
+    // The lit rag in the hand.
+    const wick = priming === 'molotov' ? this.weapon.wickWorld(this.tmpC) : null;
+    if (wick && dt > 0) this.pyro.rag(wick, this.tmpD.set(0, 0, 0));
+    this.pyro.setBurning(this.zombies.flamePoints(this.burnPoints, cam));
+    this.pyro.update(dt, renderTime, cam);
+    const fires = this.phase === 'paused' && !this.link ? [] : this.pyro.activeFires(renderTime);
+    // Up to three of the nearest burning zombies crackle too.
+    const cp = cam.position;
+    const near = this.burnPoints.filter((b) => b.size >= 0.9)
+      .sort((p, q) => Math.hypot(p.x - cp.x, p.z - cp.z) - Math.hypot(q.x - cp.x, q.z - cp.z)).slice(0, 3);
+    for (let i = 0; i < near.length; i++) fires.push({ id: -1 - i, pos: new THREE.Vector3(near[i].x, near[i].y, near[i].z), strength: 0.5 * near[i].strength });
+    audio.fires(fires, dt);
+  }
+
   // ------------------------------------------------------------------ events
 
   private onEvent(e: SimEvent): void {
@@ -1516,7 +1611,7 @@ export class GameSession {
       case 'zombieDied': {
         const head = this.zombies.headOf(e.zombie, C);
         if (head) audio.zombieDeath(head, this.zombies.pitchOf(e.zombie));
-        this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force);
+        this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force, { cause: e.cause, gibs: e.gibs, shred: e.shred, blast: e.blast });
         break;
       }
       case 'raiderHit': {
@@ -1742,6 +1837,7 @@ export class GameSession {
         }
         break;
       default:
+        this.throws.onEvent(e, this.sim, (id, out) => this.handOf(id, out));
         break;
     }
   }
@@ -2045,6 +2141,8 @@ export class GameSession {
       healing: a.action === 'bandage' ? a.progress : null,
       hits: limb ? limb.wear : null,
       wear: limb ? limb.wear / limb.maxWear : null,
+      frags: a.throwables.frag,
+      molotovs: a.throwables.molotov,
     });
     const s = this.sim;
     const w = s.phase === 'survival' ? hordeAt(s.phaseTime).stage : 'calm';
@@ -2068,7 +2166,7 @@ export class GameSession {
     // Down the sights, the sights are the crosshair.
     this.updateDownPanel();
     hud.setCrosshairVisible(this.phase === 'playing' && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
-    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
     // Pain: hits flash the screen edges red; low health keeps a pulse there.
@@ -2177,6 +2275,10 @@ export class GameSession {
     this.drops.dispose();
     audio.helicopters(new Map());
     this.effects.dispose();
+    this.throws.dispose();
+    this.pyro.dispose();
+    audio.fires([], 0);
+    clearGibCache();
     this.rack?.dispose();
     this.weapon.dispose();
     clearSeveredCache();
