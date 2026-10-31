@@ -34,6 +34,10 @@ export type SimEvent =
   | { type: 'zombieAlert'; zombie: number; pos: Vec3 }
   | { type: 'zombieAttack'; zombie: number; target: string }
   | { type: 'zombieGroan'; zombie: number; pos: Vec3 }
+  /** A screamer let out its call: `called` zombies turned toward `target`, `fresh` more are coming. */
+  | { type: 'zombieScream'; zombie: number; pos: Vec3; target: string; called: number; fresh: number }
+  /** A bloater burst at `pos` (after its zombieDied), killed by `by`. */
+  | { type: 'zombieBurst'; zombie: number; pos: Vec3; by: string }
   | { type: 'playerHurt'; player: string; damage: number; from: Vec3; health: number }
   | { type: 'playerDied'; player: string }
   | { type: 'playerHealed'; player: string; amount: number; health: number }

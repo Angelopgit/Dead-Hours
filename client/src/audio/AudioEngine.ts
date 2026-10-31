@@ -1217,6 +1217,64 @@ export class AudioEngine {
     this.burst(this.out(position, 0.1, 3), t + 0.5, 'lowpass', 300, 0.7, 0.35, 0.01, 0.2);
   }
 
+  /**
+   * A screamer's call: a long, rising, tearing shriek in two voices, ragged with noise, then
+   * a gasp. Carries far and rings off the houses.
+   */
+  zombieScream(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.6, 9);
+    const shriek = (at: number, f0: number, f1: number, formant: number, dur: number, peak: number, wobble: number) => {
+      const ctx = this.ctx!;
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f0, at);
+      o.frequency.exponentialRampToValueAtTime(f1, at + dur * 0.35);
+      o.frequency.setTargetAtTime(f1 * 0.82, at + dur * 0.55, dur * 0.3);
+      const vib = ctx.createOscillator();
+      vib.frequency.value = wobble;
+      const vg = ctx.createGain();
+      vg.gain.value = f1 * 0.05;
+      vib.connect(vg).connect(o.frequency);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = formant;
+      bp.Q.value = 3;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(peak, at + 0.12);
+      g.gain.setTargetAtTime(0, at + dur * 0.8, dur * 0.12);
+      o.connect(bp).connect(g).connect(d);
+      o.start(at);
+      vib.start(at);
+      o.stop(at + dur + 0.6);
+      vib.stop(at + dur + 0.6);
+    };
+    shriek(t, 380, 1150, 1900, 1.25, 0.75, 9);
+    shriek(t + 0.03, 560, 1650, 2700, 1.2, 0.4, 13);
+    this.burst(d, t + 0.05, 'bandpass', 3000, 1.2, 0.3, 0.1, 1.1);
+    this.burst(d, t + 0.1, 'highpass', 4500, 0.7, 0.12, 0.2, 0.9);
+    this.voice(position, t + 1.2, 700, 300, 1300, 0.4, 0.3, 18, 0.25);
+  }
+
+  /** A bloater bursting: a deep wet boom, a gas rush, and meat raining down. */
+  bloaterBurst(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.5, 7);
+    this.tone(d, t, 'sine', 70, 28, 1.0, 0.003, 0.5);
+    this.burst(d, t, 'lowpass', 520, 0.7, 1.0, 0.003, 0.4);
+    this.burst(d, t, 'bandpass', 900, 1.5, 0.5, 0.002, 0.18, 0.6);
+    // Gas tearing out.
+    this.burst(d, t + 0.02, 'bandpass', 1600, 0.8, 0.35, 0.05, 0.7, 0.8);
+    // Skin splitting and bone cracking.
+    for (let i = 0; i < 6; i++) this.burst(d, t + Math.random() * 0.06, 'bandpass', 700 + Math.random() * 1200, 4, 0.25, 0.002, 0.04, 0.7);
+    for (let i = 0; i < 3; i++) this.burst(d, t + 0.01 + Math.random() * 0.04, 'highpass', 2600 + Math.random() * 1500, 0.8, 0.25, 0.001, 0.02);
+    // Pieces coming down all around.
+    for (let i = 0; i < 18; i++) this.burst(d, t + 0.35 + Math.random() * 0.9, 'bandpass', 500 + Math.random() * 900, 3, 0.06 + Math.random() * 0.08, 0.003, 0.05, 0.7);
+  }
+
   doorPound(position: THREE.Vector3): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;

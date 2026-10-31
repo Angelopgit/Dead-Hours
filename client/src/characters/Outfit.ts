@@ -122,7 +122,12 @@ export interface DressOptions {
   rand: () => number;
   /** Widens torso and limbs beyond the broadest build (brutes). */
   girth?: number;
+  /** What the infection made of the special zombies. */
+  mutation?: Mutation;
 }
+
+/** Screamers: a jaw hanging open and a swollen throat. Bloaters: a gut bursting out of the shirt, boils. */
+export type Mutation = 'screamer' | 'bloater';
 
 export interface DressResult {
   /** How far behind the back the carried gear reaches, so a slung rifle sits on top of it. */
@@ -183,7 +188,34 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
   neck(spine, a, b, cloth(a.neckColor));
   const backDepth = back(spine, a, b, cloth(a.backColor)) + b.bulk;
   gear(spine, hips, kit, a, b, cloth(a.gearColor));
+  if (o.mutation) mutate(head, spine, kit, b, o.mutation);
   return { backDepth, eyesVisible: !o.zombie && !HIDES_EYES.has(a.headwear) && !HIDES_EYES.has(a.face) };
+}
+
+// ── Mutations ──────────────────────────────────────────────────────────────────────────
+
+function mutate(head: Kit, spine: Kit, kit: (bone: number) => Kit, b: Body, m: Mutation): void {
+  const skin = b.skin;
+  if (m === 'screamer') {
+    // The jaw hangs open in a permanent scream, the throat swollen from it.
+    head.ball(0x1c0606, [0.034, 0.05, 0.012], [0, 0.045, 0.114], [0.12, 0, 0], undefined, 10, 7);
+    head.ball(0x5a1a14, [0.024, 0.008, 0.02], [0, 0.012, 0.108], O, undefined, 8, 5);
+    head.ball(shade(skin, 1.08), [0.058, 0.045, 0.05], [0, -0.07, 0.035], O, undefined, 10, 7);
+    for (const s of [1, -1]) head.ball(mixHex(skin, 0x6a2a3a, 0.35), [0.02, 0.034, 0.02], [s * 0.04, -0.06, 0.06], O, undefined, 7, 5);
+    return;
+  }
+  // A gut swollen with gas, split skin and boils, straining out under the shirt.
+  const gut = mixHex(skin, 0xb7b06a, 0.3);
+  spine.ball(gut, [0.27 * b.bx, 0.24, 0.24 * b.bz], [0, 0.13, 0.06 * b.bz], O, undefined, 16, 12);
+  spine.ball(mixHex(gut, 0x5a2d3d, 0.4), [0.07, 0.012, 0.03], [0.05, 0.08, 0.06 * b.bz + 0.23 * b.bz], [0.4, 0, 0.5], undefined, 8, 5);
+  const boil = 0xc8b84a;
+  const spots: [number, number, number][] = [[0.12, 0.2, 1], [-0.16, 0.1, 1], [0.05, 0.02, 1], [-0.08, 0.27, 1], [0.18, 0.32, -1], [-0.14, 0.36, -1]];
+  for (const [x, y, side] of spots) {
+    const z = side * (0.06 * b.bz + 0.22 * b.bz * Math.sqrt(Math.max(0, 1 - (x / (0.27 * b.bx)) ** 2)));
+    spine.ico(boil, 0.022 + b.rand() * 0.016, [x * b.bx, y, z], O, 1, 1);
+  }
+  for (const bone of [BONE.armLUpper, BONE.armRUpper]) kit(bone).ico(boil, 0.024, [0.03, -0.12, 0.03], O, 1, 1);
+  head.ico(boil, 0.02, [0.07, 0.17, 0.08], O, 1, 1);
 }
 
 // ── Face ────────────────────────────────────────────────────────────────────────────────

@@ -26,7 +26,7 @@ export interface LimbClub {
 /** Severed arms: when they come off, how they fall, and what they do as a club. */
 export const LIMBS = {
   /** Damage an arm soaks before it comes off (on top of the zombie's health), per kind. */
-  armHealth: { walker: 36, runner: 26, brute: 95, crawler: 26 } as Record<ZombieKind, number>,
+  armHealth: { walker: 36, runner: 26, brute: 95, crawler: 26, screamer: 22, bloater: 70 } as Record<ZombieKind, number>,
   /** A machete chop counts this much more against an arm (it is made for cutting). */
   chopBonus: 1.5,
   /** A swung arm hitting an arm counts this much (it tears more than it cuts). */

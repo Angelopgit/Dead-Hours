@@ -281,6 +281,51 @@ export class Effects {
     }
   }
 
+  /**
+   * A bloater bursting: a sallow cloud of gas, meat, bone and blood thrown every way, and
+   * splatter painted on the walls and ground all around.
+   */
+  bloaterBurst(pos: THREE.Vector3): void {
+    // The gas is there whatever the gore setting.
+    for (let i = 0; i < 7; i++) {
+      this.emitSoft({
+        x: pos.x + rand(-0.2, 0.2), y: pos.y + rand(-0.2, 0.3), z: pos.z + rand(-0.2, 0.2),
+        vx: rand(-1.6, 1.6), vy: rand(0.1, 1.1), vz: rand(-1.6, 1.6),
+        life: rand(1.6, 2.8), size: 0.4, size1: rand(1.8, 2.8), r: 0.36, g: 0.38, b: 0.16, alpha: 0.42, drag: 1.8,
+      });
+    }
+    if (this.gore === 'off') return;
+    const full = this.gore === 'full' ? 1 : 0.45;
+    const k = this.scale(pos) * full;
+    const floor = this.floorBelow(pos);
+    const dir = this.tmp;
+    for (let i = 0; i < 4; i++) {
+      this.emitSoft({
+        x: pos.x, y: pos.y, z: pos.z, vx: rand(-1.4, 1.4), vy: rand(0, 1), vz: rand(-1.4, 1.4),
+        life: rand(0.6, 1), size: 0.25, size1: rand(1, 1.6), r: BLOOD[0] * 1.35, g: BLOOD[1], b: BLOOD[2], alpha: 0.65, drag: 3,
+      });
+    }
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 + rand(-0.2, 0.2);
+      dir.set(Math.cos(a), rand(0.05, 0.45), Math.sin(a));
+      this.droplets(pos, dir, this.n(9, k), [3, 7.5], 0.3, floor, [0.02, 0.05]);
+      this.chunks(pos, dir.multiplyScalar(1.6), this.n(3, k), this.n(1, k), floor);
+    }
+    // Splatter on whatever is around, and a spray on the ground.
+    const at = new THREE.Vector3(), n = new THREE.Vector3(), ray = new THREE.Vector3();
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + rand(-0.15, 0.15);
+      ray.set(Math.cos(a), rand(-0.5, 0.15), Math.sin(a)).normalize();
+      const hit = this.physics.raycastHit(pos.x, pos.y, pos.z, ray.x, ray.y, ray.z, 5);
+      if (!hit) continue;
+      at.copy(pos).addScaledVector(ray, hit.distance);
+      n.set(hit.nx, hit.ny, hit.nz);
+      if (!this.isMoving?.(at, n)) this.decals.add(DECAL.splat, at, n, rand(0.6, 1.2) * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 80, 0, ray);
+    }
+    at.set(pos.x, floor, pos.z);
+    this.decals.add(DECAL.pool, at, this.up, 1.8 * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0] * 0.8, BLOOD_DECAL[1] * 1.2, BLOOD_DECAL[2], 0.9, 90, 3);
+  }
+
   /** One pulse of blood from a fresh stump (several a second, weakening). */
   spurt(pos: THREE.Vector3, dir: THREE.Vector3, strength: number): void {
     if (this.gore === 'off' || strength <= 0) return;

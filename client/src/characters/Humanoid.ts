@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { ArmState, ArmZone, HitZone } from '@dead-hours/shared';
+import type { ArmState, ArmZone, HitZone, ZombieKind } from '@dead-hours/shared';
 import { chain } from '../lighting/BakeShader';
 import { rng, randomAppearance, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
-import { EYE_Y, dress, eyeParts, type DressResult, type PartSink } from './Outfit';
+import { EYE_Y, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 
 export interface HumanoidLook {
@@ -20,6 +20,8 @@ export interface HumanoidLook {
   girth?: number;
   /** Zombie eye glow color. */
   eyeGlow?: number;
+  /** Special zombies' bodies (see Outfit's Mutation). */
+  mutation?: Mutation;
 }
 
 export type ZombieGait = 'walker' | 'runner' | 'brute';
@@ -151,7 +153,7 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
     geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
     parts.push(geo);
   };
-  const result = dress(sink, look.outfit, { zombie: !!look.zombie, skin: look.skin, rand, girth: look.girth });
+  const result = dress(sink, look.outfit, { zombie: !!look.zombie, skin: look.skin, rand, girth: look.girth, mutation: look.mutation });
   const merged = mergeGeometries(parts, false)!;
   for (const p of parts) p.dispose();
   merged.computeBoundingSphere();
@@ -306,6 +308,8 @@ export class Humanoid {
   attack = -1;
   /** Door pounding cycle 0..1, or -1. */
   bash = -1;
+  /** Screamers: scream progress 0..1, or -1. */
+  scream = -1;
   /** Knocked down (0 standing .. 1 lying on its back). */
   downTarget = 0;
   private down = 0;
@@ -649,6 +653,14 @@ export class Humanoid {
         lx = b < 0.6 ? -1.0 : -0.25;
         spread = 0.15;
       }
+      if (this.scream >= 0) {
+        // Rears back with arms flung wide and down, then holds the call.
+        const k = THREE.MathUtils.smoothstep(this.scream, 0, 0.3) * (1 - THREE.MathUtils.smoothstep(this.scream, 0.85, 1));
+        ux = THREE.MathUtils.lerp(ux, 0.35, k);
+        lx = THREE.MathUtils.lerp(lx, -0.25, k);
+        spread = THREE.MathUtils.lerp(spread, 0.75, k);
+        swing *= 1 - k;
+      }
       // Staggering throws the arms out.
       ux = THREE.MathUtils.lerp(ux, -0.6, sv * 0.6);
       spread += sv * 0.8;
@@ -661,6 +673,15 @@ export class Humanoid {
         Math.sin(p * 0.21 + this.seed) * 0.3,
         0.25 * Math.sin(this.seed) + fh[1].x * 0.1,
       );
+      if (this.scream >= 0) {
+        // Chest out, head thrown back, shaking with the effort.
+        const k = THREE.MathUtils.smoothstep(this.scream, 0, 0.3) * (1 - THREE.MathUtils.smoothstep(this.scream, 0.85, 1));
+        const shake = this.scream > 0.3 ? Math.sin(performance.now() * 0.09) * 0.04 * k : 0;
+        this.spine.rotation.x -= (zLean + 0.25) * k;
+        this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, -0.75 + shake, k);
+        this.head.rotation.y *= 1 - k;
+        this.head.rotation.z = THREE.MathUtils.lerp(this.head.rotation.z, shake, k);
+      }
     } else {
       const swingL = sin * armAmp;
       const swingR = -sin * armAmp;
@@ -761,7 +782,7 @@ export class Humanoid {
     this.ragdoll = false;
     this.down = this.downTarget = 0;
     this.stagger = this.staggerTarget = 0;
-    this.attack = this.bash = -1;
+    this.attack = this.bash = this.scream = -1;
     this.kick = this.twist = this.lookPitch = 0;
     for (const sp of [...this.flinchHead, ...this.flinchTorso, ...this.flinchLimb]) sp.x = sp.v = 0;
     for (const b of this.bones) b.rotation.set(0, 0, 0);
@@ -793,6 +814,54 @@ const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THRE
 /** Number of distinct zombie looks per kind (looks repeat beyond this). */
 export const ZOMBIE_LOOK_COUNT = 12;
 export const ZOMBIE_LOOKS: Record<ZombieGait, number> = { walker: ZOMBIE_LOOK_COUNT, runner: 6, brute: 4 };
+
+/** How each kind moves: crawlers (not spawned yet) walk, screamers run, bloaters lumber. */
+export const gaitOf = (kind: ZombieKind): ZombieGait =>
+  kind === 'runner' || kind === 'screamer' ? 'runner' : kind === 'brute' || kind === 'bloater' ? 'brute' : 'walker';
+
+/** Distinct looks per kind. */
+export const kindLooks = (kind: ZombieKind): number => (kind === 'screamer' ? 4 : kind === 'bloater' ? 4 : ZOMBIE_LOOKS[gaitOf(kind)]);
+
+/** A zombie of `kind` wearing its look number `i`. */
+export function zombieLookOf(kind: ZombieKind, i: number): HumanoidLook {
+  if (kind === 'screamer') return screamerLook(i);
+  if (kind === 'bloater') return bloaterLook(i);
+  return zombieLook(i, gaitOf(kind));
+}
+
+/** Screamers: gaunt, grey-white and hairless but for straggles, jaw hanging open, pale glowing eyes. */
+function screamerLook(i: number): HumanoidLook {
+  const k = i % 4;
+  const rand = rng(0x5c4ea + k * 7727);
+  const a = randomAppearance(rand);
+  a.build = 'slim';
+  a.top = (['tank', 'longsleeve', 'tee', 'tank'] as const)[k];
+  a.topColor = [0, 2, 14, 3][k];
+  a.pants = (['jeans', 'joggers', 'work', 'jeans'] as const)[k];
+  a.shoes = 'sneakers';
+  a.hair = k % 2 ? 'messy' : 'bald';
+  a.hairColor = 3;
+  a.headwear = 'none';
+  a.facialHair = 'none';
+  a.face = a.neck = a.gloves = a.back = a.gear = 'none';
+  return { outfit: a, zombie: true, skin: [0xb4b4a8, 0xa9aca2, 0xbab6aa, 0xa5a59a][k], gait: 'runner', girth: 0.9, eyeGlow: 0xe8f4ff, mutation: 'screamer' };
+}
+
+/** Bloaters: swollen with gas, sallow yellow-green skin, in what still fits, sickly yellow eyes. */
+function bloaterLook(i: number): HumanoidLook {
+  const k = i % 4;
+  const rand = rng(0xb10a7 + k * 6007);
+  const a = randomAppearance(rand);
+  a.build = 'broad';
+  a.top = (['tank', 'tee', 'tank', 'tee'] as const)[k];
+  a.topColor = [0, 7, 14, 10][k];
+  a.pants = (['work', 'jeans', 'joggers', 'cargo'] as const)[k];
+  a.shoes = 'work';
+  a.hair = k === 2 ? 'buzz' : 'bald';
+  a.headwear = k === 3 ? 'cap' : 'none';
+  a.face = a.neck = a.gloves = a.back = a.gear = 'none';
+  return { outfit: a, zombie: true, skin: [0x8f9468, 0x9a9a6a, 0x868c62, 0x939060][k], gait: 'brute', girth: 1.32, eyeGlow: 0xd8e040, mutation: 'bloater' };
+}
 
 const ZOMBIE_SKINS = [0x7d8a72, 0x8b8a76, 0x6f7a6a, 0x948f7e, 0x86806c, 0x6a7466];
 const ZOMBIE_HATS = ['cap', 'beanie', 'hardhat', 'army', 'bandana', 'fire', 'capback', 'bike'] as const;

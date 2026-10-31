@@ -233,7 +233,7 @@ export class Night {
     }
     else if (m.cmd === 'spawn' && Number.isFinite(m.dist) && Number.isFinite(m.angle)) {
       const yaw = p.motion.yaw + m.angle;
-      const kind = (['walker', 'runner', 'brute'] as const).includes(m.kind as 'walker') ? (m.kind as ZombieKind) : 'walker';
+      const kind = (['walker', 'runner', 'brute', 'screamer', 'bloater'] as const).includes(m.kind as 'walker') ? (m.kind as ZombieKind) : 'walker';
       const at = { x: p.motion.pos.x - Math.sin(yaw) * m.dist, y: p.motion.pos.y + 0.02, z: p.motion.pos.z - Math.cos(yaw) * m.dist };
       this.sim.spawnZombie(kind, at, 'approach');
     }

@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -387,7 +387,7 @@ section('Zombie kinds and getting unstuck');
   const { sim, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
   const count = (t: number) => {
     sim.phaseTime = t;
-    const n = { walker: 0, runner: 0, brute: 0, crawler: 0 };
+    const n = { walker: 0, runner: 0, brute: 0, crawler: 0, screamer: 0, bloater: 0 };
     for (let i = 0; i < 2000; i++) n[sim.pickKind()]++;
     return n;
   };
@@ -962,6 +962,126 @@ section('Severed arms');
   check(sp.stats.limbsSevered === LIMBS.maxLoose + 3 && loose === LIMBS.maxLoose && gone === 3, `no more than ${LIMBS.maxLoose} arms lie around: the oldest are cleared (${sp.stats.limbsSevered} severed, ${loose} loose)`);
   const s = sim.limbs[0] as SimLimb;
   check(Number.isFinite(s.pos.x + s.pos.y + s.pos.z + s.rot.w), 'arm poses stay finite');
+  cleanup(sim, body);
+}
+
+section('Screamers and bloaters');
+{
+  // Mixed into the spawns as the night goes on, a few at a time.
+  const { sim, sp, body } = makeSim({ x: 20, y: 0.15, z: 6 });
+  const count = (t: number) => {
+    sim.phaseTime = t;
+    const n = { walker: 0, runner: 0, brute: 0, crawler: 0, screamer: 0, bloater: 0 };
+    for (let i = 0; i < 2000; i++) n[sim.pickKind()]++;
+    return n;
+  };
+  sim.phase = 'survival';
+  const early = count(30);
+  check(early.screamer === 0 && early.bloater === 0, 'no specials in the first half minute');
+  const later = count(300);
+  check(later.screamer > 50 && later.screamer < 220 && later.bloater > 90 && later.bloater < 280, `screamers and bloaters join the mix (${later.screamer} and ${later.bloater} of 2000 after five minutes)`);
+  check(later.runner > 300 && later.brute > 120, `runners and brutes keep their share (${later.runner}, ${later.brute})`);
+  const held: Zombie[] = [];
+  for (let i = 0; i < 4; i++) held.push(sim.spawnZombie('screamer', { x: 60 + i * 3, y: 0.02, z: 8 }, 'idle'), sim.spawnZombie('bloater', { x: 60 + i * 3, y: 0.02, z: 12 }, 'idle'));
+  const capped = count(300);
+  check(capped.screamer === 0 && capped.bloater === 0, 'no more specials while their caps are reached');
+  for (const z of held) z.removeBody();
+  sim.zombies.length = 0;
+  sim.phase = 'preparation';
+  sim.phaseTime = 600;
+
+  // A screamer that sees someone stops and calls the others, who come for that survivor.
+  const sc = sim.spawnZombie('screamer', { x: 20, y: 0.02, z: -8 }, 'idle');
+  sc.facing = 0;
+  const far = sim.spawnZombie('walker', { x: 20, y: 0.02, z: -40 }, 'idle');
+  far.facing = Math.PI;
+  let screamed = false;
+  const res = run(sim, 6, () => {
+    if (sc.state === 'scream') screamed = true;
+    return sim.zombies.length > 0 && far.target === 'p1';
+  });
+  const ev = res.events.find((e) => e.type === 'zombieScream');
+  check(screamed && !!ev && ev.type === 'zombieScream' && ev.target === 'p1', `the screamer stops and screams when it spots the player (${res.time.toFixed(1)} s)`);
+  check(far.target === 'p1' && far.state === 'chase', 'a walker 32 m away, facing away, comes for the player at the call');
+  check(!!ev && ev.type === 'zombieScream' && ev.called === 1 && ev.fresh === 0, 'no reinforcements outside the survival phase');
+  check(sp.health === PLAYER.maxHealth, 'it does not attack while screaming');
+  const second = run(sim, 6).events.filter((e) => e.type === 'zombieScream').length;
+  check(sc.screams === 1 && second === 0, 'it waits out the cooldown before screaming again');
+  cleanup(sim, body);
+}
+{
+  // Staggered before the call: nothing goes out, and it tries again sooner.
+  const { sim, sp, body } = makeSim({ x: 20, y: 0.15, z: 6 });
+  const sc = sim.spawnZombie('screamer', { x: 20, y: 0.02, z: -8 }, 'idle');
+  sc.facing = 0;
+  run(sim, 6, () => sc.state === 'scream');
+  run(sim, 0.2);
+  sc.shove({ x: 0, y: 0, z: -1 }, 2);
+  const cut = run(sim, 1.5).events.some((e) => e.type === 'zombieScream');
+  check(sc.state !== 'scream' && !cut && sc.screams === 0, 'a stagger before the call cuts the scream short');
+  const retry = run(sim, SPECIALS.screamer.interruptedCooldown + 3, () => sc.screams > 0);
+  check(sc.screams === 1, `it screams again soon after (${retry.time.toFixed(1)} s)`);
+
+  // In the survival phase the call brings fresh dead from out of sight, capped.
+  sim.phase = 'survival';
+  const before = sim.zombies.length;
+  sim.screamCall(sc, sp);
+  const fresh = sim.zombies.filter((z) => z.reinforcement);
+  const [lo, hi] = SPECIALS.screamer.reinforcements;
+  check(fresh.length >= lo && fresh.length <= hi && sim.zombies.length === before + fresh.length, `${fresh.length} fresh zombies come running`);
+  const [minD] = SPECIALS.screamer.reinforceDistance;
+  check(fresh.every((z) => Math.hypot(z.pos.x - sp.motion.pos.x, z.pos.z - sp.motion.pos.z) >= minD - 0.01 && z.target === 'p1'), 'they appear out of reach and already know where the player is');
+  for (let i = 0; i < 8; i++) sim.screamCall(sc, sp);
+  check(sim.zombies.filter((z) => z.reinforcement).length <= SPECIALS.screamer.reinforceCap, `reinforcements stop at ${SPECIALS.screamer.reinforceCap}`);
+  sim.phase = 'preparation';
+  cleanup(sim, body);
+}
+{
+  // A bloater bursts when killed: its arms fly off, and anyone close gets hurt.
+  const { sim, sp, body } = makeSim({ x: 20, y: 0.15, z: 6 });
+  run(sim, 0.7);
+  sp.arsenal.aim = 1;
+  sp.motion.aiming = true;
+  const bl = sim.spawnZombie('bloater', { x: 20, y: 0.02, z: 2.6 }, 'idle');
+  bl.facing = 0;
+  const nb = sim.spawnZombie('walker', { x: 21.2, y: 0.02, z: 1.8 }, 'idle');
+  const away = sim.spawnZombie('walker', { x: 20, y: 0.02, z: -12 }, 'idle');
+  bl.health = 5;
+  const e = sp.eye;
+  const to = { x: bl.pos.x - e.x, y: bl.pos.y + 1.1 * bl.scale - e.y, z: bl.pos.z - e.z };
+  const l = Math.hypot(to.x, to.y, to.z);
+  sim.fire('p1', e, { x: to.x / l, y: to.y / l, z: to.z / l }, true, 5);
+  const evs = run(sim, 0.3).events;
+  const types = evs.map((x) => x.type);
+  const burst = evs.find((x) => x.type === 'zombieBurst');
+  check(!!burst && types.indexOf('zombieDied') < types.indexOf('zombieBurst'), 'killing a bloater bursts it, after its death');
+  const ownArms = evs.filter((x) => x.type === 'limbSevered' && x.zombie === bl.id).length;
+  check(ownArms === 2 && sim.limbs.filter((x) => !x.holder).length >= 2, 'both its arms are blown off as loose arms');
+  const hurt = evs.find((x) => x.type === 'playerHurt');
+  check(!!hurt && hurt.type === 'playerHurt' && hurt.damage > 20 && hurt.damage < SPECIALS.bloater.playerDamage, `the shooter 3.4 m away is hurt by the blast (${hurt && hurt.type === 'playerHurt' ? hurt.damage : 0})`);
+  check(!nb.alive && sp.stats.kills === 2, 'a walker beside it is killed, credited to the shooter');
+  check(away.alive && away.health === ZOMBIES.walker.health, 'one 15 m away is untouched');
+  cleanup(sim, body);
+}
+{
+  // Chains: one bloater's blast sets off the next, each once.
+  const { sim, sp, body } = makeSim({ x: 20, y: 0.15, z: 6 });
+  run(sim, 0.7);
+  sp.arsenal.aim = 1;
+  sp.motion.aiming = true;
+  const a = sim.spawnZombie('bloater', { x: 20, y: 0.02, z: -6 }, 'idle');
+  const b = sim.spawnZombie('bloater', { x: 21.6, y: 0.02, z: -7 }, 'idle');
+  const c = sim.spawnZombie('bloater', { x: 18.4, y: 0.02, z: -7 }, 'idle');
+  for (const z of [a, b, c]) { z.facing = 0; z.health = Math.min(z.health, 40); }
+  const e = sp.eye;
+  const to = { x: a.pos.x - e.x, y: a.pos.y + 1.1 * a.scale - e.y, z: a.pos.z - e.z };
+  const l = Math.hypot(to.x, to.y, to.z);
+  a.health = 5;
+  sim.fire('p1', e, { x: to.x / l, y: to.y / l, z: to.z / l }, true, 6);
+  const evs = run(sim, 0.3).events;
+  const bursts = evs.filter((x) => x.type === 'zombieBurst').map((x) => (x as { zombie: number }).zombie);
+  check(bursts.length === 3 && new Set(bursts).size === 3, `three bloaters in a row go off one after another (${bursts.length} bursts)`);
+  check(sp.health === PLAYER.maxHealth, 'a chain 12 m away does not reach the shooter');
   cleanup(sim, body);
 }
 

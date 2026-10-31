@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { LIMBS, type ArmZone, type LimbCut, type ZombieKind } from '@dead-hours/shared';
-import { Humanoid, patchWounds, zombieLook, ZOMBIE_LOOKS, type ZombieGait } from './Humanoid';
+import { Humanoid, kindLooks, patchWounds, zombieLookOf } from './Humanoid';
 import { BONE, BONE_COUNT } from './rig';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 
@@ -22,7 +22,6 @@ interface ArmGeometry {
   radius: number;
 }
 
-const gaitOf = (kind: ZombieKind): ZombieGait => (kind === 'runner' || kind === 'brute' ? kind : 'walker');
 const cache = new Map<string, ArmGeometry>();
 
 /**
@@ -30,12 +29,11 @@ const cache = new Map<string, ArmGeometry>();
  * skin, hand, whatever it wore there), moved so the elbow is the origin. Cached per look.
  */
 function armGeometry(spec: SeveredSpec): ArmGeometry {
-  const gait = gaitOf(spec.kind);
-  const look = spec.look % ZOMBIE_LOOKS[gait];
-  const key = `${gait}:${look}:${spec.arm}:${spec.cut}`;
+  const look = spec.look % kindLooks(spec.kind);
+  const key = `${spec.kind === 'crawler' ? 'walker' : spec.kind}:${look}:${spec.arm}:${spec.cut}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const body = new Humanoid(zombieLook(look, gait));
+  const body = new Humanoid(zombieLookOf(spec.kind, look));
   const src = body.mesh.geometry;
   const upper = spec.arm === 'armL' ? BONE.armLUpper : BONE.armRUpper;
   const lower = spec.arm === 'armL' ? BONE.armLLower : BONE.armRLower;

@@ -9,8 +9,8 @@ import type { SimEvent, SimPhase } from '../sim/events';
 import { clamp, type Quat, type Vec3 } from '../sim/math';
 
 // Index tables for the wire format (append only: old clients read new numbers otherwise).
-const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler'];
-const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead'];
+const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'];
+const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead', 'scream'];
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
 const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage'];
 const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper'];
@@ -241,7 +241,7 @@ export class Mirror {
     const since = t - b.t;
     sim.phaseTime = b.phase === 'preparation' ? Math.max(0, b.phaseTime - since) : b.phase === 'survival' ? b.phaseTime + Math.max(0, since) : b.phaseTime;
     // Swipes and door pounding keep going between snapshots.
-    if (dt > 0 && dt < 0.5) for (const z of sim.zombies) if (z.state === 'attack' || z.state === 'bash') z.attackT += dt;
+    if (dt > 0 && dt < 0.5) for (const z of sim.zombies) if (z.state === 'attack' || z.state === 'bash' || z.state === 'scream') z.attackT += dt;
   }
 
   /** Fraction of the way from the previous arm poses to the newest (LimbView's interpolation). */

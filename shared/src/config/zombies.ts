@@ -1,4 +1,4 @@
-export type ZombieKind = 'walker' | 'runner' | 'brute' | 'crawler';
+export type ZombieKind = 'walker' | 'runner' | 'brute' | 'crawler' | 'screamer' | 'bloater';
 
 export interface ZombieDef {
   kind: ZombieKind;
@@ -32,7 +32,9 @@ export interface ZombieDef {
 /**
  * Zombie types. Walkers are most of the dead; runners sprint once they spot someone (still
  * slower than a sprinting survivor); brutes are slow, take a magazine to put down, hit hard
- * and break doors in a few blows. Crawlers are defined for the Phase 5 director.
+ * and break doors in a few blows. Crawlers are defined for the Phase 5 director. Screamers are
+ * frail and quick, and stop to call the dead down on whoever they see; bloaters are slow, swollen
+ * and burst when killed (see SPECIALS).
  */
 export const ZOMBIES: Record<ZombieKind, ZombieDef> = {
   walker: {
@@ -55,7 +57,58 @@ export const ZOMBIES: Record<ZombieKind, ZombieDef> = {
     attackRange: 0.95, windup: 0.3, cooldown: 0.8, sightRange: 18, hearing: 1.1, radius: 0.3, height: 0.7,
     staggerAt: 30, turnRate: 6, bash: 0.08, girth: 1,
   },
+  screamer: {
+    kind: 'screamer', health: 60, wanderSpeed: [0.7, 1.0], chaseSpeed: [2.5, 3.1], damage: [6, 9],
+    attackRange: 1.1, windup: 0.38, cooldown: 1.0, sightRange: 36, hearing: 1.35, radius: 0.28, height: 1.8,
+    staggerAt: 20, turnRate: 6.5, bash: 0.08, girth: 0.86,
+  },
+  bloater: {
+    kind: 'bloater', health: 170, wanderSpeed: [0.4, 0.55], chaseSpeed: [1.05, 1.35], damage: [16, 22],
+    attackRange: 1.35, windup: 0.75, cooldown: 1.7, sightRange: 22, hearing: 0.9, radius: 0.38, height: 1.86,
+    staggerAt: 80, turnRate: 2.6, bash: 0.3, girth: 1.5,
+  },
 };
+
+/** What makes the special zombies special. */
+export const SPECIALS = {
+  screamer: {
+    /** Seconds in the scream state: it rears back, lets out the call at `callAt`, then recovers. */
+    duration: 2.1,
+    callAt: 0.75,
+    /** Only screams at someone it can see between these distances. */
+    minRange: 3.5,
+    maxRange: 32,
+    /** Seconds between screams; a scream cut short (staggered before the call) retries sooner. */
+    cooldown: 15,
+    interruptedCooldown: 4,
+    /** Screams before it just hunts like any other. */
+    maxScreams: 3,
+    /** How far the scream is heard (noise radius), and how far the dead it calls come from. */
+    noise: 70,
+    callRadius: 55,
+    /** Fresh dead that come running from out of sight per scream, and from how far. */
+    reinforcements: [3, 5] as [number, number],
+    reinforceDistance: [26, 48] as [number, number],
+    /** Share of those that are runners. */
+    reinforceRunners: 0.35,
+    /** Called reinforcements alive at once, beyond the night's normal population. */
+    reinforceCap: 14,
+  },
+  bloater: {
+    /** Blast radius (m): full damage at the centre falling to `edge` of it at the rim. */
+    radius: 5.2,
+    edge: 0.2,
+    /** Damage at the centre to survivors and to other zombies. */
+    playerDamage: 75,
+    zombieDamage: 260,
+    /** Shove (m/s) given to zombies caught in it. */
+    knock: 3.4,
+    /** Arms caught in the blast inside this distance are torn off. */
+    severWithin: 2.6,
+    /** How far the bang carries. */
+    noise: 36,
+  },
+} as const;
 
 /** Survival tuning that Phase 5's director will replace with a full escalation model. */
 export const SPAWNING = {
@@ -84,10 +137,16 @@ export const SPAWNING = {
   mix: {
     runner: { from: 20, full: 360, start: 0.14, end: 0.26 },
     brute: { from: 60, full: 480, start: 0.07, end: 0.12 },
+    screamer: { from: 75, full: 480, start: 0.04, end: 0.07 },
+    bloater: { from: 45, full: 420, start: 0.05, end: 0.09 },
   },
   /** Brutes alive at once: `bruteBase` plus one more every `bruteEvery` seconds. */
   bruteBase: 1,
   bruteEvery: 150,
+  /** Specials alive at once: the base plus one more every `specialEvery` seconds. */
+  screamerBase: 1,
+  bloaterBase: 2,
+  specialEvery: 180,
 } as const;
 
 /**

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { SPAWNING, type ArmZone, type HitZone, type LimbCut, type Simulation, type Zombie, type ZombieKind } from '@dead-hours/shared';
-import { Humanoid, ZOMBIE_LOOKS, zombieLook, type ZombieGait } from '../characters/Humanoid';
+import { Humanoid, kindLooks, zombieLookOf } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import type { Physics } from '../core/Physics';
 import type { Effects } from '../effects/Effects';
@@ -10,7 +10,7 @@ import { DynamicProbe } from '../lighting/Probes';
 interface View {
   id: number;
   look: number;
-  gait: ZombieGait;
+  kind: ZombieKind;
   body: Humanoid;
   probe: DynamicProbe;
   facing: number;
@@ -43,11 +43,8 @@ const BLEED_TIME = 40;
 
 const MAX_CORPSES = 14;
 
-/** Crawlers aren't spawned yet; until they have their own body they walk like walkers. */
-const gaitOf = (kind: ZombieKind): ZombieGait => (kind === 'runner' || kind === 'brute' ? kind : 'walker');
-
-/** Voice pitch per kind: brutes rumble, runners shriek. */
-const VOICE_PITCH: Record<ZombieGait, number> = { walker: 1, runner: 1.32, brute: 0.62 };
+/** Voice pitch per kind: brutes rumble, runners shriek, screamers shriek higher, bloaters gurgle low. */
+const VOICE_PITCH: Record<ZombieKind, number> = { walker: 1, runner: 1.32, brute: 0.62, crawler: 1, screamer: 1.5, bloater: 0.74 };
 
 /**
  * Renders the simulation's zombies: pooled skinned bodies per look, positions interpolated
@@ -70,17 +67,19 @@ export class ZombieView {
     scene.add(this.root);
   }
 
-  private poolOf(gait: ZombieGait, look: number) {
-    const key = `${gait}:${look % ZOMBIE_LOOKS[gait]}`;
+  private poolOf(kind: ZombieKind, look: number) {
+    // Crawlers aren't spawned yet; until they have their own body they look like walkers.
+    if (kind === 'crawler') kind = 'walker';
+    const key = `${kind}:${look % kindLooks(kind)}`;
     let list = this.pool.get(key);
     if (!list) this.pool.set(key, (list = []));
     return list;
   }
 
-  private acquire(gait: ZombieGait, look: number): { body: Humanoid; probe: DynamicProbe } {
-    let entry = this.poolOf(gait, look).pop();
+  private acquire(kind: ZombieKind, look: number): { body: Humanoid; probe: DynamicProbe } {
+    let entry = this.poolOf(kind, look).pop();
     if (!entry) {
-      const body = new Humanoid(zombieLook(look, gait));
+      const body = new Humanoid(zombieLookOf(kind === 'crawler' ? 'walker' : kind, look));
       const probe = new DynamicProbe(this.field, 0.3 + Math.random() * 0.1);
       probe.attach(body.surfaces());
       entry = { body, probe };
@@ -103,7 +102,8 @@ export class ZombieView {
     v.body.root.removeFromParent();
     v.body.ragdoll = false;
     v.bleeds.length = 0;
-    this.poolOf(v.gait, v.look).push({ body: v.body, probe: v.probe });
+    v.body.root.scale.setScalar(1);
+    this.poolOf(v.kind, v.look).push({ body: v.body, probe: v.probe });
   }
 
   get count(): number {
@@ -161,6 +161,23 @@ export class ZombieView {
     }
   }
 
+  /**
+   * A bloater burst: its body (already a ragdoll from the killing blow) is gone, blown apart.
+   * Returns where its middle was, for the gore.
+   */
+  burst(id: number, out: THREE.Vector3): THREE.Vector3 | null {
+    const i = this.corpses.findIndex((c) => c.id === id && c.deadT >= 0 && c.deadT < 1);
+    const v = i >= 0 ? this.corpses[i] : this.views.get(id);
+    if (!v) return null;
+    if (v.ragdoll) v.ragdoll.center(out);
+    else out.set(v.pos.x, v.pos.y + 1, v.pos.z);
+    if (i >= 0) this.corpses.splice(i, 1);
+    else this.views.delete(id);
+    v.ragdoll = null;
+    this.release(v);
+    return out;
+  }
+
   removed(id: number): void {
     const v = this.views.get(id);
     if (!v) return;
@@ -171,7 +188,7 @@ export class ZombieView {
   /** Voice pitch of a zombie on screen (1 when unknown). */
   pitchOf(id: number): number {
     const v = this.views.get(id);
-    return v ? VOICE_PITCH[v.gait] : 1;
+    return v ? VOICE_PITCH[v.kind] : 1;
   }
 
   /** Spatial anchor for zombie audio. */
@@ -193,9 +210,8 @@ export class ZombieView {
       seen.add(z.id);
       let v = this.views.get(z.id);
       if (!v) {
-        const gait = gaitOf(z.kind);
-        const { body, probe } = this.acquire(gait, z.look);
-        v = { id: z.id, look: z.look, gait, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [] };
+        const { body, probe } = this.acquire(z.kind, z.look);
+        v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [] };
         this.views.set(z.id, v);
       }
       this.animate(v, z, dt, renderTime, cam, camera);
@@ -243,6 +259,12 @@ export class ZombieView {
     v.pos.set(x, y, zz);
     b.root.position.set(x, y, zz);
     b.root.scale.setScalar(z.scale);
+    if (z.kind === 'bloater') {
+      // Gas swelling and settling inside it.
+      const swell = 1 + Math.sin(renderTime * 2.1 + v.id) * 0.025 + Math.sin(renderTime * 5.3 + v.id * 2) * 0.01;
+      b.root.scale.x *= swell;
+      b.root.scale.z *= swell;
+    }
     const diff = Math.atan2(Math.sin(z.facing - v.facing), Math.cos(z.facing - v.facing));
     v.facing += diff * (1 - Math.exp(-dt * 14));
     b.root.rotation.y = v.facing;
@@ -250,6 +272,7 @@ export class ZombieView {
     const state = z.state;
     b.attack = state === 'attack' ? z.attackPhase : -1;
     b.bash = state === 'bash' ? z.attackPhase : -1;
+    b.scream = state === 'scream' ? z.attackPhase : -1;
     b.downTarget = state === 'down' ? 1 : 0;
     b.staggerTarget = state === 'stagger' ? 1 : 0;
     if (state === 'stagger' && z.lastHit) b.setStaggerDir(z.lastHit.dx, z.lastHit.dz);

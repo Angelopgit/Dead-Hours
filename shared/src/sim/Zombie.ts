@@ -1,5 +1,5 @@
 import { RAPIER, GROUP, groups } from '../physics/Physics';
-import { ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
+import { SPECIALS, ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
 import { LIMBS, type ArmState, type ArmZone, type LimbCut } from '../config/limbs';
 import { zombieZones, type ZoneShape } from './hitzones';
@@ -13,7 +13,7 @@ export const ZOMBIE_GROUPS = groups(GROUP.zombie, GROUP.static | GROUP.dynamic |
 export const ZOMBIE_STEP = 0.4;
 
 export type ZombieState =
-  | 'idle' | 'wander' | 'approach' | 'investigate' | 'chase' | 'attack' | 'bash' | 'stagger' | 'down' | 'dead';
+  | 'idle' | 'wander' | 'approach' | 'investigate' | 'chase' | 'attack' | 'bash' | 'stagger' | 'down' | 'dead' | 'scream';
 
 const SEPARATION = 0.95;
 
@@ -75,6 +75,12 @@ export class Zombie {
   private bashDoor = -1;
   private bashAt = 0;
   private legDamage = 0;
+  /** Screamers: calls let out so far, seconds until the next, and whether this one went out. */
+  screams = 0;
+  private screamCd = 0;
+  private screamCalled = false;
+  /** Came running at a screamer's call (counted against SPECIALS.screamer.reinforceCap). */
+  reinforcement = false;
   private recentDamage = 0;
   private recentT = 0;
   /** Horizontal speed actually achieved (animation). */
@@ -160,6 +166,16 @@ export class Zombie {
     this.recentDamage = 0;
   }
 
+  /** Thrown off its feet for a moment (a blast): `speed` m/s along `dir`. */
+  shove(dir: Vec3, speed: number): void {
+    if (!this.alive || this.state === 'down' || speed <= 0) return;
+    this.setState('stagger');
+    this.staggerT = Math.max(this.staggerT, 0.5 + Math.min(0.6, speed * 0.12));
+    const hl = Math.hypot(dir.x, dir.z) || 1;
+    this.push.x = (dir.x / hl) * speed;
+    this.push.z = (dir.z / hl) * speed;
+  }
+
   /** True while it is pursuing someone it knows about. */
   get engaged(): boolean {
     return this.state === 'chase' || this.state === 'attack' || this.state === 'bash' || (this.target !== null && this.state !== 'wander');
@@ -168,14 +184,17 @@ export class Zombie {
   setState(s: ZombieState): void {
     if (s === this.state) return;
     if (s === 'stagger' || s === 'down') {
-      if (this.state !== 'stagger' && this.state !== 'down') this.resumeState = this.state === 'attack' ? 'chase' : this.state;
+      if (this.state !== 'stagger' && this.state !== 'down') this.resumeState = this.state === 'attack' || this.state === 'scream' ? 'chase' : this.state;
     }
+    // Cut short before the call went out: it tries again soon.
+    if (this.state === 'scream' && !this.screamCalled) this.screamCd = SPECIALS.screamer.interruptedCooldown;
     this.state = s;
     this.stateT = 0;
-    if (s === 'attack') {
+    if (s === 'attack' || s === 'scream') {
       this.attackT = 0;
       this.landed = false;
     }
+    if (s === 'scream') this.screamCalled = false;
     if (s !== 'bash') this.bashDoor = -1;
   }
 
@@ -189,6 +208,17 @@ export class Zombie {
     this.goal = { x: at.x + Math.cos(a) * d, y: at.y, z: at.z + Math.sin(a) * d };
     if (this.state !== 'chase') this.setState('investigate');
     else this.lastKnown = { ...this.goal };
+    this.needPath = true;
+  }
+
+  /** Called by a screamer: comes for `p`, heading for where they are now. */
+  summon(p: SimPlayer): void {
+    if (this.state === 'attack' || this.state === 'stagger' || this.state === 'down' || this.state === 'dead' || this.state === 'scream') return;
+    if (this.target && this.target !== p.id && this.sim.time - this.lastSeen < 2) return;
+    this.target = p.id;
+    this.lastKnown = { ...p.motion.pos };
+    this.lastSeen = Math.max(this.lastSeen, this.sim.time - 1.5);
+    this.setState('chase');
     this.needPath = true;
   }
 
@@ -333,6 +363,7 @@ export class Zombie {
     if (!this.alive) return;
     this.stateT += dt;
     this.attackCd -= dt;
+    this.screamCd -= dt;
     if (sim.time >= this.nextSense && this.state !== 'stagger' && this.state !== 'down') {
       this.nextSense = sim.time + 0.2 + this.rand() * 0.12;
       this.sense();
@@ -404,6 +435,12 @@ export class Zombie {
         const tp = target.motion.pos;
         const d = dist2D(this.pos, tp);
         const dy = Math.abs(tp.y - this.pos.y);
+        const S = SPECIALS.screamer;
+        if (this.kind === 'screamer' && seenRecently && this.screamCd <= 0 && this.screams < S.maxScreams && d > S.minRange && d < S.maxRange) {
+          // Stops dead, throws its head back and calls the others down on them.
+          this.setState('scream');
+          break;
+        }
         if (seenRecently && d < this.def.attackRange && dy < 1.2 && this.attackCd <= 0) {
           this.setState('attack');
           sim.emit({ type: 'zombieAttack', zombie: this.id, target: target.id });
@@ -469,6 +506,25 @@ export class Zombie {
         if (this.attackT >= this.def.windup + 0.45) {
           this.attackCd = Math.max(0.2, this.def.cooldown - this.def.windup - 0.45);
           this.setState(target ? 'chase' : 'wander');
+        }
+        break;
+      }
+      case 'scream': {
+        const S = SPECIALS.screamer;
+        this.attackT += dt;
+        if (target) {
+          faceX = target.motion.pos.x - this.pos.x;
+          faceZ = target.motion.pos.z - this.pos.z;
+        }
+        if (!this.screamCalled && this.attackT >= S.callAt) {
+          this.screamCalled = true;
+          this.screams++;
+          this.screamCd = S.cooldown;
+          if (target) sim.screamCall(this, target);
+        }
+        if (this.attackT >= S.duration) {
+          this.setState(target ? 'chase' : 'wander');
+          this.needPath = true;
         }
         break;
       }
@@ -821,6 +877,7 @@ export class Zombie {
   get attackPhase(): number {
     if (this.state === 'attack') return clamp(this.attackT / (this.def.windup + 0.45), 0, 1);
     if (this.state === 'bash') return clamp(this.attackT / 0.8, 0, 1);
+    if (this.state === 'scream') return clamp(this.attackT / SPECIALS.screamer.duration, 0, 1);
     return -1;
   }
 

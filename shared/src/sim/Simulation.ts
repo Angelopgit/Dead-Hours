@@ -3,7 +3,7 @@ import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
-import { HORDES, SPAWNING, type ZombieKind } from '../config/zombies';
+import { HORDES, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
 import { propOccluders } from '../map/colliders';
@@ -214,6 +214,9 @@ export class Simulation {
   private nextLimbId = 1;
   /** Where the night is in the horde schedule (see Hordes.ts), as of the last survival step. */
   horde: HordeState = hordeAt(0);
+  /** Bloaters killed and waiting to burst (a blast can set off another: they go in turn). */
+  private readonly bursts: { z: Zombie; by: SimPlayer }[] = [];
+  private bursting = false;
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -459,6 +462,7 @@ export class Simulation {
     p: SimPlayer, z: Zombie, damage: number, zone: HitZone, pos: Vec3, dir: Vec3, melee: boolean, force: number,
     opts: { along?: number; armTally?: number; limb?: number; knock?: number } = {},
   ): void {
+    if (!z.alive) return;
     const before = z.health;
     const killed = z.takeHit(damage, zone, dir, p, melee, opts.knock);
     const dealt = Math.min(before, damage);
@@ -480,7 +484,113 @@ export class Simulation {
       if (zone === 'head') p.stats.headshots++;
       if (opts.limb !== undefined) p.stats.limbKills++;
       this.emit({ type: 'zombieDied', zombie: z.id, zone, dir: { ...dir }, force: (melee ? 1.2 : 0.6 + Math.min(1.4, damage / 60)) * force, by: p.id });
+      if (z.kind === 'bloater') this.burst(z, p);
     }
+  }
+
+  /** A bloater bursts where it died. Chains (a blast killing another bloater) run one after another. */
+  private burst(z: Zombie, by: SimPlayer): void {
+    this.bursts.push({ z, by });
+    if (this.bursting) return;
+    this.bursting = true;
+    try {
+      for (let b = this.bursts.shift(); b; b = this.bursts.shift()) this.blast(b.z, b.by);
+    } finally {
+      this.bursting = false;
+      this.bursts.length = 0;
+    }
+  }
+
+  /**
+   * The blast: both its arms fly off (loose arms anyone can pick up), anyone close takes a
+   * beating that falls off with distance and stops at walls, and the dead next to it are torn
+   * apart. Credit for what it kills goes to whoever killed the bloater.
+   */
+  private blast(z: Zombie, by: SimPlayer): void {
+    const B = SPECIALS.bloater;
+    const c = z.chest;
+    const shapes = z.zones(this.zones);
+    const outward = (arm: ArmZone): Vec3 => {
+      const s = shapes.find((sh) => sh.zone === arm);
+      let x = s ? s.a.x - c.x : this.rand() - 0.5, zz = s ? s.a.z - c.z : this.rand() - 0.5;
+      const l = Math.hypot(x, zz) || 1;
+      x /= l; zz /= l;
+      return { x, y: 0.5, z: zz };
+    };
+    this.emit({ type: 'zombieBurst', zombie: z.id, pos: { ...c }, by: by.id });
+    this.noise(c, B.noise, null);
+    for (const arm of ['armL', 'armR'] as const) {
+      if (z.canLose(arm)) this.severArm(by, z, arm, 'shoulder', outward(arm), false, 70, true);
+    }
+    const clear = (to: Vec3, d: number): boolean => {
+      if (d < 0.3) return true;
+      const hit = this.physics.raycast(c.x, c.y, c.z, (to.x - c.x) / d, (to.y - c.y) / d, (to.z - c.z) / d, d);
+      return hit === null || hit > d - 0.3;
+    };
+    const falloff = (d: number) => 1 - (1 - B.edge) * clamp(d / B.radius, 0, 1);
+    for (const p of this.players.values()) {
+      if (!p.alive) continue;
+      const pc = p.chest;
+      const d = Math.hypot(pc.x - c.x, pc.y - c.y, pc.z - c.z);
+      if (d > B.radius || !clear(pc, d)) continue;
+      this.damagePlayer(p, Math.round(B.playerDamage * falloff(d)), c);
+    }
+    for (const o of this.zombies) {
+      if (o === z || !o.alive) continue;
+      const oc = o.chest;
+      const d = Math.hypot(oc.x - c.x, oc.y - c.y, oc.z - c.z);
+      if (d > B.radius || !clear(oc, d)) continue;
+      const hl = Math.hypot(oc.x - c.x, oc.z - c.z) || 1;
+      const dir = { x: (oc.x - c.x) / hl, y: 0.3, z: (oc.z - c.z) / hl };
+      // Close in, arms are torn off before the body takes the rest.
+      if (d < B.severWithin) {
+        for (const arm of ['armL', 'armR'] as const) {
+          if (o.canLose(arm) && this.rand() < 0.65) this.severArm(by, o, arm, this.rand() < 0.6 ? 'shoulder' : 'elbow', dir, false, 60, false);
+        }
+      }
+      this.hitZombie(by, o, B.zombieDamage * falloff(d), 'torso', oc, dir, false, 1.8, { armTally: 0 });
+      if (o.alive) o.shove(dir, B.knock * falloff(d));
+    }
+  }
+
+  /**
+   * A screamer's call: the dead within earshot come straight for `target`, and a few more come
+   * running from out of sight (capped, on top of the night's normal numbers).
+   */
+  screamCall(from: Zombie, target: SimPlayer): void {
+    const S = SPECIALS.screamer;
+    this.noise(from.pos, S.noise, `z${from.id}`);
+    let called = 0;
+    for (const z of this.zombies) {
+      if (z === from || !z.alive) continue;
+      if (dist2D(z.pos, from.pos) > S.callRadius || Math.abs(z.pos.y - from.pos.y) > 6) continue;
+      const was = z.target;
+      z.summon(target);
+      if (z.target === target.id && was !== target.id) called++;
+    }
+    let fresh = 0;
+    if (this.phase === 'survival') {
+      let alive = 0, extra = 0;
+      for (const z of this.zombies) {
+        if (!z.alive) continue;
+        alive++;
+        if (z.reinforcement) extra++;
+      }
+      const [lo, hi] = S.reinforcements;
+      const want = lo + Math.floor(this.rand() * (hi - lo + 1));
+      const [minD, maxD] = S.reinforceDistance;
+      for (let i = 0; i < want && extra < S.reinforceCap && alive < SPAWNING.maxPopulation; i++) {
+        const at = this.findSpawnPoint(minD, maxD);
+        if (!at) continue;
+        const z = this.spawnZombie(this.rand() < S.reinforceRunners ? 'runner' : 'walker', at, 'approach');
+        z.reinforcement = true;
+        z.summon(target);
+        extra++;
+        alive++;
+        fresh++;
+      }
+    }
+    this.emit({ type: 'zombieScream', zombie: from.id, pos: { ...from.pos }, target: target.id, called, fresh });
   }
 
   reload(id: string): boolean {
@@ -1074,7 +1184,7 @@ export class Simulation {
     this.spawnZombie(this.pickKind(), at, surge || this.rand() < 0.78 ? 'approach' : 'wander');
   }
 
-  /** Kind of the next spawn: walkers, with runners and brutes mixed in as the night goes on. */
+  /** Kind of the next spawn: walkers, with runners, brutes, screamers and bloaters mixed in as the night goes on. */
   pickKind(): ZombieKind {
     const t = this.phaseTime;
     const share = (m: { from: number; full: number; start: number; end: number }) =>
@@ -1085,6 +1195,18 @@ export class Simulation {
     if (r < runner + share(SPAWNING.mix.brute)) {
       const brutes = this.zombies.filter((z) => z.alive && z.kind === 'brute').length;
       if (brutes < Math.floor((SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) * this.playerScale)) return 'brute';
+    }
+    // Specials, each held to a few at once.
+    const special = (kind: 'screamer' | 'bloater', base: number) => {
+      const n = this.zombies.filter((z) => z.alive && z.kind === kind).length;
+      return n < Math.floor((base + Math.floor(t / SPAWNING.specialEvery)) * this.playerScale);
+    };
+    const r2 = 1 - r;
+    const screamer = share(SPAWNING.mix.screamer);
+    if (r2 < screamer) {
+      if (special('screamer', SPAWNING.screamerBase)) return 'screamer';
+    } else if (r2 < screamer + share(SPAWNING.mix.bloater)) {
+      if (special('bloater', SPAWNING.bloaterBase)) return 'bloater';
     }
     return 'walker';
   }

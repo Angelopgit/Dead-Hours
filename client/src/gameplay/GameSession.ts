@@ -158,6 +158,7 @@ export class GameSession {
   private outbreakAnnounced = false;
   /** First arm torn off / first picked up: say once what can be done with it. */
   private limbHinted = false;
+  private screamHinted = false;
   private gripHinted = false;
   /** Blood off the arm in hand: seconds to the next drop, and where its torn end was. */
   private limbDrip = 0;
@@ -1103,6 +1104,27 @@ export class GameSession {
       case 'zombieGroan':
         audio.groan(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A), 0.8, this.zombies.pitchOf(e.zombie));
         break;
+      case 'zombieScream': {
+        audio.zombieScream(this.zombies.headOf(e.zombie, C) ?? v3(e.pos, A).setY(e.pos.y + 1.6));
+        if (e.target === this.myId) {
+          this.hud.feedLine(e.fresh > 0 ? 'A SCREAMER CALLED THE HORDE' : 'A SCREAMER GAVE YOU AWAY');
+          if (!this.screamHinted) {
+            this.screamHinted = true;
+            this.hud.notify('SCREAMER', 'SHOOT THEM BEFORE THEY CALL · A HIT CUTS THE SCREAM SHORT', 3, 'danger');
+          }
+        }
+        break;
+      }
+      case 'zombieBurst': {
+        const at = this.zombies.burst(e.zombie, A) ?? v3(e.pos, A);
+        this.effects.bloaterBurst(at);
+        audio.bloaterBurst(at);
+        const me = this.me.motion.pos;
+        const d = Math.hypot(me.x - at.x, me.y - at.y, me.z - at.z);
+        if (d < 14) this.cam.addTrauma(Math.min(0.45, 0.5 * (1 - d / 14)));
+        if (e.by === this.myId) this.hud.feedLine('BLOATER BURST');
+        break;
+      }
       case 'doorPound':
         audio.doorPound(v3(e.pos, A));
         break;
