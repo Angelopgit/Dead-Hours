@@ -579,7 +579,13 @@ body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top
 body.touch-play .weapon-panel { bottom: auto; top: calc(52px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); right: auto; text-align: left; font-size: 0.75em; }
 body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
 body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right)); }
-body.touch-play .prompt { top: 40%; }
+/* The interaction prompt sits under the crosshair (the rows above it are the timer, warnings and notices),
+   centred while it clears the BOARD / USE / MELEE buttons (their left edge is 304 px x button size in from the
+   right), slid left of them when it would not, and wrapped to fit (it ran under BOARD and USE on most phones). */
+body.touch-play .prompt { top: calc(50% + 36px); width: max-content; white-space: normal; text-align: center;
+  font-size: 0.85em; letter-spacing: 0.16em; line-height: 1.35;
+  max-width: calc(100vw - 304px * var(--tc-scale, 1) - 12px - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  transform: translateX(min(-50%, calc(50vw - 304px * var(--tc-scale, 1) - 12px - env(safe-area-inset-right) - 100%))); }
 /* The health bar and the LIGHT / BAG / HEAL buttons fill the top row on a phone, so the timer, the
    warning and notices take rows of their own under it, a little smaller (they printed over the health
    bar and over each other). */

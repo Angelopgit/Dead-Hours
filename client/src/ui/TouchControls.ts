@@ -82,7 +82,10 @@ export class TouchControls {
   }
 
   private applyScale(): void {
-    this.el.style.setProperty('--tc-scale', String(settings.value.controls.touchScale));
+    const s = String(settings.value.controls.touchScale);
+    this.el.style.setProperty('--tc-scale', s);
+    // The HUD reads it too: on a phone the interaction prompt keeps clear of the button cluster.
+    document.body.style.setProperty('--tc-scale', s);
   }
 
   private bindButton(b: HTMLElement, def: ButtonDef): void {
