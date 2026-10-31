@@ -1,6 +1,7 @@
 import type { HitZone, WeaponId, WeaponSlot } from '../config/weapons';
 import type { ZombieKind } from '../config/zombies';
 import type { ArmZone, LimbCut } from '../config/limbs';
+import type { MeleeId } from '../config/melee';
 import type { Surface } from '../physics/Physics';
 import type { Vec3 } from './math';
 
@@ -27,6 +28,8 @@ export type SimEvent =
     exit: { pos: Vec3; normal: Vec3 } | null;
     /** The severed arm it was clubbed with, if any. */
     limb?: number;
+    /** The melee weapon it was struck with (not set for arms or bullets). */
+    weapon?: MeleeId;
   }
   | { type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string }
   | { type: 'zombieSpawned'; zombie: number; kind: ZombieKind }
@@ -78,6 +81,8 @@ export type SimEvent =
   | { type: 'limbDropped'; player: string; limb: number; thrown: boolean }
   /** Worn through: it comes apart in the survivor's hands at `pos`. */
   | { type: 'limbBroke'; player: string; limb: number; pos: Vec3; dir: Vec3 }
+  /** A found melee weapon was picked up at `pos` (floor); `swapped` is the one left there in its place. */
+  | { type: 'meleeTaken'; player: string; item: number; weapon: MeleeId; swapped: MeleeId | null; pos: Vec3 }
   /** A loose arm was cleared away. */
   | { type: 'limbGone'; limb: number };
 

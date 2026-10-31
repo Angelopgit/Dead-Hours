@@ -1,5 +1,6 @@
 import { COMBAT, WEAPONS, type WeaponDef, type WeaponId, type WeaponSlot } from '../config/weapons';
 import { LIMBS, type ArmZone, type LimbCut } from '../config/limbs';
+import { MELEE, type MeleeId } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
 import { clamp } from './math';
 
@@ -50,6 +51,8 @@ export class Arsenal {
   primary: WeaponState;
   secondary: WeaponState;
   readonly melee: WeaponState = fresh('machete');
+  /** The melee weapon in hand for quick swings: the machete, or one found lying around. */
+  meleeId: MeleeId = 'machete';
   active: 'primary' | 'secondary' = 'primary';
   action: ArsenalAction = 'draw';
   actionT: number;
@@ -172,14 +175,14 @@ export class Arsenal {
     this.meleeWith = this.limb ? 'limb' : 'machete';
     this.interruptedSlot = this.action === 'draw' && !this.limb ? this.active : null;
     this.action = 'melee';
-    this.actionTotal = this.actionT = this.limb ? LIMBS.duration : COMBAT.meleeDuration;
+    this.actionTotal = this.actionT = this.limb ? LIMBS.duration : MELEE[this.meleeId].duration;
     this.meleeHitPending = true;
     return true;
   }
 
   /** Seconds into a swing at which the blow lands. */
   get meleeWindup(): number {
-    return this.meleeWith === 'limb' ? LIMBS.windup : COMBAT.meleeWindup;
+    return this.meleeWith === 'limb' ? LIMBS.windup : MELEE[this.meleeId].windup;
   }
 
   /** Takes a severed arm in hand: the gun is slung while the grip is taken. */

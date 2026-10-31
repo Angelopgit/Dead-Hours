@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
   type ActMsg, type ArmZone, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
@@ -26,6 +26,7 @@ import { Effects } from '../effects/Effects';
 import { ZombieView } from '../zombies/ZombieView';
 import { LimbView } from '../zombies/LimbView';
 import { BarricadeView } from './BarricadeView';
+import { MeleePickups } from './MeleePickups';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { ChatBox } from '../ui/ChatBox';
@@ -118,6 +119,9 @@ export class GameSession {
   private readonly barricades: BarricadeView;
   /** Boarding up or prying off: which opening, and how far into this board (this survivor's own estimate online). */
   private work: { slot: number; kind: 'board' | 'pry'; t: number } | null = null;
+  /** Found melee weapons lying around indoors. */
+  private readonly pickups: MeleePickups;
+  private meleeHinted = false;
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -251,6 +255,7 @@ export class GameSession {
     this.zombies = new ZombieView(engine.scene, physics, field, this.effects);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
     this.limbs = new LimbView(engine.scene, field, this.effects);
+    this.pickups = new MeleePickups(engine.scene, field);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     this.barricades = new BarricadeView(engine.scene, this.sim, field);
     this.drops = new SupplyDrops(engine.scene);
@@ -727,6 +732,7 @@ export class GameSession {
     const renderTime = m ? this.sim.time : this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
+    this.pickups.update(live, this.sim, this.engine.camera);
     if (m) {
       this.remotes!.update(live, this.sim, m, this.engine.camera);
       this.updateVoices();
@@ -1104,6 +1110,11 @@ export class GameSession {
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
     else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
     else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()} · ARMOR AGAINST THE DEAD`);
+    else if (best.kind === 'melee') {
+      const mine = this.me.arsenal.meleeId;
+      const what = WEAPONS[best.it!.weapon ?? 'machete'].model;
+      this.hud.setPrompt('interact', mine === 'machete' ? `PICK UP ${what}` : `SWAP ${WEAPONS[mine].model} FOR ${what}`);
+    }
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'limb') {
       const l = best.limb!;
@@ -1193,7 +1204,9 @@ export class GameSession {
     if (door) cands.push({ kind: 'door', pos: door.center, door });
     for (const it of this.sim.reachable(this.myId)) {
       if (it.supply <= 0) continue;
-      cands.push({ kind: it.kind, pos: new THREE.Vector3(it.pos.x, it.pos.y, it.pos.z), it });
+      // Weapons lying on the floor count by how near they are underfoot, like severed arms.
+      const near = it.kind === 'melee' ? Math.hypot(it.pos.x - p.x, it.pos.z - p.z) : undefined;
+      cands.push({ kind: it.kind, pos: new THREE.Vector3(it.pos.x, it.pos.y, it.pos.z), it, near });
     }
     // Severed arms within reach (not mid-swing or mid-bandage, when the hands are busy).
     const busy = this.me.arsenal.action === 'melee' || this.me.arsenal.action === 'bandage';
@@ -1271,6 +1284,9 @@ export class GameSession {
           const held = e.by === this.myId ? this.weapon.heldLimb : null;
           if (held) this.effects.clubSplash(held.cutEnd(C), B);
           if (e.by === this.myId) this.cam.addTrauma(0.1 + Math.min(0.1, e.damage / 400));
+        } else if (e.weapon) {
+          // A melee weapon: the blade's slice or the blunt weapon's crack and crunch.
+          audio.meleeHit(e.weapon, A, { kill: e.killed, head: e.zone === 'head', damage: e.damage });
         } else {
           audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
         }
@@ -1305,6 +1321,17 @@ export class GameSession {
         break;
       case 'limbDropped':
         break;
+      case 'meleeTaken': {
+        v3(e.pos, A);
+        audio.meleePickup(e.weapon, A);
+        if (e.player !== this.myId) break;
+        if (!this.meleeHinted) {
+          this.meleeHinted = true;
+          this.hud.notify(`${WEAPONS[e.weapon].model} IN HAND`, `${actionLabel('melee') || 'MELEE'} TO SWING · IT REPLACES YOUR MACHETE`, 3.2);
+        }
+        if (e.swapped) this.hud.feedLine(`LEFT THE ${WEAPONS[e.swapped].model} BEHIND`);
+        break;
+      }
       case 'limbBroke': {
         v3(e.pos, A);
         v3(e.dir, B);
@@ -1463,15 +1490,15 @@ export class GameSession {
         if (e.player !== this.myId) {
           if (e.stage === 'swing' && this.remotes?.handOf(e.player, A)) {
             if (e.limb) audio.heavySwing(A);
-            else audio.meleeSwing(A);
+            else audio.meleeWhoosh(this.sim.players.get(e.player)?.arsenal.meleeId ?? 'machete', A);
           }
           break;
         }
         if (e.stage === 'swing') {
           if (e.limb) audio.heavySwing(this.handPos());
-          else audio.meleeSwing(this.handPos());
+          else audio.meleeWhoosh(this.me.arsenal.meleeId, this.handPos());
           this.player.faceCamera(0.6);
-          this.player.blockSprint(e.limb ? 0.85 : 0.6);
+          this.player.blockSprint(e.limb ? 0.85 : MELEE[this.me.arsenal.meleeId].recover);
         }
         break;
       case 'bandage':
@@ -1823,7 +1850,7 @@ export class GameSession {
     const allEmpty = total(a.primary) === 0 && total(a.secondary) === 0;
     const critical = total(a.weapon) <= def.magazine && def.mode !== 'MELEE';
     // (Not while the hands are full of something else to fight with.)
-    hud.setWarning(limb ? '' : allEmpty ? 'OUT OF AMMUNITION · USE YOUR MACHETE' : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
+    hud.setWarning(limb ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
     // Dynamic crosshair: gap follows the real spread cone.
     const hv = Math.hypot(p.velocity.x, p.velocity.z);
@@ -1930,6 +1957,7 @@ export class GameSession {
     this.zombies.dispose();
     this.limbs.dispose();
     this.barricades.dispose();
+    this.pickups.dispose();
     this.drops.dispose();
     audio.helicopters(new Map());
     this.effects.dispose();

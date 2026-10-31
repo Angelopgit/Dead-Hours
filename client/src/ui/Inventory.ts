@@ -1,5 +1,5 @@
 import gsap from 'gsap';
-import { COMBAT, WEAPONS, type SimPlayer, type WeaponId } from '@dead-hours/shared';
+import { COMBAT, MELEE, WEAPONS, isMelee, type SimPlayer, type WeaponId } from '@dead-hours/shared';
 import { h } from './dom';
 import { codeLabel } from '../core/Input';
 import { settings, ACTION_LABELS, type Action } from '../core/Settings';
@@ -74,7 +74,7 @@ export class Inventory {
         h('div', { class: 'slot' }, slot),
         h('span', { class: 'wname' }, w.name.toUpperCase()),
         h('span', { class: 'wmodel' }, `${w.model} · ${w.mode}`),
-        h('div', { class: 'ammo' }, ammo ? `${ammo.mag} / ${ammo.reserve}` : '—', h('small', {}, ammo ? `MAX ${w.maxReserve}` : 'BLADE')),
+        h('div', { class: 'ammo' }, ammo ? `${ammo.mag} / ${ammo.reserve}` : '—', h('small', {}, ammo ? `MAX ${w.maxReserve}` : isMelee(id) && MELEE[id].sever > 0 ? 'BLADE' : 'BLUNT')),
         stat('Damage', w.stats.damage), stat('Fire rate', w.stats.fireRate), stat('Handling', w.stats.handling), stat('Range', w.stats.range),
       );
     };
@@ -93,7 +93,7 @@ export class Inventory {
           h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
           h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
         )
-        : card(`MELEE · ${k('melee')}`, 'machete', null, false),
+        : card(`MELEE · ${k('melee')}`, a.meleeId, null, false),
     );
     this.supplies.replaceChildren(
       h('div', { class: 'slot' }, `MEDICAL · ${k('heal')}`),

@@ -35,7 +35,7 @@ const SURFACES: Record<Surface, SurfaceFx> = {
 const BLOOD: [number, number, number] = [0.24, 0.008, 0.008];
 const BLOOD_DECAL: [number, number, number] = [0.34, 0.03, 0.025];
 
-const FLASH: Record<WeaponId, { size: number; light: number }> = {
+const FLASH: Partial<Record<WeaponId, { size: number; light: number }>> = {
   ar: { size: 0.42, light: 1 }, smg: { size: 0.32, light: 0.8 }, shotgun: { size: 0.65, light: 1.4 },
   marksman: { size: 0.55, light: 1.2 }, pistol: { size: 0.3, light: 0.7 }, machete: { size: 0, light: 0 },
   lmg: { size: 0.45, light: 1.0 }, battle: { size: 0.5, light: 1.1 }, sniper: { size: 0.85, light: 1.7 },
@@ -426,7 +426,7 @@ export class Effects {
   }
 
   muzzle(pos: THREE.Vector3, dir: THREE.Vector3, weapon: WeaponId): void {
-    const f = FLASH[weapon];
+    const f = FLASH[weapon] ?? FLASH.machete!;
     if (!f.size) return;
     const dim = this.reducedFlashing ? 0.45 : 1;
     this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, vx: 0, vy: 0, vz: 0, life: 0.045, size: f.size * rand(0.8, 1.1), size1: f.size * 0.6, r: 5 * dim, g: 3 * dim, b: 1.3 * dim, alpha: 1, shape: SHAPE.flash });

@@ -1,6 +1,7 @@
 import { RAPIER, GROUP, groups } from '../physics/Physics';
 import type { HitZone, WeaponId } from '../config/weapons';
 import type { ArmState, ArmZone, LimbCut } from '../config/limbs';
+import { isMelee } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
 import type { Arsenal, ArsenalAction, HeldLimb } from '../sim/Arsenal';
 import type { InteractKind, PlayerMotion, PlayerStats, Simulation } from '../sim/Simulation';
@@ -13,8 +14,8 @@ const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer',
 const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead', 'scream', 'breach', 'vault'];
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
 const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage'];
-const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper'];
-const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum'];
+const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper', 'katana', 'bat', 'crowbar', 'wrench', 'hockey'];
+const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum', 'melee'];
 const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
 const ARMS: ArmZone[] = ['armL', 'armR'];
 const CUTS: LimbCut[] = ['shoulder', 'elbow'];
@@ -40,7 +41,7 @@ export interface SnapPlayer {
   dt: number;
   /** Lazarus serum armor ×10 (left out when none). */
   ar?: number;
-  /** [active (1 secondary), action, actionT, actionTotal, primary id, mag, reserve, secondary id, mag, reserve, melee with limb, aim ×1000] */
+  /** [active (1 secondary), action, actionT, actionTotal, primary id, mag, reserve, secondary id, mag, reserve, melee with limb, aim ×1000, melee weapon] */
   w: number[];
   /** The arm in hand: [id, arm, cut, kind, look, scale ×1000, wear, maxWear, broken], or 0. */
   lb: number[] | 0;
@@ -93,7 +94,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
       w: [
         a.active === 'secondary' ? 1 : 0, idx(ACTIONS, a.action), milli(Math.max(0, a.actionT)), milli(a.actionTotal),
         idx(WEAPON_IDS, a.primary.id), a.primary.mag, a.primary.reserve, idx(WEAPON_IDS, a.secondary.id), a.secondary.mag, a.secondary.reserve,
-        a.meleeWith === 'limb' ? 1 : 0, milli(a.aim),
+        a.meleeWith === 'limb' ? 1 : 0, milli(a.aim), idx(WEAPON_IDS, a.meleeId),
       ],
       lb: l ? [l.id, idx(ARMS, l.arm), idx(CUTS, l.cut), idx(KINDS, l.kind), l.look, milli(l.scale), l.wear, l.maxWear, l.broken ? 1 : 0] : 0,
       dn: p.downed ? [milli(Math.max(0, p.bleed)), milli(p.revive), p.downs] : 0,
@@ -513,6 +514,8 @@ export class Mirror {
     a.primary = slot(a.primary, w[4], w[5], w[6]);
     a.secondary = slot(a.secondary, w[7], w[8], w[9]);
     a.meleeWith = w[10] === 1 ? 'limb' : 'machete';
+    const melee = WEAPON_IDS[w[12]];
+    a.meleeId = melee && isMelee(melee) ? melee : 'machete';
     if (remote) a.aim = w[11] / 1000;
     a.limb = lb ? this.heldLimb(lb) : null;
   }

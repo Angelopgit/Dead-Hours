@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -1382,6 +1382,134 @@ const outsideOf = (slot: BarricadeSlot, dist: number): Vec3 => {
   mirror.apply(JSON.parse(JSON.stringify(captureSnapshot(sim, new Map()))), 10.05);
   check(ca.boards === 0 && !cb.glass, 'boards pried off on the server come off on clients');
   copy.dispose();
+  cleanup(sim, body);
+}
+
+section('Found melee weapons');
+{
+  const rooms = findPickupRooms(map, nav, physics);
+  const kinds = new Set(rooms.map((r) => r.room));
+  check(kinds.has('bedroom') && kinds.has('basement') && kinds.has('store'), `weapons can turn up in bedrooms, basements and the store (${rooms.length} rooms: ${rooms.filter((r) => r.room === 'bedroom').length} bedrooms, ${rooms.filter((r) => r.room === 'basement').length} basements)`);
+  check(rooms.every((r) => r.nodes.every((n) => nav.reachable(n))), 'every spot is on walkable floor');
+  check(rooms.every((r) => map.playerSpawns.every((sp) => Math.hypot(sp.x - r.centre.x, sp.z - r.centre.z) >= MELEE_PICKUPS.awayFromSpawn)), 'none in the safehouse the survivors start in');
+
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  run(sim, 0.2);
+  let placed = sim.placedMelee;
+  check(placed.length === MELEE_PICKUPS.maxPlaced, `${placed.length} weapons placed at the start (at most ${MELEE_PICKUPS.maxPlaced})`);
+  check(placed.every((it) => !!it.weapon && FOUND_MELEE.includes(it.weapon as never)), 'all of them found weapons, never a machete or a gun');
+  const byRoom = new Map<string, number>();
+  for (const it of placed) byRoom.set(it.room!, (byRoom.get(it.room!) ?? 0) + 1);
+  check([...byRoom].every(([k, c]) => c <= MELEE_PICKUPS.perRoom[rooms.find((r) => r.key === k)!.room]), 'never crowded into one room');
+  check(placed.every((it) => {
+    const n = nav.nodeAt(it.pos.x, it.pos.y - MELEE_PICKUPS.lift + 0.05, it.pos.z, 0.3);
+    return n >= 0 && (nav.flags[n] & 4) !== 0;
+  }), 'every one lies indoors');
+  check(new Set(placed.map((it) => it.weapon)).size >= 3, `a mix of weapons (${placed.map((it) => it.weapon).join(', ')})`);
+  run(sim, 30);
+  check(sim.placedMelee.length === MELEE_PICKUPS.maxPlaced, 'no more turn up while the map is full');
+
+  // Picking one up, then swapping it for another.
+  const first = placed[0];
+  const standBy = (it: typeof first) => {
+    const at = { x: it.pos.x + 0.6, y: it.pos.y - MELEE_PICKUPS.lift, z: it.pos.z };
+    sim.setMotion('p1', { pos: at });
+    body.moveTo(at);
+  };
+  standBy(first);
+  check(sim.reachable('p1').some((it) => it.id === first.id), 'a weapon on the floor is in reach standing beside it');
+  sim.drain();
+  check(sim.use('p1', first.id) && sp.arsenal.meleeId === first.weapon && first.supply === 0, `picked up: the ${first.weapon} replaces the machete`);
+  let ev = sim.drain();
+  check(ev.some((e) => e.type === 'meleeTaken' && e.weapon === first.weapon && e.swapped === null), 'everyone hears it picked up');
+  check(sim.placedMelee.length === MELEE_PICKUPS.maxPlaced - 1, 'one fewer on the map');
+  check(!sim.use('p1', first.id), 'it cannot be taken twice');
+  const other = sim.placedMelee.find((it) => it.weapon !== first.weapon)!;
+  standBy(other);
+  check(sim.use('p1', other.id) && sp.arsenal.meleeId === other.weapon, `swapped for the ${other.weapon}`);
+  ev = sim.drain();
+  const left = sim.placedMelee.find((it) => it.weapon === first.weapon && Math.hypot(it.pos.x - other.pos.x, it.pos.z - other.pos.z) < 0.01);
+  check(!!left && ev.some((e) => e.type === 'meleeTaken' && e.swapped === first.weapon), 'the one carried is left where the new one lay');
+  check(sim.placedMelee.length === MELEE_PICKUPS.maxPlaced - 1, 'a swap keeps the count');
+  // A replacement turns up somewhere else in time, out of everyone's way.
+  sim.setMotion('p1', { pos: { x: 0, y: 0.15, z: 6 } });
+  body.moveTo({ x: 0, y: 0.15, z: 6 });
+  const before = new Set(sim.placedMelee.map((it) => it.id));
+  run(sim, MELEE_PICKUPS.respawn[1] + 10);
+  const fresh = sim.placedMelee.filter((it) => !before.has(it.id));
+  check(sim.placedMelee.length === MELEE_PICKUPS.maxPlaced && fresh.length === 1, `a taken weapon is replaced within ${MELEE_PICKUPS.respawn[1]} s`);
+  check(fresh.every((it) => Math.hypot(it.pos.x - sp.motion.pos.x, it.pos.z - sp.motion.pos.z) > MELEE_PICKUPS.awayFromPlayers), 'never right under a survivor\'s nose');
+
+  // Each weapon's swing in the hands.
+  check(MELEE.machete.damage === 55 && MELEE.machete.windup === 0.16 && MELEE.machete.duration === 0.55, 'the machete keeps its old numbers');
+  const standAt = { x: 0, y: 0.15, z: 6 };
+  const swingWith = (w: keyof typeof MELEE, kind: 'walker' | 'brute', aim: 'torso' | 'armL' | 'head' = 'torso') => {
+    for (const zz of [...sim.zombies]) zz.removeBody();
+    sim.zombies.length = 0;
+    sp.arsenal.meleeId = w;
+    sp.motion.yaw = 0;
+    const zz = sim.spawnZombie(kind, { x: standAt.x, y: 0.02, z: standAt.z - 1.3 }, 'idle');
+    zz.facing = 0;
+    run(sim, 0.05);
+    const e = sp.eye;
+    const shape = zz.zones([]).find((s2) => s2.zone === (aim === 'torso' ? 'torso' : aim))!;
+    const to = aim === 'armL' ? along(shape.a, shape.b, 0.3) : along(shape.a, shape.b, 0.5);
+    const d = { x: to.x - e.x, y: to.y - e.y, z: to.z - e.z };
+    const l = Math.hypot(d.x, d.y, d.z);
+    const hp = zz.health;
+    const ok = sim.melee('p1', { origin: e, dir: { x: d.x / l, y: d.y / l, z: d.z / l } });
+    const got = run(sim, MELEE[w].duration + 0.05).events;
+    return { ok, zz, got, dealt: hp - Math.max(0, zz.health), took: sp.arsenal.action };
+  };
+  sim.setMotion('p1', { pos: standAt });
+  body.moveTo(standAt);
+  run(sim, 0.8);
+  const swing = swingWith('bat', 'walker');
+  const hit = swing.got.find((e) => e.type === 'zombieHit');
+  check(swing.ok && !!hit && hit.type === 'zombieHit' && hit.weapon === 'bat' && hit.melee, 'a bat blow is reported with the weapon that struck it');
+  for (const w of ['katana', 'bat', 'crowbar', 'wrench', 'hockey'] as const) {
+    const r = swingWith(w, 'walker');
+    check(r.ok && r.dealt > 0 && Math.abs(r.dealt - Math.min(ZOMBIES.walker.health, MELEE[w].damage)) < 0.5, `${w}: torso blow deals ${MELEE[w].damage} (dealt ${r.dealt.toFixed(0)})`);
+  }
+  // Edged weapons take arms off; blunt ones never do.
+  let r1 = swingWith('katana', 'brute', 'armL');
+  check(r1.got.some((e) => e.type === 'limbSevered' && e.melee) && r1.zz.arms.armL !== 'intact', 'one katana cut takes a brute\'s arm off (the machete takes two)');
+  let severs = 0;
+  for (let i = 0; i < 3; i++) {
+    r1 = swingWith('bat', 'brute', 'armL');
+    if (r1.got.some((e) => e.type === 'limbSevered')) severs++;
+  }
+  check(severs === 0 && r1.zz.arms.armL === 'intact', 'a bat breaks an arm but never takes it off');
+  r1 = swingWith('crowbar', 'walker', 'head');
+  check(!r1.zz.alive, 'a crowbar to the head drops a walker in one blow');
+  // Knockback: a bat or hockey stick shoves harder than a machete.
+  check(MELEE.bat.knockback > MELEE.machete.knockback && MELEE.hockey.knockback > MELEE.machete.knockback && MELEE.hockey.reach > MELEE.katana.reach, 'clubs shove harder, the hockey stick reaches farthest');
+  // Slower weapons land later.
+  sp.arsenal.meleeId = 'bat';
+  sim.melee('p1');
+  run(sim, MELEE.machete.windup + 0.02);
+  check(sp.arsenal.action === 'melee' && sp.arsenal.actionTotal === MELEE.bat.duration, 'the bat\'s swing takes its own time');
+  run(sim, 1);
+
+  // Online: the weapon in hand and the ones on the floor reach every client.
+  sp.arsenal.meleeId = 'hockey';
+  const snap = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+  const copy = new Simulation({ physics, map, nav, doors, seed: 3 });
+  const mirror = new Mirror(copy, 'someone-else');
+  mirror.apply(snap, 10);
+  const them = copy.players.get('p1');
+  check(them?.arsenal.meleeId === 'hockey', 'a remote survivor\'s copy carries the same melee weapon');
+  const theirs = copy.interactables.filter((it) => it.kind === 'melee' && it.supply > 0);
+  check(theirs.length === sim.placedMelee.length && theirs.every((it) => isMelee(it.weapon!) && sim.interactables[it.id].weapon === it.weapon), 'the weapons on the floor show on every screen');
+  copy.dispose();
+
+  // Dying leaves it on the floor.
+  for (const zz of [...sim.zombies]) zz.removeBody();
+  sim.zombies.length = 0;
+  const count = sim.placedMelee.length;
+  sim.damagePlayer(sp, 500, { x: 0, y: 0, z: 0 });
+  const dropped = sim.placedMelee.find((it) => it.weapon === 'hockey' && Math.hypot(it.pos.x - standAt.x, it.pos.z - standAt.z) < 1.5);
+  check(!!dropped && sim.placedMelee.length === count + 1 && sp.arsenal.meleeId === 'machete', 'a survivor who dies drops it where they fell');
   cleanup(sim, body);
 }
 

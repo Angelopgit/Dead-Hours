@@ -143,6 +143,9 @@ interface Spec {
   stock: [number, number, number];
   bolt: [number, number, number];
   metal?: boolean;
+  /** Non-metal parts of a metal weapon (a katana's wrapped grip, tape), or the whole of a wooden one. */
+  trim?: Builder;
+  trimRough?: number;
 }
 
 function m4(): Spec {
@@ -388,7 +391,130 @@ function machete(): Spec {
   };
 }
 
-const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107 };
+/** Melee models: origin at the right hand's grip, +Z toward the striking end, +Y the edge's back. */
+const MELEE_POINTS = { eject: [0, 0, 0] as V3, stock: [0, 0, 0] as V3, bolt: [0, 0, 0] as V3 };
+
+function katana(): Spec {
+  const blade = new Builder();
+  // A gently curved blade (sori): short segments rising toward the tip, the back (mune) up.
+  const segs = 9, z0 = 0.075, len = 0.7;
+  for (let i = 0; i < segs; i++) {
+    const u0 = i / segs, u1 = (i + 1) / segs;
+    const zc = z0 + len * (u0 + u1) / 2;
+    const rise = (u: number) => 0.022 * u * u;
+    const yc = (rise(u0) + rise(u1)) / 2;
+    const tilt = -Math.atan2(rise(u1) - rise(u0), len / segs);
+    const h = 0.03 - 0.006 * u1;
+    blade.box(0.0055, h, len / segs + 0.002, 0x9ea4aa, 0, yc + 0.004, zc, tilt);
+    // The hardened edge (hamon side): bright steel.
+    blade.box(0.0035, 0.008, len / segs + 0.002, 0xd8dde2, 0, yc - h / 2 + 0.006, zc, tilt);
+  }
+  // Kissaki: the angled point.
+  blade.box(0.005, 0.02, 0.05, 0xb9bec4, 0, 0.026, z0 + len + 0.016, -0.55);
+  // Habaki (brass collar) and tsuba (guard).
+  blade.box(0.012, 0.036, 0.026, 0xb08a3c, 0, 0.003, 0.068);
+  blade.tube(0.042, 0.05, 0.057, 0x2a2622, 0, 0.002, 10);
+  blade.tube(0.017, -0.245, -0.235, 0x6b5a3a, 0, 0.002, 8);
+  const grip = new Builder()
+    .tube(0.0155, -0.235, 0.05, 0x1a1817, 0, 0.002, 8, 0.0165);
+  // Ito wrap: diamonds along the grip.
+  for (let i = 0; i < 9; i++) {
+    const z = -0.22 + i * 0.03;
+    grip.box(0.034, 0.008, 0.012, 0x2c2622, 0, 0.002, z, 0, 0, 0.7);
+    grip.box(0.034, 0.008, 0.012, 0x2c2622, 0, 0.002, z + 0.015, 0, 0, -0.7);
+  }
+  return {
+    body: blade, trim: grip, trimRough: 0.85, metal: true,
+    muzzle: [0, 0.03, 0.78], fore: [0, 0, -0.17], ...MELEE_POINTS,
+  };
+}
+
+function bat(): Spec {
+  const ASH = 0xb8915e;
+  const b = new Builder()
+    // Knob, taped handle, the flare and the barrel.
+    .tube(0.026, -0.14, -0.125, 0x9c7a4c, 0, 0, 10, 0.02)
+    .tube(0.0145, -0.125, 0.16, ASH, 0, 0, 10, 0.016)
+    .tube(0.016, 0.16, 0.42, ASH, 0, 0, 10, 0.03)
+    .tube(0.03, 0.42, 0.74, 0xbf9963, 0, 0, 12, 0.034)
+    .tube(0.034, 0.74, 0.755, 0xa88352, 0, 0, 12, 0.03);
+  // Grip tape spiral and the burnt-in brand.
+  for (let i = 0; i < 8; i++) b.box(0.033, 0.006, 0.014, 0x161616, 0, 0, -0.11 + i * 0.026, 0, 0, i % 2 ? 0.5 : -0.5);
+  b.box(0.004, 0.02, 0.07, 0x3a2410, 0.031, 0.006, 0.56);
+  // Dark, dried stains on the barrel: it has been used.
+  b.box(0.006, 0.024, 0.05, 0x3b0d0a, 0.03, -0.01, 0.65, 0, 0, 0.4);
+  return {
+    body: new Builder(), trim: b, trimRough: 0.62,
+    muzzle: [0, 0, 0.75], fore: [0, 0, -0.085], ...MELEE_POINTS,
+  };
+}
+
+function crowbar(): Spec {
+  const RED = 0x8f1d17;
+  const b = new Builder()
+    // Hex bar, painted, worn to bare iron at the ends.
+    .tube(0.0115, -0.13, 0.44, RED, 0, 0, 6)
+    .tube(0.0115, -0.2, -0.13, 0x3a3836, 0, 0, 6, 0.0115)
+    // Flat chisel end, slightly bent.
+    .box(0.026, 0.006, 0.05, 0x4a4744, 0, 0.004, -0.225, 0.15)
+    // The goose neck curling back over the top, and its split claw.
+    .tube(0.0115, 0.44, 0.48, 0x4a4744, 0, 0, 6);
+  const arc = [[0.5, 0.012, 0.5], [0.52, 0.036, 1.05], [0.522, 0.066, 1.6], [0.51, 0.094, 2.2], [0.488, 0.11, 2.75]];
+  for (const [z, y, a] of arc) b.box(0.022, 0.022, 0.04, 0x4a4744, 0, y, z, -a);
+  b.box(0.03, 0.007, 0.045, 0x3a3836, 0, 0.116, 0.462, -3.0);
+  b.box(0.004, 0.012, 0.03, 0x1a1a1a, 0, 0.12, 0.45, -3.0);
+  return {
+    body: b, metal: true,
+    muzzle: [0, 0.1, 0.5], fore: [0, 0, -0.08], ...MELEE_POINTS,
+  };
+}
+
+function wrench(): Spec {
+  const IRON = 0x7a2a22, BARE = 0x55585a;
+  const b = new Builder()
+    // I-beam handle with a hanging hole at the end.
+    .box(0.014, 0.03, 0.3, IRON, 0, 0, 0.06)
+    .box(0.026, 0.008, 0.3, IRON, 0, 0.015, 0.06)
+    .box(0.026, 0.008, 0.3, IRON, 0, -0.015, 0.06)
+    .box(0.03, 0.038, 0.03, BARE, 0, 0, -0.105)
+    // The head: fixed hook jaw, knurled adjusting nut, sliding hook jaw.
+    .box(0.03, 0.05, 0.06, IRON, 0, 0.012, 0.235)
+    .box(0.03, 0.02, 0.05, BARE, 0, 0.05, 0.27)
+    .tube(0.017, 0.255, 0.285, BARE, 0, 0.065, 10)
+    .box(0.032, 0.11, 0.024, IRON, 0, 0.08, 0.3)
+    .box(0.03, 0.022, 0.052, IRON, 0, 0.128, 0.322);
+  // Jaw teeth.
+  for (let i = 0; i < 4; i++) b.box(0.032, 0.004, 0.006, 0x2a2b2c, 0, 0.115, 0.306 + i * 0.008);
+  return {
+    body: b, metal: true,
+    muzzle: [0, 0.1, 0.33], fore: [0, 0, -0.07], ...MELEE_POINTS,
+  };
+}
+
+function hockey(): Spec {
+  const SHAFT = 0x22262c, BLADE = 0x2c3038;
+  const b = new Builder()
+    // Composite shaft: the left hand at the taped butt, the right partway down.
+    .box(0.03, 0.022, 1.18, SHAFT, 0, 0, 0.29)
+    .box(0.031, 0.023, 0.12, 0x101010, 0, 0, -0.25)
+    .box(0.036, 0.028, 0.025, 0x101010, 0, 0, -0.31)
+    .box(0.0305, 0.0225, 0.25, 0xc8ccd0, 0, 0, 0.55)
+    // The heel, then the curved blade off to the side, its tape wrapped white.
+    .box(0.03, 0.024, 0.07, BLADE, 0.004, -0.004, 0.9, 0, 0.4);
+  const curve = [[0.04, 0.95, 0.75], [0.1, 0.985, 1.05], [0.17, 1.005, 1.28], [0.24, 1.01, 1.5]];
+  for (const [x, z, a] of curve) {
+    b.box(0.075, 0.07, 0.012, BLADE, x, 0.018, z, 0, a - Math.PI / 2 + 0.1);
+    b.box(0.072, 0.03, 0.013, 0xe7e7e2, x, 0.015, z, 0, a - Math.PI / 2 + 0.1);
+  }
+  return {
+    body: new Builder(), trim: b, trimRough: 0.45,
+    muzzle: [0.14, 0.02, 1.0], fore: [0, 0, -0.26], ...MELEE_POINTS,
+  };
+}
+
+const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107,
+  katana, bat, crowbar, wrench, hockey,
+};
 
 const v = (a: V3) => new THREE.Vector3(...a);
 
@@ -399,11 +525,14 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
   const materials: THREE.MeshStandardMaterial[] = [];
   const glowMaterials: THREE.Material[] = [];
   const geometries: THREE.BufferGeometry[] = [];
-  const mesh = (b: Builder, parent: THREE.Object3D, metal = 0.35) => {
-    const g = b.build()!;
+  const mesh = (b: Builder, parent: THREE.Object3D, metal = 0.35, trim = false) => {
+    const g = b.build();
+    if (!g) return null;
     geometries.push(g);
     // Double-sided: looking down the sights puts the eye inside apertures and optic tubes.
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.metal ? 0.32 : 0.55, metalness: spec.metal ? 0.75 : metal, flatShading: true, side: THREE.DoubleSide });
+    const mat = trim
+      ? new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.trimRough ?? 0.7, metalness: 0.02, flatShading: true, side: THREE.DoubleSide })
+      : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.metal ? 0.32 : 0.55, metalness: spec.metal ? 0.75 : metal, flatShading: true, side: THREE.DoubleSide });
     materials.push(mat);
     const m = new THREE.Mesh(g, mat);
     m.castShadow = true;
@@ -418,6 +547,7 @@ export function createWeaponModel(id: WeaponId): WeaponModel {
     return m;
   };
   mesh(spec.body, root);
+  if (spec.trim) mesh(spec.trim, root, 0, true);
   const sub = (s: { b: Builder; at: [number, number, number] } | undefined) => {
     if (!s) return null;
     const o = new THREE.Group();

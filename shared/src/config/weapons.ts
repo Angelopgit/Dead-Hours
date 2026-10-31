@@ -1,5 +1,6 @@
 export type WeaponSlot = 'primary' | 'secondary' | 'melee';
-export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper';
+export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper'
+  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -40,6 +41,16 @@ export interface WeaponDef {
   hold: 'rifle' | 'pistol' | 'melee';
   /** 0..1 summary bars for the loadout screen. */
   stats: { damage: number; fireRate: number; handling: number; range: number };
+}
+
+/** A found melee weapon's entry (the swing itself is tuned in MELEE, config/melee.ts). */
+function found(id: WeaponId, name: string, description: string, stats: WeaponDef['stats']): WeaponDef {
+  return {
+    id, name, model: name.toUpperCase(), slot: 'melee', description,
+    damage: 0, pellets: 1, fireRate: 0, magazine: 0, startReserve: 0, reloadTime: 0,
+    hipSpread: 0, aimSpread: 0, recoil: 0, range: 0, auto: false,
+    mode: 'MELEE', noise: 0, draw: 0.3, penetration: 0, maxReserve: 0, hold: 'melee', stats,
+  };
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
@@ -116,7 +127,13 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     mode: 'SEMI', noise: 120, draw: 1.0, penetration: 4, maxReserve: 50, hold: 'rifle',
     stats: { damage: 1, fireRate: 0.12, handling: 0.15, range: 1 },
   },
+  katana: found('katana', 'Katana', 'Long, razor sharp. Takes limbs off clean and cuts through a crowd.', { damage: 0.85, fireRate: 0.3, handling: 0.75, range: 0.1 }),
+  bat: found('bat', 'Baseball Bat', 'Slow, heavy two-handed swing that knocks a crowd back.', { damage: 0.6, fireRate: 0.2, handling: 0.5, range: 0.09 }),
+  crowbar: found('crowbar', 'Crowbar', 'Cast iron. Caves skulls in.', { damage: 0.7, fireRate: 0.25, handling: 0.6, range: 0.07 }),
+  wrench: found('wrench', 'Pipe Wrench', 'Short and quick, devastating to the head.', { damage: 0.55, fireRate: 0.35, handling: 0.8, range: 0.05 }),
+  hockey: found('hockey', 'Hockey Stick', 'Longest reach: sweeps the dead off their feet.', { damage: 0.45, fireRate: 0.3, handling: 0.7, range: 0.12 }),
 };
+
 
 export const PRIMARY_WEAPONS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman'];
 export const SECONDARY_WEAPONS: WeaponId[] = ['pistol'];

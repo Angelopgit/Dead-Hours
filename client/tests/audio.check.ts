@@ -6,6 +6,7 @@
  * sounds, every handling sound for every gun, both echo impulse responses, and the per-gun
  * character the engine relies on (louder guns echo harder, rifles crack, the shotgun booms longest).
  */
+import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
 import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
 
 const SR = 44100;
@@ -103,6 +104,44 @@ const t30 = (ir: Channels): number => {
 const decay = Object.fromEntries((Object.keys(ENCLOSURES) as Enclosure[]).map((k) => [k, t30(enclosedIR(k, SR, 11))]));
 if (!(decay.room < decay.basement && decay.room < decay.hall)) fail(`ring times out of order: ${JSON.stringify(decay)}`);
 else ok(`ring time (T60 from T30): room ${decay.room.toFixed(2)} s, basement ${decay.basement.toFixed(2)} s, hall ${decay.hall.toFixed(2)} s`);
+
+console.log('Melee weapons');
+{
+  // Share of a sound's energy above `hz` (a one-pole split: crude but enough to compare voices).
+  const bright = (x: Float32Array, hz: number) => {
+    const a = Math.exp((-2 * Math.PI * hz) / SR);
+    let lp = 0, hi = 0, all = 0;
+    for (let i = 0; i < x.length; i++) {
+      lp = a * lp + (1 - a) * x[i];
+      hi += (x[i] - lp) ** 2;
+      all += x[i] ** 2;
+    }
+    return hi / Math.max(1e-12, all);
+  };
+  const before = failures;
+  const hits: Record<string, Float32Array> = {};
+  for (const id of MELEE_VOICES) {
+    const sw = renderMeleeSwing(id, SR, 1), sw2 = renderMeleeSwing(id, SR, 1);
+    sound(`${id} swing`, [sw], 1, 0.6);
+    if (sw.some((v, i) => v !== sw2[i])) fail(`${id} swing: same seed renders differently`);
+    for (const heavy of [false, true]) {
+      const h = renderMeleeHit(id, { kill: heavy, head: heavy }, SR, 3);
+      sound(`${id} hit${heavy ? ' (kill)' : ''}`, [h], 1, 0.7);
+      if (stats([h], 0, 0.01).peak < 0.5) fail(`${id} hit: doesn't land on its transient`);
+      if (stats([h], 0.4, 0.62).peak > 0.1) fail(`${id} hit: still ringing after 400 ms`);
+      if (!heavy) hits[id] = h;
+    }
+    sound(`${id} pickup`, [renderMeleePickup(id, SR, 5)], 1, 0.6);
+  }
+  const a = renderMeleeHit('machete', { kill: false, head: false }, SR, 3), b = renderMeleeHit('machete', { kill: false, head: false }, SR, 4);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+  if (diff / a.length < 1e-3) fail('machete hit: takes are identical');
+  // Blades slice (bright, hissing), clubs thud (dark): the katana brightest, the bat darkest.
+  const br = Object.fromEntries(Object.entries(hits).map(([k, v]) => [k, bright(v, 2500)]));
+  if (!(br.katana > br.bat && br.machete > br.bat && br.machete > br.wrench && br.katana > br.hockey)) fail(`brightness order wrong: ${JSON.stringify(br)}`);
+  if (failures === before) ok(`${MELEE_VOICES.length} melee voices: swings, light and heavy hits, pickups render clean; blades brighter than clubs (${MELEE_VOICES.map((k) => `${k} ${(br[k] * 100).toFixed(0)}%`).join(', ')})`);
+}
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL AUDIO CHECKS PASSED');
 process.exit(failures ? 1 : 0);

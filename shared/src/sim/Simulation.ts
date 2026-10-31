@@ -6,6 +6,8 @@ import { DOWNED, PLAYER } from '../config/player';
 import { HORDES, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
+import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
+import { findPickupRooms, pickFoundWeapon, type PickupRoom } from './MeleePickups';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
 import type { MapDefinition } from '../types/world';
@@ -111,7 +113,7 @@ export interface Noise {
   source: string | null;
 }
 
-export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive' | 'serum';
+export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive' | 'serum' | 'melee';
 
 export interface Interactable {
   id: number;
@@ -122,8 +124,10 @@ export interface Interactable {
   range: number;
   /** Supply crates: how many times each survivor has taken from it. */
   takenBy?: Map<string, number>;
-  /** Weapon cases from a supply drop: the exclusive gun inside. */
+  /** Weapon cases from a supply drop: the exclusive gun inside. Found melee weapons: which one. */
   weapon?: WeaponId;
+  /** Found melee weapons: the room it lies in (one room holds only so many). */
+  room?: string;
 }
 
 /** One helicopter supply drop, from the flight in to the crate being emptied or taken away. */
@@ -240,6 +244,11 @@ export class Simulation {
   /** Severed arms, loose or held. */
   readonly limbs: SimLimb[] = [];
   private nextLimbId = 1;
+  /** Rooms found melee weapons turn up in (worked out on first use), and when the next one appears. */
+  private pickupRooms: PickupRoom[] | null = null;
+  /** Its own random stream, so placing weapons never shifts the zombies' rolls. */
+  private readonly pickRand: () => number;
+  private nextPickupAt = 0;
   /** Where the night is in the horde schedule (see Hordes.ts), as of the last survival step. */
   horde: HordeState = hordeAt(0);
   /** Bloaters killed and waiting to burst (a blast can set off another: they go in turn). */
@@ -255,6 +264,7 @@ export class Simulation {
     this.nav = opts.nav;
     this.doors = opts.doors;
     this.rand = rng(opts.seed ?? 1);
+    this.pickRand = rng(((opts.seed ?? 1) * 7919 + 13) >>> 0);
     this.phaseTime = opts.preparation ?? GAME.preparationSeconds;
     const controller = (step: boolean) => {
       const ctrl = this.physics.world.createCharacterController(0.02);
@@ -314,7 +324,10 @@ export class Simulation {
 
   removePlayer(id: string): void {
     const p = this.players.get(id);
-    if (p) this.dropLimb(p, false);
+    if (p) {
+      this.dropLimb(p, false);
+      this.dropMelee(p);
+    }
     this.players.delete(id);
     this.stopRevive(id);
     // The last one standing left: nobody is coming for the downed.
@@ -554,6 +567,7 @@ export class Simulation {
     p.work = null;
     p.arsenal.cancelReload();
     this.dropLimb(p, false);
+    this.dropMelee(p);
     this.stopRevive(p.id);
     this.emit({ type: 'playerDied', player: p.id });
     if (wipe) this.checkWipe();
@@ -758,7 +772,7 @@ export class Simulation {
    */
   private hitZombie(
     p: SimPlayer, z: Zombie, damage: number, zone: HitZone, pos: Vec3, dir: Vec3, melee: boolean, force: number,
-    opts: { along?: number; armTally?: number; limb?: number; knock?: number } = {},
+    opts: { along?: number; armTally?: number; limb?: number; knock?: number; weapon?: MeleeId } = {},
   ): void {
     if (!z.alive) return;
     const before = z.health;
@@ -769,7 +783,7 @@ export class Simulation {
     let exit: { pos: Vec3; normal: Vec3 } | null = null;
     const back = this.physics.raycastHit(pos.x, pos.y, pos.z, dir.x, dir.y, dir.z, 2.6);
     if (back) exit = { pos: { x: pos.x + dir.x * back.distance, y: pos.y + dir.y * back.distance, z: pos.z + dir.z * back.distance }, normal: { x: back.nx, y: back.ny, z: back.nz } };
-    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}) });
+    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}), ...(opts.weapon ? { weapon: opts.weapon } : {}) });
     // Enough punishment and the arm comes off: near the shoulder the whole arm, lower down the forearm.
     if ((zone === 'armL' || zone === 'armR') && z.canLose(zone)) {
       z.armDamage[zone] += opts.armTally ?? damage;
@@ -1044,6 +1058,7 @@ export class Simulation {
       this.emit({ type: 'notice', player: null, text: `${p.name.toUpperCase()} TOOK THE ${WEAPONS[it.weapon].model}` });
       return true;
     }
+    if (it.kind === 'melee') return this.takeMelee(p, it);
     if (it.kind === 'medical') {
       if (it.supply <= 0) return false;
       const room = COMBAT.maxBandages - p.bandages;
@@ -1301,6 +1316,118 @@ export class Simulation {
     return { origin: p.eye, dir: { x: -Math.sin(m.yaw) * cp, y: Math.sin(m.pitch), z: -Math.cos(m.yaw) * cp } };
   }
 
+  // ---------------------------------------------------------------- found melee weapons
+
+  /** Rooms found weapons can lie in (bedrooms, basements, the gas station store). */
+  get meleeRooms(): PickupRoom[] {
+    this.pickupRooms ??= findPickupRooms(this.map, this.nav, this.physics);
+    return this.pickupRooms;
+  }
+
+  /** Found weapons lying on the map now. */
+  get placedMelee(): Interactable[] {
+    return this.interactables.filter((it) => it.kind === 'melee' && it.supply > 0);
+  }
+
+  /** Keeps up to MELEE_PICKUPS.maxPlaced lying about: the first ones at once, then one now and then. */
+  private runPickups(): void {
+    const P = MELEE_PICKUPS;
+    if (this.time < this.nextPickupAt) return;
+    const placed = this.placedMelee;
+    if (placed.length >= P.maxPlaced) {
+      this.nextPickupAt = Infinity;
+      return;
+    }
+    const first = this.nextPickupAt === 0;
+    let made = 0;
+    while (placed.length + made < P.maxPlaced && this.placeMelee(!first)) {
+      made++;
+      if (!first) break;
+    }
+    const [lo, hi] = P.respawn;
+    this.nextPickupAt = this.time + (made || first ? lo + this.pickRand() * (hi - lo) : 8);
+  }
+
+  /** A taken weapon starts the clock for another to turn up somewhere. */
+  private pickupTaken(): void {
+    if (this.nextPickupAt !== Infinity) return;
+    const [lo, hi] = MELEE_PICKUPS.respawn;
+    this.nextPickupAt = this.time + lo + this.pickRand() * (hi - lo);
+  }
+
+  /**
+   * Puts a found weapon down in a room with space for one. `hidden`: only out of every survivor's
+   * way, so nobody sees it appear. Returns the interactable, or null when nowhere fits.
+   */
+  placeMelee(hidden = true, weapon?: MeleeId): Interactable | null {
+    const P = MELEE_PICKUPS;
+    const placed = this.placedMelee;
+    const used = new Map<string, number>();
+    for (const it of placed) if (it.room) used.set(it.room, (used.get(it.room) ?? 0) + 1);
+    const alive = [...this.players.values()].filter((p) => p.alive);
+    const open = this.meleeRooms.filter((r) => {
+      if ((used.get(r.key) ?? 0) >= P.perRoom[r.room]) return false;
+      return !hidden || alive.every((p) => dist2D(p.motion.pos, r.centre) > P.awayFromPlayers);
+    });
+    if (!open.length) return null;
+    // The gas station is the likeliest place, then basements, then bedrooms (there are many).
+    const weightOf = (r: PickupRoom) => (r.room === 'store' ? 4 : r.room === 'basement' ? 1.6 : 1);
+    let x = this.pickRand() * open.reduce((s, r) => s + weightOf(r), 0);
+    let room = open[open.length - 1];
+    for (const r of open) if ((x -= weightOf(r)) < 0) { room = r; break; }
+    const kinds = placed.map((it) => it.weapon).filter((w): w is MeleeId => !!w && isMelee(w));
+    const id = weapon ?? pickFoundWeapon(room.room, kinds, this.pickRand);
+    // Against a wall when there is one free, never on top of another.
+    for (let tries = 0; tries < 24; tries++) {
+      const pool = room.walled > 0 && tries < 16 ? room.walled : room.nodes.length;
+      const pos = this.nav.nodePos(room.nodes[Math.floor(this.pickRand() * pool)]);
+      if (placed.some((it) => Math.hypot(it.pos.x - pos.x, it.pos.z - pos.z) < 1.2 && Math.abs(it.pos.y - P.lift - pos.y) < 1)) continue;
+      return this.layMelee(id, pos, room.key);
+    }
+    return null;
+  }
+
+  /** A found weapon lying at `floor` (its reach point sits a little above it). */
+  private layMelee(weapon: MeleeId, floor: Vec3, room?: string): Interactable {
+    const it: Interactable = {
+      id: this.interactables.length, kind: 'melee', pos: { x: floor.x, y: floor.y + MELEE_PICKUPS.lift, z: floor.z },
+      supply: 1, range: MELEE_PICKUPS.range, weapon, ...(room ? { room } : {}),
+    };
+    this.interactables.push(it);
+    return it;
+  }
+
+  /** Takes a found weapon in place of the machete; one already carried is left where this one lay. */
+  private takeMelee(p: SimPlayer, it: Interactable): boolean {
+    const a = p.arsenal;
+    const weapon = it.weapon;
+    if (it.supply <= 0 || !weapon || !isMelee(weapon) || a.action === 'melee' || a.action === 'bandage') return false;
+    if (a.meleeId === weapon) {
+      this.emit({ type: 'notice', player: p.id, text: `YOU ALREADY CARRY A ${WEAPONS[weapon].model}` });
+      return false;
+    }
+    const swapped = a.meleeId === 'machete' ? null : a.meleeId;
+    it.supply = 0;
+    a.meleeId = weapon;
+    const floor = { x: it.pos.x, y: it.pos.y - MELEE_PICKUPS.lift, z: it.pos.z };
+    if (swapped) this.layMelee(swapped, floor, it.room);
+    else this.pickupTaken();
+    this.emit({ type: 'meleeTaken', player: p.id, item: it.id, weapon, swapped, pos: floor });
+    this.emit({ type: 'pickup', player: p.id, item: 'weapon', amount: 1, source: it.id, weapon });
+    return true;
+  }
+
+  /** A survivor who dies or leaves lets go of a found weapon: it lies where they were. */
+  private dropMelee(p: SimPlayer): void {
+    const a = p.arsenal;
+    if (a.meleeId === 'machete') return;
+    const m = p.motion.pos;
+    const n = this.nav.nodeAt(m.x, m.y + 0.1, m.z, 1.5);
+    const floor = n >= 0 ? this.nav.nodePos(n) : { x: m.x, y: m.y, z: m.z };
+    this.layMelee(a.meleeId, floor);
+    a.meleeId = 'machete';
+  }
+
   // ---------------------------------------------------------------- zombies
 
   spawnZombie(kind: ZombieKind, at: Vec3, mode: 'approach' | 'wander' | 'idle' = 'approach'): Zombie {
@@ -1424,6 +1551,7 @@ export class Simulation {
     for (const d of this.doors) d?.update(dt);
     this.updateLimbs();
     if (this.phase !== 'over') this.stepDowned(dt);
+    if (this.phase !== 'over') this.runPickups();
 
     const ticks: ArsenalTick[] = [];
     for (const p of this.players.values()) {
@@ -1766,8 +1894,9 @@ export class Simulation {
     const m = p.motion;
     const limb = a.meleeWith === 'limb' ? a.limb : null;
     const club = limb ? limbClub(limb.cut, limb.kind) : null;
-    const reach = club ? club.reach : WEAPONS.machete.range;
-    const arc = club ? LIMBS.arc : COMBAT.meleeArc;
+    const md = MELEE[a.meleeId];
+    const reach = club ? club.reach : md.reach;
+    const arc = club ? LIMBS.arc : md.arc;
     const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
     const chest = p.chest;
     const targets: { z: Zombie; d: number }[] = [];
@@ -1785,14 +1914,14 @@ export class Simulation {
       targets.push({ z, d });
     }
     targets.sort((a, b) => a.d - b.d);
-    this.noise(m.pos, club ? LIMBS.noise : WEAPONS.machete.noise, p.id);
+    this.noise(m.pos, club ? LIMBS.noise : md.noise, p.id);
     if (!targets.length) {
       this.emit({ type: 'melee', player: p.id, stage: 'miss', limb: !!limb });
       return;
     }
     const aim = this.meleeRay(p);
     let first: { pos: Vec3; dir: Vec3 } | null = null;
-    for (const [i, { z }] of targets.slice(0, club ? club.targets : 2).entries()) {
+    for (const [i, { z }] of targets.slice(0, club ? club.targets : md.targets).entries()) {
       const zc = z.chest;
       const dir = { x: zc.x - chest.x, y: 0, z: zc.z - chest.z };
       const l = Math.hypot(dir.x, dir.z) || 1;
@@ -1810,14 +1939,16 @@ export class Simulation {
         zone = m.pitch > 0.12 ? 'head' : 'torso';
         at = { x: zc.x - dir.x * 0.2, y: zone === 'head' ? z.pos.y + 1.62 * z.scale : zc.y, z: zc.z - dir.z * 0.2 };
       }
-      const base = club ? club.damage : WEAPONS.machete.damage;
-      const zoneK = zone === 'head' ? (club ? LIMBS.headBonus : 1.4) : zone === 'torso' ? 1 : ZONE_MULTIPLIER[zone];
-      const share = i === 0 ? 1 : club ? 0.75 : 0.6;
-      this.hitZombie(p, z, base * zoneK * share, zone, at, dir, true, club ? 1.3 : 1, {
+      const base = club ? club.damage : md.damage;
+      const zoneK = zone === 'head' ? (club ? LIMBS.headBonus : md.head) : zone === 'torso' ? 1 : ZONE_MULTIPLIER[zone];
+      const share = i === 0 ? 1 : club ? 0.75 : md.share;
+      // Blades cut toward taking the arm off; blunt weapons only bruise it.
+      this.hitZombie(p, z, base * zoneK * share, zone, at, dir, true, club ? 1.3 : md.sever > 0 ? 1 : 1.25, {
         along: h?.along ?? 0.5,
-        armTally: base * (club ? LIMBS.clubTear : LIMBS.chopBonus) * share,
+        armTally: base * (club ? LIMBS.clubTear : md.sever) * share,
         limb: limb?.id,
-        knock: club ? LIMBS.knockback : undefined,
+        knock: club ? LIMBS.knockback : md.knockback,
+        weapon: club ? undefined : a.meleeId,
       });
       first ??= { pos: at, dir };
     }

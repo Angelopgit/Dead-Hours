@@ -3,6 +3,8 @@ import { settings } from '../core/Settings';
 import type { Vec3 } from '@dead-hours/shared';
 import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from './GunSynth';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
+import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
+import type { MeleeId } from '@dead-hours/shared';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 const SHOT_TAKES = 4;
@@ -1567,6 +1569,40 @@ export class AudioEngine {
     const v = 0.25 + this.danger * 0.45;
     this.tone(d, t, 'sine', 62, 40, v, 0.01, 0.12);
     this.tone(d, t + 0.17, 'sine', 55, 36, v * 0.7, 0.01, 0.14);
+  }
+
+  // ------------------------------------------------------------------ melee weapons (MeleeSynth)
+
+  /** Plays a banked melee buffer: a fresh take each time, pitch nudged so repeats never sound identical. */
+  private meleeBuffer(key: string, takes: number, make: (seed: number) => Float32Array<ArrayBuffer>, position: THREE.Vector3, level: number, reverb: number, ref: number, spread = 0.05): void {
+    if (!this.ctx) return;
+    const take = Math.floor(Math.random() * takes);
+    const k = `${key}:${take}`;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.sample(k, () => [make(seedOf(k))]);
+    src.playbackRate.value = 1 + (Math.random() * 2 - 1) * spread;
+    const d = this.out(position, reverb, ref);
+    d.gain.value = level;
+    src.connect(d);
+    src.start();
+  }
+
+  /** A melee weapon swung through the air (whoosh voiced for the weapon). */
+  meleeWhoosh(weapon: MeleeId, position: THREE.Vector3): void {
+    const heavy = weapon === 'bat' || weapon === 'hockey';
+    this.meleeBuffer(`mswing:${weapon}`, 3, (seed) => renderMeleeSwing(weapon, this.ctx!.sampleRate, seed), position, heavy ? 0.5 : 0.42, 0, 2);
+  }
+
+  /** A melee blow landing on a zombie: blades slice and bite, blunt weapons crack and crunch. */
+  meleeHit(weapon: MeleeId, position: THREE.Vector3, hit: { kill: boolean; head: boolean; damage: number }): void {
+    const v = hit.kill || hit.head ? 'heavy' : 'light';
+    const level = 0.62 + Math.min(0.3, hit.damage / 300);
+    this.meleeBuffer(`mhit:${weapon}:${v}`, 4, (seed) => renderMeleeHit(weapon, { kill: hit.kill, head: hit.head }, this.ctx!.sampleRate, seed), position, level, 0.06, 3.2);
+  }
+
+  /** Picking a found melee weapon up. */
+  meleePickup(weapon: MeleeId, position: THREE.Vector3): void {
+    this.meleeBuffer(`mpick:${weapon}`, 2, (seed) => renderMeleePickup(weapon, this.ctx!.sampleRate, seed), position, 0.45, 0.04, 2);
   }
 
   dispose(): void {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COMBAT, LIMBS, WEAPONS, type HeldLimb, type WeaponDef, type WeaponId } from '@dead-hours/shared';
+import { LIMBS, MELEE, WEAPONS, isMelee, type HeldLimb, type MeleeId, type MeleeStyle, type WeaponDef, type WeaponId } from '@dead-hours/shared';
 import type { Humanoid } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
@@ -16,6 +16,8 @@ export interface HeldState {
   limb?: HeldLimb | null;
   /** What the current melee swing is made with. */
   meleeWith?: 'machete' | 'limb';
+  /** The melee weapon quick swings use: the machete, or one found lying around. */
+  meleeId?: WeaponId;
 }
 
 export interface HandsInput {
@@ -67,6 +69,26 @@ const SWING: { t: number; at: V3; rot: V3; twist: number }[] = [
   { t: 0.55, at: [-0.2, 0.22, 0.12], rot: [0.6, 0, 0], twist: 0 },
 ];
 
+type Key = { t: number; at: V3; rot: V3; twist: number };
+
+/** Katana: both hands, wound up over the right shoulder, a long diagonal cut down across. */
+const KATANA_SWING: Key[] = [
+  { t: 0, at: [-0.06, 0.24, 0.26], rot: [-0.55, 0.05, 0], twist: 0 },
+  { t: 0.2, at: [-0.24, 0.56, 0.04], rot: [-2.25, 0.5, 0.1], twist: -0.5 },
+  { t: 0.31, at: [0.04, 0.36, 0.44], rot: [0.15, 0.95, 1.25], twist: 0.45 },
+  { t: 0.5, at: [0.26, 0.08, 0.26], rot: [1.05, 1.2, 1.4], twist: 0.5 },
+  { t: 1, at: [-0.06, 0.24, 0.26], rot: [-0.55, 0.05, 0], twist: 0 },
+];
+
+/** Crowbar and wrench: one hand, raised high behind the head, brought straight down. */
+const TOOL_SWING: Key[] = [
+  { t: 0, at: [-0.2, 0.25, 0.14], rot: [0.55, 0, 0], twist: 0 },
+  { t: 0.2, at: [-0.22, 0.68, -0.02], rot: [-2.55, 0.15, 0], twist: -0.3 },
+  { t: 0.36, at: [-0.04, 0.34, 0.5], rot: [0.35, 0.15, 0.1], twist: 0.25 },
+  { t: 0.55, at: [-0.02, 0.06, 0.36], rot: [1.25, 0.2, 0.15], twist: 0.2 },
+  { t: 1, at: [-0.2, 0.25, 0.14], rot: [0.55, 0, 0], twist: 0 },
+];
+
 /**
  * Clubbing with a severed arm (spine space): where the grip is (the zombie's wrist) and how
  * the arm points (+Z toward the torn end). Heavier than the machete: a long wind-up over the
@@ -79,6 +101,30 @@ const LIMB_SWING: { t: number; at: V3; rot: V3; twist: number }[] = [
   { t: 0.42, at: [0.26, 0.12, 0.3], rot: [0.9, 1.1, 1.3], twist: 0.4 },
   { t: LIMBS.duration, at: [-0.2, 0.32, 0.18], rot: [-1.8, -0.3, 0], twist: 0 },
 ];
+/** Bat and hockey stick: the same big two-handed swing as an arm, in that weapon's own time. */
+const CLUB_SWING: Key[] = LIMB_SWING.map((k) => ({ ...k, t: k.t / LIMBS.duration }));
+/** The machete's swing on a 0..1 clock. */
+const BLADE_SWING: Key[] = SWING.map((k) => ({ ...k, t: k.t / SWING[SWING.length - 1].t }));
+
+/**
+ * Each style's keyframes (0..1 of the swing) and where in them the blow lands; a weapon with a
+ * quicker or slower windup has its swing stretched so the blade meets the zombie when the hit does.
+ */
+const STYLES: Record<MeleeStyle, { keys: Key[]; impact: number; twoHands: boolean; holster: 'hip' | 'blade' }> = {
+  blade: { keys: BLADE_SWING, impact: MELEE.machete.windup / MELEE.machete.duration, twoHands: false, holster: 'hip' },
+  katana: { keys: KATANA_SWING, impact: 0.28, twoHands: true, holster: 'blade' },
+  club: { keys: CLUB_SWING, impact: LIMBS.windup / LIMBS.duration, twoHands: true, holster: 'blade' },
+  tool: { keys: TOOL_SWING, impact: 0.3, twoHands: false, holster: 'hip' },
+};
+
+/** Swing progress 0..1 to keyframe time, so the weapon's impact key lands on its windup. */
+function swingClock(p: number, id: MeleeId): number {
+  const d = MELEE[id];
+  const st = STYLES[d.style];
+  const w = d.windup / d.duration;
+  return p < w ? (p / w) * st.impact : st.impact + ((p - w) / (1 - w)) * (1 - st.impact);
+}
+
 /** Ready: resting over the right shoulder like a bat. */
 const LIMB_READY: PoseDef = LIMB_SWING[0];
 /** Sprinting: dragged along by the wrist at the side. */
@@ -101,6 +147,8 @@ const HOLSTERS = {
   back: { pos: new THREE.Vector3(0.09, 0.42, -0.2), quat: basis([-0.45, -0.88, 0], [0, 0, -1]) },
   thigh: { pos: new THREE.Vector3(-0.115, -0.06, -0.02), quat: basis([0, -1, 0], [0, 0, 1]) },
   hip: { pos: new THREE.Vector3(0.19, 0.05, -0.08), quat: basis([0.08, -0.9, -0.42], [1, 0, 0]) },
+  /** Long melee weapons across the back the other way from a slung rifle, grip over the left shoulder. */
+  blade: { pos: new THREE.Vector3(-0.1, 0.4, -0.24), quat: basis([0.42, -0.9, 0], [0, 0, -1]) },
 };
 
 const smooth = (t: number) => t * t * (3 - 2 * t);
@@ -121,6 +169,9 @@ export class PlayerWeapon {
   private sprintW = 0;
   private reloadW = 0;
   private meleeW = 0;
+  /** The gun put away for a two-handed swing (katana, bat, hockey stick). */
+  private meleeTwoW = 0;
+  private meleeShown: MeleeId = 'machete';
   private stowW = 0;
   private raised = 0;
   private readonly recoil = { z: 0, vz: 0, pitch: 0, vp: 0, yaw: 0, vy: 0 };
@@ -170,6 +221,12 @@ export class PlayerWeapon {
     this.ensure('machete');
   }
 
+  /** The melee weapon quick swings use. */
+  private meleeOf(s: HeldState): MeleeId {
+    const id = s.meleeId;
+    return id && isMelee(id) ? id : 'machete';
+  }
+
   private ensure(id: WeaponId): WeaponModel {
     let m = this.models.get(id);
     if (!m) {
@@ -188,7 +245,7 @@ export class PlayerWeapon {
   private setLoadout(primary: WeaponId, secondary: WeaponId): void {
     if (primary === this.primaryId && secondary === this.secondaryId) return;
     for (const [id, m] of this.models) {
-      if (id !== primary && id !== secondary && id !== 'machete') {
+      if (id !== primary && id !== secondary && WEAPONS[id].slot !== 'melee') {
         m.dispose();
         this.models.delete(id);
       }
@@ -299,6 +356,17 @@ export class PlayerWeapon {
     const limb = s.limb && !s.limb.broken ? s.limb : null;
     const clubbing = s.action === 'melee' && s.meleeWith === 'limb';
     this.syncLimb(limb);
+    const meleeId = this.meleeOf(s);
+    if (meleeId !== this.meleeShown) {
+      const old = this.models.get(this.meleeShown);
+      if (old && this.meleeShown !== 'machete') {
+        old.dispose();
+        this.models.delete(this.meleeShown);
+      }
+      this.meleeShown = meleeId;
+    }
+    const meleeModel = this.ensure(meleeId);
+    const style = STYLES[MELEE[meleeId].style];
 
     // Blend weights.
     const ease = (cur: number, target: number, rate: number) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
@@ -309,6 +377,7 @@ export class PlayerWeapon {
     this.sprintW = ease(this.sprintW, input.sprinting && !busy && this.raised <= 0 ? 1 : 0, 9);
     this.reloadW = ease(this.reloadW, s.action === 'reload' ? 1 : 0, 12);
     this.meleeW = ease(this.meleeW, s.action === 'melee' ? 1 : 0, 22);
+    this.meleeTwoW = ease(this.meleeTwoW, s.action === 'melee' && !clubbing && style.twoHands ? 1 : 0, 26);
     // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm).
     const drawing = s.action === 'draw' && !limb;
     const stowTarget = s.action === 'bandage' ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
@@ -320,6 +389,8 @@ export class PlayerWeapon {
     const twistRifle = THREE.MathUtils.lerp(-0.4, -0.55, this.aimW) * (1 - this.sprintW) * (1 - this.stowW) * (1 - this.reloadW * 0.5);
     let twist = hold === 'rifle' ? twistRifle : 0;
     twist *= (1 - this.meleeW) * (1 - this.limbW);
+    // Both hands on a long weapon: the gun goes to its holster for the swing.
+    const away = Math.max(this.limbW, this.meleeTwoW);
 
     body.root.updateMatrixWorld(true);
     const spine = body.spine;
@@ -365,10 +436,10 @@ export class PlayerWeapon {
       this.tmpA.add(new THREE.Vector3().copy(stockLocal).applyQuaternion(this.tmpQ));
       this.mix(this.tmpA, this.tmpQ, this.stowW);
     }
-    if (this.limbW > 0.001) {
+    if (away > 0.001) {
       this.holsterPose(def.slot === 'primary' ? 'back' : 'thigh', this.tmpA, this.tmpQ);
       this.tmpA.add(new THREE.Vector3().copy(stockLocal).applyQuaternion(this.tmpQ));
-      this.mix(this.tmpA, this.tmpQ, this.limbW);
+      this.mix(this.tmpA, this.tmpQ, away);
     }
 
     // Recoil springs (weapon space): kick back, muzzle climb, a little sideways wander.
@@ -397,7 +468,7 @@ export class PlayerWeapon {
     // Holstered weapons.
     for (const [id, m] of this.models) {
       if (m === model) continue;
-      if (id === 'machete') continue;
+      if (WEAPONS[id].slot === 'melee') continue;
       m.root.visible = this.shown;
       this.holsterPose(WEAPONS[id].slot === 'primary' ? 'back' : 'thigh', m.root.position, m.root.quaternion);
       m.root.updateMatrixWorld(true);
@@ -416,14 +487,25 @@ export class PlayerWeapon {
       if (hold === 'pistol') leftW = 1 - this.sprintW;
       if (s.action === 'draw') leftW *= smooth(seg(progress, 0.55, 0.95));
     }
-    const machete = this.models.get('machete')!;
+    // The melee weapon: swung, or riding on the hip or across the back (the machete stays home
+    // while a found weapon is carried).
+    const spare = this.models.get('machete');
+    if (spare && spare !== meleeModel) spare.root.visible = false;
+    meleeModel.root.visible = this.shown;
     if (s.action === 'melee' && !clubbing) {
-      this.swingPose(progress * COMBAT.meleeDuration, machete);
-      machete.root.localToWorld(this.rightTarget.set(0, 0, 0));
+      this.keyPose(style.keys, swingClock(progress, meleeId), meleeModel.root.position, meleeModel.root.quaternion);
+      meleeModel.root.updateMatrixWorld(true);
+      meleeModel.root.localToWorld(this.rightTarget.set(0, 0, 0));
       this.poleR.set(-0.8, -0.4, -0.4).transformDirection(spineM);
+      if (style.twoHands) {
+        // The other hand on the grip below the right.
+        meleeModel.root.localToWorld(this.leftTarget.copy(meleeModel.fore));
+        this.poleL.set(0.7, -0.5, -0.3).transformDirection(spineM);
+        leftW = 1;
+      }
     } else {
-      this.holsterPose('hip', machete.root.position, machete.root.quaternion);
-      machete.root.updateMatrixWorld(true);
+      this.holsterPose(style.holster, meleeModel.root.position, meleeModel.root.quaternion);
+      meleeModel.root.updateMatrixWorld(true);
     }
     if (s.action === 'bandage') {
       // Wrap the left forearm: left arm across the chest, right hand circling it.
@@ -525,10 +607,10 @@ export class PlayerWeapon {
 
   private holsterPose(kind: keyof typeof HOLSTERS, pos: THREE.Vector3, q: THREE.Quaternion): void {
     const h = HOLSTERS[kind];
-    const bone = kind === 'back' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : this.body.hips;
+    const bone = kind === 'back' || kind === 'blade' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : this.body.hips;
     pos.copy(h.pos);
     // A rifle slung over a backpack rides on top of it.
-    if (kind === 'back') pos.z -= this.body.backDepth;
+    if (kind === 'back' || kind === 'blade') pos.z -= this.body.backDepth;
     bone.localToWorld(pos);
     bone.getWorldQuaternion(q).multiply(h.quat);
   }
@@ -536,8 +618,10 @@ export class PlayerWeapon {
   private swingTwist(s: HeldState): number {
     if (s.action !== 'melee' || s.actionTotal <= 0) return 0;
     const club = s.meleeWith === 'limb';
-    const keys = club ? LIMB_SWING : SWING;
-    const t = (1 - s.actionT / s.actionTotal) * (club ? LIMBS.duration : COMBAT.meleeDuration);
+    const p = THREE.MathUtils.clamp(1 - s.actionT / s.actionTotal, 0, 1);
+    const id = this.meleeOf(s);
+    const keys = club ? LIMB_SWING : STYLES[MELEE[id].style].keys;
+    const t = club ? p * LIMBS.duration : swingClock(p, id);
     for (let i = 1; i < keys.length; i++) {
       if (t <= keys[i].t) {
         const a = keys[i - 1], b = keys[i];
@@ -545,11 +629,6 @@ export class PlayerWeapon {
       }
     }
     return 0;
-  }
-
-  private swingPose(t: number, m: WeaponModel): void {
-    this.keyPose(SWING, t, m.root.position, m.root.quaternion);
-    m.root.updateMatrixWorld(true);
   }
 
   /** Left wrist target for the current action (support grip, reload choreography). */
