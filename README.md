@@ -2,6 +2,55 @@
 
 A cinematic co-op zombie survival game for the browser. Three.js + TypeScript client, Colyseus authoritative server, shared game data.
 
+![A horde of walkers, runners and brutes coming down Elm Street](docs/screenshots/hero.jpg)
+
+Hold out through the night in Maple Hollow, alone or with up to three friends. Gear up in the safehouse, then survive a growing outbreak with limited ammunition, bandages and whatever the supply helicopter drops. Everything runs in the browser: no installs, no downloads, and solo needs no server.
+
+## Screenshots
+
+### The night
+
+| | |
+| --- | --- |
+| ![Main menu over the night street](docs/screenshots/menu.jpg) | ![Survivor on Elm Street by the police car](docs/screenshots/street.jpg) |
+| Main menu, with the town behind it | Elm Street during the preparation |
+| ![Firing the M4A1 as the horde closes in](docs/screenshots/firing.jpg) | ![The police checkpoint with floodlights](docs/screenshots/checkpoint.jpg) |
+| Overrun at close range | The police checkpoint |
+
+### Homes and basements
+
+Every house on the street can be entered, and four of them have a basement, some with an ammo cache.
+
+| | |
+| --- | --- |
+| ![Living room of the Okafor house](docs/screenshots/home-interior.jpg) | ![A basement under one of the homes](docs/screenshots/basement.jpg) |
+| The Okafor house, with stairs up and down | A basement |
+| ![The Quik-Stop store](docs/screenshots/store.jpg) | ![Garage weapon table](docs/screenshots/weapon-table.jpg) |
+| The Quik-Stop store | Swapping the primary at the garage weapon table |
+
+### Aim down the sights
+
+| | | |
+| --- | --- | --- |
+| ![M4A1 red dot](docs/screenshots/ads-red-dot.jpg) | ![M870 fiber-optic bead](docs/screenshots/ads-bead.jpg) | ![MK14 scope](docs/screenshots/ads-scope.jpg) |
+| M4A1 red dot | M870 bead | MK14 scope |
+
+### Make your survivor
+
+| | |
+| --- | --- |
+| ![Character creator with a propeller cap](docs/screenshots/creator.jpg) | ![All headwear](docs/screenshots/headwear.jpg) |
+| The character creator, twelve tabs on a turntable | 31 hats, helmets and funny hats |
+| ![Survivor in game](docs/screenshots/survivor-in-game.jpg) | ![Zombies dressed from the same catalog](docs/screenshots/zombie-outfits.jpg) |
+| Your survivor in the night | Zombies wear the same clothes, muddied |
+
+### Play together
+
+| | |
+| --- | --- |
+| ![Online lobby with a join code and chat](docs/screenshots/lobby.jpg) | ![Text chat and push to talk in play](docs/screenshots/chat.jpg) |
+| Host a room and share the five-letter code | Proximity voice, team radio and text chat |
+
 ## Running
 
 ```bash
@@ -185,7 +234,7 @@ WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB
 ## Roadmap status
 
 - **Phase 1 Foundation**: done.
-- **Phase 2 Environment**: done. Maple Hollow, 250 × 250 m: Elm Street and Birch Lane with sidewalks, alleys and fourteen streetlights (a few dead, one flickering); ten houses (eight closed homes, the two-storey safehouse with kitchen, living room, three bedrooms, basement, garage and four ways in, and the enterable Henderson house); the Quik-Stop gas station with an enterable store; a park with playground and gazebo; a police checkpoint with a barrier chicane and floodlights; fenced backyards with sheds and tight side passages; woods around the edge. Baked AO, shadows and bounce light plus fog and dynamic lights.
+- **Phase 2 Environment**: done. Maple Hollow, 250 × 250 m: Elm Street and Birch Lane with sidewalks, alleys and fourteen streetlights (a few dead, one flickering); ten houses (eight enterable homes, four with basements, the two-storey safehouse with kitchen, living room, three bedrooms, basement, garage and four ways in, and the enterable Henderson house); the Quik-Stop gas station with an enterable store; a park with playground and gazebo; a police checkpoint with a barrier chicane and floodlights; fenced backyards with sheds and tight side passages; woods around the edge. Baked AO, shadows and bounce light plus fog and dynamic lights.
 - **Phase 3 Combat**: done. Six weapons with real models, hand IK, reload animations, recoil and holsters; muzzle flashes, tracers, shell casings and surface impacts; pooled blood, wounds, hit reactions and ragdoll deaths; zombie AI; weapon table, ammo crates and first aid; HUD with weapon panel, dynamic crosshair, hit markers, damage direction, timers and ammunition warning; inventory and results screen.
 - **Character customization**: done (see Survivors).
 - **Phase 4 Multiplayer**: done (see Online play). Hosted rooms with codes and a public list, the night run on the server, leaderboards and saved survivors, proximity voice with team radio, and text chat.
