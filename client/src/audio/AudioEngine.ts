@@ -5,6 +5,8 @@ import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMec
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
 import type { MeleeId } from '@dead-hours/shared';
+import { RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
+import { RECORDED_FILES } from './recordedFiles';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 const SHOT_TAKES = 4;
@@ -23,6 +25,35 @@ const CRACK_LEVEL = 0.55;
 /** Slower than this and a round makes no crack worth hearing (m/s). */
 const CRACK_SPEED = 380;
 const SPEED_OF_SOUND = 343;
+/**
+ * Guns get their own bus, louder than the rest of the effects (whose volume setting they follow)
+ * and past the compressor that holds the rest of the mix down: a compressor flattens the crack of
+ * a shot by 15 dB or more, so nothing on their way out compresses them; a soft clipper on the
+ * master rounds off whatever goes over.
+ */
+const GUN_GAIN = 1.6;
+/** The master's soft clipper: unity gain below CLIP_KNEE, rounding off to just under full scale. */
+const CLIP_KNEE = 0.6;
+const CLIP_RANGE = 2;
+/** Your own shot pushes everything but guns and voices down for a moment: the ears closing up. */
+const DUCK_DEPTH = 0.45;
+const DUCK_HOLD = 0.06;
+const DUCK_RECOVER = 0.14;
+/** Flesh hits this close together in time and place play as one (a load of buckshot). */
+const FLESH_GAP = 0.03;
+/** A recorded take indoors: the range's own outdoor tail gives way to the room's echo after this. */
+const INDOOR_TAIL = 0.12;
+/**
+ * Zombies carry: full level to ZOMBIE_REF metres, then inverse distance, slower than other
+ * sounds, so a groan is still made out at 60 m. Walls between muffle them like gunshots.
+ */
+const ZOMBIE_REF = 6;
+const ZOMBIE_ROLLOFF = 0.85;
+const ZOMBIE_LEVEL = 2.4;
+/** Zombie groans sounding at once before distant ones are left out. */
+const MAX_GROANS = 12;
+/** Zombie footsteps by gait: loud enough to hear them coming down the street, not just groaning. */
+const STEP_LEVEL = { walker: 1.8, runner: 1.7, brute: 1.2 };
 /** Playback level of each handling sound. */
 const FOLEY_LEVEL: Record<FoleyKind, number> = {
   magOut: 0.3, magIn: 0.42, bolt: 0.45, pump: 0.45, slide: 0.42, shellIn: 0.3, shellGrab: 0.08, holster: 0.16, draw: 0.16, dryFire: 0.3,
@@ -38,6 +69,20 @@ const FOLEY_SET: Record<string, FoleyKind[]> = {
   battle: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
   sniper: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
 };
+
+/** Transfer curve for the master's WaveShaper, which sees the signal scaled down by CLIP_RANGE. */
+function softClipCurve(): Float32Array<ArrayBuffer> {
+  const n = 4097;
+  const curve = new Float32Array(n);
+  const top = 0.98;
+  for (let i = 0; i < n; i++) {
+    const x = ((i / (n - 1)) * 2 - 1) * CLIP_RANGE;
+    const a = Math.abs(x);
+    const y = a < CLIP_KNEE ? a : CLIP_KNEE + (top - CLIP_KNEE) * Math.tanh((a - CLIP_KNEE) / (top - CLIP_KNEE));
+    curve[i] = Math.sign(x) * y;
+  }
+  return curve;
+}
 
 function seedOf(key: string): number {
   let h = 2166136261;
@@ -58,6 +103,16 @@ export class AudioEngine {
   private ambient!: GainNode;
   /** Other players' voices: straight to the master, past the compressor (gunfire doesn't pump them). */
   private voiceBus!: GainNode;
+  /** Shots, their echo and fly-by cracks. */
+  private guns!: GainNode;
+  /** Between the compressed mix (music, effects, ambience) and the master: dips under your own shots. */
+  private duck!: GainNode;
+  /** Decoded recordings by set name; empty until they are decoded (synthesized sounds stand in). */
+  private readonly recorded = new Map<string, AudioBuffer[]>();
+  /** Settles once the recordings are decoded, or have failed to (then synthesized sounds play). */
+  recordingsReady: Promise<void> = Promise.resolve();
+  /** Recent flesh hits, so a load of pellets lands as one wet hit. */
+  private fleshes: { t: number; at: THREE.Vector3 }[] = [];
   private noise!: AudioBuffer;
   private windGain!: GainNode;
   private windFilter!: BiquadFilterNode;
@@ -77,6 +132,8 @@ export class AudioEngine {
   private readonly bank = new Map<string, AudioBuffer>();
   private bankTimer = 0;
   private readonly listenerPos = new THREE.Vector3();
+  /** When each groan now sounding ends. */
+  private groaning: number[] = [];
   private rotorBuffer: AudioBuffer | null = null;
   private readonly rotors = new Map<number, { src: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode }>();
   private vanSound: { oscs: OscillatorNode[]; rumble: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode } | null = null;
@@ -101,11 +158,20 @@ export class AudioEngine {
     const ctx = context ?? new AudioContext();
     this.ctx = ctx;
     this.master = ctx.createGain();
-    this.master.connect(ctx.destination);
+    // Guns on top of everything else round off instead of clipping the output.
+    const down = ctx.createGain();
+    down.gain.value = 1 / CLIP_RANGE;
+    const clip = ctx.createWaveShaper();
+    clip.curve = softClipCurve();
+    clip.oversample = '2x';
+    this.master.connect(down).connect(clip).connect(ctx.destination);
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 3;
-    comp.connect(this.master);
+    this.duck = ctx.createGain();
+    comp.connect(this.duck).connect(this.master);
+    this.guns = ctx.createGain();
+    this.guns.connect(this.master);
     this.music = ctx.createGain();
     this.effects = ctx.createGain();
     this.ambient = ctx.createGain();
@@ -143,11 +209,12 @@ export class AudioEngine {
     const verb = () => {
       const v = ctx.createConvolver();
       v.normalize = false;
-      v.connect(this.effects);
+      v.connect(this.guns);
       return v;
     };
     this.verbs = { street: verb(), room: verb(), hall: verb(), basement: verb() };
     this.prepareGuns();
+    this.recordingsReady = this.loadRecordings(ctx);
 
     this.startWind();
     this.startDrone();
@@ -164,6 +231,7 @@ export class AudioEngine {
     this.master.gain.setTargetAtTime(a.master, t, 0.05);
     this.music.gain.setTargetAtTime(a.music, t, 0.05);
     this.effects.gain.setTargetAtTime(a.effects, t, 0.05);
+    this.guns.gain.setTargetAtTime(a.effects * GUN_GAIN, t, 0.05);
     this.ambient.gain.setTargetAtTime(a.ambient, t, 0.05);
     this.voiceBus.gain.setTargetAtTime(a.voice, t, 0.05);
     this.sends.music.gain.setTargetAtTime(a.music, t, 0.05);
@@ -375,6 +443,10 @@ export class AudioEngine {
     const ctx = this.ctx;
     const t = ctx.currentTime;
     const dur = 1.2 + Math.random() * 1.3;
+    // A horde groans all the time: past a dozen at once, only the near ones get a voice.
+    this.groaning = this.groaning.filter((end) => end > t);
+    if (this.groaning.length >= MAX_GROANS && position.distanceTo(this.listenerPos) > 20) return;
+    this.groaning.push(t + dur);
     const o = ctx.createOscillator();
     o.type = 'sawtooth';
     const base = (70 + Math.random() * 40) * pitch;
@@ -392,11 +464,9 @@ export class AudioEngine {
     f1.Q.value = 5;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.5 * volume, t + 0.25);
+    g.gain.linearRampToValueAtTime(0.5 * volume * ZOMBIE_LEVEL, t + 0.25);
     g.gain.setTargetAtTime(0, t + dur * 0.7, 0.2);
-    const panner = this.makePanner(position);
-    o.connect(f1).connect(g).connect(panner).connect(this.effects);
-    g.connect(this.sends.effects);
+    o.connect(f1).connect(g).connect(this.zombieOut(position, 1));
     o.start(t);
     vib.start(t);
     o.stop(t + dur + 1);
@@ -862,14 +932,21 @@ export class AudioEngine {
   /** Renders the gun bank one buffer per task, so startup never stalls a frame for long. */
   private prepareGuns(): void {
     const jobs: (() => void)[] = (['street', ...Object.keys(ENCLOSURES) as Enclosure[]] as Space[]).map((s) => () => this.echo(s));
+    const later: (() => void)[] = [];
     for (const id of Object.keys(GUN_SOUNDS)) {
-      for (let k = 0; k < SHOT_TAKES; k++) jobs.push(() => this.shotBuffer(id, k));
+      // Recorded guns only need their synthesized shot if the recordings fail to decode.
+      const rec = RECORDED_SHOTS[id];
+      for (let k = 0; k < SHOT_TAKES; k++) {
+        if (!rec) jobs.push(() => this.shotBuffer(id, k));
+        else later.push(() => { if (!this.recorded.has(rec.set)) this.shotBuffer(id, k); });
+      }
       jobs.push(() => this.mechBuffer(id));
       if (GUN_SOUNDS[id].velocity >= CRACK_SPEED) for (let k = 0; k < CRACK_TAKES; k++) jobs.push(() => this.crackBuffer(id, k));
     }
     for (const [id, kinds] of Object.entries(FOLEY_SET)) {
       for (const kind of kinds) for (let k = 0; k < FOLEY_TAKES; k++) jobs.push(() => this.foleyBuffer(kind, id, k));
     }
+    jobs.push(...later);
     const run = () => {
       const job = jobs.shift();
       if (!job || !this.ctx) return;
@@ -877,6 +954,45 @@ export class AudioEngine {
       this.bankTimer = window.setTimeout(run, 0);
     };
     this.bankTimer = window.setTimeout(run, 0);
+  }
+
+  /** Decodes the recordings; each set is used as soon as it is ready. */
+  private async loadRecordings(ctx: BaseAudioContext): Promise<void> {
+    const sets = Object.entries(groupRecordings(RECORDED_FILES));
+    const results = await Promise.allSettled(sets.map(async ([set, urls]) => {
+      const takes = await Promise.all(urls.map(async (url) => trimLead(ctx, await ctx.decodeAudioData(await recordingBytes(url)))));
+      if (this.ctx === ctx) this.recorded.set(set, takes);
+    }));
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed.length) console.warn(`${failed.length} recorded sound sets failed to decode; synthesized sounds stand in`, failed[0].reason);
+  }
+
+  /** A random take of a recording set, if it is decoded. */
+  private recording(set: string): AudioBuffer | null {
+    const takes = this.recorded.get(set);
+    return takes?.length ? takes[Math.floor(Math.random() * takes.length)] : null;
+  }
+
+  /** A shot for this gun: a recorded take once decoded, else the synthesized one. */
+  private shot(id: string): { buffer: AudioBuffer; level: number; rate: number; recorded: boolean } {
+    const rec = RECORDED_SHOTS[id];
+    const buffer = rec && this.recording(rec.set);
+    if (rec && buffer) return { buffer, level: rec.level, rate: rec.rate, recorded: true };
+    return { buffer: this.shotBuffer(id, Math.floor(Math.random() * SHOT_TAKES)), level: GUN_SOUNDS[id].level, rate: 1, recorded: false };
+  }
+
+  /**
+   * Your own shot: a sub-bass kick under the recording, and the rest of the mix dipping under it
+   * (`scale` below 1 for a suppressed shot).
+   */
+  private kick(id: string, t: number, scale = 1): void {
+    const weight = (RECORDED_SHOTS[id]?.punch ?? 0.5) * scale;
+    this.tone(this.guns, t, 'sine', 78, 36, 0.55 * weight, 0.002, 0.16, 0.12);
+    const g = this.duck.gain;
+    const depth = 1 - (1 - DUCK_DEPTH) * Math.min(1, 0.5 + weight * 0.5) * scale;
+    g.cancelScheduledValues(t);
+    g.setTargetAtTime(depth, t, 0.004);
+    g.setTargetAtTime(1, t + DUCK_HOLD, DUCK_RECOVER);
   }
 
   /** The map's acoustics (spaces and walls) for the game in progress; null in the menu. */
@@ -939,7 +1055,9 @@ export class AudioEngine {
       let far = 0;
       for (let i = 1; i < this.voices.length; i++) if (this.voices[i].dist > this.voices[far].dist) far = i;
       if (this.voices[far].dist <= dist) return false;
-      this.voices[far].level.gain.setTargetAtTime(0, now, 0.008);
+      const g = this.voices[far].level.gain;
+      g.cancelScheduledValues(now);
+      g.setTargetAtTime(0, now, 0.008);
       this.voices.splice(far, 1);
     }
     this.voices.push({ end, dist, level });
@@ -967,11 +1085,13 @@ export class AudioEngine {
     const here = this.here;
     const there = local ? here : this.spaceOf(position);
     const d = local ? 0 : position.distanceTo(L);
+    const shot = this.shot(id);
     const src = ctx.createBufferSource();
-    src.buffer = this.shotBuffer(id, Math.floor(Math.random() * SHOT_TAKES));
-    src.playbackRate.value = 1 + (Math.random() * 2 - 1) * 0.03;
+    src.buffer = shot.buffer;
+    src.playbackRate.value = shot.rate * (1 + (Math.random() * 2 - 1) * 0.03);
     const level = ctx.createGain();
-    level.gain.value = gun.level * (suppressed ? 0.3 : 1);
+    const lv = shot.level * (suppressed ? 0.3 : 1);
+    level.gain.value = lv;
     if (suppressed) {
       const can = ctx.createBiquadFilter();
       can.type = 'lowpass';
@@ -980,10 +1100,16 @@ export class AudioEngine {
     } else src.connect(level);
     const t = ctx.currentTime + d / SPEED_OF_SOUND;
     if (!local && !this.claimVoice(d, t + src.buffer.duration, level)) return;
+    // Recorded outdoors: fired inside, the recording's own tail is cut short and the room answers.
+    if (shot.recorded && there !== 'street') {
+      level.gain.setValueAtTime(lv, t + INDOOR_TAIL);
+      level.gain.setTargetAtTime(0, t + INDOOR_TAIL, 0.07);
+    }
     const echo = (gun.echo / (1 + d / 200)) * (suppressed ? 0.3 : 1);
     if (local) {
+      this.kick(id, t, suppressed ? 0.3 : 1);
       // The gun is at the shooter's face: no panning, the shot fills both ears.
-      level.connect(this.effects);
+      level.connect(this.guns);
       this.sendTo(level, here, echo * SEND[here]);
       if (here !== 'street') this.sendTo(level, 'street', echo * SEND.street * STREET_INDOORS, LEAK_OUT);
     } else {
@@ -994,7 +1120,7 @@ export class AudioEngine {
       const p = this.makePanner(position);
       p.refDistance = 8;
       level.connect(air);
-      this.muffled(air, wall).connect(p).connect(this.effects);
+      this.muffled(air, wall).connect(p).connect(this.guns);
       // Echo finds its way round through doors and windows: less muffled than the straight line.
       const apart = there !== here || wall.walls > 0;
       const leak: Muffle = !apart ? CLEAR : wall.walls
@@ -1013,7 +1139,7 @@ export class AudioEngine {
       m.playbackRate.value = src.playbackRate.value;
       const mg = ctx.createGain();
       mg.gain.value = gun.mechLevel;
-      m.connect(mg).connect(this.effects);
+      m.connect(mg).connect(this.guns);
       m.start(t);
     }
   }
@@ -1050,7 +1176,7 @@ export class AudioEngine {
     g.gain.value = CRACK_LEVEL * Math.min(1, (1.2 / Math.max(0.4, miss)) ** 0.75);
     const p = this.makePanner(this.flyAt);
     p.rolloffFactor = 0;
-    src.connect(g).connect(p).connect(this.effects);
+    src.connect(g).connect(p).connect(this.guns);
     src.start(now + along / gun.velocity + miss / SPEED_OF_SOUND);
   }
 
@@ -1118,30 +1244,49 @@ export class AudioEngine {
     }
   }
 
-  /** Wet hit on a body. */
-  flesh(position: THREE.Vector3, heavy: number): void {
+  /**
+   * A round (or a blow) going into a body, heard from where it lands: a recorded impact with a
+   * wet layer, a skull hit on headshots and a heavy punch under big or melee hits. Your own hits
+   * carry further than other people's. Pellets landing together play as one.
+   */
+  flesh(position: THREE.Vector3, hit: { damage: number; head: boolean; own: boolean; melee: boolean }): void {
     if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    const d = this.out(position, 0.05, 3);
-    this.burst(d, t, 'lowpass', 750, 1, 0.45 * (0.6 + heavy * 0.5), 0.002, 0.07 + heavy * 0.04);
-    this.tone(d, t, 'sine', 110, 55, 0.4 * (0.5 + heavy * 0.5), 0.002, 0.09);
-    this.burst(d, t + 0.01, 'bandpass', 1200, 3, 0.1, 0.005, 0.08, 0.7);
-  }
-
-  /** Hit confirmation ticks (not spatial). */
-  hitMarker(kind: 'hit' | 'kill' | 'head'): void {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    const d = this.out(null);
-    if (kind === 'hit') {
-      this.tone(d, t, 'square', 2600, 2400, 0.018, 0.001, 0.025);
-    } else if (kind === 'kill') {
-      this.tone(d, t, 'triangle', 1500, 1450, 0.06, 0.001, 0.07);
-      this.tone(d, t + 0.06, 'triangle', 1100, 1080, 0.06, 0.001, 0.1);
-    } else {
-      this.tone(d, t, 'sine', 3300, 3250, 0.07, 0.001, 0.22);
-      this.tone(d, t, 'sine', 4950, 4900, 0.03, 0.001, 0.15);
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    this.fleshes = this.fleshes.filter((f) => now - f.t < FLESH_GAP);
+    if (this.fleshes.some((f) => f.at.distanceToSquared(position) < 1)) return;
+    this.fleshes.push({ t: now, at: position.clone() });
+    const heavy = Math.min(1, hit.damage / 60);
+    const t = now + position.distanceTo(this.listenerPos) / SPEED_OF_SOUND;
+    const g = ctx.createGain();
+    const p = this.makePanner(position);
+    p.refDistance = hit.own ? 10 : 4;
+    this.muffled(g, this.muffle(position)).connect(p).connect(this.effects);
+    const verb = ctx.createGain();
+    verb.gain.value = 0.06;
+    g.connect(verb).connect(this.sends.effects);
+    const impact = this.recording('flesh');
+    if (!impact) {
+      // Synthesized until the recordings are decoded.
+      this.burst(g, t, 'lowpass', 750, 1, 0.45 * (0.6 + heavy * 0.5), 0.002, 0.07 + heavy * 0.04);
+      this.tone(g, t, 'sine', 110, 55, 0.4 * (0.5 + heavy * 0.5), 0.002, 0.09);
+      this.burst(g, t + 0.01, 'bandpass', 1200, 3, 0.1, 0.005, 0.08, 0.7);
+      return;
     }
+    const layer = (buf: AudioBuffer | null, gain: number, rate: number, at = t): void => {
+      if (!buf) return;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate * (1 + (Math.random() * 2 - 1) * 0.06);
+      const lg = ctx.createGain();
+      lg.gain.value = gain;
+      src.connect(lg).connect(g);
+      src.start(at);
+    };
+    layer(impact, 0.65 + heavy * 0.3, hit.melee ? 0.85 : 1);
+    layer(this.recording('wet'), 0.22 + heavy * 0.2, 1.05, t + 0.012);
+    if (hit.head) layer(this.recording('head'), 0.5, 1.1);
+    if (hit.melee || heavy > 0.6) layer(this.recording('punch'), hit.melee ? 0.6 : 0.35 * heavy, 0.9);
   }
 
   meleeSwing(position: THREE.Vector3): void {
@@ -1258,10 +1403,71 @@ export class AudioEngine {
     this.burst(d, t + 0.005, 'bandpass', 1300, 2, 0.14 * strength, 0.002, 0.06, 0.7);
   }
 
+  /**
+   * Output for a zombie's sounds: carries farther than the rest, muffled through walls. `lift`
+   * raises the point walls are looked for from, so a foot on the ground isn't heard through it.
+   */
+  private zombieOut(position: THREE.Vector3, reverb: number, lift = 0): GainNode {
+    const ctx = this.ctx!;
+    const g = ctx.createGain();
+    const p = this.makePanner(position);
+    p.refDistance = ZOMBIE_REF;
+    p.rolloffFactor = ZOMBIE_ROLLOFF;
+    const m = this.muffle(lift ? { x: position.x, y: position.y + lift, z: position.z } : position);
+    this.muffled(g, m).connect(p).connect(this.effects);
+    if (reverb > 0) {
+      const s = ctx.createGain();
+      s.gain.value = reverb;
+      g.connect(s).connect(this.sends.effects);
+    }
+    return g;
+  }
+
+  /**
+   * A zombie's foot coming down: walkers plant a heel and drag the other foot, runners slap
+   * the ground fast, brutes stomp. Floorboards sound hollow, a basement hard, outside dull.
+   */
+  zombieStep(position: THREE.Vector3, gait: 'walker' | 'runner' | 'brute', loudness: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = this.zombieOut(position, 0.12, 0.5);
+    // The noise bed is mostly rumble: steep high-pass it, so the scuff and slap carry (on small
+    // speakers too) and the thump comes from the tone alone.
+    const d = ctx.createBiquadFilter();
+    const d2 = ctx.createBiquadFilter();
+    d.type = d2.type = 'highpass';
+    d.frequency.value = d2.frequency.value = gait === 'brute' ? 160 : 260;
+    d.connect(d2).connect(out);
+    const floor = position.y < -0.5 ? 'concrete' : position.y > 0.25 ? 'wood' : 'ground';
+    const tone = floor === 'wood' ? 0.7 : floor === 'concrete' ? 1.5 : 1;
+    const l = STEP_LEVEL[gait] * (0.75 + 0.25 * Math.min(1, loudness * 2));
+    const j = () => 0.9 + Math.random() * 0.2;
+    if (gait === 'brute') {
+      this.tone(out, t, 'sine', 72 * j(), 34, 0.5 * l, 0.004, 0.3);
+      this.burst(d, t, 'lowpass', 900 * tone, 0.8, 0.9 * l, 0.003, 0.18);
+      this.burst(d, t, 'bandpass', 380 * tone * j(), 1, 1 * l, 0.003, 0.14);
+      this.burst(d, t + 0.004, 'bandpass', 1600 * tone, 0.9, 0.6 * l, 0.002, 0.07);
+      if (floor === 'wood') this.burst(d, t + 0.03, 'bandpass', 260 * j(), 5, 0.3 * l, 0.02, 0.3, 0.6);
+    } else if (gait === 'runner') {
+      this.burst(d, t, 'bandpass', 1200 * tone * j(), 0.9, 2.4 * l, 0.002, 0.06);
+      this.burst(d, t, 'highpass', 2500 * tone, 0.7, 0.4 * l, 0.001, 0.03);
+      this.tone(out, t, 'sine', 120 * j(), 70, 0.18 * l, 0.002, 0.06);
+    } else {
+      this.burst(d, t, 'lowpass', 700 * tone, 0.8, 0.6 * l, 0.004, 0.08);
+      this.burst(d, t + 0.002, 'bandpass', 1800 * tone * j(), 0.8, 0.25 * l, 0.002, 0.06);
+      this.tone(out, t, 'sine', 90 * j(), 55, 0.15 * l, 0.004, 0.09);
+      // The other foot dragged through after it.
+      this.burst(d, t + 0.06 + Math.random() * 0.05, 'bandpass', 900 * tone * j(), 1.2, 0.35 * l, 0.07, 0.22, 0.8);
+    }
+  }
+
   /** Formant-filtered growl for the zombie voices. */
   private voice(position: THREE.Vector3, t: number, f0: number, f1: number, formant: number, dur: number, peak: number, wobble: number, rough = 0): void {
     const ctx = this.ctx!;
-    const d = this.out(position, 0.25, 3);
+    const d = this.zombieOut(position, 0.25);
+    peak *= ZOMBIE_LEVEL;
+    rough *= ZOMBIE_LEVEL;
     const o = ctx.createOscillator();
     o.type = 'sawtooth';
     o.frequency.setValueAtTime(f0, t);
@@ -1318,7 +1524,7 @@ export class AudioEngine {
     const t = this.ctx.currentTime;
     const f = Math.sqrt(pitch);
     this.voice(position, t, 110 * pitch, 48 * pitch, 420 * f, 0.9 * (2 - f), 0.42, 9, 0.12);
-    this.burst(this.out(position, 0.1, 3), t + 0.5, 'lowpass', 300, 0.7, 0.35, 0.01, 0.2);
+    this.burst(this.zombieOut(position, 0.1), t + 0.5, 'lowpass', 300, 0.7, 0.35 * ZOMBIE_LEVEL, 0.01, 0.2);
   }
 
   /**
@@ -1713,6 +1919,7 @@ export class AudioEngine {
     this.unsub?.();
     window.clearTimeout(this.bankTimer);
     this.bank.clear();
+    this.recorded.clear();
     if (this.ctx instanceof AudioContext) void this.ctx.close();
     this.ctx = null;
   }

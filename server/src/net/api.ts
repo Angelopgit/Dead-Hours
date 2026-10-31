@@ -8,7 +8,7 @@ import { MAX_ROOMS, forwarded, localGames } from './scale';
 import { cleanAppearance, cleanBuildsWire, cleanName, cleanPrimary } from './clean';
 import { accountView, authProviders, exchange, logout, ownerFor } from './auth';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 
 /** The game is played from another address (the static site): every route allows any origin. */
 function cors(res: ServerResponse): void {

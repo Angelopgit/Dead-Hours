@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { SPAWNING, type ArmZone, type HitZone, type LimbCut, type Simulation, type Zombie, type ZombieKind } from '@dead-hours/shared';
-import { Humanoid, kindLooks, zombieLookOf } from '../characters/Humanoid';
+import { Humanoid, kindLooks, zombieLookOf, type ZombieGait } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import type { Physics } from '../core/Physics';
 import type { Effects } from '../effects/Effects';
@@ -45,6 +45,14 @@ const MAX_CORPSES = 14;
 
 /** Voice pitch per kind: brutes rumble, runners shriek, screamers shriek higher, bloaters gurgle low. */
 const VOICE_PITCH: Record<ZombieKind, number> = { walker: 1, runner: 1.32, brute: 0.62, crawler: 1, screamer: 1.5, bloater: 0.74 };
+/**
+ * Footfalls are heard this far (m), sharing STEP_RATE a second; within NEAR_STEPS they may
+ * overdraw by NEAR_CREDIT, so a crowd at arm's length is heard without turning into noise.
+ */
+const STEP_RANGE = 45;
+const NEAR_STEPS = 12;
+const STEP_RATE = 24;
+const NEAR_CREDIT = 6;
 
 /**
  * Renders the simulation's zombies: pooled skinned bodies per look, positions interpolated
@@ -61,6 +69,11 @@ export class ZombieView {
   gore = true;
   /** A body came to rest (blood pool under it). */
   onCorpseSettled: ((pos: THREE.Vector3) => void) | null = null;
+  /** A zombie's foot came down (gait, how hard 0..1). */
+  onStep: ((pos: THREE.Vector3, gait: ZombieGait, loudness: number) => void) | null = null;
+  /** Far footfalls left to play this moment (a horde would otherwise be hundreds a second). */
+  private stepBudget = 8;
+  private readonly ear = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, private readonly physics: Physics, private readonly field: LightField, private readonly effects: Effects) {
     this.root.name = 'zombies';
@@ -205,13 +218,16 @@ export class ZombieView {
   update(dt: number, sim: Simulation, renderTime: number, camera: THREE.Camera): void {
     const seen = new Set<number>();
     const cam = camera.position;
+    this.ear.copy(cam);
+    this.stepBudget = Math.min(8, this.stepBudget + dt * STEP_RATE);
     for (const z of sim.zombies) {
       if (!z.alive) continue;
       seen.add(z.id);
       let v = this.views.get(z.id);
       if (!v) {
         const { body, probe } = this.acquire(z.kind, z.look);
-        v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [] };
+        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [] };
+        body.onFootstep = (l) => this.stepped(view, l);
         this.views.set(z.id, v);
       }
       this.animate(v, z, dt, renderTime, cam, camera);
@@ -289,6 +305,15 @@ export class ZombieView {
     b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: state === 'vault' ? 0.6 : 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
     v.probe.update(dt, this.tmp.set(x, y, zz), camera);
     if (v.bleeds.length) this.bleed(v, dt, cam);
+  }
+
+  private stepped(v: View, loudness: number): void {
+    if (!this.onStep || v.ragdoll) return;
+    const d = v.pos.distanceTo(this.ear);
+    if (d > STEP_RANGE) return;
+    if (this.stepBudget < (d > NEAR_STEPS ? 1 : 1 - NEAR_CREDIT)) return;
+    this.stepBudget -= 1;
+    this.onStep(v.pos, v.body.gait, loudness);
   }
 
   /** Blood out of the stumps: pulses in time with what's left of a heartbeat, then drops. */

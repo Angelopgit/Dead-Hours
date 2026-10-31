@@ -74,7 +74,7 @@ export class MainMenu {
     this.el = h('div', { class: 'menu' },
       h('div', { class: 'menu-shade' }),
       this.main,
-      h('div', { class: 'menu-footer' }, 'BUILD 0.4.0 — MAPLE HOLLOW'),
+      h('div', { class: 'menu-footer' }, 'BUILD 0.4.1 — MAPLE HOLLOW'),
       h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'TOUCH CONTROLS ON · PLAY SIDEWAYS'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);

@@ -270,6 +270,7 @@ export class GameSession {
     this.zombies = new ZombieView(engine.scene, physics, field, this.effects);
     this.raid = new RaidView(engine.scene, physics, field);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
+    this.zombies.onStep = (pos, gait, loudness) => audio.zombieStep(pos, gait, loudness);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
@@ -1454,12 +1455,12 @@ export class GameSession {
           // A melee weapon: the blade's slice or the blunt weapon's crack and crunch.
           audio.meleeHit(e.weapon, A, { kill: e.killed, head: e.zone === 'head', damage: e.damage });
         } else {
-          audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
+          audio.flesh(A, { damage: e.damage, head: e.zone === 'head', own: e.by === this.myId, melee: e.melee });
         }
         if (e.by === this.myId) {
           const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
+          // Seen, not heard: the round going in is the sound of a hit.
           this.hud.hitMarker(kind);
-          audio.hitMarker(kind);
         }
         if (!e.killed && Math.random() < 0.4) audio.zombieHurt(this.zombies.headOf(e.zombie, C) ?? A, this.zombies.pitchOf(e.zombie));
         break;

@@ -61,7 +61,7 @@ npm start            # game server, as deployed
 npm run typecheck    # shared + client + server
 npm run check:world  # walks a character through the real map collision (doors, stairs, passages)
 npm run check:houses # every enterable home: rooms reachable, stairs walkable, basements connected
-npm run check:audio  # renders every gun, action and handling sound and the echo responses, checks level and shape
+npm run check:audio  # renders every synthesized gun, action and handling sound and the echo responses; checks the recorded takes and their credits
 npm run check:sim    # headless combat simulation: navigation, weapons, damage, zombie AI, supplies, death, appearance wire format
 npm run check:server # starts a real server and plays it over WebSocket and HTTP: rooms, codes, a night, boards, profiles, chat, voice setup
 npm run check:cluster # the game cap, then two servers sharing Redis behind a balancer (needs redis-server for that part)
@@ -93,7 +93,7 @@ client/   Vite + Three.js game
   src/gameplay     player controller, shoulder camera, doors, weapon table, menu cinematic, the game session
                    (solo and online) and the other survivors online (RemoteSurvivors.ts)
   src/network      server address and health (Net.ts), the room connection (NetLink.ts), player key and saved survivor (Account.ts)
-  src/audio        procedural Web Audio engine and offline gun synthesis (no external assets)
+  src/audio        Web Audio engine: recorded gun and flesh-hit sounds (recorded/, CC0, see Sound credits), synthesized everything else
   src/ui           main menu, settings, loadout, HUD, pause, inventory, weapon table, results,
                    online menu (host, join, lobby) and leaderboards
   tests/           headless world and audio checks (npm run check:world, check:audio)
@@ -129,10 +129,12 @@ Solo play runs the same authoritative simulation the game server runs online (`s
 - Zombies have head, torso, arm and leg hit zones (head ×2.5). They hear gunfire and footsteps, spot you in their sight cone (crouching shortens it), path through houses, pound and break doors, stagger and get knocked down.
 - 45 seconds of preparation, then the outbreak: a growing population of walkers and no waves. Death ends a solo run with the results screen.
 - Gore can be set to Off, Reduced or Full in Settings → Graphics.
-- Gun sounds are modeled per weapon and rendered into buffers at startup (`client/src/audio/GunSynth.ts`): the muzzle blast pressure wave, the gas jet, the supersonic crack for the rifles, the steel ringing, a ground bounce and an overload stage. The M4A1 is sharp with a hard crack, the MP5 a rounder bark with the roller bolt clacking, the M870 a long deep boom, the MK14 the biggest crack and report, the M17 a short snappy pop with the slide snapping. Each gun has four takes picked at random with slight pitch variation, the action cycling under each shot (buffer spring, roller bolt, op-rod, slide), and its own reload, pump, charging handle and dry fire sounds. These are synthesized, not recordings: the free sound and impulse-response libraries (freesound.org, openairlib.net) are blocked from the build environment, so nothing here is measured against real recordings yet.
+- Gun shots are real recordings (`client/src/audio/recorded`, CC0 from Freesound, see Sound credits), four takes per gun picked at random with slight pitch variation: the M17 and MP5 from a 9 mm pistol at an outdoor range (the MP5's takes shorter and barkier), the M4A1 and M249 from an AR-15 (5.56, the M249 a touch lower), the MK14 from a .303 Lee-Enfield (no clean, freely licensed 7.62 NATO recording was found; it is the nearest full-power rifle), the SCAR-H from a SCAR-H, the M870 from a 12 gauge fired four times, the M107 from a Barrett .50 in an open field and a .50 BMG at a range. They are Freesound's high-quality previews, not the original files (those need a login). `client/dev/make_recorded_sounds.py` rebuilds them: it finds each shot, cuts and pitches the takes, adds body and bark with EQ, limits, and checks they decode under full scale. Your own shot adds a sub-bass kick and pushes the rest of the mix down for a moment. Guns play on their own bus, louder than other effects and following the Effects volume, with no compressor on it (one flattened each crack by 15 dB); a soft clipper on the output rounds off anything over the top. Until the recordings are decoded, or if they fail to, the synthesized shots from `client/src/audio/GunSynth.ts` play (muzzle blast, gas jet, supersonic crack, steel ring); the action under each shot and every reload, pump, charging handle and dry fire are still synthesized.
+- Hits on zombies are heard, not beeped: the hit marker is visual only, and every round going into a body plays a recorded flesh impact with a wet layer, a skull hit on headshots and a heavy punch under big or melee hits, from where it landed (late by distance, muffled through walls). Your own hits carry farther than other people's; a load of buckshot lands as one hit.
+- Zombies carry farther than other sounds (full level to 6 m, then fading slowly, so a groan is still heard at 60 m) and are muffled through walls. Their footsteps are heard to 45 m: walkers plant a heel and drag the other foot, runners slap the ground fast, brutes stomp; floorboards sound hollow, a basement hard. Distant steps share a budget so a horde doesn't turn into noise.
 - Where a shot is heard decides how it sounds (`client/src/audio/Acoustics.ts`). Raycasts against the map sort each spot into street, room, hall (garages and the store, by their concrete floors) or basement, and each space has its own echo: on the street the facades slap a shot back one by one for about two seconds, a living room rings short and dull (0.8 s), a garage or the store longer (1.1 s), the concrete basement booms (1.5 s). A shot fired indoors also leaks, muffled, into the street echo, and a street shot leaks into the room you are in.
-- Every shot that is not your own plays from where it was fired with 3D (HRTF) panning, late by its distance at 343 m/s and with less of its direct sound the farther it is. Walls between you and the gun muffle it by what they are made of (glass a little, wood and plaster a lot, brick and concrete almost entirely; `Physics.crossings` lists every surface on the line). A supersonic round passing within 10 m cracks from the point where it passed you, ahead of the report: loud for the M4A1 and MK14, faint for 9 mm and buckshot, none for the M17. At most 10 shots from others play at once; a nearer one takes over from the farthest. Online, other survivors' shots go through this same path from their positions.
-- To hear or measure the gun sound, run `npm run dev` and open `/dev/gunclips.html`: **Render clips** plays each gun in each space and the distance, wall and fly-by cases through the game's own audio graph, with a save link per clip. `python3 -I client/dev/analyze_gunclips.py CLIPDIR OUTDIR` measures saved clips (C50, ring time, spectral centroid, crack and report timing), draws spectrogram sheets and joins each gun's four spaces into one A/B file.
+- Every shot that is not your own plays from where it was fired with 3D (HRTF) panning, late by its distance at 343 m/s and with less of its direct sound the farther it is. Walls between you and the gun muffle it by what they are made of (glass a little, wood and plaster a lot, brick and concrete almost entirely; `Physics.crossings` lists every surface on the line). A supersonic round passing within 10 m cracks from the point where it passed you, ahead of the report: loud for the M4A1 and MK14, faint for 9 mm and buckshot, none for the M17. At most 10 shots from others play at once; a nearer one takes over from the farthest. Online, other survivors' shots go through this same path from their positions. Inside, a recorded take's own outdoor tail is cut short and the room's echo takes over.
+- To hear or measure the gun sound, run `npm run dev` and open `/dev/gunclips.html`: **Render clips** plays each gun in each space, the distance, wall and fly-by cases, flesh hits, zombie steps and groans through the game's own audio graph, with a save link per clip (`renderClips({ synth: true })` from the console renders the synthesized shots instead). `python3 -I client/dev/analyze_gunclips.py CLIPDIR OUTDIR` measures saved clips (C50, ring time, spectral centroid, crack and report timing), draws spectrogram sheets and joins each gun's four spaces into one A/B file.
 - Barricading: from inside a home, hold G at a door or ground-floor window to nail boards across it (4 on a door, 3 on a window, 1.5 s each; the hammering carries to zombie ears). Hold E to pry one off. A boarded door won't open. Zombies beat the boards off one at a time, smash window glass and climb in through empty windows; doors still get pounded until they burst. Bullets shatter panes and fly on into the room, and shots into a closed door splinter its boards, then knock it in. Everything is decided by the simulation and synced to every player online.
 - Aiming looks down the sights in first person: the camera moves into the survivor's eye and the weapon's sights line up with it. Out of the box the M4A1 has iron sights, the MP5 a peep sight and hooded post, the M870 a fiber-optic bead, the M17 three-dot night sights and the MK14 a 6× scope (zoomed view with a duplex reticle); fitted optics replace them (see Progression). Settings → Controls → Aim view switches back to the over-the-shoulder zoom.
 
@@ -237,9 +239,28 @@ A busy game (four survivors, two dozen zombies) takes about a tenth of one CPU c
 - A deploy or a stopped instance ends the games on it, as with one server; games on the other instances carry on.
 - `GET /health` gives `games`, `maxGames` and `forwarded` (connections passed to another instance) for the instance that answered.
 
+## Sound credits
+
+All recordings are CC0 (public domain dedication) from [Freesound](https://freesound.org); credit is not required but given. The game uses the high-quality previews, cut and processed by `client/dev/make_recorded_sounds.py`.
+
+| Used for | Recording | Author |
+| --- | --- | --- |
+| M17, MP5 | [9mm Pistol Gunshots](https://freesound.org/s/731942/) | DledeSOUND |
+| M4A1, M249 | [AR15 pistol shot](https://freesound.org/s/427598/) | michorvath |
+| MK14 | [gun lee enfield 303 rifle clean shot](https://freesound.org/s/450853/) | kyles |
+| M870 | [Shot Gun - 12 Gauge- Fire Four Shots Quickly](https://freesound.org/s/619041/) | mrrap4food |
+| SCAR-H | [FN SCAR-H](https://freesound.org/s/702225/) | areniporgen |
+| M107 | [50CaliberOnePigRoast2012](https://freesound.org/s/169170/) | kvgarlic |
+| M107 | [50 cal shot](https://freesound.org/s/668071/) | ajhartman42295 |
+| Flesh hits | [VisceralBulletImpacts](https://freesound.org/s/423301/) | u1769092 |
+| Flesh hits (wet) | [Wet Splat 1](https://freesound.org/s/495118/) | nebulasnails |
+| Flesh hits (wet) | [GROSS IMPACT](https://freesound.org/s/641040/) | magnuswaker |
+| Headshots | [Headshot](https://freesound.org/s/511194/) | Pablobd |
+| Heavy and melee hits | [Major punch](https://freesound.org/s/399183/) | janbezouska |
+
 ## Controls
 
-WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact (hold to pry a board off) · G board up (hold) · F melee · H gunsmith · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
+WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact (hold to pry a board off) · G board up (hold) · F melee · H gunsmith · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc menu (pauses solo play; online the night goes on). Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
 
 ## Roadmap status
 

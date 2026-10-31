@@ -5,9 +5,14 @@
  * Covers each gun's close-shot takes (reproducible, yet different from one another), the action
  * sounds, every handling sound for every gun, both echo impulse responses, and the per-gun
  * character the engine relies on (louder guns echo harder, rifles crack, the shotgun booms longest).
+ * Then the real recordings the engine plays in their place: four takes for every gun, the flesh-hit
+ * layers, each a sane MP3 (decoded and measured when ffmpeg is installed), and every source credited.
  */
-import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, readdirSync } from 'node:fs';
 import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
+import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
+import { FLESH_SETS, RECORDED_SHOTS, groupRecordings } from '../src/audio/Recordings';
 
 const SR = 44100;
 let failures = 0;
@@ -142,6 +147,51 @@ console.log('Melee weapons');
   if (!(br.katana > br.bat && br.machete > br.bat && br.machete > br.wrench && br.katana > br.hockey)) fail(`brightness order wrong: ${JSON.stringify(br)}`);
   if (failures === before) ok(`${MELEE_VOICES.length} melee voices: swings, light and heavy hits, pickups render clean; blades brighter than clubs (${MELEE_VOICES.map((k) => `${k} ${(br[k] * 100).toFixed(0)}%`).join(', ')})`);
 }
+console.log('Recordings');
+const recDir = new URL('../src/audio/recorded/', import.meta.url);
+const recFiles = readdirSync(recDir).filter((f) => f.endsWith('.mp3'));
+const sets = groupRecordings(Object.fromEntries(recFiles.map((f) => [f, f])));
+let recorded = 0;
+for (const id of Object.keys(GUN_SOUNDS)) {
+  const rec = RECORDED_SHOTS[id];
+  const takes = rec ? (sets[rec.set] ?? []).filter(Boolean).length : 0;
+  if (!rec) fail(`${id}: no recorded shot, it would play the synthesized one`);
+  else if (takes < 4) fail(`${id}: ${takes} recorded takes of '${rec.set}', expected 4`);
+  else recorded++;
+}
+if (recorded === Object.keys(GUN_SOUNDS).length) ok(`all ${recorded} guns play one of 4 recorded takes`);
+const missing = FLESH_SETS.filter((set) => !sets[set]?.length);
+if (missing.length) fail(`flesh layers missing: ${missing.join(', ')}`);
+else ok(`flesh hit layers: ${FLESH_SETS.map((set) => `${set} ×${sets[set].length}`).join(', ')}`);
+const ffmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+let sane = 0;
+for (const f of recFiles) {
+  const bytes = readFileSync(new URL(f, recDir));
+  const mp3 = (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+  if (!mp3) { fail(`${f}: not an MP3`); continue; }
+  if (bytes.length < 2000 || bytes.length > 100_000) { fail(`${f}: ${bytes.length} bytes`); continue; }
+  if (ffmpeg) {
+    const raw = spawnSync('ffmpeg', ['-v', 'error', '-i', '-', '-f', 'f32le', '-ac', '1', '-ar', String(SR), '-'], { input: bytes, maxBuffer: 1 << 26 }).stdout;
+    const x = new Float32Array(raw.buffer, raw.byteOffset, raw.length >> 2);
+    const s = stats([x]);
+    let onset = 0;
+    while (onset < x.length && Math.abs(x[onset]) < s.peak * 0.05) onset++;
+    if (!s.finite) { fail(`${f}: NaN samples`); continue; }
+    if (s.peak > 1 || s.peak < 0.7) { fail(`${f}: peak ${s.peak.toFixed(3)}, expected about -1 dBFS`); continue; }
+    if (onset > 0.005 * SR) { fail(`${f}: starts ${(onset / SR * 1000).toFixed(1)} ms late`); continue; }
+    if (x.length > 2.1 * SR) { fail(`${f}: ${(x.length / SR).toFixed(2)} s long`); continue; }
+  }
+  sane++;
+}
+if (sane === recFiles.length) ok(`${sane} recordings are MP3s of sane size${ffmpeg ? ', peak near -1 dBFS, start on the sound, under 2.1 s' : ' (ffmpeg not installed: not decoded)'}`);
+// Every recording used is credited in the README with its Freesound page.
+const maker = readFileSync(new URL('../dev/make_recorded_sounds.py', import.meta.url), 'utf8');
+const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+const ids = [...maker.matchAll(/freesound\.org\/previews\/\d+\/(\d+)_/g)].map((m) => m[1]);
+const uncredited = ids.filter((id) => !readme.includes(`freesound.org/s/${id}`));
+if (!ids.length) fail('no sources found in make_recorded_sounds.py');
+else if (uncredited.length) fail(`README doesn't credit Freesound ${uncredited.join(', ')}`);
+else ok(`all ${ids.length} source recordings credited in the README`);
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL AUDIO CHECKS PASSED');
 process.exit(failures ? 1 : 0);

@@ -2,6 +2,7 @@
  * Dev-only listening tests: renders shots through the game's own AudioEngine into an
  * OfflineAudioContext, on the real map's acoustics, so every clip is exactly what the game plays.
  * window.renderClips() returns { name: base64 WAV }; each clip is also listed with a player.
+ * window.renderClips({ synth: true }) plays the synthesized shots in place of the recordings.
  */
 import * as THREE from 'three';
 import { MAPLE_HOLLOW as map, type Vec3 } from '@dead-hours/shared';
@@ -26,9 +27,11 @@ interface Clip {
   /** Where the listener faces. */
   look: THREE.Vector3;
   shots: { weapon: string; at: THREE.Vector3; local: boolean; bullets?: Vec3[]; delay?: number }[];
+  /** Other sounds, played at the start. */
+  play?: (eng: AudioEngine) => void;
 }
 
-const GUNS = ['ar', 'smg', 'shotgun', 'marksman', 'pistol'];
+const GUNS = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'lmg', 'battle', 'sniper'];
 
 function clips(): Clip[] {
   const out: Clip[] = [];
@@ -59,6 +62,24 @@ function clips(): Clip[] {
     name: 'ar-on-street-heard-from-house', seconds: 2.6, listener: PLACES.room, look: PLACES.frontWalk,
     shots: [{ weapon: 'ar', at: PLACES.frontWalk, local: false, bullets: [{ x: 60, y: PLACES.frontWalk.y, z: -6.5 }] }],
   });
+  // Down the open street, nothing in between.
+  const ahead = (m: number) => st.clone().add(new THREE.Vector3(m, -1.1, 0));
+  const look = st.clone().add(new THREE.Vector3(5, 0, 0));
+  out.push({ name: 'flesh-own-12m', seconds: 1, listener: st, look, shots: [], play: (e) => e.flesh(ahead(12), { damage: 35, head: false, own: true, melee: false }) });
+  out.push({ name: 'flesh-head-own-12m', seconds: 1, listener: st, look, shots: [], play: (e) => e.flesh(ahead(12), { damage: 120, head: true, own: true, melee: false }) });
+  out.push({ name: 'flesh-other-12m', seconds: 1, listener: st, look, shots: [], play: (e) => e.flesh(ahead(12), { damage: 35, head: false, own: false, melee: false }) });
+  out.push({ name: 'flesh-melee-2m', seconds: 1, listener: st, look, shots: [], play: (e) => e.flesh(ahead(2), { damage: 60, head: false, own: true, melee: true }) });
+  out.push({
+    name: 'shotgun-pellets-8m', seconds: 1.4, listener: st, look, shots: [{ weapon: 'shotgun', at: st, local: true }],
+    play: (e) => { for (let k = 0; k < 8; k++) e.flesh(ahead(8).add(new THREE.Vector3(Math.random() * 0.4, Math.random() * 0.6, 0)), { damage: 18, head: false, own: true, melee: false }); },
+  });
+  for (const gait of ['walker', 'runner', 'brute'] as const) {
+    out.push({ name: `steps-${gait}-10m`, seconds: 1.2, listener: st, look, shots: [], play: (e) => e.zombieStep(ahead(10).setY(0.15), gait, 0.5) });
+  }
+  out.push({ name: 'steps-own', seconds: 1.2, listener: st, look, shots: [], play: (e) => e.footstep(1, false) });
+  out.push({ name: 'steps-walker-3m', seconds: 1.2, listener: st, look, shots: [], play: (e) => e.zombieStep(ahead(3).setY(0.15), 'walker', 0.5) });
+  out.push({ name: 'groan-15m', seconds: 2.5, listener: st, look, shots: [], play: (e) => e.groan(ahead(15), 1, 1) });
+  out.push({ name: 'groan-50m', seconds: 2.5, listener: st, look, shots: [], play: (e) => e.groan(ahead(50), 1, 1) });
   out.push({
     name: 'ar-burst-street', seconds: 2.6, listener: st, look: st.clone().add(new THREE.Vector3(0, 0, -5)),
     shots: [0, 1, 2, 3, 4].map((k) => ({ weapon: 'ar', at: st, local: true, delay: k * 0.075 })),
@@ -82,10 +103,12 @@ function wav(buf: AudioBuffer): string {
   return btoa(s);
 }
 
-async function render(clip: Clip, acoustics: Acoustics): Promise<AudioBuffer> {
+async function render(clip: Clip, acoustics: Acoustics, synth: boolean): Promise<AudioBuffer> {
   const ctx = new OfflineAudioContext(2, Math.round(SR * clip.seconds), SR);
   const eng = new AudioEngine();
   eng.unlock(ctx);
+  await eng.recordingsReady;
+  if (synth) (eng as unknown as { recorded: Map<string, AudioBuffer[]> }).recorded.clear();
   // Only the guns: music and the night's ambience stay silent.
   const buses = eng as unknown as Record<'music' | 'ambient', GainNode> & { sends: Record<'music' | 'ambient', GainNode> };
   for (const bus of [buses.music, buses.ambient, buses.sends.music, buses.sends.ambient]) {
@@ -100,6 +123,7 @@ async function render(clip: Clip, acoustics: Acoustics): Promise<AudioBuffer> {
   eng.update(0.016, cam);
   // Shots after the first moment are fired when rendering reaches them (the context pauses there).
   const fire = (k: number) => eng.gunshot(clip.shots[k].weapon, clip.shots[k].at, clip.shots[k].local, clip.shots[k].bullets);
+  clip.play?.(eng);
   clip.shots.forEach((s, k) => {
     if (!s.delay) fire(k);
     else void ctx.suspend(s.delay).then(() => { fire(k); void ctx.resume(); });
@@ -109,7 +133,7 @@ async function render(clip: Clip, acoustics: Acoustics): Promise<AudioBuffer> {
   return out;
 }
 
-async function renderClips(): Promise<Record<string, string>> {
+async function renderClips(opts: { synth?: boolean; only?: string } = {}): Promise<Record<string, string>> {
   await initPhysics();
   const physics = new Physics(map);
   physics.world.step();
@@ -118,7 +142,8 @@ async function renderClips(): Promise<Record<string, string>> {
   list.replaceChildren();
   const result: Record<string, string> = {};
   for (const clip of clips()) {
-    const buf = await render(clip, acoustics);
+    if (opts.only && !clip.name.includes(opts.only)) continue;
+    const buf = await render(clip, acoustics, !!opts.synth);
     result[clip.name] = wav(buf);
     const li = document.createElement('li');
     const player = document.createElement('audio');
