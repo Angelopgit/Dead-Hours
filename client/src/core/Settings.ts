@@ -166,7 +166,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
 export const GRAPHICS_PRESETS: Record<GraphicsPreset, Partial<SettingsData['graphics']>> = {
   phone: {
     resolutionScale: 0.7, adaptiveResolution: true, shadows: 'off', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', particleQuality: 'low',
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: false, fogQuality: 'low', particleQuality: 'low',
     renderDistance: 120, fpsLimit: 30,
   },
   low: {

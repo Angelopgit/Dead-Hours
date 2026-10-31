@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { chain } from './BakeShader';
 import { GROUND_BAND } from './LightBaker';
 
 /** Top-down cover map for rain: 0.5 m texels, the highest roof or slab over each spot. */
@@ -125,22 +124,49 @@ const WET_COMMON = /* glsl */ `
  * ripples; and the nearest outdoor lamps (baked, so they have no specular of their own) are added
  * as GGX highlights, giving the long lamp reflections of a wet street.
  */
+/**
+ * How much of the wet shading is compiled in: none while rain is off (dry materials cost nothing),
+ * a cheap version on low fog quality (darkening, gloss, puddles, baked sheen), everything otherwise
+ * (ripples, sky sheen and per-lamp reflections). Changing it recompiles the wet materials.
+ */
+export type WetTier = 'off' | 'cheap' | 'full';
+let wetTier: WetTier = 'full';
+const wetMaterials = new Set<THREE.Material>();
+
+export function setWetTier(t: WetTier): void {
+  if (t === wetTier) return;
+  wetTier = t;
+  for (const m of wetMaterials) m.needsUpdate = true;
+}
+
 export function patchWet(mat: THREE.Material): void {
   if (mat.userData.wet || !mat.userData.baked || !(mat instanceof THREE.MeshStandardMaterial)) return;
   if (mat.name === 'puddle' || mat.transparent) return;
   mat.userData.wet = true;
+  wetMaterials.add(mat);
   // Standing water collects on hard flat ground, less on lawns and dirt, never on floors.
   const pool = PUDDLES[mat.name] ?? 0;
-  chain(mat, `wet${pool}`, (shader) => {
+  const prev = mat.onBeforeCompile;
+  const prevKey = mat.customProgramCacheKey.bind(mat);
+  mat.customProgramCacheKey = () => `${prevKey()}|wet${pool}${wetTier}`;
+  mat.needsUpdate = true;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev.call(mat, shader, renderer);
+    if (wetTier === 'off') return;
+    const full = wetTier === 'full';
     Object.assign(shader.uniforms, weatherUniforms);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${WET_COMMON}`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        // Dry (no rain, or indoors per the baked sky visibility): skip all of it.
         float wetSky = vBake.a;
-        bool wetGround = vBakeUp > 0.9 && vBakeWorld.y < ${GROUND_BAND.max.toFixed(3)} && vBakeWorld.y > ${GROUND_BAND.min.toFixed(3)};
-        if (wetGround) wetSky = texture2D(uGroundBake, (vBakeWorld.xz - uGroundRect.xy) * uGroundRect.zw).a;
-        float wet = uWetness * smoothstep(0.42, 0.8, wetSky) * mix(0.3, 1.0, smoothstep(0.1, 0.85, vBakeUp));
+        float wet = 0.0;
         float puddle = 0.0;
+        if (uWetness > 0.001) {
+          bool wetGround = vBakeUp > 0.9 && vBakeWorld.y < ${GROUND_BAND.max.toFixed(3)} && vBakeWorld.y > ${GROUND_BAND.min.toFixed(3)};
+          if (wetGround) wetSky = texture2D(uGroundBake, (vBakeWorld.xz - uGroundRect.xy) * uGroundRect.zw).a;
+          wet = uWetness * smoothstep(0.42, 0.8, wetSky) * mix(0.3, 1.0, smoothstep(0.1, 0.85, vBakeUp));
+        }
         if (${pool.toFixed(2)} > 0.0 && vBakeUp > 0.9 && vBakeWorld.y < 0.35 && wet > 0.01) {
           vec2 q = vBakeWorld.xz;
           float n = wetNoise(q * 0.21) * 0.62 + wetNoise(q * 0.83 + 3.1) * 0.38;
@@ -151,7 +177,7 @@ export function patchWet(mat: THREE.Material): void {
         roughnessFactor = mix(roughnessFactor, min(roughnessFactor, mix(0.38, 0.17, smoothstep(0.5, 0.95, vBakeUp))), wet);
         roughnessFactor = mix(roughnessFactor, 0.04, puddle);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        if (puddle > 0.02 && uRainAmt > 0.01) {
+        if (${full ? 'true' : 'false'} && puddle > 0.02 && uRainAmt > 0.01) {
           vec2 rg = wetRipples(vBakeWorld.xz, uWxTime) * puddle * uRainAmt * 0.35;
           normal = normalize(normal + (viewMatrix * vec4(-rg.x, 0.0, -rg.y, 0.0)).xyz);
         }`)
@@ -163,6 +189,7 @@ export function patchWet(mat: THREE.Material): void {
           // Wet ground spreads the lamp pools into a broad glossy sheen rather than going dark:
           // a share of the baked light comes back as reflection.
           reflectedLight.indirectSpecular += bk.rgb * uBakeGain * RECIPROCAL_PI * wet * (0.03 + 0.07 * puddle) * (0.3 + 2.0 * F_Schlick(vec3(0.04), 1.0, nv));
+          #if ${full ? 1 : 0}
           // Sky sheen: water mirrors the glowing fog, strongly at grazing angles (Fresnel).
           reflectedLight.indirectSpecular += uSkyRefl * F_Schlick(vec3(0.02), 1.0, nv) * (puddle + 0.35 * wet * (1.0 - puddle)) * mix(0.25, 1.0, smoothstep(0.6, 0.95, wetSky));
           float rough = pow2(material.roughness);
@@ -183,6 +210,7 @@ export function patchWet(mat: THREE.Material): void {
             float w = pow2(saturate(1.0 - pow4(d / uLampPos[i].w)));
             reflectedLight.directSpecular += min(uLampCol[i].rgb * f * (spec * cone * w * wet / pow(max(d, 0.5), uLampCol[i].w)), vec3(64.0));
           }
+          #endif
         }`);
-  });
+  };
 }

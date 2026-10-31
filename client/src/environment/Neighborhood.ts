@@ -13,7 +13,7 @@ import { LightField } from '../lighting/LightField';
 import { LightBaker, type BakeProgress } from '../lighting/LightBaker';
 import { bakeUniforms, patchBaked, patchPuddle, PUDDLE_LAMPS, type ReflectedLamp } from '../lighting/BakeShader';
 import { settings, type Quality } from '../core/Settings';
-import { patchWet, setWetLamps, setWetLampBudget, updateWetLamps, weatherUniforms } from '../lighting/WetShader';
+import { patchWet, setWetLamps, setWetLampBudget, setWetTier, updateWetLamps, weatherUniforms } from '../lighting/WetShader';
 import { FogLights } from '../lighting/FogLights';
 import { setLightConesVisible } from './LightCone';
 import { Rain, buildCoverMap } from './Rain';
@@ -342,7 +342,9 @@ export class Neighborhood {
     this.lighting.setShadowSize(shadowSize, renderer);
     this.atmosphere.setQuality(g.particleQuality, focus);
     this.rain.setQuality(g.particleQuality);
-    setWetLampBudget(g.fogQuality === 'high' ? 8 : g.fogQuality === 'medium' ? 6 : 3);
+    // Low fog (Phone, Low): wet streets keep the cheap baked sheen, no per-lamp reflections.
+    setWetLampBudget(g.fogQuality === 'high' ? 8 : g.fogQuality === 'medium' ? 5 : 0);
+    setWetTier(!g.rain ? 'off' : g.fogQuality === 'low' ? 'cheap' : 'full');
     setLightConesVisible(g.fogQuality === 'low');
     this.lib.setAnisotropy(g.textureQuality === 'low' ? 1 : g.textureQuality === 'medium' ? 4 : 8);
     void this.lib.loadPbr(renderer, g.textureQuality);

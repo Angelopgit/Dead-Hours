@@ -47,9 +47,11 @@ const GradeShader = {
       // Damage: red vignette pulse.
       c = mix(c, vec3(0.35, 0.02, 0.02), uDamage * (1.0 - v) * 0.85);
       // Grain: stronger in the shadows, like film; two hashes so it doesn't crawl in lines.
-      vec2 gp = vUv * vec2(1920.0, 1080.0);
-      float g = (hash(gp + fract(uTime * 7.3) * 91.7) + hash(gp * 1.37 - fract(uTime * 3.1) * 57.3)) - 1.0;
-      c += g * uGrain * (1.0 - l * 0.7);
+      if (uGrain > 0.0) {
+        vec2 gp = vUv * vec2(1920.0, 1080.0);
+        float g = (hash(gp + fract(uTime * 7.3) * 91.7) + hash(gp * 1.37 - fract(uTime * 3.1) * 57.3)) - 1.0;
+        c += g * uGrain * (1.0 - l * 0.7);
+      }
       c += uFlash;
       c *= 1.0 - uFade;
       gl_FragColor = vec4(max(c, 0.0), 1.0);

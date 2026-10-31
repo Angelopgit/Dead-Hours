@@ -113,7 +113,7 @@ export class Game {
   private applyRenderSettings(): void {
     const g = settings.value.graphics;
     const focus = this.session?.focus ?? this.menuCine.focus;
-    const key = `${g.particleQuality}`;
+    const key = `${g.particleQuality}|${g.rain}`;
     if (this.engine.shadowMapSize !== this.lastShadowSize || key !== this.lastParticle || g.fogQuality !== this.lastFog || g.textureQuality !== this.lastTex) {
       this.lastShadowSize = this.engine.shadowMapSize;
       this.lastParticle = key;
