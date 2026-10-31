@@ -45,6 +45,8 @@ export class Game {
     this.physics = new Physics(NEIGHBORHOOD);
     this.world = new Neighborhood(NEIGHBORHOOD, this.engine.scene, this.engine.renderer.capabilities.getMaxAnisotropy());
     this.world.lighting.onThunder = (delay, power) => audio.thunder(delay, power);
+    // Compressed PBR texture sets stream in while the lighting bakes.
+    const pbr = this.world.lib.loadPbr(this.engine.renderer, settings.value.graphics.textureQuality);
     const label = document.querySelector('.boot');
     let lastLabel = '';
     this.field = await this.world.bakeLighting((f, text) => {
@@ -78,6 +80,7 @@ export class Game {
       this.input.poll(1 / 60);
       this.input.endFrame();
     };
+    await pbr;
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);
     this.engine.renderer.compile(this.engine.scene, this.engine.camera);

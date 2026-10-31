@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { subtractRects, type MapDefinition } from '@dead-hours/shared';
+import { subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
 import { MaterialLibrary } from '../rendering/Materials';
 import { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
@@ -7,6 +7,7 @@ import { BAKE_CELL, dressHouses } from './Houses';
 import { PropFactory, pineCrown, type PropBuildResult, type Updatable } from './Props';
 import { Sky } from './Sky';
 import { Atmosphere } from './Atmosphere';
+import { Clutter } from './Clutter';
 import { Lighting } from '../lighting/Lighting';
 import { LightField } from '../lighting/LightField';
 import { LightBaker, type BakeProgress } from '../lighting/LightBaker';
@@ -30,6 +31,8 @@ export class Neighborhood {
   private readonly fog: THREE.FogExp2;
   private readonly staticMeshes: THREE.Mesh[];
   private envMap: THREE.Texture | null = null;
+  /** Litter, leaves, papers and glass pieces scattered at build time. */
+  clutterCount = 0;
 
   constructor(readonly map: MapDefinition, private readonly scene: THREE.Scene, anisotropy: number) {
     const texSize = { low: 256, medium: 512, high: 1024 }[settings.value.graphics.textureQuality];
@@ -58,6 +61,8 @@ export class Neighborhood {
     this.props = this.propFactory.build(map, this.root, batch);
     this.dynamic.push(...this.props.dynamic);
     this.buildFixtures(batch);
+    // Fixed density: clutter is static geometry, and changing it would re-run the lighting bake.
+    this.clutterCount = Clutter.build(map, this.lib, batch);
     this.staticMeshes = batch.build(this.root, 'map');
     this.buildForest();
     this.root.add(this.atmosphere.group);
@@ -84,6 +89,7 @@ export class Neighborhood {
     const puddles = this.map.props.filter((p) => p.kind === 'puddle');
     const found: { lamp: ReflectedLamp; dist: number }[] = [];
     for (const l of this.map.lights) {
+      if (l.flicker) continue;
       let best = Infinity;
       for (const p of puddles) {
         const dx = l.x - p.x, dy = l.y - 0.1, dz = l.z - p.z;
@@ -221,6 +227,10 @@ export class Neighborhood {
     const panel = this.lib.emissive(0xe6eeff, 5);
     bulb.userData.noBake = panel.userData.noBake = true;
     for (const l of this.map.lights) {
+      if (l.flicker) {
+        this.buildFlicker(l);
+        continue;
+      }
       if (l.fixture === 'bulb') {
         const g = new THREE.SphereGeometry(0.07, 8, 6);
         g.translate(l.x, l.y + 0.06, l.z);
@@ -235,6 +245,46 @@ export class Neighborhood {
         batch.add(worldBox(l.x, l.y + 0.03, l.z, 1.1, 0.04, 0.34, 1, null), panel, false, false);
       }
     }
+  }
+
+  /**
+   * A failing fixture: its emitter and a realtime light (no shadows, short range) stutter together,
+   * with long steady stretches between bursts. The light is always in the scene (intensity changes
+   * only), so no shader recompiles while it flickers.
+   */
+  private buildFlicker(l: LightSpec): void {
+    const color = new THREE.Color(l.color);
+    const emitter = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: color, emissiveIntensity: 5, roughness: 1 });
+    emitter.userData.noBake = true;
+    const g = l.fixture === 'bulb'
+      ? new THREE.SphereGeometry(0.07, 8, 6).translate(l.x, l.y + 0.06, l.z)
+      : new THREE.BoxGeometry(1.1, 0.04, 0.34).translate(l.x, l.y + 0.03, l.z);
+    const mesh = new THREE.Mesh(g, emitter);
+    mesh.castShadow = false;
+    this.root.add(mesh);
+    const light = new THREE.PointLight(color, l.intensity, Math.min(l.range, 9), l.decay ?? 2);
+    light.position.set(l.x, l.y - 0.1, l.z);
+    light.castShadow = false;
+    this.root.add(light);
+    const base = l.intensity;
+    let next = 1.5 + ((l.x * 7.3) % 3), until = 0, level = 1;
+    this.dynamic.push({
+      update: (_dt, t) => {
+        if (t > next) {
+          until = t + 0.3 + ((t * 13.7) % 1) * 1.4;
+          next = until + 2 + ((t * 7.1) % 1) * 7;
+        }
+        if (t < until) {
+          const n = Math.sin(t * 57.0) * Math.sin(t * 19.3 + 0.7);
+          level = n > 0.15 ? 1 : n > -0.35 ? 0.3 : 0.03;
+        } else {
+          level = 0.95 + Math.sin(t * 100) * 0.02;
+        }
+        if (settings.value.accessibility.reducedFlashing) level = 0.55 + level * 0.45;
+        light.intensity = base * level;
+        emitter.emissiveIntensity = 5 * level;
+      },
+    });
   }
 
   /** The woods: one instanced draw for trunks and one for crowns, with per-instance sway phase. */
@@ -274,6 +324,7 @@ export class Neighborhood {
     this.lighting.setShadowSize(shadowSize, renderer);
     this.atmosphere.setQuality(g.particleQuality, focus);
     this.lib.setAnisotropy(g.textureQuality === 'low' ? 1 : g.textureQuality === 'medium' ? 4 : 8);
+    void this.lib.loadPbr(renderer, g.textureQuality);
   }
 
   update(dt: number, t: number, camera: THREE.Camera, focus: THREE.Vector3): void {

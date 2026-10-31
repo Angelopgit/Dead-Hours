@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { MapDefinition } from '@dead-hours/shared';
+import { wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
@@ -24,6 +24,21 @@ function cabinGeometry(len: number, h: number, wid: number, insetF: number, inse
   }
   g.computeVertexNormals();
   return g;
+}
+
+/**
+ * Knocked-over furniture: a chair falls onto its side (toward local -X, matching its tipped collider),
+ * a floor lamp lies along local +X.
+ */
+function tip(kind: PropSpec['kind'], root: THREE.Group): void {
+  root.rotation.order = 'YXZ';
+  if (kind === 'chair') {
+    root.rotation.z = Math.PI / 2;
+    root.position.y += 0.21;
+  } else if (kind === 'floorLamp') {
+    root.rotation.z = -Math.PI / 2 + 0.06;
+    root.position.y += 0.2;
+  }
 }
 
 /** Builds every map prop. Static parts merge into the world batch; animated parts stay separate. */
@@ -86,6 +101,7 @@ export class PropFactory {
       const dynamicRoot = new THREE.Group();
       dynamicRoot.position.copy(root.position);
       dynamicRoot.rotation.copy(root.rotation);
+      if (p.tipped) tip(p.kind, root);
       kit.begin(p, root, dynamicRoot);
       const builder = INTERIOR[p.kind] ?? OUTDOOR[p.kind];
       if (builder) builder(kit);
@@ -211,6 +227,17 @@ export class PropFactory {
         k.box(0.05, 0.12, 0.35, tail, -2.24, 0.75, -0.65, { cast: false });
         k.box(0.05, 0.14, 0.38, k.mat(0x9aa0a6, 0.2, 0.5), 2.24, 0.72, 0.62);
         k.box(0.05, 0.14, 0.38, k.mat(0x9aa0a6, 0.2, 0.5), 2.24, 0.72, -0.62);
+        const door = wreckDoor(p);
+        if (door) {
+          // Abandoned with a door hanging open: a hole in the body and the door swung out on its hinge.
+          const dz = door.side * 0.935;
+          k.box(door.length - 0.08, 0.5, 0.02, k.mat(0x0d0d0e, 0.9), 0.55 - door.length / 2, 0.68, dz, { cast: false });
+          k.box(door.length, 0.62, 0.07, paint, door.cx, 0.62, door.cz, { ry: door.ry });
+          const win = new THREE.BoxGeometry(door.length * 0.62, 0.42, 0.02);
+          k.add(win, glass, door.cx + Math.cos(door.ry) * 0.12, 1.12, door.cz - Math.sin(door.ry) * 0.12, { ry: door.ry, cast: false });
+          // Interior: seat backs show through the opening.
+          k.box(0.5, 0.55, 1.5, k.mat(0x2a2422, 0.95), 0.05, 0.95, 0, { cast: false });
+        }
         if (wreck) {
           k.root.rotation.z = 0.03;
           k.box(1.2, 0.08, 1.7, paint, 1.55, 0.98, 0, { rz: -0.25 });

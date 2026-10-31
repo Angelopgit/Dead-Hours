@@ -102,7 +102,8 @@ export class LightField {
 
   constructor(map: MapDefinition) {
     this.tracer = new BakeTracer(map);
-    for (const l of map.lights) this.addLight(l);
+    // Flickering fixtures are realtime lights (Neighborhood), never baked.
+    for (const l of map.lights) if (!l.flicker) this.addLight(l);
     this.buildVpls();
   }
 

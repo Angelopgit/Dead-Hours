@@ -215,9 +215,19 @@ function diningSet(k: Frame, u: number, v: number, y: number, chairs: 'round' | 
     for (const su of [-1, 1]) k.prop('chair', u + su * 1.04, v, k.face(-su, 0) + twist(), { y, movable: true });
     return;
   }
+  const set: PropSpec[] = [];
   for (const sv of chairs === 'front' ? [-1] : [-1, 1]) {
-    for (const su of [-1, 1]) k.prop('chair', u + su * 0.42, v + sv * 0.68, k.face(0, -sv) + twist(), { y, movable: true });
+    for (const su of [-1, 1]) set.push(k.prop('chair', u + su * 0.42, v + sv * 0.68, k.face(0, -sv) + twist(), { y, movable: true }));
   }
+  // Knocked over in the panic: one chair in most homes (a hash, so the layout's random stream is untouched).
+  const pick = Math.floor(spot(set[0].x, set[0].z) * 7);
+  if (pick < set.length) set[pick].tipped = true;
+}
+
+/** Stable 0..1 from a world position (keeps decorative choices out of the layout's random stream). */
+function spot(x: number, z: number): number {
+  const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+  return s - Math.floor(s);
 }
 
 /**
@@ -267,7 +277,8 @@ function ranch(k: Frame, plan: HomePlan): void {
   k.prop('sofa', W - 3.2, livingV, k.face(1, 0), { y: F1, movable: true });
   k.prop('coffeeTable', W - 1.62, livingV, k.run(0, 1), { y: F1, movable: true });
   k.prop('rug', W - 1.9, livingV, k.run(0, 1), { y: F1, length: 2.6 });
-  k.prop('floorLamp', W - 3.2, T + 0.6, 0, { y: F1 });
+  const lamp = k.prop('floorLamp', W - 3.2, T + 0.6, 0, { y: F1 });
+  if (spot(lamp.x, lamp.z) < 0.45) lamp.tipped = true;
   k.prop('armchair', -W + 0.75, livingV - 0.6, k.face(1, 0.25), { y: F1, movable: true });
   k.against('bookshelf', 'v-', T, -1.3, F1, { movable: true });
   k.lamp(-2.6, livingV, F1, 3, 6.5);
@@ -375,7 +386,8 @@ function twoStorey(k: Frame, plan: HomePlan): void {
   k.prop('sofa', W - 3.22, livingV, k.face(1, 0), { y: F1, movable: true });
   k.prop('coffeeTable', W - 1.62, livingV, k.run(0, 1), { y: F1, movable: true });
   k.prop('rug', W - 1.9, livingV, k.run(0, 1), { y: F1, length: 2.6 });
-  k.prop('floorLamp', W - 3.4, 2.0, 0, { y: F1 });
+  const lamp = k.prop('floorLamp', W - 3.4, 2.0, 0, { y: F1 });
+  if (spot(lamp.x, lamp.z) < 0.45) lamp.tipped = true;
   k.prop('armchair', W - 0.78, 0.95, k.face(-0.5, 0.85), { y: F1, movable: true });
   k.against('bookshelf', 'v+', denV - PH, W - 1.0, F1, { movable: true });
   k.lamp((hallU0 + W) / 2, 3.0, F1, 3, 7);

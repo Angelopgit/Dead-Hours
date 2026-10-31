@@ -156,6 +156,8 @@ export interface PropSpec {
   forest?: boolean;
   /** Interaction the prop offers besides its kind's default (the workbench that is the weapon table). */
   use?: 'weapons';
+  /** Knocked over (chairs lie on their side, floor lamps on the floor). */
+  tipped?: boolean;
 }
 
 /** Static light: baked into static geometry and sampled by dynamic objects through probes. */
@@ -177,6 +179,8 @@ export interface LightSpec {
   penumbra?: number;
   /** Visible emitter shape the renderer draws at the light. */
   fixture?: 'bulb' | 'panel' | 'none';
+  /** A failing fixture: drawn as a realtime light that flickers, so it is left out of the bake. */
+  flicker?: boolean;
 }
 
 export interface Rect {

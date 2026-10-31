@@ -388,7 +388,8 @@ function gasStation(b: MapBuilder): void {
   b.prop('firstAid', 95.6, -42.69, 0, { y: 1.5 });
   b.prop('trashBag', 93.2, -35.2, 1, { variant: 3, movable: true });
   b.prop('ceilingLamp', 92, -38, 0, { y: 3.8 });
-  for (const x of [87, 97]) b.light({ kind: 'point', x, y: 3.72, z: -38, color: 0xdfe8ff, intensity: 55, range: 10, decay: 2, fixture: 'panel' });
+  // The east tube is failing: it flickers (realtime, not baked).
+  for (const x of [87, 97]) b.light({ kind: 'point', x, y: 3.72, z: -38, color: 0xdfe8ff, intensity: 55, range: 10, decay: 2, fixture: 'panel', flicker: x === 97 });
   // Behind the store.
   b.prop('dumpster', 103.6, -41, Math.PI / 2);
   b.prop('dumpster', 103.6, -37.9, Math.PI / 2 + 0.05, { variant: 1 });

@@ -1,0 +1,80 @@
+{
+  "version": 1793432413192,
+  "tiers": {
+    "high": {
+      "color": 1024,
+      "normal": 1024,
+      "orm": 512
+    },
+    "medium": {
+      "color": 512,
+      "normal": 512,
+      "orm": 256
+    },
+    "low": {
+      "color": 256
+    }
+  },
+  "sets": {
+    "asphalt": {
+      "from": "generated",
+      "colored": false
+    },
+    "brick": {
+      "from": "generated",
+      "colored": false
+    },
+    "carpet": {
+      "from": "generated",
+      "colored": false
+    },
+    "concrete": {
+      "from": "generated",
+      "colored": false
+    },
+    "dirt": {
+      "from": "generated",
+      "colored": false
+    },
+    "fence": {
+      "from": "generated",
+      "colored": false
+    },
+    "grass": {
+      "from": "generated",
+      "colored": false
+    },
+    "gravel": {
+      "from": "generated",
+      "colored": false
+    },
+    "metal": {
+      "from": "generated",
+      "colored": false
+    },
+    "plaster": {
+      "from": "generated",
+      "colored": false
+    },
+    "roof": {
+      "from": "generated",
+      "colored": false
+    },
+    "sidewalk": {
+      "from": "generated",
+      "colored": false
+    },
+    "siding": {
+      "from": "generated",
+      "colored": false
+    },
+    "tile": {
+      "from": "generated",
+      "colored": false
+    },
+    "wood": {
+      "from": "generated",
+      "colored": false
+    }
+  }
+}

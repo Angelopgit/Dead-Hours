@@ -22,6 +22,8 @@
     "check:server": "npm run check -w server",
     "check:cluster": "npm run check:cluster -w server",
     "check:controls": "tsx client/tests/controls.check.ts",
-    "check:explosives": "tsx shared/tests/explosives.check.ts"
+    "check:explosives": "tsx shared/tests/explosives.check.ts",
+    "textures": "node client/tools/textures/generate.mjs && node client/tools/textures/encode.mjs",
+    "textures:cc0": "node client/tools/textures/generate.mjs && node client/tools/textures/fetch-cc0.mjs && node client/tools/textures/encode.mjs"
   }
 }

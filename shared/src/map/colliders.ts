@@ -88,6 +88,33 @@ export function propHalfExtents(kind: PropKind, length?: number): [number, numbe
   return [hx, hz];
 }
 
+/** A wrecked car's open door: hinge at the front of the cabin, swung out on one side. */
+export interface WreckDoor {
+  /** -1 driver side (local -Z), 1 passenger side. */
+  side: -1 | 1;
+  /** Opening angle (radians). */
+  angle: number;
+  /** Door center and yaw in the car's local frame. */
+  cx: number;
+  cz: number;
+  ry: number;
+  length: number;
+}
+
+/** Which wrecks were abandoned with a door hanging open (overturned ones stay shut). */
+export function wreckDoor(p: PropSpec): WreckDoor | null {
+  if (p.kind !== 'wreckedCar') return null;
+  const v = p.variant ?? 0;
+  if (v >= 10 || v % 3 === 1) return null;
+  const side: -1 | 1 = v % 2 === 0 ? -1 : 1;
+  const angle = 0.85 + (v % 4) * 0.12;
+  const length = 1.05;
+  const hx = 0.55, hz = side * 0.93;
+  const cx = hx - Math.cos(angle) * length / 2;
+  const cz = hz + side * Math.sin(angle) * length / 2;
+  return { side, angle, cx, cz, ry: side * angle, length };
+}
+
 /** Collision for props, built identically on client and server. */
 export function propColliders(p: PropSpec): OrientedBox[] {
   const base = p.y ?? 0;
@@ -96,7 +123,11 @@ export function propColliders(p: PropSpec): OrientedBox[] {
   // Three.js Y rotation: x' = x*c + z*s, z' = -x*s + z*c
   const at = ([lx, ly, lz, hx, hy, hz]: LocalBox): OrientedBox =>
     ({ x: p.x + lx * c + lz * s, y: base + ly, z: p.z - lx * s + lz * c, hx, hy, hz, rotY: p.rotY });
+  if (p.tipped && p.kind === 'chair') return [at([-0.45, 0.22, 0, 0.45, 0.22, 0.22])];
+  if (p.tipped && p.kind === 'floorLamp') return [];
   const simple = SIMPLE[p.kind];
+  const door = wreckDoor(p);
+  if (simple && door) return [at(simple), { ...at([door.cx, 0.72, door.cz, door.length / 2, 0.42, 0.05]), rotY: p.rotY + door.ry }];
   if (simple) return [at(simple)];
   const len = p.length;
   switch (p.kind) {
