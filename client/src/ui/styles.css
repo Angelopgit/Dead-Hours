@@ -41,7 +41,17 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .menu { position: absolute; inset: 0; pointer-events: none; }
 .menu-shade { position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(90deg, rgba(4,6,9,0.86) 0%, rgba(4,6,9,0.55) 32%, rgba(4,6,9,0) 62%); }
-.menu-main { position: absolute; left: 7vw; top: 50%; transform: translateY(-50%); pointer-events: auto; width: min(420px, 80vw); }
+/* The column fills the band between the top and bottom margins and centers what is in it; the two
+   spacers shrink to nothing first, then it scrolls (big UI scale on a short window) instead of
+   running off the screen or over the footer. The padding (pulled back out by the margin) keeps
+   the hover line left of each item inside the scroll box. */
+.menu-main { position: absolute; left: 7vw; top: 4vh; bottom: 4vh; pointer-events: auto; width: min(420px, 80vw);
+  padding-left: 2em; margin-left: -2em;
+  display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--fg-faint) transparent; }
+.menu-main::before, .menu-main::after { content: ''; flex: 1 0 0; }
+.menu-main > * { flex: none; }
+/* The main menu keeps the build line and the hint clear below it (and stays centered on the screen). */
+.menu > .menu-main { top: calc(4vh + 2.4em); bottom: calc(4vh + 2.4em); }
 .title { font-family: var(--font-display); font-weight: 500; font-size: 4.6em; letter-spacing: 0.22em; margin: 0; line-height: 1;
   color: #e6e1d8; text-shadow: 0 0 40px rgba(0,0,0,0.6); }
 .subtitle { font-family: var(--font-display); font-weight: 300; letter-spacing: 0.32em; text-transform: uppercase; color: var(--fg-dim);
@@ -63,6 +73,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .menu-hint { position: absolute; right: 4vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.14em; pointer-events: none; text-align: right; }
 .menu-hint .touch { display: none; color: var(--accent); }
 @media (pointer: coarse) { .menu-hint .touch { display: block; margin-bottom: 0.6em; } }
+/* Laptop-height windows (1366x768 leaves about 650 px): tighter spacing, so the whole menu fits with PLAY open. */
+@media (min-width: 721px) and (min-height: 501px) and (max-height: 860px) {
+  .menu .title { font-size: 3.9em; }
+  .menu .subtitle { margin-bottom: 2em; }
+  .menu .menu-item { padding-top: 0.26em; padding-bottom: 0.26em; }
+  .menu .menu-sub .menu-item { padding-top: 0.22em; padding-bottom: 0.22em; }
+}
+@media (min-width: 721px) and (min-height: 501px) and (max-height: 700px) {
+  .menu .title { font-size: 3.3em; }
+  .menu .subtitle { margin: 0.7em 0 1.3em 0.2em; }
+  .menu .menu-item { padding-top: 0.17em; padding-bottom: 0.17em; }
+  .menu .menu-sub { margin-bottom: 0.4em; }
+  .menu .menu-sub .menu-item { padding-top: 0.16em; padding-bottom: 0.16em; }
+}
 @media (max-width: 720px) {
   .title { font-size: 3em; }
   .menu-main { left: max(16px, 6vw); }
@@ -554,7 +578,7 @@ body.touch-play .prompt { top: 40%; }
 @media (max-height: 500px) {
   .title { font-size: 2.4em; }
   .subtitle { margin-bottom: 0.4em; font-size: 0.75em; }
-  .menu-main { max-height: calc(100vh - 24px); overflow-y: auto; scrollbar-width: none; top: 50%; padding: 6px 0; }
+  .menu-main, .menu > .menu-main { top: 12px; bottom: 12px; scrollbar-width: none; }
   .menu-item { font-size: 1.2em; padding-top: 0.25em; padding-bottom: 0.25em; }
   .menu-sub .menu-item { font-size: 0.95em; }
   .menu-footer, .menu-hint { display: none; }
