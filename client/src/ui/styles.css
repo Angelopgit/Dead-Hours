@@ -45,7 +45,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
    spacers shrink to nothing first, then it scrolls (big UI scale on a short window) instead of
    running off the screen or over the footer. The padding (pulled back out by the margin) keeps
    the hover line left of each item inside the scroll box. */
-.menu-main { position: absolute; left: 7vw; top: 4vh; bottom: 4vh; pointer-events: auto; width: min(420px, 80vw);
+.menu-main { position: absolute; left: 7vw; top: 4vh; bottom: 4vh; pointer-events: auto; width: min(30em, 80vw);
   padding-left: 2em; margin-left: -2em;
   display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--fg-faint) transparent; }
 .menu-main::before, .menu-main::after { content: ''; flex: 1 0 0; }
@@ -65,8 +65,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .menu-item:hover::before, .menu-item:focus-visible::before { width: 0.9em; }
 .menu-item[disabled] { color: var(--fg-faint); cursor: default; padding-left: 0.1em; }
 .menu-item[disabled]::before { display: none; }
+/* A tag stays in one piece: beside its label when it fits, else whole on the line below, cut with an ellipsis
+   only when even that is too narrow ("SERVER / OFFLINE" split, and "CONNECTING…" ran out of the column). */
 .menu-item .tag { font-family: var(--font-body); font-size: 0.5em; letter-spacing: 0.15em; color: var(--fg-faint); margin-left: 1em;
-  vertical-align: middle; }
+  vertical-align: middle; display: inline-block; white-space: nowrap; max-width: calc(100% - 1em); overflow: hidden; text-overflow: ellipsis; }
 .menu-sub { margin: 0.2em 0 0.8em 1.2em; display: flex; flex-direction: column; gap: 0.05em; overflow: hidden; }
 .menu-sub .menu-item { font-size: 1.1em; letter-spacing: 0.24em; padding: 0.3em 0 0.3em 0.1em; }
 .menu-footer { position: absolute; left: 7vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.12em; pointer-events: none; }
@@ -95,10 +97,12 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .weapons { grid-template-columns: 1fr; }
   .menu-footer { left: max(16px, 6vw); }
 }
-/* Phones held upright: the build line and the hint don't fit side by side, so the hint sits above it. */
+/* Phones held upright: the build line and the hint don't fit side by side, so the hint sits above it, and
+   the menu column runs to the right margin (at 80% wide LEADERBOARDS ran out of it at large UI scales). */
 @media (max-width: 600px) {
   .menu-hint { left: max(16px, 6vw); right: auto; text-align: left; bottom: calc(4vh + 1.7em); }
   .menu > .menu-main { bottom: calc(4vh + 4.8em); }
+  .menu-main { width: calc(100vw - 2 * max(16px, 6vw) + 2em); }
 }
 
 /* ── Panels ───────────────────────────────────────────── */
