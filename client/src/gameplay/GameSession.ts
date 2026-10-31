@@ -6,7 +6,7 @@ import {
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
-import { actionLabel, codeLabel, onDeviceChange, typing, type Input } from '../core/Input';
+import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
 import { settings, type Action } from '../core/Settings';
 import { PlayerController } from './PlayerController';
