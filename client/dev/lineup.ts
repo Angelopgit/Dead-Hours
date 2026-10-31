@@ -1,6 +1,7 @@
 /**
  * Dev-only outfit lineup: /dev/lineup.html?slot=headwear&view=head renders every item of a slot
- * side by side under studio lights, for checking how pieces fit. `slot=zombies` shows walkers,
+ * side by side under studio lights, for checking how pieces fit (`view=head|torso|legs|body`;
+ * `base={"body":"female"}` dresses a woman, `items=a,b` picks a few). `slot=zombies` shows walkers,
  * `slot=specials` screamers and bloaters (`scream=0.5` poses them mid-scream), `slot=crawlers` legless
  * zombies crawling (`speed=1` drags them along, `attack=0.55` mid-lunge). Not part of the game build.
  */
@@ -44,7 +45,9 @@ const looks = slot === 'zombies'
   ? Array.from({ length: 8 }, (_, i) => ({ label: `crawler ${i}`, look: zombieLookOf(i === 6 ? 'brute' : i === 7 ? 'runner' : 'walker', i) }))
   : slot === 'specials'
   ? (['screamer', 'bloater'] as const).flatMap((kind) => Array.from({ length: 4 }, (_, i) => ({ label: `${kind} ${i}`, look: zombieLookOf(kind, i) })))
-  : (APPEARANCE_ITEMS[slot] as readonly { id: string; label: string }[]).map((it) => ({ label: it.label, look: survivorLook({ ...base, [slot]: it.id } as Appearance) }));
+  : (APPEARANCE_ITEMS[slot] as readonly { id: string; label: string }[])
+    .filter((it) => !q.get('items') || q.get('items')!.split(',').includes(it.id))
+    .map((it) => ({ label: it.label, look: survivorLook({ ...base, [slot]: it.id } as Appearance) }));
 const rows = Math.ceil(looks.length / cols);
 const people: Humanoid[] = [];
 const cellW = innerWidth / cols, cellH = innerHeight / rows;
@@ -96,10 +99,16 @@ function shoot(h: Humanoid, seed: number): void {
 }
 
 // One camera framing a single character; each grid cell renders one of them.
-const camera = new THREE.PerspectiveCamera(view === 'head' ? 24 : 30, cellW / cellH, 0.05, 50);
+const camera = new THREE.PerspectiveCamera(view === 'head' ? 24 : view === 'body' ? 30 : 28, cellW / cellH, 0.05, 50);
 if (view === 'head') {
   camera.position.set(0, 1.78, 1.55);
   camera.lookAt(0, 1.7, 0);
+} else if (view === 'torso') {
+  camera.position.set(0, 1.42, 2.3);
+  camera.lookAt(0, 1.2, 0);
+} else if (view === 'legs') {
+  camera.position.set(0, 0.8, 2.6);
+  camera.lookAt(0, 0.5, 0);
 } else if (slot === 'crawlers') {
   camera.position.set(0, 1.3, 3.6);
   camera.lookAt(0, 0.25, -0.2);

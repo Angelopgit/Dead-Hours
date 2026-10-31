@@ -4,7 +4,7 @@ import type { ArmState, ArmZone, HitZone, LegState, LegZone, LimbZone, ZombieKin
 import { chain } from '../lighting/BakeShader';
 import { rng, randomAppearance, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
-import { EYE_Y, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
+import { EYE_Y, SHOULDER_X, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 import { DECAY_BLOOD, DECAY_COMMON, DECAY_SURFACE, MAX_HITS, SURF, createDecayUniforms, trackDecayMaterial, untrackDecayMaterial, zombieDetail, type DecayUniforms } from './Decay';
 
@@ -421,8 +421,10 @@ export class Humanoid {
     this.spine.position.y = 0.08;
     this.spine.add(this.head);
     this.head.position.y = 0.58;
-    this.armL = limb(this.spine, 0.22 * girth, 0.48, 0.31, 0.29);
-    this.armR = limb(this.spine, -0.22 * girth, 0.48, 0.31, 0.29);
+    // Women's shoulders sit a little closer in.
+    const shoulder = SHOULDER_X[look.outfit.body === 'female' ? 'female' : 'male'] * girth;
+    this.armL = limb(this.spine, shoulder, 0.48, 0.31, 0.29);
+    this.armR = limb(this.spine, -shoulder, 0.48, 0.31, 0.29);
     this.legL = limb(this.hips, 0.1 * girth, -0.04, 0.44, 0.44);
     this.legR = limb(this.hips, -0.1 * girth, -0.04, 0.44, 0.44);
     this.bones = [
@@ -1176,7 +1178,7 @@ export function zombieLookOf(kind: ZombieKind, i: number): HumanoidLook {
 function screamerLook(i: number): HumanoidLook {
   const k = i % 4;
   const rand = rng(0x5c4ea + k * 7727);
-  const a = randomAppearance(rand);
+  const a = randomAppearance(rand, k % 2 ? 'female' : 'male');
   a.build = 'slim';
   a.top = (['tank', 'longsleeve', 'tee', 'tank'] as const)[k];
   a.topColor = [0, 2, 14, 3][k];
@@ -1194,7 +1196,7 @@ function screamerLook(i: number): HumanoidLook {
 function bloaterLook(i: number): HumanoidLook {
   const k = i % 4;
   const rand = rng(0xb10a7 + k * 6007);
-  const a = randomAppearance(rand);
+  const a = randomAppearance(rand, 'male');
   a.build = 'broad';
   a.top = (['tank', 'tee', 'tank', 'tee'] as const)[k];
   a.topColor = [0, 7, 14, 10][k];
@@ -1210,8 +1212,8 @@ const ZOMBIE_SKINS = [0x7d8a72, 0x8b8a76, 0x6f7a6a, 0x948f7e, 0x86806c, 0x6a7466
 const ZOMBIE_HATS = ['cap', 'beanie', 'hardhat', 'army', 'bandana', 'fire', 'capback', 'bike'] as const;
 
 /**
- * The neighborhood's dead wear what the living wear: everyday clothes from the same catalog,
- * now filthy and torn, with the odd work helmet. One in twelve died at a party.
+ * The neighborhood's dead wear what the living wear: men and women in everyday clothes from the
+ * same catalog, now filthy and torn, with the odd work helmet. One in twelve died at a party.
  */
 export function zombieLook(i: number, kind: ZombieGait = 'walker'): HumanoidLook {
   if (kind === 'runner') return runnerLook(i);
@@ -1256,7 +1258,7 @@ function runnerLook(i: number): HumanoidLook {
 function bruteLook(i: number): HumanoidLook {
   const k = i % ZOMBIE_LOOKS.brute;
   const rand = rng(0xb2a7e + k * 15485863);
-  const a = randomAppearance(rand);
+  const a = randomAppearance(rand, 'male');
   a.build = 'broad';
   a.face = a.neck = a.gloves = a.back = 'none';
   a.hair = 'buzz';

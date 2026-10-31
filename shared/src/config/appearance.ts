@@ -16,7 +16,14 @@ export interface AppearanceItem {
   accent?: string;
   /** Cloth color the creator switches to when the item is picked (a yellow hard hat). */
   color?: number;
+  /**
+   * Who the randomizer gives it to. Everything can be worn by either body type in the creator;
+   * this only keeps random survivors and zombies plausible (no bearded women in sundresses).
+   */
+  lean?: BodyType;
 }
+
+export type BodyType = 'male' | 'female';
 
 export const SKIN_TONES = [
   0xf0d0b8, 0xe4b897, 0xd6a27c, 0xc68e67, 0xb07955, 0x9a6444, 0x83512f, 0x6c4128, 0x55311e, 0x3f2417,
@@ -36,14 +43,21 @@ export const CLOTH_COLORS = [
   0xb59a72, 0x5a3e2a, 0x5e1f24, 0x9b2a26, 0xc2652a, 0xc4a03a, 0xc7d93a, 0xc77b9a, 0x4e3a6a, 0x2e6a6a,
 ] as const;
 
+/** Lipstick, eyeshadow and the like (the makeup slot's color). */
+export const MAKEUP_COLORS = [
+  0xb47a6c, 0xd66f8e, 0xb04a62, 0xb3202e, 0x7c1f3f, 0x5a2a4a, 0xe0705a, 0x6e3b2c, 0x1c1416, 0xc9a24a, 0x3f5fa8, 0x6a3f9a,
+] as const;
+
 export const SKIN_LABELS = ['Porcelain', 'Fair', 'Light', 'Warm', 'Tan', 'Olive', 'Brown', 'Deep', 'Rich', 'Ebony'];
 export const HAIR_COLOR_LABELS = ['Black', 'Dark brown', 'Brown', 'Light brown', 'Auburn', 'Ginger', 'Dirty blond', 'Blond', 'Platinum',
   'Gray', 'White', 'Dyed red', 'Dyed blue', 'Dyed green', 'Dyed pink', 'Dyed purple'];
 export const EYE_COLOR_LABELS = ['Dark brown', 'Brown', 'Hazel', 'Amber', 'Green', 'Blue', 'Gray', 'Ice blue', 'Violet', 'Red'];
 export const CLOTH_COLOR_LABELS = ['Charcoal', 'Black', 'White', 'Gray', 'Navy', 'Denim', 'Sky', 'Forest', 'Olive', 'Khaki', 'Tan',
   'Brown', 'Maroon', 'Red', 'Orange', 'Mustard', 'Hi-vis', 'Pink', 'Purple', 'Teal'];
+export const MAKEUP_COLOR_LABELS = ['Nude', 'Pink', 'Rose', 'Red', 'Berry', 'Plum', 'Coral', 'Brown', 'Black', 'Gold', 'Blue', 'Purple'];
 
-const H = 'Hats', HL = 'Helmets', F = 'Funny hats';
+const H = 'Hats', HL = 'Helmets', F = 'Funny hats', HA = 'Hair accessories';
+const M = 'male', W = 'female';
 
 export const APPEARANCE_ITEMS = {
   build: [
@@ -52,29 +66,40 @@ export const APPEARANCE_ITEMS = {
     { id: 'broad', label: 'Broad' },
   ],
   hair: [
-    { id: 'bald', label: 'Bald' },
+    { id: 'bald', label: 'Bald', lean: M },
     { id: 'buzz', label: 'Buzz cut' },
     { id: 'short', label: 'Short' },
-    { id: 'sidepart', label: 'Side part' },
+    { id: 'sidepart', label: 'Side part', lean: M },
     { id: 'messy', label: 'Messy' },
-    { id: 'spiky', label: 'Spiky' },
+    { id: 'spiky', label: 'Spiky', lean: M },
     { id: 'curly', label: 'Curly' },
     { id: 'afro', label: 'Afro' },
     { id: 'long', label: 'Long' },
     { id: 'ponytail', label: 'Ponytail' },
     { id: 'bun', label: 'Top bun' },
     { id: 'mohawk', label: 'Mohawk' },
-    { id: 'mullet', label: 'Mullet' },
+    { id: 'mullet', label: 'Mullet', lean: M },
     { id: 'bob', label: 'Bob' },
+    { id: 'pixie', label: 'Pixie cut', lean: W },
+    { id: 'bangs', label: 'Long with bangs', lean: W },
+    { id: 'wavy', label: 'Long waves', lean: W },
+    { id: 'shoulder', label: 'Shoulder length', lean: W },
+    { id: 'highpony', label: 'High ponytail', lean: W },
+    { id: 'braid', label: 'Braid', lean: W },
+    { id: 'pigtails', label: 'Pigtails', lean: W },
+    { id: 'spacebuns', label: 'Space buns', lean: W },
+    { id: 'messybun', label: 'Messy bun', lean: W },
+    { id: 'afropuffs', label: 'Afro puffs', lean: W },
+    { id: 'boxbraids', label: 'Box braids', lean: W },
   ],
   facialHair: [
     { id: 'none', label: 'Clean shaven' },
-    { id: 'stubble', label: 'Stubble' },
-    { id: 'mustache', label: 'Mustache' },
-    { id: 'handlebar', label: 'Handlebar' },
-    { id: 'goatee', label: 'Goatee' },
-    { id: 'beard', label: 'Full beard' },
-    { id: 'chops', label: 'Mutton chops' },
+    { id: 'stubble', label: 'Stubble', lean: M },
+    { id: 'mustache', label: 'Mustache', lean: M },
+    { id: 'handlebar', label: 'Handlebar', lean: M },
+    { id: 'goatee', label: 'Goatee', lean: M },
+    { id: 'beard', label: 'Full beard', lean: M },
+    { id: 'chops', label: 'Mutton chops', lean: M },
   ],
   eyes: [
     { id: 'round', label: 'Round' },
@@ -117,6 +142,15 @@ export const APPEARANCE_ITEMS = {
     { id: 'sombrero', label: 'Sombrero', group: F, tint: true, color: 10 },
     { id: 'duck', label: 'Rubber duck', group: F },
     { id: 'lampshade', label: 'Lampshade', group: F, tint: true, color: 10 },
+    { id: 'beret', label: 'Beret', group: H, tint: true, color: 12 },
+    { id: 'sunhat', label: 'Sun hat', group: H, tint: true, color: 10, lean: W },
+    { id: 'headband', label: 'Headband', group: HA, tint: true, lean: W },
+    { id: 'hairbow', label: 'Hair bow', group: HA, tint: true, color: 13, lean: W },
+    { id: 'clips', label: 'Hair clips', group: HA, tint: true, color: 17, lean: W },
+    { id: 'flowercrown', label: 'Flower crown', group: HA, lean: W },
+    { id: 'tiara', label: 'Tiara', group: F },
+    { id: 'catears', label: 'Cat ears', group: F, tint: true, color: 1 },
+    { id: 'witch', label: 'Witch hat', group: F, tint: true, color: 1 },
   ],
   top: [
     { id: 'tee', label: 'T-shirt', tint: true },
@@ -137,6 +171,14 @@ export const APPEARANCE_ITEMS = {
     { id: 'puffer', label: 'Puffer jacket', tint: true },
     { id: 'raincoat', label: 'Rain jacket', tint: true, color: 15 },
     { id: 'camo', label: 'Camo jacket', tint: true, accent: 'Camo', color: 8 },
+    { id: 'croptop', label: 'Crop top', tint: true, lean: W },
+    { id: 'cami', label: 'Camisole', tint: true, lean: W },
+    { id: 'blouse', label: 'Blouse', tint: true, lean: W },
+    { id: 'sportstop', label: 'Sports top', tint: true, accent: 'Trim', lean: W },
+    { id: 'turtleneck', label: 'Turtleneck', tint: true },
+    { id: 'cardigan', label: 'Cardigan', tint: true, accent: 'Undershirt', lean: W },
+    { id: 'sundress', label: 'Sundress', tint: true, accent: 'Flowers', lean: W },
+    { id: 'peacoat', label: 'Peacoat', tint: true, accent: 'Undershirt', color: 4 },
   ],
   pants: [
     { id: 'jeans', label: 'Jeans', tint: true, color: 5 },
@@ -146,6 +188,11 @@ export const APPEARANCE_ITEMS = {
     { id: 'shorts', label: 'Cargo shorts', tint: true },
     { id: 'camo', label: 'Camo pants', tint: true, color: 8 },
     { id: 'overalls', label: 'Overalls', tint: true },
+    { id: 'leggings', label: 'Leggings', tint: true, color: 1, lean: W },
+    { id: 'flares', label: 'Flared jeans', tint: true, color: 5, lean: W },
+    { id: 'denimshorts', label: 'Denim shorts', tint: true, color: 6, lean: W },
+    { id: 'skirt', label: 'Skirt', tint: true, lean: W },
+    { id: 'plaidskirt', label: 'Plaid skirt & tights', tint: true, color: 12, lean: W },
   ],
   shoes: [
     { id: 'sneakers', label: 'Sneakers', tint: true },
@@ -153,6 +200,10 @@ export const APPEARANCE_ITEMS = {
     { id: 'combat', label: 'Combat boots', tint: true },
     { id: 'work', label: 'Work boots', tint: true, color: 10 },
     { id: 'rain', label: 'Rain boots', tint: true, color: 7 },
+    { id: 'kneeboots', label: 'Knee-high boots', tint: true, color: 1, lean: W },
+    { id: 'heeledboots', label: 'Heeled ankle boots', tint: true, color: 11, lean: W },
+    { id: 'flats', label: 'Flats', tint: true, color: 1, lean: W },
+    { id: 'platforms', label: 'Platform sneakers', tint: true, color: 2, lean: W },
   ],
   gloves: [
     { id: 'none', label: 'None' },
@@ -174,6 +225,9 @@ export const APPEARANCE_ITEMS = {
     { id: 'gasmask', label: 'Gas mask' },
     { id: 'hockey', label: 'Hockey mask' },
     { id: 'clown', label: 'Clown nose' },
+    { id: 'cateye', label: 'Cat-eye glasses', tint: true, lean: W },
+    { id: 'oversized', label: 'Oversized sunglasses', tint: true, color: 1, lean: W },
+    { id: 'heartglasses', label: 'Heart sunglasses', tint: true, color: 17 },
   ],
   neck: [
     { id: 'none', label: 'None' },
@@ -183,6 +237,9 @@ export const APPEARANCE_ITEMS = {
     { id: 'headphones', label: 'Headphones', tint: true },
     { id: 'chain', label: 'Gold chain' },
     { id: 'bowtie', label: 'Bow tie', tint: true },
+    { id: 'pearls', label: 'Pearl necklace', lean: W },
+    { id: 'choker', label: 'Choker', tint: true, color: 1, lean: W },
+    { id: 'locket', label: 'Gold locket', lean: W },
   ],
   back: [
     { id: 'none', label: 'None' },
@@ -191,6 +248,9 @@ export const APPEARANCE_ITEMS = {
     { id: 'messenger', label: 'Messenger bag', tint: true },
     { id: 'katana', label: 'Katana', tint: true, color: 1 },
     { id: 'guitar', label: 'Guitar', tint: true, color: 11 },
+    { id: 'purse', label: 'Shoulder bag', tint: true, color: 11, lean: W },
+    { id: 'minipack', label: 'Mini backpack', tint: true, color: 17, lean: W },
+    { id: 'quiver', label: 'Quiver', tint: true, color: 11 },
   ],
   gear: [
     { id: 'none', label: 'None' },
@@ -201,15 +261,41 @@ export const APPEARANCE_ITEMS = {
     { id: 'fannypack', label: 'Fanny pack', tint: true },
     { id: 'kneepads', label: 'Knee pads', tint: true },
   ],
+  body: [
+    { id: 'male', label: 'Male' },
+    { id: 'female', label: 'Female' },
+  ],
+  ears: [
+    { id: 'none', label: 'None' },
+    { id: 'studs', label: 'Silver studs' },
+    { id: 'goldstuds', label: 'Gold studs' },
+    { id: 'hoops', label: 'Gold hoops', lean: W },
+    { id: 'silverhoops', label: 'Silver hoops', lean: W },
+    { id: 'bighoops', label: 'Big hoops', lean: W },
+    { id: 'pearls', label: 'Pearl earrings', lean: W },
+    { id: 'drops', label: 'Drop earrings', lean: W },
+  ],
+  makeup: [
+    { id: 'none', label: 'None' },
+    { id: 'lipstick', label: 'Lipstick', tint: true, lean: W },
+    { id: 'liner', label: 'Winged liner', lean: W },
+    { id: 'blush', label: 'Blush', lean: W },
+    { id: 'shadow', label: 'Eyeshadow', tint: true, lean: W },
+    { id: 'glam', label: 'Full glam', tint: true, lean: W },
+    { id: 'smoky', label: 'Smoky eyes', tint: true, lean: W },
+    { id: 'eyeblack', label: 'Eye black' },
+  ],
 } as const satisfies Record<string, readonly AppearanceItem[]>;
 
 export type AppearanceSlot = keyof typeof APPEARANCE_ITEMS;
 type ItemId<S extends AppearanceSlot> = (typeof APPEARANCE_ITEMS)[S][number]['id'];
 
-export type PaletteName = 'skin' | 'hair' | 'eye' | 'cloth';
-export const PALETTES: Record<PaletteName, readonly number[]> = { skin: SKIN_TONES, hair: HAIR_COLORS, eye: EYE_COLORS, cloth: CLOTH_COLORS };
+export type PaletteName = 'skin' | 'hair' | 'eye' | 'cloth' | 'makeup';
+export const PALETTES: Record<PaletteName, readonly number[]> = {
+  skin: SKIN_TONES, hair: HAIR_COLORS, eye: EYE_COLORS, cloth: CLOTH_COLORS, makeup: MAKEUP_COLORS,
+};
 export const PALETTE_LABELS: Record<PaletteName, readonly string[]> = {
-  skin: SKIN_LABELS, hair: HAIR_COLOR_LABELS, eye: EYE_COLOR_LABELS, cloth: CLOTH_COLOR_LABELS,
+  skin: SKIN_LABELS, hair: HAIR_COLOR_LABELS, eye: EYE_COLOR_LABELS, cloth: CLOTH_COLOR_LABELS, makeup: MAKEUP_COLOR_LABELS,
 };
 
 export interface Appearance {
@@ -239,6 +325,10 @@ export interface Appearance {
   backColor: number;
   gear: ItemId<'gear'>;
   gearColor: number;
+  body: ItemId<'body'>;
+  ears: ItemId<'ears'>;
+  makeup: ItemId<'makeup'>;
+  makeupColor: number;
 }
 
 type FieldKind = { slot: AppearanceSlot } | { palette: PaletteName };
@@ -257,6 +347,8 @@ export const APPEARANCE_FIELDS: readonly (readonly [keyof Appearance, FieldKind]
   ['neck', { slot: 'neck' }], ['neckColor', { palette: 'cloth' }],
   ['back', { slot: 'back' }], ['backColor', { palette: 'cloth' }],
   ['gear', { slot: 'gear' }], ['gearColor', { palette: 'cloth' }],
+  // Added with female survivors: older saves and clients simply stop before these (male, none).
+  ['body', { slot: 'body' }], ['ears', { slot: 'ears' }], ['makeup', { slot: 'makeup' }], ['makeupColor', { palette: 'makeup' }],
 ];
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -272,6 +364,19 @@ export const DEFAULT_APPEARANCE: Appearance = {
   neck: 'none', neckColor: 12,
   back: 'backpack', backColor: 8,
   gear: 'none', gearColor: 8,
+  body: 'male', ears: 'none', makeup: 'none', makeupColor: 2,
+};
+
+/** Where a new female survivor starts (the creator's reset, and switching body type). */
+export const DEFAULT_FEMALE_APPEARANCE: Appearance = {
+  ...DEFAULT_APPEARANCE,
+  body: 'female', build: 'average',
+  hair: 'wavy', hairColor: 2, facialHair: 'none',
+  eyes: 'almond', eyeColor: 4,
+  top: 'openflannel', topColor: 4, topAccent: 2,
+  pants: 'jeans', pantsColor: 5,
+  shoes: 'combat', shoesColor: 1,
+  ears: 'studs', makeup: 'none', makeupColor: 2,
 };
 
 export function appearanceItem<S extends AppearanceSlot>(slot: S, id: string): AppearanceItem | undefined {
@@ -328,35 +433,45 @@ export function decodeAppearance(s: unknown): Appearance {
 }
 
 /**
- * A random, plausible survivor. Headwear and accessories are often left off so a crowd of
- * randomized survivors doesn't look like a costume party; funny hats are rarer still.
+ * A random, plausible survivor, male or female (or the body type asked for). Headwear and
+ * accessories are often left off so a crowd of randomized survivors doesn't look like a costume
+ * party; funny hats are rarer still. Items leaning to the other body type are left out.
  */
-export function randomAppearance(rand: () => number = Math.random): Appearance {
+export function randomAppearance(rand: () => number = Math.random, body?: BodyType): Appearance {
+  const sex: BodyType = body ?? (rand() < 0.5 ? 'female' : 'male');
+  const female = sex === 'female';
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length) % xs.length];
   const ids = (slot: AppearanceSlot, filter: (i: AppearanceItem) => boolean = () => true) =>
-    (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).filter(filter).map((i) => i.id);
+    (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).filter((i) => (!i.lean || i.lean === sex) && filter(i)).map((i) => i.id);
   const maybe = (slot: AppearanceSlot, chance: number) => (rand() < chance ? pick(ids(slot, (i) => i.id !== 'none')) : 'none');
   const cloth = () => Math.floor(rand() * CLOTH_COLORS.length);
   let headwear = 'none';
   const r = rand();
-  if (r < 0.32) headwear = pick(ids('headwear', (i) => i.group === H));
+  if (r < 0.32) headwear = pick(ids('headwear', (i) => i.group === H || i.group === HA));
   else if (r < 0.44) headwear = pick(ids('headwear', (i) => i.group === HL));
   else if (r < 0.5) headwear = pick(ids('headwear', (i) => i.group === F));
   const hairColor = rand() < 0.88 ? Math.floor(rand() * 11) : Math.floor(rand() * HAIR_COLORS.length);
+  // Skirts and dresses go with bare legs or tights, not under jeans.
+  const top = pick(ids('top'));
+  const pants = top === 'sundress' ? 'skirt' : pick(ids('pants'));
   return sanitizeAppearance({
     skin: Math.floor(rand() * SKIN_TONES.length),
     build: pick(ids('build')),
     hair: pick(ids('hair')), hairColor,
-    facialHair: rand() < 0.45 ? pick(ids('facialHair')) : 'none',
+    facialHair: !female && rand() < 0.45 ? pick(ids('facialHair')) : 'none',
     eyes: pick(ids('eyes')), eyeColor: Math.floor(rand() * 9),
     headwear, headwearColor: cloth(),
-    top: pick(ids('top')), topColor: cloth(), topAccent: cloth(),
-    pants: pick(ids('pants')), pantsColor: cloth(),
+    top, topColor: cloth(), topAccent: cloth(),
+    pants, pantsColor: cloth(),
     shoes: pick(ids('shoes')), shoesColor: cloth(),
     gloves: maybe('gloves', 0.3), glovesColor: cloth(),
     face: maybe('face', 0.25), faceColor: cloth(),
     neck: maybe('neck', 0.25), neckColor: cloth(),
     back: maybe('back', 0.55), backColor: cloth(),
     gear: maybe('gear', 0.3), gearColor: cloth(),
+    body: sex,
+    ears: maybe('ears', female ? 0.6 : 0.12),
+    makeup: female ? maybe('makeup', 0.45) : 'none',
+    makeupColor: Math.floor(rand() * MAKEUP_COLORS.length),
   });
 }

@@ -1,7 +1,7 @@
 import gsap from 'gsap';
 import {
-  APPEARANCE_ITEMS, DEFAULT_APPEARANCE, PALETTES, PALETTE_LABELS, appearanceItem, randomAppearance, sanitizeAppearance,
-  type Appearance, type AppearanceItem, type AppearanceSlot, type PaletteName,
+  APPEARANCE_ITEMS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, PALETTE_LABELS, appearanceItem, randomAppearance, sanitizeAppearance,
+  type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type PaletteName,
 } from '@dead-hours/shared';
 import { h } from './dom';
 import { settings } from '../core/Settings';
@@ -24,8 +24,14 @@ interface Tab {
 /** The color each slot's tint is stored in. */
 const SLOT_COLOR: Partial<Record<AppearanceSlot, ColorKey>> = {
   headwear: 'headwearColor', top: 'topColor', pants: 'pantsColor', shoes: 'shoesColor', gloves: 'glovesColor',
-  face: 'faceColor', neck: 'neckColor', back: 'backColor', gear: 'gearColor',
+  face: 'faceColor', neck: 'neckColor', back: 'backColor', gear: 'gearColor', makeup: 'makeupColor',
 };
+
+/** Each body type's starting look (reset), and the hair a switch to it falls back on. */
+const BODY_DEFAULTS: Record<BodyType, Appearance> = { male: DEFAULT_APPEARANCE, female: DEFAULT_FEMALE_APPEARANCE };
+
+/** Bottoms that go under a dress; anything else switches to a plain skirt (bare legs) when one is put on. */
+const UNDER_DRESS = new Set(['skirt', 'plaidskirt', 'shorts', 'denimshorts', 'leggings']);
 
 /** A slot's color row is shown while the chosen item takes a color, named by what it colors. */
 const tinted = (slot: AppearanceSlot, title = 'Color') => (a: Appearance): string | false => {
@@ -35,12 +41,15 @@ const tinted = (slot: AppearanceSlot, title = 'Color') => (a: Appearance): strin
 
 const TABS: Tab[] = [
   { id: 'body', label: 'Body', focus: 'body', sections: [
+    { kind: 'items', title: 'Body type', slot: 'body' },
     { kind: 'colors', title: 'Skin tone', key: 'skin', palette: 'skin' },
     { kind: 'items', title: 'Build', slot: 'build' },
   ] },
   { id: 'face', label: 'Face', focus: 'head', sections: [
     { kind: 'items', title: 'Eye shape', slot: 'eyes' },
     { kind: 'colors', title: 'Eye color', key: 'eyeColor', palette: 'eye' },
+    { kind: 'items', title: 'Makeup', slot: 'makeup' },
+    { kind: 'colors', title: 'Makeup color', key: 'makeupColor', palette: 'makeup', when: tinted('makeup') },
     { kind: 'items', title: 'Facial hair', slot: 'facialHair' },
   ] },
   { id: 'hair', label: 'Hair', focus: 'head', sections: [
@@ -71,6 +80,9 @@ const TABS: Tab[] = [
   { id: 'eyewear', label: 'Eyewear & masks', focus: 'head', sections: [
     { kind: 'items', title: 'Face', slot: 'face' },
     { kind: 'colors', title: 'Color', key: 'faceColor', palette: 'cloth', when: tinted('face') },
+  ] },
+  { id: 'ears', label: 'Earrings', focus: 'head', sections: [
+    { kind: 'items', title: 'Earrings', slot: 'ears' },
   ] },
   { id: 'neck', label: 'Neck', focus: 'torso', sections: [
     { kind: 'items', title: 'Neck', slot: 'neck' },
@@ -138,8 +150,9 @@ export class CharacterCreator {
         h('h2', {}, 'SURVIVOR'),
         h('label', { class: 'creator-name-wrap' }, h('span', {}, 'NAME'), this.nameInput),
         h('div', { class: 'creator-actions' },
-          btn('RANDOMIZE', () => this.apply(randomAppearance())),
-          btn('RESET', () => this.apply({ ...DEFAULT_APPEARANCE })),
+          // Both keep the body type picked: a new random survivor, or that body's starting look.
+          btn('RANDOMIZE', () => this.apply(randomAppearance(Math.random, this.a.body))),
+          btn('RESET', () => this.apply({ ...BODY_DEFAULTS[this.a.body] })),
           btn('DONE', () => { audio.ui('back'); this.onClose(); }, 'primary'),
         ),
       ),
@@ -223,7 +236,22 @@ export class CharacterCreator {
     const ck = SLOT_COLOR[slot];
     // Some items come in their usual color first (a yellow hard hat); it can still be changed.
     if (ck && it.color !== undefined && this.a[slot] !== it.id) (next[ck] as number) = it.color;
+    if (slot === 'body' && this.a.body !== it.id) this.switchBody(next, it.id as BodyType);
+    // A dress goes over bare legs (or tights, shorts, leggings), not jeans.
+    if (slot === 'top' && it.id === 'sundress' && !UNDER_DRESS.has(next.pants)) next.pants = 'skirt';
     this.apply(next);
+  }
+
+  /**
+   * Switching body type keeps the clothes and colors but drops what plainly belonged to the other
+   * one: a beard, makeup, and a hairstyle that leans the other way (to that body's default style).
+   */
+  private switchBody(next: Appearance, body: BodyType): void {
+    const hair = appearanceItem('hair', next.hair);
+    const other: BodyType = body === 'female' ? 'male' : 'female';
+    if (hair?.lean === other || next.hair === BODY_DEFAULTS[other].hair) next.hair = BODY_DEFAULTS[body].hair;
+    if (body === 'female') next.facialHair = 'none';
+    else next.makeup = 'none';
   }
 
   private set(key: ColorKey, v: number): void {

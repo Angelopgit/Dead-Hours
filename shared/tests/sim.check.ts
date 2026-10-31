@@ -9,7 +9,7 @@ import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
   WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
-  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
+  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
   BARRICADE, Mirror, NAV_INDOOR, type BarricadeSlot,
   BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
@@ -1772,6 +1772,33 @@ section('Survivor appearance');
   check(sameLook(decodeAppearance('1.' + 'zz.'.repeat(80)), DEFAULT_APPEARANCE), 'oversized wire strings are refused');
   const partial = decodeAppearance('1.2');
   check(partial.skin === 2 && partial.hair === DEFAULT_APPEARANCE.hair, 'short wire strings fill missing fields with defaults');
+
+  // Female survivors: body, earrings and makeup ride at the end of the wire string.
+  const ids = (slot: keyof typeof APPEARANCE_ITEMS) => (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).map((i) => i.id) as string[];
+  check(ids('body').join() === 'male,female', 'body types are male then female');
+  check(['pixie', 'bangs', 'wavy', 'highpony', 'braid', 'pigtails', 'messybun', 'boxbraids'].every((id) => ids('hair').includes(id)), 'women\'s hairstyles are in the catalog');
+  check(['croptop', 'blouse', 'sundress', 'cardigan'].every((id) => ids('top').includes(id)) && ['skirt', 'leggings', 'denimshorts'].every((id) => ids('pants').includes(id)), 'women\'s tops and bottoms are in the catalog');
+  check(ids('ears').length >= 6 && ids('makeup').length >= 6 && PALETTES.makeup.length >= 10, 'earrings, makeup looks and makeup colors');
+  const fem = sanitizeAppearance(DEFAULT_FEMALE_APPEARANCE);
+  check(fem.body === 'female' && sameLook(fem, DEFAULT_FEMALE_APPEARANCE) && sameLook(decodeAppearance(encodeAppearance(fem)), fem), 'default female look is valid and survives the wire');
+  const glam = sanitizeAppearance({ ...fem, ears: 'hoops', makeup: 'glam', makeupColor: 3, hair: 'braid', top: 'sundress', pants: 'skirt' });
+  check(sameLook(decodeAppearance(encodeAppearance(glam)), glam) && glam.makeup === 'glam' && glam.ears === 'hoops', 'earrings and makeup survive the wire');
+  const oldWire = encodeAppearance(DEFAULT_APPEARANCE).split('.').slice(0, 1 + APPEARANCE_FIELDS.findIndex(([k]) => k === 'body')).join('.');
+  const oldLook = decodeAppearance(oldWire);
+  check(oldLook.body === 'male' && oldLook.makeup === 'none' && oldLook.ears === 'none' && sameLook(oldLook, DEFAULT_APPEARANCE), 'saves from before body types load as the same man');
+  check(encodeAppearance(glam).length < 120, 'a full look still fits well under the wire cap');
+  let women = 0, beards = 0, menMakeup = 0, asked = true;
+  for (let i = 0; i < 400; i++) {
+    const w = randomAppearance(rand, 'female'), m = randomAppearance(rand, 'male'), any = randomAppearance(rand);
+    if (w.body !== 'female' || m.body !== 'male') asked = false;
+    if (any.body === 'female') women++;
+    if (w.facialHair !== 'none') beards++;
+    if (m.makeup !== 'none') menMakeup++;
+    if (w.top === 'sundress' && w.pants !== 'skirt') beards++;
+  }
+  check(asked, 'randomize keeps the body type it was asked for');
+  check(women > 120 && women < 280, `random looks are a mix of men and women (${women}/400 women)`);
+  check(beards === 0 && menMakeup === 0, 'random women get no beards, random men no makeup, sundresses come with a skirt');
 
   const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
   const cowboy = sanitizeAppearance({ ...DEFAULT_APPEARANCE, headwear: 'cowboy', top: 'flannel', eyes: 'fierce', eyeColor: 5 });
