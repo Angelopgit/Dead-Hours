@@ -89,11 +89,15 @@ const god = (p: SimPlayer) => () => {
   p.health = 100;
 };
 const of = <T extends SimEvent['type']>(events: SimEvent[], t: T) => events.filter((e) => e.type === t) as Extract<SimEvent, { type: T }>[];
+/** Where the survivor stands in the street, in the open. */
+const STREET: Vec3 = { x: 6, y: 0.15, z: 9 };
+/** Damage a second the first crew does to them there (judged with other crews under "How hard they hit"). */
+let streetDps = 0;
 
 section('The van comes once, after seven minutes');
 {
   const { sim, events, run } = world(3);
-  const p = sim.addPlayer('A', 'Alice', 'ar', 'pistol', { x: 6, y: 0.15, z: 9 }, 0);
+  const p = sim.addPlayer('A', 'Alice', 'ar', 'pistol', STREET, 0);
   run(0.2);
   sim.phaseTime = RAID.at - 3;
   run(2, () => noZombies(sim));
@@ -129,8 +133,7 @@ section('The van comes once, after seven minutes');
   const shots = of(events, 'shot').filter((e) => e.player.startsWith('raider:'));
   check(shots.length > 5 && hurt > 0, `they shoot at the survivor in the street (${shots.length} shots, ${hurt.toFixed(0)} damage taken)`);
   check(of(events, 'playerHurt').some((e) => e.player === 'A'), 'and hit them');
-  const dps = hurt / 14;
-  check(dps > 3 && dps < 25, `they can be survived for a while: ${dps.toFixed(1)} damage a second on a survivor standing still in the open (${(100 / dps).toFixed(1)} s to go down)`);
+  streetDps = hurt / 14;
   // Fight back: aim at each raider in turn.
   let killed = 0;
   let k = 0;
@@ -180,6 +183,30 @@ function raidOn(seed: number, at: Vec3, secs: number, until: (sim: Simulation, r
     done = sim.raid.stage === 'arrived' && sim.raid.raiders.length > 0 && until(sim, sim.raid.raiders, events);
   }
   return { ...w, p, hurt, t, done };
+}
+
+section('How hard they hit');
+{
+  // One crew is a small sample: which guns it carries and where each raider stops to shoot swing
+  // it from about 12 to 38 damage a second, so a small change to the map (an open car door one of
+  // them stands behind) moves a single crew by more than any margin. The balance is the average
+  // over a dozen crews, each shooting at a survivor standing still in the street.
+  const rates = [streetDps];
+  for (const seed of [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
+    const { sim, p, run, done } = raidOn(seed, STREET, 60, (s) => s.raid.raiders.length === RAID.raiders);
+    run(1.5, () => { noZombies(sim); god(p)(); });
+    let hurt = 0;
+    run(14, () => {
+      noZombies(sim);
+      hurt += 100 - p.health;
+      p.health = 100;
+    });
+    rates.push(done ? hurt / 14 : NaN);
+    sim.dispose();
+  }
+  const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+  check(rates.every((x) => x > 0), `every crew hits a survivor in the open (${rates.length} crews, ${Math.min(...rates).toFixed(1)} to ${Math.max(...rates).toFixed(1)} damage a second)`);
+  check(mean > 3 && mean < 25, `they can be survived for a while: ${mean.toFixed(1)} damage a second on average on a survivor standing still in the open (${(100 / mean).toFixed(1)} s to go down)`);
 }
 
 section('Survivors in a house');
