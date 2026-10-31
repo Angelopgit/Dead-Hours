@@ -326,6 +326,18 @@ export class Explosives {
       if (dmg >= 0.5) sim.damagePlayer(p, dmg, o);
     }
 
+    // Raiders caught in it.
+    for (const r of sim.raid.raiders) {
+      if (!r.alive) continue;
+      const c = r.chest;
+      const d = Math.hypot(c.x - o.x, c.y - o.y, c.z - o.z);
+      if (d > R) continue;
+      const seen = [c, r.eye, { x: r.pos.x, y: r.pos.y + 0.3, z: r.pos.z }].filter(visible).length;
+      if (!seen) continue;
+      const k = force(Math.max(0, d - PLAYER.radius)) * [0, 0.45, 0.8, 1][seen];
+      if (k > 0.01) sim.raid.hit(by, r, BLAST.playerDamage * 1.5 * k, 'torso', c, this.away(o, c, 0.3));
+    }
+
     // Loose arms lying around are thrown about.
     for (const l of sim.limbs) {
       if (!l.body) continue;
@@ -452,6 +464,13 @@ export class Explosives {
       if (!p.alive) continue;
       const s = this.flamesAt(p.motion.pos, 0.25, 1.2);
       if (s > 0.15) sim.damagePlayer(p, FIRE.playerDps * dt * s, this.nearestPatch(p.motion.pos));
+    }
+    // Raiders too (whoever lit it gets the credit).
+    for (const r of sim.raid.raiders) {
+      if (!r.alive) continue;
+      const s = this.flamesAt(r.pos, 0.25, 1.2);
+      const owner = s > 0.15 ? this.ownerAt(r.pos) : null;
+      if (owner) sim.raid.hit(owner, r, FIRE.playerDps * 1.5 * dt * s, 'torso', r.chest, { x: 0, y: 1, z: 0 });
     }
   }
 
