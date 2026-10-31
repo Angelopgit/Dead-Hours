@@ -18,6 +18,7 @@
     "check:houses": "tsx client/tests/houses.check.ts",
     "check:audio": "tsx client/tests/audio.check.ts",
     "check:sim": "tsx shared/tests/sim.check.ts",
+    "check:raid": "tsx shared/tests/raid.check.ts",
     "check:server": "npm run check -w server",
     "check:cluster": "npm run check:cluster -w server",
     "check:controls": "tsx client/tests/controls.check.ts"

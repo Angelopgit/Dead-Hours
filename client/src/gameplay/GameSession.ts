@@ -25,6 +25,7 @@ import { clearSeveredCache } from '../characters/Severed';
 import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../weapons/WeaponModels';
 import { Effects } from '../effects/Effects';
 import { ZombieView } from '../zombies/ZombieView';
+import { RaidView } from './RaidView';
 import { LimbView } from '../zombies/LimbView';
 import { BarricadeView } from './BarricadeView';
 import { MeleePickups } from './MeleePickups';
@@ -127,6 +128,7 @@ export class GameSession {
   private readonly weapon: PlayerWeapon;
   private readonly effects: Effects;
   private readonly zombies: ZombieView;
+  private readonly raid: RaidView;
   private readonly limbs: LimbView;
   private readonly barricades: BarricadeView;
   /** Boarding up or prying off: which opening, and how far into this board (this survivor's own estimate online). */
@@ -266,6 +268,7 @@ export class GameSession {
     };
     this.effects.casings.onBounce = (pos, shell, strength) => audio.casing(pos, shell, strength);
     this.zombies = new ZombieView(engine.scene, physics, field, this.effects);
+    this.raid = new RaidView(engine.scene, physics, field);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
@@ -333,6 +336,7 @@ export class GameSession {
     this.limbs.gore = g.gore !== 'off';
     this.weapon.gore = g.gore !== 'off';
     this.remotes?.setGore(g.gore !== 'off');
+    this.raid.setGore(g.gore !== 'off');
   }
 
   /** Under a roof: sky mostly hidden (drives footstep and gunshot acoustics). */
@@ -867,6 +871,7 @@ export class GameSession {
     const m = this.mirror;
     const renderTime = m ? this.sim.time : this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
+    this.raid.update(live, this.sim, renderTime, this.engine.camera, !!m);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
     this.pickups.update(live, this.sim, this.engine.camera);
     if (m) {
@@ -1195,6 +1200,19 @@ export class GameSession {
   }
 
   /** Another survivor fired: their muzzle, their report from where they stand, tracers to where it went. */
+  /** A raider fired: their muzzle and report, tracers to where the rounds went. */
+  private raiderShot(e: Extract<SimEvent, { type: 'shot' }>): void {
+    const muzzle = this.raid.muzzle(e.player, this.tmpA) ?? v3(e.origin, this.tmpA);
+    const dir = this.raid.muzzleDir(e.player, this.tmpB) ?? this.tmpB.set(0, 0, 1);
+    this.effects.muzzle(muzzle, dir, e.weapon);
+    for (let i = 0; i < e.pellets.length; i++) {
+      if (e.pellets.length > 1 && i % 3 !== 0) continue;
+      this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
+    }
+    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end));
+    this.raid.weaponOf(e.player)?.fired(WEAPONS[e.weapon]);
+  }
+
   private remoteShot(e: Extract<SimEvent, { type: 'shot' }>): void {
     const r = this.remotes!;
     const muzzle = r.muzzle(e.player, this.tmpA) ?? v3(e.origin, this.tmpA);
@@ -1387,6 +1405,10 @@ export class GameSession {
     const A = this.tmpA, B = this.tmpB, C = this.tmpC;
     switch (e.type) {
       case 'shot': {
+        if (e.player.startsWith('raider:')) {
+          this.raiderShot(e);
+          break;
+        }
         if (e.player !== this.myId) {
           if (this.remotes) this.remoteShot(e);
           break;
@@ -1496,6 +1518,26 @@ export class GameSession {
         this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force);
         break;
       }
+      case 'raiderHit': {
+        v3(e.pos, A);
+        v3(e.dir, B);
+        this.effects.blood(A, B, e.damage, { exit: null, killed: e.killed, head: e.zone === 'head', melee: e.melee });
+        this.raid.hit(e.raider, e.zone, B, e.damage);
+        audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
+        if (e.by === this.myId) {
+          const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
+          this.hud.hitMarker(kind);
+          audio.hitMarker(kind);
+        }
+        break;
+      }
+      case 'raiderDied':
+        this.raid.died(e.raider, e.zone, v3(e.dir, B));
+        if (e.by === this.myId) this.hud.feedLine('RAIDER KILLED');
+        break;
+      case 'raid':
+        if (e.stage === 'arrived') audio.raidSting();
+        break;
       case 'zombieRemoved':
         this.zombies.removed(e.zombie);
         break;
@@ -1620,7 +1662,7 @@ export class GameSession {
         break;
       case 'reload':
         if (e.player !== this.myId) {
-          if (e.stage === 'shell' && this.remotes?.handOf(e.player, A)) audio.foley('shellIn', A, e.weapon);
+          if (e.stage === 'shell' && (this.remotes?.handOf(e.player, A) ?? this.raid.handOf(e.player, A))) audio.foley('shellIn', A, e.weapon);
           break;
         }
         if (e.stage === 'shell') audio.foley('shellIn', this.handPos(), e.weapon);
@@ -1674,6 +1716,8 @@ export class GameSession {
         if (e.player === this.myId || e.player === null) {
           if (e.text === 'SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 3.2);
           else if (e.text === 'RARE SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 4.2, 'rare');
+          else if (e.text === 'VEHICLE APPROACHING' || e.text === 'HOSTILE SURVIVORS') this.hud.notify(e.text, e.sub ?? '', 4, 'danger');
+          else if (e.text === 'RAIDERS ELIMINATED') this.hud.notify(e.text, e.sub ?? '', 3.6);
           else this.hud.feedLine(e.text);
         }
         break;
@@ -2088,6 +2132,8 @@ export class GameSession {
     hurt: (amount: number) => this.link?.debug({ cmd: 'hurt', amount }),
     /** Online: health stays full (the server's test mode only). */
     god: (on = true) => this.link?.debug({ cmd: 'god', on }),
+    /** Sends in the raiders' van now (during the outbreak). */
+    raid: () => (this.link ? (this.link.debug({ cmd: 'raid' }), true) : this.sim.callRaid()),
   };
 
   dispose(): void {
@@ -2123,6 +2169,7 @@ export class GameSession {
     this.pause.hide();
     this.sim.dispose();
     this.zombies.dispose();
+    this.raid.dispose();
     this.limbs.dispose();
     this.barricades.dispose();
     this.pickups.dispose();

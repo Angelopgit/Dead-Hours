@@ -16,6 +16,7 @@ import { Arsenal, type ArsenalTick, type HeldLimb } from './Arsenal';
 import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
 import { rayZones, along, type ZoneShape } from './hitzones';
 import { ZOMBIE_STEP, Zombie } from './Zombie';
+import { Raid } from './Raid';
 import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes';
 import { Barricades, type BarricadeSlot } from './Barricades';
 import { BARRICADE } from '../config/barricades';
@@ -244,6 +245,8 @@ export class Simulation {
   private readonly overhead: { x: number; z: number; r: number }[] = [];
   /** Severed arms, loose or held. */
   readonly limbs: SimLimb[] = [];
+  /** The van raid (once a night, see Raid.ts). */
+  readonly raid: Raid;
   private nextLimbId = 1;
   /** Rooms found melee weapons turn up in (worked out on first use), and when the next one appears. */
   private pickupRooms: PickupRoom[] | null = null;
@@ -266,6 +269,7 @@ export class Simulation {
     this.doors = opts.doors;
     this.rand = rng(opts.seed ?? 1);
     this.pickRand = rng(((opts.seed ?? 1) * 7919 + 13) >>> 0);
+    this.raid = new Raid(this, opts.seed ?? 1);
     this.phaseTime = opts.preparation ?? GAME.preparationSeconds;
     const controller = (step: boolean) => {
       const ctrl = this.physics.world.createCharacterController(0.02);
@@ -735,9 +739,11 @@ export class Simulation {
       if (h) hits.push({ z, zone: h.zone, t: h.t, along: h.along });
     }
     hits.sort((a, b) => a.t - b.t);
+    // A raider in the way stops the round (no rounds pass through people).
+    const raider = this.raid.raiders.length ? this.raid.traceHit(o, d, worldD) : null;
 
     // The camera sees around corners the gun can't: check the line from the eye too.
-    const firstT = hits.length ? hits[0].t : worldD;
+    const firstT = Math.min(hits.length ? hits[0].t : worldD, raider ? raider.t : worldD);
     const eye = p.eye;
     const tx = o.x + d.x * firstT - eye.x, ty = o.y + d.y * firstT - eye.y, tz = o.z + d.z * firstT - eye.z;
     const L = Math.hypot(tx, ty, tz);
@@ -752,11 +758,17 @@ export class Simulation {
 
     let pierced = 0;
     for (const h of hits) {
+      if (raider && raider.t < h.t) break;
       const pos = { x: o.x + d.x * h.t, y: o.y + d.y * h.t, z: o.z + d.z * h.t };
       const dmg = def.damage * ZONE_MULTIPLIER[h.zone] * FALLOFF(def, h.t) * Math.pow(0.6, pierced);
       this.hitZombie(p, h.z, dmg, h.zone, pos, d, false, def.pellets > 1 ? 0.5 : 1, { along: h.along, armTally: dmg });
       pierced++;
       if (pierced > def.penetration) return { end: pos, hit: 'zombie' };
+    }
+    if (raider) {
+      const pos = { x: o.x + d.x * raider.t, y: o.y + d.y * raider.t, z: o.z + d.z * raider.t };
+      this.raid.hit(p, raider.r, def.damage * FALLOFF(def, raider.t) * Math.pow(0.6, pierced), raider.zone, pos, d);
+      return { end: pos, hit: 'zombie' };
     }
     if (world) {
       const pos = { x: o.x + d.x * world.distance, y: o.y + d.y * world.distance, z: o.z + d.z * world.distance };
@@ -1514,8 +1526,39 @@ export class Simulation {
     return Math.min(SPAWNING.maxPopulation, base + Math.floor(hordeBonus(this.horde.wave) * this.playerScale));
   }
 
+  // ---------------------------------------------------------------- the van raid (Raid.ts)
+
+  /**
+   * A round's flight against the world. `breakGlass`: window panes it meets shatter and it flies
+   * on; otherwise (sight lines) panes are looked through. The first solid hit, or null.
+   */
+  castRound(o: Vec3, d: Vec3, maxD: number, breakGlass: boolean): RayHit | null {
+    if (breakGlass) return this.castThrough(o, d, maxD);
+    let from = 0;
+    for (let i = 0; i < 6; i++) {
+      const hit = this.physics.raycastHit(o.x + d.x * from, o.y + d.y * from, o.z + d.z * from, d.x, d.y, d.z, maxD - from);
+      if (!hit) return null;
+      if (hit.surface !== 'glass') return { ...hit, distance: hit.distance + from };
+      from += hit.distance + 0.12;
+      if (from >= maxD) return null;
+    }
+    return null;
+  }
+
+  /** Whether boards hold a door shut (a raider has to kick it in rather than open it). */
+  doorBarred(door: DoorBody): boolean {
+    return this.doorLocked(door.index);
+  }
+
+  /** Starts the van raid now, whatever the clock says (debugging and tests). */
+  callRaid(): boolean {
+    if (this.phase !== 'survival') return false;
+    return this.raid.start();
+  }
+
   /** Removes every zombie body and the shared zombie controller from the physics world. */
   dispose(): void {
+    this.raid.dispose();
     for (const d of this.drops) if (d.body) this.physics.world.removeRigidBody(d.body);
     for (const l of this.limbs) if (l.body) this.physics.world.removeRigidBody(l.body);
     this.limbs.length = 0;
@@ -1560,6 +1603,7 @@ export class Simulation {
       this.runHordes();
       this.runSpawner();
       this.runDrops();
+      this.raid.update(dt, zombies);
     }
 
     for (const d of this.doors) d?.update(dt);
@@ -1929,6 +1973,23 @@ export class Simulation {
     }
     targets.sort((a, b) => a.d - b.d);
     this.noise(m.pos, club ? LIMBS.noise : md.noise, p.id);
+    // A raider within the swing takes it too (the nearest one).
+    let struck = false;
+    for (const r of this.raid.raiders) {
+      if (!r.alive || struck) continue;
+      const dx = r.pos.x - m.pos.x, dz = r.pos.z - m.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > reach + 0.35 || Math.abs(r.pos.y - m.pos.y) > 1.3) continue;
+      if (d > 0.3 && Math.acos(clamp((dx * fx + dz * fz) / d, -1, 1)) > arc / 2) continue;
+      const dir = { x: dx / (d || 1), y: 0, z: dz / (d || 1) };
+      const head = m.pitch > 0.12;
+      this.raid.hit(p, r, club ? club.damage : md.damage, head ? 'head' : 'torso', head ? r.eye : r.chest, dir, true);
+      struck = true;
+    }
+    if (struck && !targets.length) {
+      this.emit({ type: 'melee', player: p.id, stage: 'hit', limb: !!limb });
+      return;
+    }
     if (!targets.length) {
       this.emit({ type: 'melee', player: p.id, stage: 'miss', limb: !!limb });
       return;

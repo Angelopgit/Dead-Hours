@@ -86,7 +86,18 @@ export type SimEvent =
   /** A found melee weapon was picked up at `pos` (floor); `swapped` is the one left there in its place. */
   | { type: 'meleeTaken'; player: string; item: number; weapon: MeleeId; swapped: MeleeId | null; pos: Vec3 }
   /** A loose arm was cleared away. */
-  | { type: 'limbGone'; limb: number };
+  | { type: 'limbGone'; limb: number }
+  /**
+   * The van raid: `inbound` (the van starts in along route `route`), `arrived` (parked at `pos`,
+   * `count` raiders about to get out), `over` (the last one is down).
+   */
+  | { type: 'raid'; stage: 'inbound' | 'arrived' | 'over'; route: number; pos: Vec3; count: number }
+  | { type: 'raiderSpawned'; raider: string; weapon: WeaponId }
+  | { type: 'raiderHit'; raider: string; zone: HitZone; pos: Vec3; dir: Vec3; damage: number; killed: boolean; by: string; melee: boolean }
+  /** `left`: raiders still standing or still in the van. */
+  | { type: 'raiderDied'; raider: string; zone: HitZone; dir: Vec3; by: string | null; weapon: WeaponId; left: number }
+  /** A dead raider's body was cleared from the simulation (renderers keep the corpse). */
+  | { type: 'raiderRemoved'; raider: string };
 
 /**
  * A supply helicopter's flight, in simulation time: in from `from` to the hover point `over`,

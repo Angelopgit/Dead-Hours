@@ -3,9 +3,11 @@ import type { HitZone, WeaponId } from '../config/weapons';
 import type { ArmState, ArmZone, LimbCut } from '../config/limbs';
 import { isMelee } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
+import { RAID } from '../config/raid';
 import type { Arsenal, ArsenalAction, HeldLimb } from '../sim/Arsenal';
 import type { InteractKind, PlayerMotion, PlayerStats, Simulation } from '../sim/Simulation';
 import { Zombie, type ZombieState } from '../sim/Zombie';
+import { Raider, type RaidStage } from '../sim/Raid';
 import type { SimEvent, SimPhase } from '../sim/events';
 import { clamp, type Quat, type Vec3 } from '../sim/math';
 import { decodeBuild, defaultBuild, encodeBuild } from '../config/progression';
@@ -21,6 +23,7 @@ const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
 const ARMS: ArmZone[] = ['armL', 'armR'];
 const CUTS: LimbCut[] = ['shoulder', 'elbow'];
 const ZONES: HitZone[] = ['head', 'torso', 'armL', 'armR', 'legL', 'legR'];
+const RAID_STAGES: RaidStage[] = ['waiting', 'inbound', 'arrived', 'over'];
 
 const idx = <T>(table: readonly T[], v: T): number => Math.max(0, table.indexOf(v));
 const cm = (v: number) => Math.round(v * 100);
@@ -73,6 +76,10 @@ export interface Snapshot {
   i: number[][];
   /** Barricades that aren't as the map starts them: [slot, boards, damage ×1000, glass in, ...]. */
   b?: number[];
+  /** The van raid, while it is on: [route, stage, x, z (cm), yaw (mrad), speed (cm/s), door open]. */
+  v?: number[];
+  /** Raiders (see captureSnapshot). */
+  r?: number[][];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -136,7 +143,21 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   for (const b of sim.barricades.slots) {
     if (b.boards > 0 || (b.kind === 'window' && !b.glass)) bars.push(b.index, b.boards, milli(b.damage), b.glass ? 1 : 0);
   }
-  return { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars };
+  const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars };
+  const raid = sim.raid;
+  const van = raid.van;
+  if (van) snap.v = [van.route, idx(RAID_STAGES, raid.stage), cm(van.pos.x), cm(van.pos.z), milli(van.yaw), cm(van.speed), van.door ? 1 : 0];
+  if (raid.raiders.length) {
+    snap.r = raid.raiders.filter((r) => r.alive).map((r) => {
+      const m = r.motion, a = r.arsenal, h = r.lastHit;
+      return [
+        r.num, idx(WEAPON_IDS, r.weapon), r.seed, cm(m.pos.x), cm(m.pos.y), cm(m.pos.z), cm(m.vel.x), cm(m.vel.z), milli(r.facing), milli(m.pitch),
+        (m.aiming ? 1 : 0) | (m.sprinting ? 2 : 0) | (m.grounded ? 4 : 0), idx(ACTIONS, a.action), milli(Math.max(0, a.actionT)), milli(a.actionTotal),
+        a.weapon.mag, Math.round(r.health * 10), h ? milli(h.at) : -1, h ? milli(h.dx) : 0, h ? milli(h.dz) : 0, h ? idx(ZONES, h.zone) : 0,
+      ];
+    });
+  }
+  return snap;
 }
 
 // ------------------------------------------------------------------ motion messages
@@ -294,6 +315,13 @@ export class Mirror {
   /** Moves every zombie's collision capsule to where it is drawn (the local survivor bumps into them). */
   updateBodies(): void {
     const t = this.sim.time;
+    for (const r of this.sim.raid.raiders) {
+      if (!r.body || !r.alive) continue;
+      const u = clamp((t - (r.updatedAt - r.lastDt)) / Math.max(1e-4, r.lastDt), 0, 1);
+      r.body.setNextKinematicTranslation({
+        x: r.prev.x + (r.pos.x - r.prev.x) * u, y: r.prev.y + (r.pos.y - r.prev.y) * u + RAID.height / 2 + 0.02, z: r.prev.z + (r.pos.z - r.prev.z) * u,
+      });
+    }
     for (const z of this.sim.zombies) {
       const u = clamp((t - (z.updatedAt - z.lastDt)) / Math.max(1e-4, z.lastDt), 0, 1);
       z.body.setNextKinematicTranslation({
@@ -496,6 +524,7 @@ export class Mirror {
       sim.barricades.remote(slot, bs[i + 1], bs[i + 2] / 1000, bs[i + 3] === 1);
     }
     for (const slot of sim.barricades.slots) if (!listed.has(slot.index) && slot.boards > 0) sim.barricades.remote(slot, 0, 0, slot.glass);
+    this.applyRaid(s, T, span);
 
     // Ammunition crates, first aid, weapon tables, landed supply crates.
     for (const r of s.i) {
@@ -508,6 +537,59 @@ export class Mirror {
         const weapon = r[7] !== undefined && r[7] >= 0 ? WEAPON_IDS[r[7]] : undefined;
         if (weapon) sim.interactables[id].weapon = weapon;
       }
+    }
+  }
+
+  /** The van and the raiders (glide between snapshots like zombies). */
+  private applyRaid(s: Snapshot, T: number, span: number): void {
+    const raid = this.sim.raid;
+    if (s.v) raid.syncVan(s.v[0], RAID_STAGES[s.v[1]] ?? 'inbound', s.v[2] / 100, s.v[3] / 100, s.v[4] / 1000, s.v[5] / 100, s.v[6] === 1);
+    const seen = new Set<number>();
+    for (const row of s.r ?? []) {
+      const num = row[0];
+      seen.add(num);
+      const x = row[3] / 100, y = row[4] / 100, z = row[5] / 100;
+      let r = raid.raiders.find((q) => q.num === num);
+      if (!r) {
+        r = new Raider(num, WEAPON_IDS[row[1]] ?? 'ar', { x, y, z }, row[8] / 1000, row[2], raid, this.sim);
+        raid.raiders.push(r);
+        r.updatedAt = T;
+        r.lastDt = span;
+      } else {
+        const u = clamp((T - (r.updatedAt - r.lastDt)) / Math.max(1e-4, r.lastDt), 0, 1);
+        r.prev.x += (r.pos.x - r.prev.x) * u;
+        r.prev.y += (r.pos.y - r.prev.y) * u;
+        r.prev.z += (r.pos.z - r.prev.z) * u;
+        r.pos.x = x; r.pos.y = y; r.pos.z = z;
+        r.updatedAt = T + span;
+        r.lastDt = span;
+      }
+      if (!r.alive) continue;
+      const m = r.motion;
+      m.vel.x = row[6] / 100;
+      m.vel.z = row[7] / 100;
+      r.facing = row[8] / 1000;
+      m.yaw = r.facing + Math.PI;
+      m.pitch = row[9] / 1000;
+      m.aiming = !!(row[10] & 1);
+      m.sprinting = !!(row[10] & 2);
+      m.grounded = !!(row[10] & 4);
+      const a = r.arsenal;
+      const action = ACTIONS[row[11]] ?? 'idle';
+      if (a.action !== action || Math.abs(a.actionT - row[12] / 1000) > 0.12) {
+        a.action = action;
+        a.actionT = row[12] / 1000;
+      }
+      a.actionTotal = row[13] / 1000;
+      a.weapon.mag = row[14];
+      r.health = row[15] / 10;
+      r.lastHit = row[16] >= 0 ? { zone: ZONES[row[19]] ?? 'torso', dx: row[17] / 1000, dz: row[18] / 1000, at: row[16] / 1000 } : null;
+    }
+    for (let i = raid.raiders.length - 1; i >= 0; i--) {
+      const r = raid.raiders[i];
+      if (seen.has(r.num)) continue;
+      r.removeBody();
+      raid.raiders.splice(i, 1);
     }
   }
 
@@ -556,7 +638,16 @@ export class Mirror {
    */
   event(e: SimEvent): void {
     const sim = this.sim;
-    if (e.type === 'zombieDied' || e.type === 'zombieRemoved') {
+    if (e.type === 'raiderDied') {
+      const r = sim.raid.raider(e.raider);
+      if (r && r.alive) {
+        r.alive = false;
+        r.state = 'dead';
+        r.diedAt = sim.time;
+      }
+    } else if (e.type === 'raid' && e.stage === 'over') {
+      sim.raid.stage = 'over';
+    } else if (e.type === 'zombieDied' || e.type === 'zombieRemoved') {
       const z = sim.zombie(e.zombie);
       if (z) z.state = 'dead';
     } else if (e.type === 'limbGrabbed') {

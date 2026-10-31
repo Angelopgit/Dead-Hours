@@ -86,6 +86,7 @@ export type DebugMsg =
   | { cmd: 'spawn'; dist: number; angle: number; kind?: string }
   | { cmd: 'supplyDrop'; weapon?: WeaponId; serum?: boolean }
   | { cmd: 'hurt'; amount: number }
+  | { cmd: 'raid' }
   /** Health stays full (for slow test clients); 'hurt' still kills. */
   | { cmd: 'god'; on: boolean };
 

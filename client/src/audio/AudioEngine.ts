@@ -79,6 +79,7 @@ export class AudioEngine {
   private readonly listenerPos = new THREE.Vector3();
   private rotorBuffer: AudioBuffer | null = null;
   private readonly rotors = new Map<number, { src: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode }>();
+  private vanSound: { oscs: OscillatorNode[]; rumble: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode } | null = null;
   private nextNote = 0;
   private nextAmbientEvent = 0;
   private nextPulse = 0;
@@ -507,6 +508,101 @@ export class AudioEngine {
       r.lp.frequency.setTargetAtTime(500 + 11000 / (1 + d / 28), t, 0.1);
       // Rotor speeds up a touch under load in the hover.
       r.src.playbackRate.setTargetAtTime(1 + h.hover * 0.04, t, 0.5);
+    }
+  }
+
+  /**
+   * The raiders' van: a diesel's low growl that rises with its speed, a lazy idle once parked,
+   * heard from a long way off down the street. `null` lets it die away.
+   */
+  van(state: { pos: THREE.Vector3; speed: number; idle: boolean } | null): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (!state) {
+      if (this.vanSound) {
+        const v = this.vanSound;
+        v.gain.gain.setTargetAtTime(0, t, 0.4);
+        for (const o of v.oscs) o.stop(t + 2.5);
+        v.rumble.stop(t + 2.5);
+        this.vanSound = null;
+      }
+      return;
+    }
+    let v = this.vanSound;
+    if (!v) {
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.55, t + 2);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.Q.value = 2;
+      lp.frequency.value = 300;
+      const panner = this.makePanner(state.pos);
+      panner.refDistance = 7;
+      panner.rolloffFactor = 1;
+      panner.maxDistance = 600;
+      lp.connect(gain).connect(panner).connect(this.effects);
+      const send = ctx.createGain();
+      send.gain.value = 0.2;
+      gain.connect(send).connect(this.sends.effects);
+      const oscs = [0, 1, 2].map((i) => {
+        const o = ctx.createOscillator();
+        o.type = i === 2 ? 'square' : 'sawtooth';
+        const og = ctx.createGain();
+        og.gain.value = [0.4, 0.22, 0.08][i];
+        o.connect(og).connect(lp);
+        o.start(t);
+        return o;
+      });
+      const rumble = ctx.createBufferSource();
+      rumble.buffer = this.noise;
+      rumble.loop = true;
+      const rl = ctx.createBiquadFilter();
+      rl.type = 'lowpass';
+      rl.frequency.value = 180;
+      const rg = ctx.createGain();
+      rg.gain.value = 0.5;
+      rumble.connect(rl).connect(rg).connect(gain);
+      rumble.start(t);
+      v = { oscs, rumble, gain, lp, panner };
+      this.vanSound = v;
+    }
+    v.panner.positionX.setTargetAtTime(state.pos.x, t, 0.05);
+    v.panner.positionY.setTargetAtTime(state.pos.y, t, 0.05);
+    v.panner.positionZ.setTargetAtTime(state.pos.z, t, 0.05);
+    // Engine speed: idling, or pulling in the gears.
+    const gear = state.speed < 0.3 ? 0 : (state.speed % 4.5) / 4.5;
+    const base = state.idle && state.speed < 0.3 ? 26 : 34 + gear * 22 + state.speed * 1.2;
+    v.oscs[0].frequency.setTargetAtTime(base, t, 0.15);
+    v.oscs[1].frequency.setTargetAtTime(base * 2.01, t, 0.15);
+    v.oscs[2].frequency.setTargetAtTime(base * 0.5, t, 0.15);
+    v.lp.frequency.setTargetAtTime(220 + state.speed * 55, t, 0.2);
+    v.gain.gain.setTargetAtTime(state.idle ? 0.3 : 0.55, t, 0.5);
+  }
+
+  /** The raiders show up: a heavy low hit and a sour rising tone. */
+  raidSting(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    for (const [f, d] of [[55, 0], [58.3, 0.02], [82.4, 0.04]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f, t + d);
+      o.frequency.linearRampToValueAtTime(f * 1.06, t + 2.4);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(900, t);
+      lp.frequency.exponentialRampToValueAtTime(160, t + 2.6);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t + d);
+      g.gain.linearRampToValueAtTime(0.09, t + d + 0.03);
+      g.gain.setTargetAtTime(0, t + 0.9, 0.7);
+      o.connect(lp).connect(g).connect(this.music);
+      g.connect(this.sends.music);
+      o.start(t + d);
+      o.stop(t + 4.5);
     }
   }
 
