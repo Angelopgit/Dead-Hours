@@ -580,6 +580,12 @@ body.touch-play .weapon-panel { bottom: auto; top: calc(52px + env(safe-area-ins
 body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
 body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right)); }
 body.touch-play .prompt { top: 40%; }
+/* The health bar and the LIGHT / BAG / HEAL buttons fill the top row on a phone, so the timer, the
+   warning and notices take rows of their own under it, a little smaller (they printed over the health
+   bar and over each other). */
+body.touch-play .phase-timer { top: calc(62px + env(safe-area-inset-top)); font-size: 0.75em; letter-spacing: 0.26em; }
+body.touch-play .warning { top: calc(80px + env(safe-area-inset-top)); font-size: 0.7em; letter-spacing: 0.32em; }
+body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size: 1em; }
 
 /* Phones held upright: the game is played sideways. */
 @media (orientation: portrait) and (pointer: coarse) {
