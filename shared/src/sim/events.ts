@@ -45,6 +45,11 @@ export type SimEvent =
   | { type: 'doorPound'; door: number; pos: Vec3 }
   | { type: 'doorForced'; door: number; pos: Vec3 }
   | { type: 'notice'; player: string | null; text: string; sub?: string }
+  /**
+   * A horde wave: `warning` (it starts at survival second `at`), `surge` (it lasts until `at`),
+   * `over` (outlasted at `at`).
+   */
+  | { type: 'horde'; wave: number; stage: 'warning' | 'surge' | 'over'; at: number }
   | { type: 'heli'; drop: number; flight: HeliFlight }
   | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'gone'; pos: Vec3 }
   /** An arm came off: `pos` is the cut, `dir` the way the blow was going. */

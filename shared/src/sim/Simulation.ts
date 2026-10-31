@@ -3,7 +3,7 @@ import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
-import { SPAWNING, type ZombieKind } from '../config/zombies';
+import { HORDES, SPAWNING, type ZombieKind } from '../config/zombies';
 import { SUPPLY_DROPS } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
 import { propOccluders } from '../map/colliders';
@@ -13,6 +13,7 @@ import { Arsenal, type ArsenalTick, type HeldLimb } from './Arsenal';
 import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
 import { rayZones, along, type ZoneShape } from './hitzones';
 import { ZOMBIE_STEP, Zombie } from './Zombie';
+import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 
@@ -206,6 +207,8 @@ export class Simulation {
   /** Severed arms, loose or held. */
   readonly limbs: SimLimb[] = [];
   private nextLimbId = 1;
+  /** Where the night is in the horde schedule (see Hordes.ts), as of the last survival step. */
+  horde: HordeState = hordeAt(0);
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -911,6 +914,18 @@ export class Simulation {
     return Math.min(SPAWNING.maxPopulation, Math.floor(solo * this.playerScale));
   }
 
+  /** True while a horde surge is under way. */
+  get surging(): boolean {
+    return this.phase === 'survival' && this.horde.stage === 'surge';
+  }
+
+  /** What the spawner fills to: the base target, plus the wave's extra during a surge. */
+  get spawnTarget(): number {
+    const base = this.populationTarget;
+    if (!this.surging) return base;
+    return Math.min(SPAWNING.maxPopulation, base + Math.floor(hordeBonus(this.horde.wave) * this.playerScale));
+  }
+
   /** Removes every zombie body and the shared zombie controller from the physics world. */
   dispose(): void {
     for (const d of this.drops) if (d.body) this.physics.world.removeRigidBody(d.body);
@@ -954,6 +969,7 @@ export class Simulation {
       }
     } else if (this.phase === 'survival') {
       this.phaseTime += dt;
+      this.runHordes();
       this.runSpawner();
       this.runDrops();
     }
@@ -1018,7 +1034,7 @@ export class Simulation {
   private runSpawner(): void {
     if (this.time < this.spawnAt) return;
     const alive = this.zombies.filter((z) => z.alive).length;
-    const target = this.populationTarget;
+    const target = this.spawnTarget;
     if (alive >= target) {
       this.spawnAt = this.time + 1;
       return;
@@ -1026,9 +1042,12 @@ export class Simulation {
     const at = this.findSpawnPoint();
     // The first arrivals come in quickly; afterwards a steady trickle.
     const [lo, hi] = SPAWNING.interval;
-    this.spawnAt = this.time + (alive < target * 0.5 ? 0.35 : lo + this.rand() * (hi - lo)) / this.playerScale;
+    const surge = this.surging;
+    const wait = surge ? HORDES.interval : alive < target * 0.5 ? 0.35 : lo + this.rand() * (hi - lo);
+    this.spawnAt = this.time + wait / this.playerScale;
     if (!at) return;
-    this.spawnZombie(this.pickKind(), at, this.rand() < 0.78 ? 'approach' : 'wander');
+    // A surge comes straight for the survivors.
+    this.spawnZombie(this.pickKind(), at, surge || this.rand() < 0.78 ? 'approach' : 'wander');
   }
 
   /** Kind of the next spawn: walkers, with runners and brutes mixed in as the night goes on. */
@@ -1037,13 +1056,55 @@ export class Simulation {
     const share = (m: { from: number; full: number; start: number; end: number }) =>
       t < m.from ? 0 : m.start + (m.end - m.start) * clamp((t - m.from) / (m.full - m.from), 0, 1);
     const r = this.rand();
-    const runner = share(SPAWNING.mix.runner);
+    const runner = share(SPAWNING.mix.runner) + (this.surging ? hordeRunnerBoost(this.horde.wave) : 0);
     if (r < runner) return 'runner';
     if (r < runner + share(SPAWNING.mix.brute)) {
       const brutes = this.zombies.filter((z) => z.alive && z.kind === 'brute').length;
       if (brutes < Math.floor((SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) * this.playerScale)) return 'brute';
     }
     return 'walker';
+  }
+
+  // ---------------------------------------------------------------- hordes
+
+  /** Moves the night through the horde schedule and announces each change of stage. */
+  private runHordes(): void {
+    const was = this.horde;
+    const now = hordeAt(this.phaseTime);
+    this.horde = now;
+    if (now.stage === was.stage && now.wave === was.wave) return;
+    // A wave was outlasted (the schedule moved on to the next wave).
+    if (now.survived > was.survived) {
+      for (let w = was.survived + 1; w <= now.survived; w++) this.emit({ type: 'horde', wave: w, stage: 'over', at: this.phaseTime });
+      this.nextDropAt = Math.min(this.nextDropAt, this.phaseTime + HORDES.dropAfter);
+      this.spawnAt = Math.max(this.spawnAt, this.time + 1);
+    }
+    if (now.stage === 'warning') {
+      this.emit({ type: 'horde', wave: now.wave, stage: 'warning', at: now.start });
+    } else if (now.stage === 'surge') {
+      this.emit({ type: 'horde', wave: now.wave, stage: 'surge', at: now.end });
+      this.callHorde();
+    }
+  }
+
+  /** The horde turns on the survivors: every zombie close enough comes to the nearest one. */
+  private callHorde(): void {
+    const R = HORDES.callRadius;
+    for (const z of this.zombies) {
+      if (!z.alive || z.engaged) continue;
+      let best: Vec3 | null = null;
+      let bestD: number = R;
+      for (const p of this.players.values()) {
+        if (!p.alive) continue;
+        const d = dist2D(p.motion.pos, z.pos);
+        if (d < bestD) {
+          bestD = d;
+          best = p.motion.pos;
+        }
+      }
+      if (best) z.investigate(best, 4);
+    }
+    this.spawnAt = Math.min(this.spawnAt, this.time);
   }
 
   // ---------------------------------------------------------------- supply drops

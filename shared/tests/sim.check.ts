@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SUPPLY_DROPS, LIMBS, limbClub, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -427,6 +427,52 @@ section('Horde size by survivors');
   sp.alive = true;
   sim.phaseTime = 3 * 3600;
   check(sim.populationTarget === 200, `the horde stops at 200 (${sim.populationTarget})`);
+  cleanup(sim, body);
+}
+section('Horde waves');
+{
+  check(hordeAt(0).stage === 'calm' && hordeAt(0).wave === 1, 'the night opens calm, wave 1 ahead');
+  check(hordeAt(HORDES.firstAt - HORDES.warning + 0.1).stage === 'warning', 'the siren sounds ahead of wave 1');
+  check(hordeAt(HORDES.firstAt + 1).stage === 'surge', 'wave 1 surges on time');
+  const starts = [1, 2, 3, 4, 5, 6, 7, 8].map(hordeStart);
+  const gaps = starts.slice(1).map((s, i) => s - starts[i]);
+  check(gaps.every((g, i) => i === 0 || g <= gaps[i - 1]) && Math.min(...gaps) >= HORDES.minGap, `waves come closer together (${gaps.join(', ')} s)`);
+  check([1, 2, 3, 4, 5].every((n) => hordeBonus(n + 1) > hordeBonus(n) && hordeDuration(n + 1) >= hordeDuration(n)), 'each wave is bigger and no shorter');
+  check(gaps.every((g, i) => g > hordeDuration(i + 1) + HORDES.warning), 'a wave is over before the next siren');
+  const mid = hordeAt(hordeStart(3) + hordeDuration(3) + 1);
+  check(mid.survived === 3 && mid.wave === 4 && mid.stage !== 'surge', `after wave 3 the count reads 3 survived (${mid.survived})`);
+
+  const { sim, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
+  sim.phase = 'survival';
+  const idle = sim.spawnZombie('walker', { x: 30, y: 0.02, z: -22 }, 'idle');
+  const seen: string[] = [];
+  const run = (from: number, steps: number) => {
+    sim.phaseTime = from;
+    for (let i = 0; i < steps; i++) {
+      sim.step(1 / 60);
+      for (const e of sim.drain()) if (e.type === 'horde') seen.push(`${e.stage}${e.wave}`);
+    }
+  };
+  run(HORDES.firstAt - HORDES.warning - 0.05, 6);
+  check(seen.includes('warning1'), `the warning reaches every client as an event (${seen.join(' ')})`);
+  check(!sim.surging && sim.spawnTarget === sim.populationTarget, 'no extra zombies during the warning');
+  run(HORDES.firstAt - 0.05, 6);
+  check(seen.includes('surge1') && sim.surging, 'the surge begins');
+  check(sim.spawnTarget === sim.populationTarget + hordeBonus(1), `the surge adds ${hordeBonus(1)} for one survivor (${sim.spawnTarget})`);
+  check(idle.state === 'investigate' || idle.state === 'chase', `zombies nearby are called to the survivors (${idle.state})`);
+  let runners = 0;
+  for (let i = 0; i < 2000; i++) if (sim.pickKind() === 'runner') runners++;
+  check(runners > 2000 * (0.14 + hordeRunnerBoost(1) - 0.05), `more runners during a surge (${runners} of 2000)`);
+  const before = sim.zombies.length;
+  run(HORDES.firstAt + 1, 120);
+  check(sim.zombies.length > before + 3, `the surge pours in quickly (${before} → ${sim.zombies.length} in 2 s)`);
+  sim.addPlayer('p2', 'P2', 'ar', 'pistol', { x: 6, y: 0.32, z: -22.3 }, 0);
+  check(sim.spawnTarget === Math.min(200, sim.populationTarget + Math.floor(hordeBonus(1) * SPAWNING.playerScale[1])), 'a bigger team gets a bigger surge');
+  run(HORDES.firstAt + hordeDuration(1) - 0.05, 6);
+  check(seen.includes('over1') && !sim.surging && sim.horde.survived === 1, `wave 1 is outlasted (${seen.join(' ')})`);
+  run(hordeStart(3) + 1, 2);
+  check(seen.filter((s) => s.startsWith('over')).length === 2 && seen.indexOf('over2') < seen.indexOf('surge3'), `a skipped wave still counts once (${seen.join(' ')})`);
+  check(sim.horde.wave === 3 && sim.surging, 'wave 3 surges');
   cleanup(sim, body);
 }
 const chaseFrom = (sim: Simulation, kind: 'walker' | 'runner' | 'brute', at: Vec3, target: Vec3) => {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  GAME, Mirror, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
   type ActMsg, type ArmZone, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
@@ -1182,6 +1182,9 @@ export class GameSession {
           else this.hud.feedLine(e.text);
         }
         break;
+      case 'horde':
+        this.onHorde(e.wave, e.stage, e.at);
+        break;
       case 'heli':
         this.drops.flight(e.drop, e.flight);
         break;
@@ -1433,12 +1436,32 @@ export class GameSession {
   /** Seconds survived since the outbreak, frozen at death. */
   private survivedAtDeath = 0;
 
+  /** Horde waves: the siren ahead of one, the roar when it hits, a breather when it is outlasted. */
+  private onHorde(wave: number, stage: 'warning' | 'surge' | 'over', at: number): void {
+    if (!this.me.alive) return;
+    if (stage === 'warning') {
+      this.hud.notify(`HORDE ${wave} INCOMING`, `${Math.round(at - this.sim.phaseTime)} SECONDS · FIND COVER, RELOAD`, 3.4, 'danger');
+      audio.hordeWarning();
+    } else if (stage === 'surge') {
+      this.hud.notify(`HORDE ${wave}`, `HOLD OUT ${clock(at - this.sim.phaseTime)}`, 2.6, 'danger');
+      audio.hordeSurge(wave);
+      this.cam.addTrauma(0.18);
+    } else {
+      this.hud.notify(`HORDE ${wave} SURVIVED`, `SUPPLY DROP IN ${HORDES.dropAfter} SECONDS`, 3.2);
+      audio.hordeOver();
+    }
+  }
+
   // ------------------------------------------------------------------ HUD
 
   private timerText(): string {
     const s = this.sim;
     if (s.phase === 'preparation') return `OUTBREAK IMMINENT — ${clock(Math.ceil(s.phaseTime))}`;
-    return `SURVIVED ${clock(s.phaseTime)}`;
+    const survived = `SURVIVED ${clock(s.phaseTime)}`;
+    if (s.phase !== 'survival') return survived;
+    const w = hordeAt(s.phaseTime);
+    if (w.stage === 'surge') return `HORDE ${w.wave} — HOLD OUT ${clock(Math.ceil(w.end - s.phaseTime))}`;
+    return `${survived} · HORDE ${w.wave} IN ${clock(Math.ceil(w.start - s.phaseTime))}`;
   }
 
   private updateHud(dt: number): void {
@@ -1466,7 +1489,8 @@ export class GameSession {
       wear: limb ? limb.wear / limb.maxWear : null,
     });
     const s = this.sim;
-    hud.setTimer(this.timerText(), s.phase === 'preparation' && s.phaseTime <= 10);
+    const w = s.phase === 'survival' ? hordeAt(s.phaseTime).stage : 'calm';
+    hud.setTimer(this.timerText(), (s.phase === 'preparation' && s.phaseTime <= 10) || w !== 'calm');
 
     this.updateWaypoint();
 

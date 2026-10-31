@@ -1333,6 +1333,97 @@ export class AudioEngine {
     s.stop(t + 10);
   }
 
+  /** A horde is coming: the town siren winds up twice, far off. */
+  hordeWarning(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const s = ctx.createOscillator();
+    s.type = 'triangle';
+    s.frequency.setValueAtTime(300, t);
+    for (let i = 0; i < 2; i++) {
+      s.frequency.linearRampToValueAtTime(760, t + 1.6 + i * 3.2);
+      s.frequency.linearRampToValueAtTime(330, t + 3.2 + i * 3.2);
+    }
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.06, t + 1);
+    g.gain.setTargetAtTime(0, t + 6.2, 0.5);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 650;
+    s.connect(bp).connect(g).connect(this.ambient);
+    g.connect(this.sends.ambient);
+    s.start(t);
+    s.stop(t + 9);
+  }
+
+  /** The horde hits: a low swell under a rush of distant voices, heavier each wave. */
+  hordeSurge(wave: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const level = Math.min(0.2, 0.11 + wave * 0.015);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(160, t);
+    lp.frequency.exponentialRampToValueAtTime(900, t + 1.2);
+    lp.frequency.exponentialRampToValueAtTime(220, t + 4.5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(level, t + 0.6);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 5);
+    lp.connect(g);
+    g.connect(this.music);
+    g.connect(this.sends.music);
+    for (const f of [41.2, 41.6, 61.7, 82.4]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.connect(lp);
+      o.start(t);
+      o.stop(t + 5.2);
+    }
+    // The crowd: band-limited noise that swells and moans.
+    const n = this.noiseSource(true);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 2.5;
+    bp.frequency.setValueAtTime(280, t);
+    bp.frequency.linearRampToValueAtTime(520, t + 1.5);
+    bp.frequency.linearRampToValueAtTime(240, t + 4);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0, t);
+    ng.gain.linearRampToValueAtTime(level * 0.5, t + 1.2);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 4.8);
+    n.connect(bp).connect(ng).connect(this.ambient);
+    ng.connect(this.sends.ambient);
+    n.start(t);
+    n.stop(t + 5);
+  }
+
+  /** A wave outlasted: a short rising chord. */
+  hordeOver(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.07, t + 0.4);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 3.2);
+    g.connect(this.music);
+    g.connect(this.sends.music);
+    for (const f of [220, 277.2, 329.6]) {
+      const o = ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(f * 0.94, t);
+      o.frequency.exponentialRampToValueAtTime(f, t + 0.5);
+      o.connect(g);
+      o.start(t);
+      o.stop(t + 3.3);
+    }
+  }
+
   /** Death sting. */
   death(): void {
     if (!this.ctx) return;

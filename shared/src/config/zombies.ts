@@ -89,3 +89,33 @@ export const SPAWNING = {
   bruteBase: 1,
   bruteEvery: 150,
 } as const;
+
+/**
+ * Horde surges: every few minutes the town sends a wave, each bigger, longer and faster than the
+ * last. The siren warns `warning` seconds ahead. Times are survival seconds after the outbreak.
+ */
+export const HORDES = {
+  /** First wave starts here; later waves come `gap` seconds apart, shrinking to `minGap`. */
+  firstAt: 150,
+  gap: 200,
+  gapShrink: 15,
+  minGap: 120,
+  warning: 25,
+  /** Surge length: `duration` plus `durationGrowth` per wave after the first, up to `maxDuration`. */
+  duration: 40,
+  durationGrowth: 8,
+  maxDuration: 90,
+  /** Extra zombies over the base target (for one survivor; scaled by player count like the rest). */
+  bonus: 10,
+  bonusGrowth: 7,
+  /** Seconds between surge spawns while below the surge target (divided by the player scale). */
+  interval: 0.3,
+  /** Extra runner share during a surge, plus this much more per wave, up to `maxRunnerBoost`. */
+  runnerBoost: 0.1,
+  runnerBoostGrowth: 0.03,
+  maxRunnerBoost: 0.3,
+  /** When a surge starts, every zombie within this many metres of a survivor hears them. */
+  callRadius: 70,
+  /** A supply drop comes this many seconds after a wave is survived (sooner if one is due). */
+  dropAfter: 12,
+} as const;

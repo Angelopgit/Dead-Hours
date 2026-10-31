@@ -1,5 +1,5 @@
 import gsap from 'gsap';
-import type { OverMsg, PlayerStats } from '@dead-hours/shared';
+import { hordeAt, type OverMsg, type PlayerStats } from '@dead-hours/shared';
 import { h } from './dom';
 import { clock } from './HUD';
 import { audio } from '../audio/AudioEngine';
@@ -53,6 +53,12 @@ const placeText = (r: RunRanks): string => [
   r.rankKills ? `#${r.rankKills} MOST KILLS` : '',
 ].filter(Boolean).join(' · ');
 
+/** How many horde waves a survival time outlasted, as a line. */
+function hordeLine(survived: number): string {
+  const n = hordeAt(survived).survived;
+  return n === 0 ? 'No horde held off' : n === 1 ? '1 horde held off' : `${n} hordes held off`;
+}
+
 /** End of a run: how long you lasted, what you did, and what to do next. */
 export class ResultsScreen {
   readonly el: HTMLElement;
@@ -66,7 +72,7 @@ export class ResultsScreen {
       h('div', { class: 'results-main' },
         h('h1', { class: 'title' }, 'YOU DIED'),
         h('div', { class: 'subtitle' }, subtitle ?? (r.outbreak ? 'Maple Hollow belongs to them now.' : 'The outbreak had not even begun.')),
-        h('div', { class: 'results-time' }, 'SURVIVED', h('b', {}, clock(r.survived)), this.ranks),
+        h('div', { class: 'results-time' }, 'SURVIVED', h('b', {}, clock(r.survived)), h('div', { class: 'results-hordes' }, hordeLine(r.outbreak ? r.survived : 0)), this.ranks),
         h('div', { class: 'results-stats' },
           cell('KILLS', String(s.kills)),
           cell('HEADSHOTS', String(s.headshots)),
@@ -121,7 +127,7 @@ export class TeamResults {
     this.el = h('div', { class: 'results', role: 'dialog', 'aria-label': 'Results' },
       h('div', { class: 'results-main team' },
         h('h1', { class: 'title' }, 'NIGHT OVER'),
-        h('div', { class: 'subtitle' }, best > 0 ? `The last of you fell after ${clock(best)}.` : 'None of you saw the outbreak through.'),
+        h('div', { class: 'subtitle' }, best > 0 ? `The last of you fell after ${clock(best)}. ${hordeLine(best)}.` : 'None of you saw the outbreak through.'),
         h('div', { class: 'team-table' }, ...rows),
         actionList(actions),
       ),

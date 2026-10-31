@@ -385,6 +385,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .board-list b { font-family: var(--font-display); font-weight: 300; font-size: 1.15em; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }
 .board-note { font-size: 0.75em !important; color: var(--fg-faint) !important; margin-top: 1.4em; }
 .board-stats { margin: 0.6em 0 0.4em; }
+.results-hordes { font-size: 0.72em; letter-spacing: 0.24em; color: var(--fg-dim); margin-top: 0.5em; }
 .results-ranks { font-family: var(--font-display); font-size: 0.8em; letter-spacing: 0.22em; color: var(--accent); margin-top: 0.6em; min-height: 1.2em; }
 .results-main.team { width: min(760px, 90vw); }
 .team-table { display: flex; flex-direction: column; margin: 1.6em 0 2.4em; border-top: 1px solid var(--line); }
