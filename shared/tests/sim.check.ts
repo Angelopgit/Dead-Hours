@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -1083,6 +1083,178 @@ section('Severed arms');
   check(sp.stats.limbsSevered === LIMBS.maxLoose + 3 && loose === LIMBS.maxLoose && gone === 3, `no more than ${LIMBS.maxLoose} arms lie around: the oldest are cleared (${sp.stats.limbsSevered} severed, ${loose} loose)`);
   const s = sim.limbs[0] as SimLimb;
   check(Number.isFinite(s.pos.x + s.pos.y + s.pos.z + s.rot.w), 'arm poses stay finite');
+  cleanup(sim, body);
+}
+
+section('Severed legs and crawlers');
+{
+  // Zones: a thigh stump keeps its upper half; a leg gone at the hip lets rounds through.
+  const pos = { x: 0, y: 0, z: 0 };
+  const whole = zombieZones(pos, 0, 1, 'standing', []);
+  const legOf = (zones: ZoneShape[]) => zones.find((zz) => zz.zone === 'legL');
+  const wl = legOf(whole)!;
+  const shin = along(wl.a, wl.b, 0.85), thigh = along(wl.a, wl.b, 0.2);
+  const shootAt = (zones: ZoneShape[], at: Vec3) => rayZones({ x: at.x, y: at.y, z: at.z + 5 }, { x: 0, y: 0, z: -1 }, zones, 50);
+  check(wl.a.y > wl.b.y && shootAt(whole, thigh)?.zone === 'legL' && (shootAt(whole, thigh)?.along ?? 1) < LEGS.kneeAt, 'leg hits report how far down the leg they landed (hip 0, foot 1)');
+  const knee = zombieZones(pos, 0, 1, 'crawl', [], 1, undefined, { legL: 'knee', legR: 'intact' });
+  const hip = zombieZones(pos, 0, 1, 'crawl', [], 1, undefined, { legL: 'hip', legR: 'intact' });
+  const kl = legOf(knee)!, fl = legOf(zombieZones(pos, 0, 1, 'crawl', []))!;
+  check(Math.hypot(kl.b.x - kl.a.x, kl.b.y - kl.a.y, kl.b.z - kl.a.z) < Math.hypot(fl.b.x - fl.a.x, fl.b.y - fl.a.y, fl.b.z - fl.a.z) * 0.6 && !legOf(hip), 'cut at the knee only the thigh is left; gone at the hip there is nothing to hit');
+  const crawlZ = zombieZones(pos, 0, 1, 'crawl', []);
+  const top = Math.max(...crawlZ.map((zz) => Math.max(zz.a.y, zz.b.y) + zz.r));
+  check(top < 0.85 && crawlZ.find((zz) => zz.zone === 'head')!.a.z > 0.2, `a crawler's body lies low (top ${top.toFixed(2)} m) with its head out in front`);
+
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  run(sim, 0.7);
+  sp.arsenal.aim = 1;
+  sp.motion.aiming = true;
+  const place = (kind: 'walker' | 'runner' | 'brute', x = 0, z = 3) => {
+    const zz = sim.spawnZombie(kind, { x, y: 0.02, z }, 'idle');
+    zz.facing = 0;
+    return zz;
+  };
+  const legPoint = (zz: Zombie, leg: 'legL' | 'legR', t: number) => {
+    const shape = zz.zones([]).find((s) => s.zone === leg)!;
+    return along(shape.a, shape.b, t);
+  };
+  const dirTo = (from: Vec3, to: Vec3) => {
+    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+    const l = Math.hypot(dx, dy, dz);
+    return { x: dx / l, y: dy / l, z: dz / l };
+  };
+  const shootLeg = (zz: Zombie, leg: 'legL' | 'legR', t: number, maxShots: number, seed: number) => {
+    const events: SimEvent[] = [];
+    let shots = 0;
+    while (zz.legs[leg] === 'intact' && zz.alive && shots < maxShots) {
+      zz.facing = 0;
+      if (sim.fire('p1', sp.eye, dirTo(sp.eye, legPoint(zz, leg, t)), true, seed + shots) === 'fired') shots++;
+      events.push(...run(sim, 0.13).events);
+    }
+    return { events, shots };
+  };
+  const clear = () => {
+    for (const zz of [...sim.zombies]) zz.removeBody();
+    sim.zombies.length = 0;
+  };
+
+  // Rounds to the thigh take the leg off at the hip; it lives on and crawls.
+  const z1 = place('walker');
+  const r1 = shootLeg(z1, 'legL', 0.25, 8, 300);
+  const cut1 = r1.events.find((e) => e.type === 'limbSevered');
+  const legHits = r1.events.filter((e) => e.type === 'zombieHit' && e.zone === 'legL').length;
+  check(!!cut1 && cut1.type === 'limbSevered' && cut1.arm === 'legL' && cut1.cut === 'hip' && z1.legs.legL === 'hip', `rifle rounds to the thigh take the whole leg off at the hip (${legHits} hits)`);
+  check(z1.alive && z1.crawling && !(cut1 as { killed: boolean }).killed, 'losing a leg does not kill it: it goes down to crawl');
+  const legLimb = sim.limbs.find((l) => l.id === (cut1 as { limb: number }).limb);
+  check(!!legLimb && legLimb.arm === 'legL' && legLimb.cut === 'hip' && !!legLimb.body && Math.abs(legLimb.length - LIMBS.length.hip) < 1e-6, 'the leg becomes a loose physics body like a severed arm');
+  check(z1.bodyHeight < 1 && z1.eye.y - z1.pos.y < 0.7 && z1.chest.y - z1.pos.y < 0.45, `its body capsule drops to the ground (${z1.bodyHeight.toFixed(2)} m tall)`);
+  check(z1.chaseSpeed <= LEGS.chaseSpeed[1] * LEGS.kindSpeed.walker && z1.wanderSpeed <= LEGS.wanderSpeed[1], `it crawls slowly (chases at ${z1.chaseSpeed.toFixed(2)} m/s)`);
+  const shock = run(sim, 0.3).events;
+  check(z1.state === 'stagger' && !shock.some((e) => e.type === 'zombieAttack'), 'it writhes in shock for a moment first');
+  // The other leg's thigh is now low and behind it, but still there to hit.
+  check(z1.zones([]).some((zz) => zz.zone === 'legR') && !z1.zones([]).some((zz) => zz.zone === 'legL'), 'the leg that is left drags behind it as a target');
+
+  // Rounds to the shin take it off at the knee.
+  clear();
+  const z2 = place('walker', 1.4, 2.6);
+  const r2 = shootLeg(z2, 'legR', 0.82, 8, 340);
+  const cut2 = r2.events.find((e) => e.type === 'limbSevered');
+  check(!!cut2 && cut2.type === 'limbSevered' && cut2.cut === 'knee' && z2.legs.legR === 'knee' && z2.crawling, 'rounds to the shin take it off at the knee');
+
+  // Crawling after you: slow, but it gets there and bites.
+  clear();
+  sp.health = PLAYER.maxHealth;
+  const c = place('walker', 0, -4);
+  c.facing = 0;
+  sim.severLeg(sp, c, 'legL', 'hip', { x: 0, y: 0, z: 1 }, false, 30, false);
+  check(c.crawling && c.legs.legL === 'hip' && sim.limbs.some((l) => l.arm === 'legL'), 'severLeg (for blasts and blades) takes a leg off directly');
+  const startD = Math.hypot(c.pos.x - sp.motion.pos.x, c.pos.z - sp.motion.pos.z);
+  c.target = 'p1';
+  c.lastKnown = { ...sp.motion.pos };
+  c.lastSeen = sim.time;
+  const ys: number[] = [];
+  let maxSpeed = 0;
+  const chased = run(sim, 25, () => {
+    ys.push(c.pos.y);
+    if (c.state === 'chase') maxSpeed = Math.max(maxSpeed, c.moveSpeed);
+    return sp.health < PLAYER.maxHealth;
+  });
+  check(sp.health < PLAYER.maxHealth && chased.events.some((e) => e.type === 'zombieAttack' && e.zombie === c.id), `it drags itself ${startD.toFixed(1)} m to you and attacks (${chased.time.toFixed(1)} s)`);
+  check(maxSpeed > 0.4 && maxSpeed < 1.6, `crawling top speed ${maxSpeed.toFixed(2)} m/s, well under a walker's`);
+  check(PLAYER.maxHealth - sp.health <= Math.round(ZOMBIES.walker.damage[1] * LEGS.damage) + 1, `a crawler's bite is weaker (${(PLAYER.maxHealth - sp.health).toFixed(0)} damage)`);
+  const jump = Math.max(...ys.slice(1).map((y, i) => Math.abs(y - ys[i])));
+  check(jump < 0.05 && c.grounded, `it stays on the ground the whole way (largest step ${jump.toFixed(3)} m, ${(Math.max(...ys) - Math.min(...ys)).toFixed(2)} m up and down)`);
+  check(c.attackRange === LEGS.attackRange, 'it has to get closer to reach you');
+  // It cannot be knocked over: it is already down.
+  const knock = (() => {
+    const ev: SimEvent[] = [];
+    for (let i = 0; i < 2 && c.alive; i++) {
+      const sh = c.zones([]).find((zz) => zz.zone === 'legR');
+      if (!sh) break;
+      sim.fire('p1', sp.eye, dirTo(sp.eye, along(sh.a, sh.b, 0.3)), true, 500 + i);
+      ev.push(...run(sim, 0.13).events);
+    }
+    return ev;
+  })();
+  check(c.state !== 'down', 'leg shots never knock a crawler down');
+  check(!knock.length || knock.some((e) => e.type === 'zombieHit'), 'its remaining leg can be shot');
+  // ...and it dies like anything else.
+  check(c.alive, 'two more leg hits do not finish it');
+  c.health = ZOMBIES.walker.health;
+  let headShots = 0;
+  while (c.alive && headShots < 8) {
+    const hz = c.zones([]).find((zz) => zz.zone === 'head')!;
+    if (sim.fire('p1', sp.eye, dirTo(sp.eye, hz.a), true, 700 + headShots) === 'fired') headShots++;
+    run(sim, 0.15);
+  }
+  check(!c.alive && headShots >= 1 && headShots <= 3, `a crawler's low head can be shot: dead in ${headShots} rounds`);
+
+  // Some that would have died of it live on as crawlers.
+  clear();
+  let lived = 0, died = 0;
+  for (let i = 0; i < 24; i++) {
+    const zz = place('walker', (i % 6) - 2.5, 2.5);
+    zz.health = 8;
+    zz.legSever.legL = LEGS.legHealth.walker - 1;
+    sim.fire('p1', sp.eye, dirTo(sp.eye, legPoint(zz, 'legL', 0.3)), true, 900 + i);
+    const ev = run(sim, 0.1).events;
+    const cut = ev.find((e) => e.type === 'limbSevered' && e.zombie === zz.id);
+    if (!cut) continue;
+    if (zz.alive) lived++;
+    else died++;
+    if (zz.alive && !(zz.health >= 1 && zz.crawling)) died += 100;
+    if (zz.alive) {
+      zz.removeBody();
+      sim.zombies.splice(sim.zombies.indexOf(zz), 1);
+    }
+  }
+  check(lived > 3 && died > 3 && lived + died >= 20, `a leg shot that would kill leaves some alive and crawling (${lived} lived, ${died} died)`);
+
+  // Born crawlers (the 'crawler' kind): legless from the start, walker-sized.
+  clear();
+  const born = sim.spawnZombie('crawler', { x: 3, y: 0.02, z: 0 }, 'idle');
+  run(sim, 0.5);
+  check(born.crawling && born.scale === 1 && born.bodyHeight < 1 && born.legs.legL !== 'intact' && born.legs.legR !== 'intact', 'crawler zombies come already without legs');
+
+  // Multiplayer: legs and severed legs reach clients.
+  const snap = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+  const copy = new Simulation({ physics, map, nav, doors, seed: 4 });
+  const mirror = new Mirror(copy, 'p2');
+  mirror.apply(snap, 10);
+  const cz = copy.zombie(born.id);
+  check(!!cz && cz.legs.legL === born.legs.legL && cz.legs.legR === born.legs.legR && cz.crawling && cz.bodyHeight < 1, 'clients see which legs are gone and draw it crawling');
+  const cl = copy.limbs.find((l) => l.arm === 'legL' && l.cut === 'hip');
+  check(!!cl && Math.abs(cl.length - LIMBS.length.hip) < 0.01, 'severed legs show on every screen');
+  copy.dispose();
+
+  // A leg makes a club too: the heaviest one there is.
+  clear();
+  const leg = sim.limbs.find((l) => l.arm === 'legL' && l.cut === 'hip')!;
+  run(sim, 3);
+  sim.setMotion('p1', { pos: { x: leg.pos.x + 0.9, y: leg.pos.y - leg.radius, z: leg.pos.z }, yaw: Math.PI / 2 });
+  body.moveTo({ x: leg.pos.x + 0.9, y: leg.pos.y - leg.radius, z: leg.pos.z });
+  const got = sim.grabLimb('p1', leg.id);
+  const hipClub = limbClub('hip', 'walker');
+  check(got && sp.arsenal.limb?.id === leg.id && leg.wear === hipClub.wear && hipClub.damage > limbClub('shoulder', 'walker').damage, `a severed leg can be picked up and swung (${hipClub.damage} damage, ${hipClub.wear} hits)`);
   cleanup(sim, body);
 }
 

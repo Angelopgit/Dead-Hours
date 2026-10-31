@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
-  type ActMsg, type ArmZone, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
+  type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
@@ -195,6 +195,7 @@ export class GameSession {
   private outbreakAnnounced = false;
   /** First arm torn off / first picked up: say once what can be done with it. */
   private limbHinted = false;
+  private crawlHinted = false;
   private screamHinted = false;
   /** When a bloater last burst (the arms it tears off then go unannounced). */
   private burstAt = -1;
@@ -209,6 +210,7 @@ export class GameSession {
   private readonly tmpB = new THREE.Vector3();
   private readonly tmpC = new THREE.Vector3();
   private readonly tmpD = new THREE.Vector3();
+  private readonly tmpE = new THREE.Vector3();
   private readonly tmpVoice = new THREE.Vector3();
   /** Online: the room's chat over the game, and who is talking. */
   private chatBox: ChatBox | null = null;
@@ -1317,7 +1319,7 @@ export class GameSession {
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'limb') {
       const l = best.limb!;
-      const what = l.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM';
+      const what = LIMB_NAME[l.cut];
       this.hud.setPrompt('interact', `${this.me.arsenal.limb ? 'SWAP FOR' : 'PICK UP'} ${what} · ${l.wear} HIT${l.wear === 1 ? '' : 'S'}`);
     } else this.hud.setPrompt('interact', 'SELECT WEAPON');
     if (!this.input.pressed('interact')) return;
@@ -1564,7 +1566,7 @@ export class GameSession {
         break;
       }
       case 'limbSevered':
-        this.onSevered(e.zombie, e.arm, e.cut, v3(e.pos, A), v3(e.dir, B), e.melee, e.by === this.myId);
+        this.onSevered(e.zombie, e.arm, e.cut, v3(e.pos, A), v3(e.dir, B), e.melee, e.killed, e.by === this.myId);
         break;
       case 'limbGrabbed':
         if (e.player !== this.myId) {
@@ -1603,7 +1605,7 @@ export class GameSession {
         this.effects.gibs(A, B);
         audio.limbBreak(A);
         if (e.player === this.myId) {
-          this.hud.feedLine('THE ARM CAME APART');
+          this.hud.feedLine(isLeg(this.me.arsenal.limb?.arm ?? 'armL') ? 'THE LEG CAME APART' : 'THE ARM CAME APART');
           this.cam.addTrauma(0.12);
         }
         break;
@@ -1849,17 +1851,23 @@ export class GameSession {
    * An arm torn off: the stump shows, blood bursts out of it both ways, the arm goes flying
    * (drawn from the simulation as it tumbles).
    */
-  private onSevered(zombie: number, arm: ArmZone, cut: LimbCut, at: THREE.Vector3, dir: THREE.Vector3, melee: boolean, mine: boolean): void {
+  private onSevered(zombie: number, arm: LimbZone, cut: LimbCut, at: THREE.Vector3, dir: THREE.Vector3, melee: boolean, killed: boolean, mine: boolean): void {
     // The torn end as drawn, where there is one on screen.
     this.zombies.severed(zombie, arm, cut, at, this.tmpC);
     this.effects.sever(at, dir, melee);
+    // A leg is more meat: a second burst down onto the ground.
+    if (isLeg(arm)) this.effects.sever(this.tmpD.copy(at).setY(at.y - 0.15), this.tmpE.set(dir.x * 0.4, -0.6, dir.z * 0.4).normalize(), melee);
     audio.sever(at, melee);
     if (!mine || performance.now() - this.burstAt < 250) return;
     this.cam.addTrauma(melee ? 0.12 : 0.06);
-    this.hud.feedLine(cut === 'shoulder' ? 'ARM TORN OFF' : 'FOREARM TORN OFF');
-    if (!this.limbHinted) {
+    const leg = isLeg(arm);
+    this.hud.feedLine(leg ? (killed ? (cut === 'hip' ? 'LEG BLOWN OFF' : 'SHIN BLOWN OFF') : 'LEG BLOWN OFF, STILL CRAWLING') : cut === 'shoulder' ? 'ARM TORN OFF' : 'FOREARM TORN OFF');
+    if (leg && !killed && !this.crawlHinted) {
+      this.crawlHinted = true;
+      this.hud.notify('LEG BLOWN OFF', 'IT IS STILL COMING. FINISH IT', 2.8);
+    } else if (!this.limbHinted) {
       this.limbHinted = true;
-      this.hud.notify('ARM TORN OFF', 'PICK IT UP AND BEAT THEM WITH IT', 2.8);
+      this.hud.notify(leg ? 'LEG BLOWN OFF' : 'ARM TORN OFF', 'PICK IT UP AND BEAT THEM WITH IT', 2.8);
     }
   }
 
@@ -2131,7 +2139,7 @@ export class GameSession {
     hud.setArmor(me.alive ? me.armor : 0, SERUM.armor);
     const limb = a.limb && !a.limb.broken ? a.limb : null;
     hud.weapon({
-      model: limb ? (limb.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM') : def.model,
+      model: limb ? (LIMB_NAME[limb.cut]) : def.model,
       mag: a.weapon.mag,
       magazine: def.magazine,
       reserve: a.weapon.reserve,

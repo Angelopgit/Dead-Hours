@@ -1,22 +1,23 @@
 import * as THREE from 'three';
-import { LIMBS, type ArmZone, type LimbCut, type ZombieKind } from '@dead-hours/shared';
+import { LIMBS, isLeg, type LimbCut, type LimbZone, type ZombieKind } from '@dead-hours/shared';
 import { Humanoid, decayOf, kindLooks, patchWounds, zombieLookOf } from './Humanoid';
 import { untrackDecayMaterial, type DecayUniforms } from './Decay';
 import { BONE, BONE_COUNT } from './rig';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 
-/** What a severed arm looks like: the zombie's own arm, cut out of its body. */
+/** What a severed arm or leg looks like: the zombie's own limb, cut out of its body. */
 export interface SeveredSpec {
   kind: ZombieKind;
   look: number;
-  arm: ArmZone;
+  /** Which limb (arms and legs alike). */
+  arm: LimbZone;
   cut: LimbCut;
   /** The zombie's size (brutes are bigger). */
   scale: number;
 }
 
 interface ArmGeometry {
-  /** Origin at the elbow, hanging down -Y as in the bind pose; skinIndex 0 = forearm, 1 = upper arm. */
+  /** Origin at the elbow (knee), hanging down -Y as in the bind pose; skinIndex 0 = forearm (shin), 1 = upper arm (thigh). */
   geometry: THREE.BufferGeometry;
   upperLen: number;
   /** Radius of the torn end. */
@@ -26,8 +27,9 @@ interface ArmGeometry {
 const cache = new Map<string, ArmGeometry>();
 
 /**
- * Cuts a zombie's arm out of its body mesh: every triangle skinned to the arm's bones (sleeve,
- * skin, hand, whatever it wore there), moved so the elbow is the origin. Cached per look.
+ * Cuts a zombie's arm or leg out of its body mesh: every triangle skinned to the limb's bones
+ * (sleeve or trouser leg, skin, hand or shoe, whatever it wore there), moved so the elbow or
+ * knee is the origin. Cached per look.
  */
 function armGeometry(spec: SeveredSpec): ArmGeometry {
   const look = spec.look % kindLooks(spec.kind);
@@ -36,11 +38,12 @@ function armGeometry(spec: SeveredSpec): ArmGeometry {
   if (hit) return hit;
   const body = new Humanoid(zombieLookOf(spec.kind, look));
   const src = body.mesh.geometry;
-  const upper = spec.arm === 'armL' ? BONE.armLUpper : BONE.armRUpper;
-  const lower = spec.arm === 'armL' ? BONE.armLLower : BONE.armRLower;
+  const UPPER = { armL: BONE.armLUpper, armR: BONE.armRUpper, legL: BONE.legLUpper, legR: BONE.legRUpper };
+  const upper = UPPER[spec.arm], lower = upper + 1;
   const jointOf = (bone: number) => new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().copy(body.mesh.skeleton.boneInverses[bone]).invert());
   const shoulder = jointOf(upper), elbow = jointOf(lower);
-  const keep: number[] = spec.cut === 'shoulder' ? [lower, upper] : [lower];
+  const whole = spec.cut === 'shoulder' || spec.cut === 'hip';
+  const keep: number[] = whole ? [lower, upper] : [lower];
   const pos = src.getAttribute('position'), nor = src.getAttribute('normal'), col = src.getAttribute('color'), pat = src.getAttribute('pattern'), si = src.getAttribute('skinIndex');
   const P: number[] = [], N: number[] = [], C: number[] = [], T: number[] = [], S: number[] = [], W: number[] = [];
   let radius = 0;
@@ -56,8 +59,8 @@ function armGeometry(spec: SeveredSpec): ArmGeometry {
       T.push(pat.getX(j), pat.getY(j), pat.getZ(j), pat.getW(j));
       S.push(k, 0, 0, 0);
       W.push(1, 0, 0, 0);
-      // Thickness at the cut: just below the shoulder, or just below the elbow.
-      const cutY = spec.cut === 'shoulder' ? shoulder.y - elbow.y : 0;
+      // Thickness at the cut: just below the shoulder (hip), or just below the elbow (knee).
+      const cutY = whole ? shoulder.y - elbow.y : 0;
       if (y < cutY - 0.02 && y > cutY - 0.08) radius = Math.max(radius, Math.hypot(x, z));
     }
   }
@@ -70,7 +73,7 @@ function armGeometry(spec: SeveredSpec): ArmGeometry {
   g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(S, 4));
   g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(W, 4));
   g.computeBoundingSphere();
-  const out = { geometry: g, upperLen: shoulder.y - elbow.y, radius: THREE.MathUtils.clamp(radius || 0.05, 0.035, 0.09) };
+  const out = { geometry: g, upperLen: shoulder.y - elbow.y, radius: isLeg(spec.arm) ? THREE.MathUtils.clamp(radius || 0.08, 0.06, 0.14) : THREE.MathUtils.clamp(radius || 0.05, 0.035, 0.09) };
   cache.set(key, out);
   return out;
 }
@@ -82,8 +85,9 @@ export function clearSeveredCache(): void {
 }
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3();
-/** Forearm length: the wrist (where it is held) below the elbow. */
+/** Where it is held below the elbow or knee: the wrist, or the ankle. */
 const FORE = 0.29;
+const SHIN = 0.36;
 /** World-mode root (+Y to the torn end) to held-mode root (+Z to the torn end). */
 const TO_HELD = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 
@@ -116,8 +120,14 @@ export class SeveredArm {
   private readonly lastQ = new THREE.Quaternion();
   private primed = false;
 
+  /** Grip below the elbow or knee. */
+  private readonly grip: number;
+
   constructor(readonly spec: SeveredSpec, readonly mode: 'world' | 'held') {
     const arm = armGeometry(spec);
+    const leg = isLeg(spec.arm);
+    const whole = spec.cut === 'shoulder' || spec.cut === 'hip';
+    this.grip = leg ? SHIN : FORE;
     this.skin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, flatShading: true });
     const look = zombieLookOf(spec.kind === 'crawler' ? 'walker' : spec.kind, spec.look % kindLooks(spec.kind));
     this.decay = decayOf(look, spec.look * 1.37, false);
@@ -127,7 +137,7 @@ export class SeveredArm {
     this.mesh = new THREE.SkinnedMesh(arm.geometry, this.skin);
     const bones = [this.fore];
     this.mesh.add(this.fore);
-    if (spec.cut === 'shoulder') {
+    if (whole) {
       this.upper = new THREE.Bone();
       this.fore.add(this.upper);
       bones.push(this.upper);
@@ -139,8 +149,8 @@ export class SeveredArm {
     this.mesh.castShadow = true;
 
     // The torn end faces where the body was.
-    const seed = spec.look * 31 + (spec.arm === 'armL' ? 3 : 7) + (spec.cut === 'shoulder' ? 11 : 0);
-    this.stump = new THREE.Mesh(stumpGeometry(arm.radius, seed, spec.cut === 'shoulder' ? 1 : 2), this.gore);
+    const seed = spec.look * 31 + { armL: 3, armR: 7, legL: 13, legR: 17 }[spec.arm] + (whole ? 11 : 0);
+    this.stump = new THREE.Mesh(stumpGeometry(arm.radius, seed, whole ? 1 : 2), this.gore);
     this.stump.rotation.x = Math.PI;
     if (this.upper) {
       this.stump.position.y = arm.upperLen;
@@ -153,14 +163,14 @@ export class SeveredArm {
     this.setWear(1);
 
     if (mode === 'world') {
-      // Capsule centre: the torn end half a length up, a slight bend at the elbow.
+      // Capsule centre: the torn end half a length up, a slight bend at the elbow (a knee bends the other way).
       const half = LIMBS.length[spec.cut] / 2;
-      this.mesh.position.y = half - (spec.cut === 'shoulder' ? arm.upperLen : 0);
-      if (this.upper) this.upper.rotation.x = 0.12 + (seed % 5) * 0.04;
+      this.mesh.position.y = half - (whole ? arm.upperLen : 0);
+      if (this.upper) this.upper.rotation.x = (0.12 + (seed % 5) * 0.04) * (leg ? -1 : 1);
     } else {
-      // Grip at the wrist, the arm running up +Z.
+      // Grip at the wrist (ankle), the limb running up +Z.
       this.mesh.rotation.x = Math.PI / 2;
-      this.mesh.position.z = FORE;
+      this.mesh.position.z = this.grip;
     }
     this.root.add(this.mesh);
     this.root.scale.setScalar(spec.scale);
@@ -190,7 +200,7 @@ export class SeveredArm {
    */
   heldPose(pos: THREE.Vector3, q: THREE.Quaternion): void {
     this.root.updateWorldMatrix(true, true);
-    this.mesh.localToWorld(pos.set(0, -FORE, 0));
+    this.mesh.localToWorld(pos.set(0, -this.grip, 0));
     this.root.getWorldQuaternion(q).multiply(TO_HELD);
   }
 

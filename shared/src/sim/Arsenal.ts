@@ -1,5 +1,5 @@
 import { COMBAT, WEAPONS, type WeaponDef, type WeaponId, type WeaponSlot } from '../config/weapons';
-import { LIMBS, type ArmZone, type LimbCut } from '../config/limbs';
+import { LIMBS, type LimbCut, type LimbZone } from '../config/limbs';
 import { MELEE, type MeleeId } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
 import { FIT_TIME, defaultBuild, sameBuild, tunedWeapon, type Loadout, type WeaponBuild } from '../config/progression';
@@ -20,7 +20,8 @@ export type ArsenalTick = 'drawn' | 'shell' | 'reloaded' | 'meleeHit' | 'meleeDo
 /** A severed arm in a survivor's hands. */
 export interface HeldLimb {
   id: number;
-  arm: ArmZone;
+  /** The limb (an arm, or a leg: the field kept its old name for the wire format). */
+  arm: LimbZone;
   cut: LimbCut;
   /** The zombie it came from (renderers dress it the same). */
   kind: ZombieKind;

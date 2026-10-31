@@ -310,6 +310,16 @@ export class Explosives {
         death: { cause: 'blast', gibs, shred, blast: { ...o } },
         force: 1.2 + k * 3.2,
       });
+      // Survivors of the blast can still lose a leg (through the one leg-severing path) and crawl on.
+      if (z.alive) {
+        for (const leg of LEGS) {
+          const s = zones.find((x) => x.zone === leg);
+          if (!s || !z.canLoseLeg(leg)) continue;
+          const q = partForce(s);
+          if (!roll(q * 0.7, BLAST.sever.leg)) continue;
+          sim.severLeg(by, z, leg, q > 0.7 || z.rand() < 0.5 ? 'hip' : 'knee', this.away(o, centre(s), 0.4), false, damage, false);
+        }
+      }
       if (z.alive && best < BLAST.inner * BLAST.knockDown) z.blasted(dir, k);
     }
 

@@ -1,7 +1,7 @@
 import { RAPIER, GROUP, groups } from '../physics/Physics';
 import { SPECIALS, ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
-import { LIMBS, type ArmState, type ArmZone, type LimbCut } from '../config/limbs';
+import { LEGS, LIMBS, type ArmCut, type ArmState, type ArmZone, type LegCut, type LegState, type LegZone } from '../config/limbs';
 import { FIRE } from '../config/throwables';
 import { zombieZones, type ZoneShape } from './hitzones';
 import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
@@ -40,8 +40,9 @@ export class Zombie {
   state: ZombieState = 'idle';
   stateT = 0;
   private resumeState: ZombieState = 'wander';
-  readonly wanderSpeed: number;
-  readonly chaseSpeed: number;
+  /** Rolled speeds (m/s); they drop to crawling speeds once a leg is gone. */
+  wanderSpeed: number;
+  chaseSpeed: number;
 
   target: string | null = null;
   lastKnown: Vec3 | null = null;
@@ -108,6 +109,12 @@ export class Zombie {
   /** On fire until this simulation time, and whose fire it is (kills count to them). */
   burnUntil = 0;
   burnBy: SimPlayer | null = null;
+  /** Its legs: whole, cut at the knee or gone at the hip. Either one lost and it crawls. */
+  readonly legs: Record<LegZone, LegState> = { legL: 'intact', legR: 'intact' };
+  /** Damage each leg has soaked toward coming off. */
+  readonly legSever: Record<LegZone, number> = { legL: 0, legR: 0 };
+  /** Height of its body capsule (drops when it goes down to crawl). */
+  bodyHeight: number;
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
   readonly seed: number;
@@ -133,10 +140,17 @@ export class Zombie {
     this.chaseSpeed = this.def.chaseSpeed[0] + r() * (this.def.chaseSpeed[1] - this.def.chaseSpeed[0]);
     this.nextSense = sim.time + r() * 0.3;
     this.groanAt = sim.time + 2 + r() * 10;
+    this.bodyHeight = this.def.height;
     const half = (this.def.height - this.def.radius * 2) / 2;
     const w = sim.physics.world;
     this.body = w.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(at.x, at.y + this.def.height / 2 + 0.02, at.z));
     this.collider = w.createCollider(RAPIER.ColliderDesc.capsule(half, this.def.radius).setCollisionGroups(ZOMBIE_GROUPS), this.body);
+    // Crawlers come already legless: a walker that lost them somewhere along the way.
+    if (kind === 'crawler') {
+      this.legs.legL = r() < 0.5 ? 'hip' : 'knee';
+      this.legs.legR = r() < 0.5 ? 'hip' : 'knee';
+      this.goProne();
+    }
   }
 
   get alive(): boolean {
@@ -144,11 +158,21 @@ export class Zombie {
   }
 
   get eye(): Vec3 {
-    return { x: this.pos.x, y: this.pos.y + 1.55 * this.scale, z: this.pos.z };
+    return { x: this.pos.x, y: this.pos.y + (this.crawling ? LEGS.eye : 1.55) * this.scale, z: this.pos.z };
   }
 
   get chest(): Vec3 {
-    return { x: this.pos.x, y: this.pos.y + 1.2 * this.scale, z: this.pos.z };
+    return { x: this.pos.x, y: this.pos.y + (this.crawling ? LEGS.chest : 1.2) * this.scale, z: this.pos.z };
+  }
+
+  /** On the ground for good, dragging itself along by its arms (a leg is gone). */
+  get crawling(): boolean {
+    return this.legs.legL !== 'intact' || this.legs.legR !== 'intact';
+  }
+
+  /** How close it has to be to swipe (crawlers grab at ankles from lower down and closer in). */
+  get attackRange(): number {
+    return this.crawling ? LEGS.attackRange : this.def.attackRange;
   }
 
   /** Arms missing: one per arm gone at the shoulder, half per elbow stub. */
@@ -160,7 +184,61 @@ export class Zombie {
 
   /** Current hit zones (posture and missing arms included). */
   zones(out: ZoneShape[]): ZoneShape[] {
-    return zombieZones(this.pos, this.facing, this.scale, this.state === 'down' ? 'down' : 'standing', out, this.def.girth, this.arms);
+    const posture = this.crawling ? 'crawl' : this.state === 'down' ? 'down' : 'standing';
+    return zombieZones(this.pos, this.facing, this.scale, posture, out, this.def.girth, this.arms, this.legs);
+  }
+
+  /** Whether a leg can still come off (a thigh stump left at the knee stays on). */
+  canLoseLeg(leg: LegZone): boolean {
+    return this.legs[leg] === 'intact';
+  }
+
+  /**
+   * The leg comes off: it drops, writhes a moment in shock, then crawls on after its prey.
+   * Its legs stay what they are until it dies.
+   */
+  loseLeg(leg: LegZone, cut: LegCut): void {
+    const was = this.crawling;
+    this.legs[leg] = cut;
+    this.legSever[leg] = 0;
+    if (!was) this.goProne();
+    if (!this.alive || this.state === 'vault') return;
+    this.setState('stagger');
+    this.staggerT = LEGS.shock[0] + this.rand() * (LEGS.shock[1] - LEGS.shock[0]);
+    this.push.x = this.push.z = 0;
+    this.vel.x *= 0.3;
+    this.vel.z *= 0.3;
+    this.recentDamage = 0;
+    this.legDamage = 0;
+  }
+
+  /** A network copy's legs, as the server has them. */
+  syncLegs(legL: LegState, legR: LegState): void {
+    if (legL === this.legs.legL && legR === this.legs.legR) return;
+    const was = this.crawling;
+    this.legs.legL = legL;
+    this.legs.legR = legR;
+    if (!was && this.crawling) this.goProne();
+  }
+
+  /** Down onto its belly: crawling speeds, and a body capsule no taller than it now is. */
+  private goProne(): void {
+    const k = LEGS.kindSpeed[this.kind] * this.scale ** 0.5;
+    const r = this.rand;
+    this.wanderSpeed = (LEGS.wanderSpeed[0] + r() * (LEGS.wanderSpeed[1] - LEGS.wanderSpeed[0])) * k;
+    this.chaseSpeed = (LEGS.chaseSpeed[0] + r() * (LEGS.chaseSpeed[1] - LEGS.chaseSpeed[0])) * k;
+    const h = Math.max(this.def.radius * 2 + 0.1, 0.62 * this.scale);
+    if (h >= this.bodyHeight) return;
+    const t = this.body.translation();
+    const drop = (this.bodyHeight - h) / 2;
+    this.bodyHeight = h;
+    this.collider.setHalfHeight((h - this.def.radius * 2) / 2);
+    this.body.setTranslation({ x: t.x, y: t.y - drop, z: t.z }, true);
+  }
+
+  /** Crawling speed lost to missing arms (it pulls itself along with them). */
+  private get armDrag(): number {
+    return this.crawling ? Math.max(0.25, 1 - LEGS.armSpeed * this.armsLost) : 1;
   }
 
   /** Whether an arm can still come off (a stub left at the elbow stays on). */
@@ -169,7 +247,7 @@ export class Zombie {
   }
 
   /** The arm comes off; the shock of it throws the zombie off balance. */
-  loseArm(arm: ArmZone, cut: LimbCut, dir: Vec3): void {
+  loseArm(arm: ArmZone, cut: ArmCut, dir: Vec3): void {
     this.arms[arm] = cut;
     this.armDamage[arm] = 0;
     if (!this.alive || this.state === 'down' || this.state === 'vault') return;
@@ -210,7 +288,8 @@ export class Zombie {
     const hl = Math.hypot(dir.x, dir.z) || 1;
     this.push.x = (dir.x / hl) * (1 + k * 3);
     this.push.z = (dir.z / hl) * (1 + k * 3);
-    if (k > 0.3 && this.state !== 'down') {
+    // A crawler is already on the ground: it is only shoved along it.
+    if (k > 0.3 && this.state !== 'down' && !this.crawling) {
       this.setState('down');
       this.downT = 1.6 + k * 1.6 + this.rand() * 0.6;
     } else if (this.state !== 'down') {
@@ -384,7 +463,7 @@ export class Zombie {
     }
     // Halfway through a window it can't be knocked about (it would end up inside the wall).
     if (this.state === 'down' || this.state === 'vault') return false;
-    if (this.legDamage >= this.def.health * 0.5 && this.rand() < 0.7) {
+    if (!this.crawling && this.legDamage >= this.def.health * 0.5 && this.rand() < 0.7) {
       this.legDamage = 0;
       this.setState('down');
       this.downT = 2.2 + this.rand() * 0.8;
@@ -393,7 +472,7 @@ export class Zombie {
     if (melee || zone === 'head' || this.recentDamage >= this.def.staggerAt) {
       this.setState('stagger');
       this.staggerT = melee ? 0.75 : 0.4 + this.rand() * 0.25;
-      const k = melee ? knock : Math.min(1.6, damage * 0.03);
+      const k = (melee ? knock : Math.min(1.6, damage * 0.03)) * (this.crawling ? 0.35 : 1);
       this.push.x = (dir.x / hl) * k;
       this.push.z = (dir.z / hl) * k;
       this.recentDamage = 0;
@@ -494,7 +573,7 @@ export class Zombie {
           this.setState('scream');
           break;
         }
-        if (seenRecently && d < this.def.attackRange && dy < 1.2 && this.attackCd <= 0) {
+        if (seenRecently && d < this.attackRange && dy < 1.2 && this.attackCd <= 0) {
           this.setState('attack');
           sim.emit({ type: 'zombieAttack', zombie: this.id, target: target.id });
           break;
@@ -548,9 +627,9 @@ export class Zombie {
             const d = dist2D(this.pos, tp);
             const ang = Math.abs(angleDiff(Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), this.facing));
             const clear = sim.physics.raycast(this.chest.x, this.chest.y, this.chest.z, (tp.x - this.pos.x) / (d || 1), 0, (tp.z - this.pos.z) / (d || 1), d);
-            if (d < this.def.attackRange + 0.5 && ang < 1.25 && Math.abs(tp.y - this.pos.y) < 1.2 && (clear === null || clear > d - 0.4)) {
+            if (d < this.attackRange + 0.5 && ang < 1.25 && Math.abs(tp.y - this.pos.y) < 1.2 && (clear === null || clear > d - 0.4)) {
               // Missing arms claw less; with none left it can only bite.
-              const reach = 1 - LIMBS.attackLoss * this.armsLost;
+              const reach = (1 - LIMBS.attackLoss * this.armsLost) * (this.crawling ? LEGS.damage : 1);
               const dmg = Math.round((this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0])) * reach)
                 + (this.burning ? FIRE.burningSwipe : 0);
               sim.damagePlayer(target, dmg, this.pos);
@@ -603,7 +682,7 @@ export class Zombie {
           sim.emit({ type: 'doorPound', door: door.index, pos: { ...this.pos } });
           // The pounding carries: others nearby come to help.
           sim.noise(door.center, 14, `z${this.id}`);
-          if (sim.poundDoor(door, this.def.bash * (1 - LIMBS.bashLoss * this.armsLost), this.pos.x, this.pos.z)) {
+          if (sim.poundDoor(door, this.def.bash * (1 - LIMBS.bashLoss * this.armsLost) * (this.crawling ? LEGS.bash : 1), this.pos.x, this.pos.z)) {
             sim.emit({ type: 'doorForced', door: door.index, pos: { ...door.center } });
           }
         }
@@ -631,7 +710,7 @@ export class Zombie {
         }
         if (b.clear(slot)) {
           // Someone right behind an empty window gets clawed at through it.
-          if (target && seen && this.attackCd <= 0 && dist2D(this.pos, target.motion.pos) < this.def.attackRange + 0.5
+          if (target && seen && this.attackCd <= 0 && dist2D(this.pos, target.motion.pos) < this.attackRange + 0.5
             && Math.abs(target.motion.pos.y - this.pos.y) < 1.5) {
             this.setState('attack');
             sim.emit({ type: 'zombieAttack', zombie: this.id, target: target.id });
@@ -644,7 +723,7 @@ export class Zombie {
           this.bashAt = sim.time + 0.85 + this.rand() * 0.35;
           this.attackT = 0;
           sim.noise(slot.center, 14, `z${this.id}`);
-          sim.poundWindow(slot, this.def.bash * (1 - LIMBS.bashLoss * this.armsLost), this.pos);
+          sim.poundWindow(slot, this.def.bash * (1 - LIMBS.bashLoss * this.armsLost) * (this.crawling ? LEGS.bash : 1), this.pos);
         }
         this.attackT += dt;
         if (this.stateT > 30) this.wander();
@@ -791,7 +870,7 @@ export class Zombie {
       }
     }
     if (this.burnUntil > sim.time) speed *= FIRE.panicSpeed;
-    let tx = wishX * speed, tz = wishZ * speed;
+    let tx = wishX * speed * this.armDrag, tz = wishZ * speed * this.armDrag;
     if (this.state !== 'stagger' && this.state !== 'down' && this.state !== 'bash' && this.state !== 'breach') {
       tx += sx * 1.4;
       tz += sz * 1.4;
@@ -842,7 +921,7 @@ export class Zombie {
     const next = { x: t.x + m.x, y: t.y + m.y, z: t.z + m.z };
     this.body.setNextKinematicTranslation(next);
     this.pos.x = next.x;
-    this.pos.y = next.y - this.def.height / 2 - 0.02;
+    this.pos.y = next.y - this.bodyHeight / 2 - 0.02;
     this.pos.z = next.z;
     this.moveSpeed = Math.hypot(m.x, m.z) / Math.max(dt, 1e-4);
     if (this.pos.y < -20) this.setState('dead');
@@ -867,7 +946,7 @@ export class Zombie {
     const n = ctrl.numComputedCollisions();
     if (n === 0) return false;
     // Contact points come back in world space.
-    const top = this.collider.translation().y - this.def.height / 2 + ZOMBIE_STEP + 0.05;
+    const top = this.collider.translation().y - this.bodyHeight / 2 + ZOMBIE_STEP + 0.05;
     for (let i = 0; i < n; i++) {
       const c = ctrl.computedCollision(i, this.hit);
       if (c && Math.abs(c.normal1.y) < 0.7 && c.witness2.y < top) return true;
@@ -1043,7 +1122,7 @@ export class Zombie {
     this.pos.x = x;
     this.pos.y = y;
     this.pos.z = z;
-    this.body.setNextKinematicTranslation({ x, y: y + this.def.height / 2 + 0.02, z });
+    this.body.setNextKinematicTranslation({ x, y: y + this.bodyHeight / 2 + 0.02, z });
     if (u < 1) return;
     this.vy = 0;
     this.grounded = true;

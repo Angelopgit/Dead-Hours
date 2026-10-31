@@ -44,8 +44,8 @@ export class AimAssist {
     for (const z of sim.zombies) {
       if (!z.alive) continue;
       // Chest height (crawlers are low to the ground).
-      const h = z.def.height * z.scale;
-      const x = z.pos.x - origin.x, y = z.pos.y + h * 0.68 - origin.y, zz = z.pos.z - origin.z;
+      const cy = z.crawling ? z.chest.y : z.pos.y + z.def.height * z.scale * 0.68;
+      const x = z.pos.x - origin.x, y = cy - origin.y, zz = z.pos.z - origin.z;
       const d = Math.hypot(x, y, zz);
       if (d > RANGE || d < 0.6) continue;
       const cos = (x * dir.x + y * dir.y + zz * dir.z) / d;

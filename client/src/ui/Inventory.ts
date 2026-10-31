@@ -1,5 +1,5 @@
 import gsap from 'gsap';
-import { COMBAT, MELEE, WEAPONS, isMelee, type SimPlayer, type WeaponId } from '@dead-hours/shared';
+import { COMBAT, LIMB_NAME, MELEE, WEAPONS, isMelee, type SimPlayer, type WeaponId } from '@dead-hours/shared';
 import { h } from './dom';
 import { codeLabel } from '../core/Input';
 import { settings, ACTION_LABELS, type Action } from '../core/Settings';
@@ -88,7 +88,7 @@ export class Inventory {
       limb
         ? h('div', { class: 'inv-card active' },
           h('div', { class: 'slot' }, `MELEE · ${k('melee')}`),
-          h('span', { class: 'wname' }, limb.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM'),
+          h('span', { class: 'wname' }, LIMB_NAME[limb.cut]),
           h('span', { class: 'wmodel' }, `TORN OFF A ${limb.kind.toUpperCase()} · CLUB`),
           h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
           h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
@@ -111,7 +111,7 @@ export class Inventory {
       cell('SUPPLIES', String(s.suppliesCollected)),
       cell('DAMAGE TAKEN', String(Math.round(s.damageTaken))),
       cell('ARMS TORN OFF', String(s.limbsSevered)),
-      cell('ARM KILLS', String(s.limbKills)),
+      cell('LIMB KILLS', String(s.limbKills)),
       ...(s.revives ? [cell('REVIVES', String(s.revives))] : []),
       cell('SHOTS FIRED', String(s.shotsFired)),
     );

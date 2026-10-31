@@ -105,7 +105,7 @@ export class ResultsScreen {
           cell('DAMAGE DEALT', String(Math.round(s.damageDealt))),
           cell('SUPPLIES', String(s.suppliesCollected)),
           cell('ARMS TORN OFF', String(s.limbsSevered)),
-          cell('ARM KILLS', String(s.limbKills)),
+          cell('LIMB KILLS', String(s.limbKills)),
           ...(s.revives ? [cell('REVIVES', String(s.revives))] : []),
           cell('DAMAGE TAKEN', String(Math.round(s.damageTaken))),
           cell('TIME IN SESSION', clock(r.total)),

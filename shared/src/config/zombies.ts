@@ -32,7 +32,8 @@ export interface ZombieDef {
 /**
  * Zombie types. Walkers are most of the dead; runners sprint once they spot someone (still
  * slower than a sprinting survivor); brutes are slow, take a magazine to put down, hit hard
- * and break doors in a few blows. Crawlers are defined for the Phase 5 director. Screamers are
+ * and break doors in a few blows. Crawlers are legless walkers dragging themselves along (any zombie
+ * whose leg is shot off becomes one; the Phase 5 director can also spawn them). Screamers are
  * frail and quick, and stop to call the dead down on whoever they see; bloaters are slow, swollen
  * and burst when killed (see SPECIALS).
  */
@@ -53,8 +54,9 @@ export const ZOMBIES: Record<ZombieKind, ZombieDef> = {
     staggerAt: 120, turnRate: 2.4, bash: 0.5, girth: 1.22,
   },
   crawler: {
-    kind: 'crawler', health: 55, wanderSpeed: [0.4, 0.6], chaseSpeed: [2.6, 3.4], damage: [7, 10],
-    attackRange: 0.95, windup: 0.3, cooldown: 0.8, sightRange: 18, hearing: 1.1, radius: 0.3, height: 0.7,
+    // A walker that lost its legs before it found anyone: born crawling (see LEGS for its speeds).
+    kind: 'crawler', health: 55, wanderSpeed: [0.3, 0.45], chaseSpeed: [0.85, 1.25], damage: [9, 13],
+    attackRange: 0.85, windup: 0.4, cooldown: 1.0, sightRange: 18, hearing: 1.1, radius: 0.3, height: 1.75,
     staggerAt: 30, turnRate: 6, bash: 0.08, girth: 1,
   },
   screamer: {

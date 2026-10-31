@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { ArmState, ArmZone, HitZone, ZombieKind } from '@dead-hours/shared';
+import type { ArmState, ArmZone, HitZone, LegState, LegZone, LimbZone, ZombieKind } from '@dead-hours/shared';
 import { chain } from '../lighting/BakeShader';
 import { rng, randomAppearance, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
@@ -382,10 +382,14 @@ export class Humanoid {
   private readonly flinchHead = [new Spring(), new Spring()];
   private readonly flinchTorso = [new Spring(), new Spring()];
   private readonly flinchLimb = [new Spring(), new Spring(), new Spring(), new Spring()];
+  /** Legless (0 upright .. 1 face down, dragging itself on its arms). */
+  crawlTarget = 0;
+  private crawl = 0;
   /** True while a ragdoll owns the bones. */
   ragdoll = false;
   /** Zombies: what is left of each arm, and the torn ends where they came off. */
   private readonly arms: Record<ArmZone, ArmState> = { armL: 'intact', armR: 'intact' };
+  private readonly legs: Record<LegZone, LegState> = { legL: 'intact', legR: 'intact' };
   private readonly stumps = new Map<string, THREE.Mesh>();
   private readonly gore: THREE.MeshStandardMaterial | null = null;
   /** Zombies: rot, torn clothes and local wounds (shader uniforms). */
@@ -501,9 +505,50 @@ export class Humanoid {
     return this.arms[arm];
   }
 
-  /** World position and outward direction of an arm's torn end; false while the arm is whole. */
-  stump(arm: ArmZone, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
-    const state = this.arms[arm];
+  /**
+   * Takes a leg off (zombies): the thigh and shin, or just the shin, collapse to nothing and a
+   * torn end with the bone showing takes their place. 'intact' puts it back (pooled bodies).
+   */
+  setLeg(leg: LegZone, state: LegState): void {
+    if (this.legs[leg] === state) return;
+    this.legs[leg] = state;
+    const l = leg === 'legL' ? this.legL : this.legR;
+    l.upper.scale.setScalar(state === 'hip' ? 0.001 : 1);
+    l.lower.scale.setScalar(state === 'knee' ? 0.001 : 1);
+    for (const cut of ['hip', 'knee'] as const) {
+      const key = `${leg}:${cut}`;
+      let m = this.stumps.get(key);
+      if (cut !== state) {
+        if (m) m.visible = false;
+        continue;
+      }
+      if (!m && this.gore) {
+        const upper = leg === 'legL' ? BONE.legLUpper : BONE.legRUpper;
+        const bone = cut === 'hip' ? upper : upper + 1;
+        // Ragged, with more meat torn out than an arm (the thigh is the thickest thing on it).
+        m = new THREE.Mesh(stumpGeometry(this.cutRadius(bone), this.seed * 1000 + bone, cut === 'hip' ? 1 : 2), this.gore);
+        if (cut === 'hip') {
+          // A little below the joint, so the torn meat shows out of what is left of the trousers.
+          m.position.copy(l.upper.position).y -= 0.05;
+          this.hips.add(m);
+        } else {
+          m.position.y = -l.upperLen;
+          l.upper.add(m);
+        }
+        this.stumps.set(key, m);
+      }
+      if (m) m.visible = true;
+    }
+  }
+
+  /** What is left of a leg. */
+  legState(leg: LegZone): LegState {
+    return this.legs[leg];
+  }
+
+  /** World position and outward direction of a limb's torn end; false while it is whole. */
+  stump(arm: LimbZone, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const state = arm === 'legL' || arm === 'legR' ? this.legs[arm] : this.arms[arm];
     if (state === 'intact') return false;
     const m = this.stumps.get(`${arm}:${state}`);
     if (!m) return false;
@@ -572,9 +617,9 @@ export class Humanoid {
     this.torn.clear();
   }
 
-  /** Runs `fn` with every arm at full size (a ragdoll reads the real joint positions). */
+  /** Runs `fn` with every arm and leg at full size (a ragdoll reads the real joint positions). */
   withWholeArms(fn: () => void): void {
-    const ls = [this.armL, this.armR];
+    const ls = [this.armL, this.armR, this.legL, this.legR];
     const saved = ls.map((l) => [l.upper.scale.x, l.lower.scale.x]);
     for (const l of ls) {
       l.upper.scale.setScalar(1);
@@ -605,7 +650,7 @@ export class Humanoid {
     const si = geo.getAttribute('skinIndex');
     const joint = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().copy(this.skeleton.boneInverses[bone]).invert());
     // A shoulder cut is measured on the upper arm just below the joint; an elbow cut just above.
-    const upper = bone === BONE.armLUpper || bone === BONE.armRUpper;
+    const upper = bone === BONE.armLUpper || bone === BONE.armRUpper || bone === BONE.legLUpper || bone === BONE.legRUpper;
     const which = upper ? bone : bone - 1;
     const y0 = upper ? joint.y - 0.08 : joint.y, y1 = upper ? joint.y - 0.02 : joint.y + 0.06;
     let r = 0;
@@ -615,7 +660,8 @@ export class Humanoid {
       if (y < y0 || y > y1) continue;
       r = Math.max(r, Math.hypot(pos.getX(i) - joint.x, pos.getZ(i) - joint.z));
     }
-    return THREE.MathUtils.clamp(r || 0.05, 0.035, 0.09);
+    const leg = bone >= BONE.legLUpper;
+    return leg ? THREE.MathUtils.clamp((r || 0.09) * 1.08, 0.065, 0.14) : THREE.MathUtils.clamp(r || 0.05, 0.035, 0.09);
   }
 
   /** Adds blood to the bones of a hit zone (0..1 per bone). */
@@ -793,6 +839,8 @@ export class Humanoid {
     const crouch = s.crouch;
 
     this.down += (this.downTarget - this.down) * (1 - Math.exp(-dt * (this.downTarget > this.down ? 7 : 3)));
+    this.crawl += (this.crawlTarget - this.crawl) * (1 - Math.exp(-dt * 6));
+    if (Math.abs(this.crawlTarget - this.crawl) < 1e-3) this.crawl = this.crawlTarget;
     this.stagger += (this.staggerTarget - this.stagger) * (1 - Math.exp(-dt * (this.staggerTarget > this.stagger ? 18 : 5)));
     // Springs are stepped at 120 Hz or finer: one big explicit step at a low frame rate diverges.
     const subs = Math.min(12, Math.ceil(dt * 120));
@@ -913,8 +961,10 @@ export class Humanoid {
       this.head.rotation.set(-lean * 0.6 + breathe - this.lookPitch * 0.4 + fh[0].x * 0.1, -this.twist - (swingY - sin * 0.1 * moving) * 0.7, fh[1].x * 0.08);
     }
 
+    if (z && this.crawl > 0.001) this.crawlPose(p, moving, sv);
+
     // Knocked down: fall onto the back, feet toward the facing direction, arms splayed.
-    const d = this.down;
+    const d = this.crawl > 0.5 ? 0 : this.down;
     if (d > 0.001) {
       const ease = d * d * (3 - 2 * d);
       this.hips.position.y = THREE.MathUtils.lerp(this.hips.position.y, 0.2, ease);
@@ -936,20 +986,82 @@ export class Humanoid {
 
     // Footstep events at each plant.
     const sign = Math.sign(sin);
-    if (sign !== this.lastStepSign && moving > 0.3 && s.grounded && d < 0.2) {
+    if (sign !== this.lastStepSign && moving > 0.3 && s.grounded && d < 0.2 && this.crawl < 0.5) {
       this.onFootstep?.(Math.min(1, speed / 6) * (1 - crouch * 0.6));
     }
     this.lastStepSign = sign;
     if (this.stumps.size) this.syncStumps();
   }
 
-  /** Shoulder stumps turn with the (collapsed) upper arm, so they flail like the stub they are. */
+  /** Shoulder and hip stumps turn with the (collapsed) upper limb, so they flail like the stub they are. */
   private syncStumps(): void {
     for (const arm of ['armL', 'armR'] as const) {
       if (this.arms[arm] !== 'shoulder') continue;
       const m = this.stumps.get(`${arm}:shoulder`);
       if (m) m.quaternion.copy((arm === 'armL' ? this.armL : this.armR).upper.quaternion);
     }
+    for (const leg of ['legL', 'legR'] as const) {
+      if (this.legs[leg] !== 'hip') continue;
+      const m = this.stumps.get(`${leg}:hip`);
+      if (m) m.quaternion.copy((leg === 'legL' ? this.legL : this.legR).upper.quaternion);
+    }
+  }
+
+  /**
+   * Legless: face down with the chest propped up and the head raised toward its prey, hauling
+   * itself along one arm at a time (reach out, dig in, drag the body up to the hand) with what
+   * is left of its legs trailing behind. Blended in by `crawl` over the standing pose; a swipe
+   * rears up on the arms and lunges, a stagger writhes on the spot.
+   */
+  private crawlPose(p: number, moving: number, sv: number): void {
+    const c = this.crawl;
+    const e = c * c * (3 - 2 * c);
+    const L = THREE.MathUtils.lerp;
+    const cyc = Math.sin(p);
+    const heave = Math.abs(Math.cos(p)) * moving;
+    // Lunging at someone: rears up on the arms, then throws itself forward.
+    let lunge = 0;
+    if (this.attack >= 0) {
+      const a = this.attack;
+      lunge = a < 0.5 ? a / 0.5 : a < 0.66 ? 1 - ((a - 0.5) / 0.16) * 1.6 : -0.6 * (1 - (a - 0.66) / 0.34);
+    }
+    const writhe = sv * Math.sin(performance.now() * 0.021 + this.seed) * 0.22;
+    const hipsY = 0.2 + heave * 0.035 + Math.max(0, lunge) * 0.07;
+    this.hips.position.set(L(this.hips.position.x, 0, e), L(this.hips.position.y, hipsY, e), L(this.hips.position.z, -0.3 + lunge * 0.06, e));
+    // Pitched forward until the spine runs ahead along the ground; rolls side to side with each pull.
+    this.hips.rotation.x = L(this.hips.rotation.x, 1.25 - Math.max(0, lunge) * 0.12, e);
+    this.hips.rotation.z = L(this.hips.rotation.z, cyc * 0.07 * moving + writhe * 0.6, e);
+    this.hips.rotation.y = L(this.hips.rotation.y, cyc * 0.06 * moving, e);
+    this.spine.rotation.x = L(this.spine.rotation.x, -0.2 - Math.max(0, lunge) * 0.12 + (this.bash >= 0 ? Math.sin(this.bash * Math.PI) * 0.15 : 0), e);
+    this.spine.rotation.z = L(this.spine.rotation.z, -cyc * 0.1 * moving + writhe, e);
+    this.spine.rotation.y = L(this.spine.rotation.y, cyc * 0.12 * moving, e);
+    // Arms: each one reaches ahead and claws back in turn (both forward when it stops).
+    for (const [arm, side] of [[this.armL, 1], [this.armR, -1]] as const) {
+      let t = moving > 0.05 ? 0.5 + 0.5 * cyc * side : 0.65;
+      t = L(0.65, t, Math.min(1, moving * 1.5));
+      let ux = L(-0.95, -2.05, t) - (t > 0.5 ? Math.max(0, Math.cos(p) * side) * 0.25 * moving : 0);
+      let lx = L(-1.15, -0.3, t);
+      if (this.attack >= 0) {
+        ux = L(ux, -1.75 - lunge * 0.35, Math.min(1, Math.abs(lunge) * 1.4));
+        lx = L(lx, -0.2, Math.min(1, Math.abs(lunge)));
+      }
+      if (this.bash >= 0) {
+        ux = L(ux, -2.3 + Math.sin(this.bash * Math.PI) * 0.5, 0.8);
+        lx = L(lx, -0.5, 0.8);
+      }
+      ux += writhe * side * 1.5;
+      arm.upper.rotation.set(L(arm.upper.rotation.x, ux, e), L(arm.upper.rotation.y, 0, e), L(arm.upper.rotation.z, 0.28 * side + sv * 0.4 * side, e));
+      arm.lower.rotation.set(L(arm.lower.rotation.x, lx, e), 0, 0);
+    }
+    // What is left of the legs drags behind, twitching, rolled out onto their sides (feet flopped outward).
+    for (const [leg, side] of [[this.legL, 1], [this.legR, -1]] as const) {
+      const twitch = Math.sin(p * 0.5 + side * 1.7 + this.seed) * 0.06 * moving + writhe * 0.8;
+      leg.upper.rotation.set(L(leg.upper.rotation.x, 0.3 + twitch, e), L(leg.upper.rotation.y, 1.35 * side, e), L(leg.upper.rotation.z, 0.14 * side, e));
+      leg.lower.rotation.set(L(leg.lower.rotation.x, 0.12 + Math.max(0, twitch), e), 0, 0);
+    }
+    // Chin up, eyes on its prey.
+    this.head.rotation.x = L(this.head.rotation.x, -0.85 + Math.sin(p * 0.5) * 0.06 - Math.max(0, lunge) * 0.15, e);
+    this.head.rotation.z = L(this.head.rotation.z, this.head.rotation.z + writhe, e);
   }
 
   /**
@@ -1010,6 +1122,9 @@ export class Humanoid {
     this.setArm('armL', 'intact');
     this.setArm('armR', 'intact');
     this.mend();
+    this.setLeg('legL', 'intact');
+    this.setLeg('legR', 'intact');
+    this.crawl = this.crawlTarget = 0;
   }
 
   dispose(): void {

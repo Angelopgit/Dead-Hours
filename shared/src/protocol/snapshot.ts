@@ -1,6 +1,6 @@
 import { RAPIER, GROUP, groups } from '../physics/Physics';
 import type { HitZone, WeaponId } from '../config/weapons';
-import type { ArmState, ArmZone, LimbCut } from '../config/limbs';
+import type { ArmState, LegState, LimbCut, LimbZone } from '../config/limbs';
 import { isMelee } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
 import { RAID } from '../config/raid';
@@ -22,8 +22,10 @@ const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'm
 const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum', 'melee'];
 const THROWS: ThrowKind[] = ['frag', 'molotov'];
 const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
-const ARMS: ArmZone[] = ['armL', 'armR'];
-const CUTS: LimbCut[] = ['shoulder', 'elbow'];
+const LEG_STATES: LegState[] = ['intact', 'knee', 'hip'];
+/** Which limb a severed limb was (legs came later, hence the name). */
+const ARMS: LimbZone[] = ['armL', 'armR', 'legL', 'legR'];
+const CUTS: LimbCut[] = ['shoulder', 'elbow', 'hip', 'knee'];
 const ZONES: HitZone[] = ['head', 'torso', 'armL', 'armR', 'legL', 'legR'];
 const RAID_STAGES: RaidStage[] = ['waiting', 'inbound', 'arrived', 'over'];
 
@@ -127,6 +129,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
       idx(ARM_STATES, z.arms.armL) * 3 + idx(ARM_STATES, z.arms.armR),
       h ? milli(h.dx) : 0, h ? milli(h.dz) : 0, h ? milli(h.at) : -1, h ? idx(ZONES, h.zone) : 0,
       z.burnUntil > sim.time ? 1 : 0,
+      idx(LEG_STATES, z.legs.legL) * 3 + idx(LEG_STATES, z.legs.legR),
     ]);
   }
   const limbs: (number | string)[][] = [];
@@ -331,7 +334,7 @@ export class Mirror {
       const u = clamp((t - (z.updatedAt - z.lastDt)) / Math.max(1e-4, z.lastDt), 0, 1);
       z.body.setNextKinematicTranslation({
         x: z.prev.x + (z.pos.x - z.prev.x) * u,
-        y: z.prev.y + (z.pos.y - z.prev.y) * u + z.def.height / 2 + 0.02,
+        y: z.prev.y + (z.pos.y - z.prev.y) * u + z.bodyHeight / 2 + 0.02,
         z: z.prev.z + (z.pos.z - z.prev.z) * u,
       });
     }
@@ -435,6 +438,9 @@ export class Mirror {
       z.grounded = r[13] === 1;
       z.arms.armL = ARM_STATES[Math.floor(r[14] / 3)] ?? 'intact';
       z.arms.armR = ARM_STATES[r[14] % 3] ?? 'intact';
+      // Legs (left out by older servers: whole).
+      const lg = r[20] ?? 0;
+      z.syncLegs(LEG_STATES[Math.floor(lg / 3)] ?? 'intact', LEG_STATES[lg % 3] ?? 'intact');
       z.lastHit = r[17] >= 0 ? { zone: ZONES[r[18]] ?? 'torso', dx: r[15] / 1000, dz: r[16] / 1000, at: r[17] / 1000, amount: 0 } : null;
       // On fire (a snapshot later says otherwise once it is out).
       z.burnUntil = r[19] === 1 ? T + 3600 : 0;

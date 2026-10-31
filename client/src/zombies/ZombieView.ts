@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SPAWNING, type ArmZone, type GibPart, type HitZone, type LimbCut, type Simulation, type Vec3, type Zombie, type ZombieKind } from '@dead-hours/shared';
+import { SPAWNING, isLeg, type ArmCut, type GibPart, type HitZone, type LegCut, type LimbCut, type LimbZone, type Simulation, type Vec3, type Zombie, type ZombieKind } from '@dead-hours/shared';
 import { Humanoid, kindLooks, zombieLookOf, type ZombieGait } from '../characters/Humanoid';
 import { Gibs } from '../characters/Gibs';
 import type { BurnPoint } from '../effects/Pyro';
@@ -31,6 +31,8 @@ interface View {
   char: number;
   /** Corpses: seconds the body keeps burning. */
   burnLeft: number;
+  /** Crawling: ground covered since the last smear of blood it dragged behind it. */
+  trail: number;
 }
 
 /** How a zombie died, when it was more than a bullet. */
@@ -43,7 +45,7 @@ export interface DeathDetail {
 
 /** A fresh stump: pumping blood for a few seconds, then dripping, slowing to nothing. */
 interface Bleed {
-  arm: ArmZone;
+  arm: LimbZone;
   /** Seconds since the arm came off. */
   t: number;
   /** Seconds to the next pulse or drop. */
@@ -170,14 +172,16 @@ export class ZombieView {
    * An arm came off (just before any death the same blow causes): the stump shows at once and
    * starts pumping blood. Where it was and which way it faces, for the burst at the cut.
    */
-  severed(id: number, arm: ArmZone, cut: LimbCut, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
-    const v = this.views.get(id);
+  severed(id: number, arm: LimbZone, cut: LimbCut, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const v = this.views.get(id) ?? this.corpses.find((c) => c.id === id && c.deadT >= 0 && c.deadT < 0.2);
     if (!v) return false;
-    v.body.setArm(arm, cut);
+    if (isLeg(arm)) v.body.setLeg(arm, cut as LegCut);
+    else v.body.setArm(arm, cut as ArmCut);
     v.body.root.updateMatrixWorld(true);
     if (this.gore) v.body.wound(arm, 0.7);
     v.bleeds = v.bleeds.filter((b) => b.arm !== arm);
-    v.bleeds.push({ arm, t: 0, next: 0.05, strength: cut === 'shoulder' ? 1 : 0.7 });
+    // A thigh pumps hardest of all (the big artery runs down it).
+    v.bleeds.push({ arm, t: 0, next: 0.05, strength: cut === 'hip' ? 1.25 : cut === 'shoulder' || cut === 'knee' ? 1 : 0.7 });
     return v.body.stump(arm, pos, dir);
   }
 
@@ -252,7 +256,7 @@ export class ZombieView {
       this.effects.sever(_sp, _sd, false);
       if (this.gore) {
         this.effects.gibs(_sp, _sd);
-        v.bleeds.push({ arm: g.part as unknown as ArmZone, t: 0, next: 0.05, strength: g.part === 'head' ? 1.2 : 1 });
+        v.bleeds.push({ arm: g.part as unknown as LimbZone, t: 0, next: 0.05, strength: g.part === 'head' ? 1.2 : 1 });
       }
     }
     if (detail.shred && this.gore) {
@@ -298,7 +302,7 @@ export class ZombieView {
       let v = this.views.get(z.id);
       if (!v) {
         const { body, probe } = this.acquire(z.kind, z.look);
-        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [], burn: 0, char: 0, burnLeft: 0 };
+        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [], burn: 0, char: 0, burnLeft: 0, trail: 0 };
         body.onFootstep = (l) => this.stepped(view, l);
         this.views.set(z.id, v);
       }
@@ -380,8 +384,19 @@ export class ZombieView {
     // What is left of its arms (also for zombies first seen after losing one).
     b.setArm('armL', z.arms.armL);
     b.setArm('armR', z.arms.armR);
+    b.setLeg('legL', z.legs.legL);
+    b.setLeg('legR', z.legs.legR);
+    b.crawlTarget = z.crawling ? 1 : 0;
+    // Dragging itself along on fresh stumps leaves a smeared trail of blood.
+    if (z.crawling && this.gore) {
+      v.trail += Math.hypot(z.vel.x, z.vel.z) * dt;
+      if (v.trail > 0.42 && v.bleeds.some((s) => (s.arm === 'legL' || s.arm === 'legR') && s.t < BLEED_TIME * 0.75)) {
+        v.trail = 0;
+        if (dist < 40) this.effects.splat(this.tmp.set(x - Math.sin(v.facing) * 0.5, y + 0.05, zz - Math.cos(v.facing) * 0.5), 0.2 + Math.random() * 0.14);
+      }
+    }
     b.goreShown = this.gore;
-    b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: state === 'vault' ? 0.6 : 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
+    b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: state === 'vault' && !z.crawling ? 0.6 : 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
     v.probe.update(dt, this.tmp.set(x, y, zz), camera);
     if (v.bleeds.length) this.bleed(v, dt, cam);
     // On fire: flames all over, the skin charring black.
@@ -443,7 +458,9 @@ export class ZombieView {
         continue;
       }
       if (s.next > 0) continue;
-      const torn = (s.arm as string) === 'head' || (s.arm as string) === 'legL' || (s.arm as string) === 'legR';
+      // Blown off by a blast (torn end) or shot off (a stump at the hip or knee).
+      const part = s.arm as string;
+      const torn = part === 'head' || ((part === 'legL' || part === 'legR') && v.body.isTorn(part));
       if (!(torn ? v.body.tornEnd(s.arm as unknown as 'head', _sp, _sd) : v.body.stump(s.arm, _sp, _sd))) {
         v.bleeds.splice(i, 1);
         continue;

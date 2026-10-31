@@ -5,7 +5,7 @@ import { GAME } from '../config/game';
 import { DOWNED, PLAYER } from '../config/player';
 import { HORDES, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
-import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
+import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, type LegZone } from '../config/limbs';
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
 import { findPickupRooms, pickFoundWeapon, type PickupRoom } from './MeleePickups';
 import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
@@ -153,7 +153,7 @@ export interface SupplyDrop {
 }
 
 /**
- * A severed arm: tumbling and lying about as a physics body, or in a survivor's hands
+ * A severed arm or leg: tumbling and lying about as a physics body, or in a survivor's hands
  * (`holder`, no body). Its pose is the capsule's centre, with local +Y toward the cut end.
  */
 export interface SimLimb extends HeldLimb {
@@ -808,6 +808,19 @@ export class Simulation {
   ): void {
     if (!z.alive) return;
     const before = z.health;
+    // Enough punishment and the leg comes off: high up at the hip, lower down at the knee. Some
+    // that would have died of it live on, dragging themselves after you on their arms.
+    let legCut: LegCut | null = null;
+    if (isLeg(zone) && z.canLoseLeg(zone)) {
+      z.legSever[zone] += opts.armTally ?? damage;
+      if (z.legSever[zone] >= LEGS.legHealth[z.kind]) {
+        legCut = (opts.along ?? 0) < LEGS.kneeAt ? 'hip' : 'knee';
+        if (damage >= z.health && this.rand() < LEGS.survive) {
+          const left = Math.max(1, Math.min(z.health - 1, Math.round(z.def.health * LEGS.surviveHealth)));
+          damage = Math.max(0, z.health - left);
+        }
+      }
+    }
     const killed = z.takeHit(damage, zone, dir, p, melee, opts.knock);
     const dealt = Math.min(before, damage);
     p.stats.damageDealt += dealt;
@@ -823,6 +836,7 @@ export class Simulation {
         this.severArm(p, z, zone, (opts.along ?? 0) < LIMBS.elbowAt ? 'shoulder' : 'elbow', dir, melee, damage, killed);
       }
     }
+    if (legCut && isLeg(zone)) this.severLeg(p, z, zone, legCut, dir, melee, damage, killed);
     if (killed) {
       p.stats.kills++;
       if (zone === 'head') p.stats.headshots++;
@@ -893,6 +907,9 @@ export class Simulation {
       if (d < B.severWithin) {
         for (const arm of ['armL', 'armR'] as const) {
           if (o.canLose(arm) && this.rand() < 0.65) this.severArm(by, o, arm, this.rand() < 0.6 ? 'shoulder' : 'elbow', dir, false, 60, false);
+        }
+        for (const leg of ['legL', 'legR'] as const) {
+          if (o.canLoseLeg(leg) && this.rand() < 0.4) this.severLeg(by, o, leg, this.rand() < 0.5 ? 'hip' : 'knee', dir, false, 60, false);
         }
       }
       this.hitZombie(by, o, B.zombieDamage * falloff(d), 'torso', oc, dir, false, 1.8, { armTally: 0 });
@@ -1172,7 +1189,7 @@ export class Simulation {
   // ---------------------------------------------------------------- severed arms
 
   /** Takes the arm off a zombie and sends it flying (`fling` times as hard: blasts). */
-  severArm(p: SimPlayer, z: Zombie, arm: ArmZone, cut: LimbCut, dir: Vec3, melee: boolean, damage: number, killed: boolean, fling = 1): void {
+  severArm(p: SimPlayer, z: Zombie, arm: ArmZone, cut: ArmCut, dir: Vec3, melee: boolean, damage: number, killed: boolean, fling = 1): void {
     // Where the arm is now: shoulder to hand, cut at the shoulder or the elbow.
     const shape = z.zones(this.zones).find((s) => s.zone === arm);
     if (!shape) return;
@@ -1220,6 +1237,66 @@ export class Simulation {
     this.limbs.push(limb);
     p.stats.limbsSevered++;
     this.emit({ type: 'limbSevered', zombie: z.id, limb: limb.id, arm, cut, pos: { ...start }, dir: { ...dir }, by: p.id, melee, killed });
+    this.trimLimbs();
+  }
+
+  /**
+   * Takes a leg off a zombie (at the hip or the knee) and sends it flopping away. Unless the
+   * same blow kills it, the zombie goes down and crawls after its prey on its arms. Shots,
+   * blades, bloater bursts and grenades all come through here; `killed` is whether the blow
+   * that did it also killed it.
+   */
+  severLeg(p: SimPlayer, z: Zombie, leg: LegZone, cut: LegCut, dir: Vec3, melee: boolean, damage: number, killed: boolean): void {
+    if (!z.canLoseLeg(leg)) return;
+    // Where the leg is now (before it goes down): hip to foot, cut at the hip or the knee.
+    const shape = z.zones(this.zones).find((s) => s.zone === leg);
+    if (!shape) return;
+    const foot = shape.b;
+    const start = cut === 'hip' ? shape.a : along(shape.a, foot, LEGS.kneeAt);
+    let ux = foot.x - shape.a.x, uy = foot.y - shape.a.y, uz = foot.z - shape.a.z;
+    const ul = Math.hypot(ux, uy, uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    z.loseLeg(leg, cut);
+    const length = LIMBS.length[cut] * z.scale;
+    const radius = LIMBS.radius * 1.7 * z.scale * Math.sqrt(z.def.girth);
+    let center = { x: start.x + ux * length * 0.5, y: start.y + uy * length * 0.5, z: start.z + uz * length * 0.5 };
+    // Its foot was on the ground: the capsule starts clear of it.
+    center.y = Math.max(center.y, z.pos.y + Math.abs(uy) * length * 0.5 + radius + 0.02);
+    // Never inside a wall the zombie was against.
+    const c = z.chest;
+    const tx = center.x - c.x, ty = center.y - c.y, tz = center.z - c.z;
+    const tl = Math.hypot(tx, ty, tz);
+    if (tl > 1e-3) {
+      const hit = this.physics.raycast(c.x, c.y, c.z, tx / tl, ty / tl, tz / tl, tl + radius);
+      if (hit !== null) {
+        const k = Math.max(0, hit - radius - 0.03);
+        center = { x: c.x + (tx / tl) * k, y: c.y + (ty / tl) * k, z: c.z + (tz / tl) * k };
+      }
+    }
+    // Heavier than an arm: kicked out from under it rather than flung.
+    const hl = Math.hypot(dir.x, dir.z) || 1;
+    const speed = melee ? 2.2 : 1.1 + Math.min(2.6, damage / 18);
+    const vel = {
+      x: z.vel.x * 0.5 + (dir.x / hl) * speed + (this.rand() - 0.5) * 0.9,
+      y: 0.8 + this.rand() * 1.2,
+      z: z.vel.z * 0.5 + (dir.z / hl) * speed + (this.rand() - 0.5) * 0.9,
+    };
+    const spin = 4 + this.rand() * 6;
+    let sx = uy * (dir.z / hl), sy = uz * (dir.x / hl) - ux * (dir.z / hl), sz = -uy * (dir.x / hl);
+    const sl = Math.hypot(sx, sy, sz);
+    if (sl < 1e-3) { sx = 1; sy = 0; sz = 0; } else { sx /= sl; sy /= sl; sz /= sl; }
+    const club = limbClub(cut, z.kind);
+    const rot = quatFromUp({ x: -ux, y: -uy, z: -uz });
+    const limb: SimLimb = {
+      id: this.nextLimbId++, arm: leg, cut, kind: z.kind, look: z.look, scale: z.scale,
+      wear: club.wear, maxWear: club.wear, broken: false,
+      holder: null, body: null, pos: center, rot, prevPos: { ...center }, prevRot: { ...rot },
+      length, radius, bornAt: this.time, looseAt: this.time,
+    };
+    limb.body = this.limbBody(limb, vel, { x: sx * spin, y: sy * spin, z: sz * spin });
+    this.limbs.push(limb);
+    p.stats.limbsSevered++;
+    this.emit({ type: 'limbSevered', zombie: z.id, limb: limb.id, arm: leg, cut, pos: { ...start }, dir: { ...dir }, by: p.id, melee, killed });
     this.trimLimbs();
   }
 

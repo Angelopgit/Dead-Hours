@@ -1,5 +1,5 @@
 import type { HitZone } from '../config/weapons';
-import { LIMBS, type ArmState } from '../config/limbs';
+import { LEGS, LIMBS, type ArmState, type LegState } from '../config/limbs';
 import type { Vec3 } from './math';
 
 /** Distance along a ray (unit dir) to a sphere, or -1. */
@@ -48,11 +48,13 @@ export interface ZoneShape {
   r: number;
 }
 
-/** Posture the hit zones are built for. */
-export type HitPosture = 'standing' | 'down';
+/** Posture the hit zones are built for: on its feet, knocked onto its back, or legless and crawling face down. */
+export type HitPosture = 'standing' | 'down' | 'crawl';
 
 /** Both arms whole. */
 export const WHOLE_ARMS: Readonly<Record<'armL' | 'armR', ArmState>> = { armL: 'intact', armR: 'intact' };
+/** Both legs whole. */
+export const WHOLE_LEGS: Readonly<Record<'legL' | 'legR', LegState>> = { legL: 'intact', legR: 'intact' };
 
 /**
  * World-space hit zones for a zombie standing at `pos` facing `facing`. Matches the hunched
@@ -63,6 +65,7 @@ export const WHOLE_ARMS: Readonly<Record<'armL' | 'armR', ArmState>> = { armL: '
 export function zombieZones(
   pos: Vec3, facing: number, scale: number, posture: HitPosture, out: ZoneShape[], girth = 1,
   arms: Readonly<Record<'armL' | 'armR', ArmState>> = WHOLE_ARMS,
+  legs: Readonly<Record<'legL' | 'legR', LegState>> = WHOLE_LEGS,
 ): ZoneShape[] {
   const fx = Math.sin(facing), fz = Math.cos(facing);
   const rx = Math.cos(facing), rz = -Math.sin(facing);
@@ -74,12 +77,33 @@ export function zombieZones(
     z: pos.z + (rz * lx + fz * lz) * w,
   });
   out.length = 0;
+  // A leg cut at the knee is only its thigh; one gone at the hip has no zone at all.
+  const leg = (zone: 'legL' | 'legR', a: Vec3, b: Vec3, r: number) => {
+    const state = legs[zone];
+    if (state === 'hip') return;
+    out.push({ zone, a, b: state === 'knee' ? along(a, b, LEGS.kneeAt) : b, r });
+  };
+  if (posture === 'crawl') {
+    // Face down, chest propped up on its arms, head raised toward its prey; legs (what is
+    // left of them) dragging out behind. Matches Humanoid's crawl pose.
+    out.push({ zone: 'head', a: P(0, 0.58, 0.42), b: P(0, 0.58, 0.42), r: 0.15 * scale });
+    out.push({ zone: 'torso', a: P(0, 0.24, -0.3), b: P(0, 0.42, 0.18), r: 0.21 * w });
+    for (const [zone, sx] of [['armL', 1], ['armR', -1]] as const) {
+      const state = arms[zone];
+      if (state === 'shoulder') continue;
+      const a = P(0.21 * sx, 0.44, 0.24), b = P(0.16 * sx, 0.07, 0.72);
+      out.push({ zone, a, b: state === 'elbow' ? along(a, b, LIMBS.elbowAt) : b, r: 0.08 * w });
+    }
+    leg('legL', P(0.1, 0.17, -0.36), P(0.13, 0.1, -1.2), 0.095 * w);
+    leg('legR', P(-0.1, 0.17, -0.36), P(-0.13, 0.1, -1.2), 0.095 * w);
+    return out;
+  }
   if (posture === 'down') {
     // Lying on its back, head away from the feet.
     out.push({ zone: 'torso', a: P(0, 0.22, -0.25), b: P(0, 0.24, -0.8), r: 0.24 * w });
     out.push({ zone: 'head', a: P(0, 0.24, -0.98), b: P(0, 0.24, -0.98), r: 0.15 * scale });
-    out.push({ zone: 'legL', a: P(0.15, 0.15, 0.6), b: P(0.1, 0.18, -0.16), r: 0.1 * w });
-    out.push({ zone: 'legR', a: P(-0.15, 0.15, 0.6), b: P(-0.1, 0.18, -0.16), r: 0.1 * w });
+    leg('legL', P(0.1, 0.18, -0.16), P(0.15, 0.15, 0.6), 0.1 * w);
+    leg('legR', P(-0.1, 0.18, -0.16), P(-0.15, 0.15, 0.6), 0.1 * w);
     return out;
   }
   out.push({ zone: 'head', a: P(0, 1.62, 0.3), b: P(0, 1.62, 0.3), r: 0.15 * scale });
@@ -90,8 +114,8 @@ export function zombieZones(
     const a = P(0.21 * sx, 1.43, 0.2), b = P(0.12 * sx, 1.14, 0.71);
     out.push({ zone, a, b: state === 'elbow' ? along(a, b, LIMBS.elbowAt) : b, r: 0.08 * w });
   }
-  out.push({ zone: 'legL', a: P(0.1, 0.88, 0), b: P(0.1, 0.06, 0), r: 0.095 * w });
-  out.push({ zone: 'legR', a: P(-0.1, 0.88, 0), b: P(-0.1, 0.06, 0), r: 0.095 * w });
+  leg('legL', P(0.1, 0.88, 0), P(0.1, 0.06, 0), 0.095 * w);
+  leg('legR', P(-0.1, 0.88, 0), P(-0.1, 0.06, 0), 0.095 * w);
   return out;
 }
 

@@ -1,6 +1,6 @@
 import type { HitZone, WeaponId, WeaponSlot } from '../config/weapons';
 import type { ZombieKind } from '../config/zombies';
-import type { ArmZone, LimbCut } from '../config/limbs';
+import type { LimbCut, LimbZone } from '../config/limbs';
 import type { MeleeId } from '../config/melee';
 import type { ThrowKind } from '../config/throwables';
 import type { Surface } from '../physics/Physics';
@@ -87,7 +87,7 @@ export type SimEvent =
   | { type: 'heli'; drop: number; flight: HeliFlight; weapon?: WeaponId; serum?: boolean }
   | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'weaponTaken' | 'serumTaken' | 'gone'; pos: Vec3 }
   /** An arm came off: `pos` is the cut, `dir` the way the blow was going. */
-  | { type: 'limbSevered'; zombie: number; limb: number; arm: ArmZone; cut: LimbCut; pos: Vec3; dir: Vec3; by: string; melee: boolean; killed: boolean }
+  | { type: 'limbSevered'; zombie: number; limb: number; arm: LimbZone; cut: LimbCut; pos: Vec3; dir: Vec3; by: string; melee: boolean; killed: boolean }
   | { type: 'limbGrabbed'; player: string; limb: number }
   /** Let go of (`thrown` when tossed aside to draw a gun). */
   | { type: 'limbDropped'; player: string; limb: number; thrown: boolean }
