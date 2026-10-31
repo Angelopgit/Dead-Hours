@@ -11,14 +11,14 @@ export type VoiceMode = 'ptt' | 'vad';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
-  | 'sprint' | 'crouch' | 'jump' | 'interact'
+  | 'sprint' | 'crouch' | 'jump' | 'interact' | 'barricade'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2'
   | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
   | 'talk' | 'radio' | 'chat';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
-  sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact',
+  sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact', barricade: 'Board up / pry off',
   reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon',
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
   talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat',
@@ -81,6 +81,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   crouch: ['ControlLeft', 'KeyC'],
   jump: ['Space'],
   interact: ['KeyE'],
+  barricade: ['KeyG'],
   reload: ['KeyR'],
   melee: ['KeyF'],
   weapon1: ['Digit1'],

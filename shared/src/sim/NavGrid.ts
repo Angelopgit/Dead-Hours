@@ -50,6 +50,18 @@ export interface PathOptions {
   seed?: number;
   /** Extra cost for crossing a door cell (closed doors cost more). */
   doorCost?: (door: number) => number;
+  /**
+   * Extra cost for taking a climb-through link (see setLink), Infinity when it can't be taken.
+   * Without it links are ignored.
+   */
+  linkCost?: (id: number) => number;
+}
+
+/** A climb-through link a path takes, from one side to the other. */
+export interface PathLink {
+  id: number;
+  from: Vec3;
+  to: Vec3;
 }
 
 export interface PathResult {
@@ -58,6 +70,8 @@ export interface PathResult {
   complete: boolean;
   /** Door indices crossed, in order. */
   doors: number[];
+  /** Climb-through links taken, in order (their ends are waypoints). */
+  links: PathLink[];
 }
 
 function hash(a: number, b: number): number {
@@ -88,6 +102,12 @@ export class NavGrid implements NavBuffers {
   private generation = 0;
   private heapNodes: Int32Array;
   private heapF: Float32Array;
+  /**
+   * Links that aren't walking: windows a zombie climbs through. Not part of the cached buffers; the
+   * simulation sets them from the map, keyed by id so setting them again changes nothing.
+   */
+  private readonly linkEnds = new Map<number, [number, number]>();
+  private readonly extra = new Map<number, { to: number; id: number }[]>();
 
   constructor(b: NavBuffers) {
     this.cols = b.cols;
@@ -183,6 +203,30 @@ export class NavGrid implements NavBuffers {
       }
     }
     return best;
+  }
+
+  /** Joins two nodes both ways with climb-through link `id` (replacing whatever `id` joined before). */
+  setLink(id: number, a: number, b: number): void {
+    const old = this.linkEnds.get(id);
+    if (old && old[0] === a && old[1] === b) return;
+    if (old) for (const n of old) this.extra.set(n, (this.extra.get(n) ?? []).filter((e) => e.id !== id));
+    this.linkEnds.set(id, [a, b]);
+    for (const [from, to] of [[a, b], [b, a]]) {
+      const list = this.extra.get(from) ?? [];
+      list.push({ to, id });
+      this.extra.set(from, list);
+    }
+  }
+
+  /** The nodes link `id` joins. */
+  linkNodes(id: number): [number, number] | undefined {
+    return this.linkEnds.get(id);
+  }
+
+  private linkBetween(a: number, b: number): number {
+    const list = this.extra.get(a);
+    if (list) for (const e of list) if (e.to === b) return e.id;
+    return -1;
   }
 
   /** Neighbour of `n` in direction index 0..7, or -1. */
@@ -318,6 +362,21 @@ export class NavGrid implements NavBuffers {
         this.parent[nb] = cur;
         size = this.heapPush(size, nb, ng + h(nb));
       }
+      const ex = opts.linkCost ? this.extra.get(cur) : undefined;
+      if (ex) {
+        for (const e of ex) {
+          const nb = e.to;
+          if (this.closed[nb] === gen || !(this.flags[nb] & NAV_REACHABLE)) continue;
+          const extra = opts.linkCost!(e.id);
+          if (!(extra < Infinity)) continue;
+          const ng = gc + Math.hypot(this.nodeX(nb) - this.nodeX(cur), this.nodeZ(nb) - this.nodeZ(cur)) + extra;
+          if (this.stamp[nb] === gen && ng >= this.g[nb]) continue;
+          this.stamp[nb] = gen;
+          this.g[nb] = ng;
+          this.parent[nb] = cur;
+          size = this.heapPush(size, nb, ng + h(nb));
+        }
+      }
     }
     const end = found ? goal : best;
     const chain: number[] = [];
@@ -331,11 +390,25 @@ export class NavGrid implements NavBuffers {
       const dr = this.door[n];
       if (dr >= 0 && doors[doors.length - 1] !== dr) doors.push(dr);
     }
-    return { points: this.smooth(chain), complete: found, doors };
+    const links: PathLink[] = [];
+    const keep = new Set<number>();
+    if (this.extra.size) {
+      for (let i = 1; i < chain.length; i++) {
+        const id = this.linkBetween(chain[i - 1], chain[i]);
+        if (id < 0) continue;
+        let grid = false;
+        for (let d = 0; d < 8; d++) if (this.links[chain[i - 1] * 8 + d] === chain[i]) grid = true;
+        if (grid) continue;
+        links.push({ id, from: this.nodePos(chain[i - 1]), to: this.nodePos(chain[i]) });
+        keep.add(i - 1);
+        keep.add(i);
+      }
+    }
+    return { points: this.smooth(chain, keep), complete: found, doors, links };
   }
 
   /** String pulling: keeps a waypoint only where the straight walk to the next one is blocked. */
-  private smooth(chain: number[]): Vec3[] {
+  private smooth(chain: number[], keep?: Set<number>): Vec3[] {
     if (chain.length <= 2) return chain.map((n) => this.nodePos(n));
     const out: Vec3[] = [this.nodePos(chain[0])];
     let anchor = 0;
@@ -351,8 +424,8 @@ export class NavGrid implements NavBuffers {
         }
       }
       for (let j = anchor + 1; j < far; j++) {
-        // Keep door cells as waypoints so agents line up with the opening.
-        if (this.door[chain[j]] >= 0) {
+        // Keep door cells as waypoints so agents line up with the opening, and both ends of a climb.
+        if (this.door[chain[j]] >= 0 || keep?.has(j)) {
           far = j;
           break;
         }

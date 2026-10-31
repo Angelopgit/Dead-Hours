@@ -1293,6 +1293,57 @@ export class AudioEngine {
     for (let i = 0; i < 7; i++) this.burst(d, t + 0.03 + Math.random() * 0.35, 'highpass', 2000 + Math.random() * 3000, 1, 0.2, 0.001, 0.03);
   }
 
+  /** A hammer blow on a nail while boarding up. */
+  hammer(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.3, 3);
+    const f = 1900 + Math.random() * 400;
+    this.tone(d, t, 'square', f, f * 0.96, 0.06, 0.001, 0.05);
+    this.tone(d, t, 'sine', 3100 + Math.random() * 300, 3000, 0.04, 0.001, 0.12);
+    this.burst(d, t, 'bandpass', 600, 1.4, 0.35, 0.001, 0.06);
+    this.tone(d, t, 'triangle', 180, 110, 0.18, 0.001, 0.07);
+  }
+
+  /** A board going up (`nailed`), pried off with a squeal of nails, or split off by a zombie. */
+  board(position: THREE.Vector3, change: 'nailed' | 'pried' | 'broken'): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, change === 'broken' ? 0.55 : 0.35, 4);
+    if (change === 'pried') {
+      this.tone(d, t, 'sawtooth', 900, 1400, 0.05, 0.02, 0.35);
+      this.burst(d, t + 0.32, 'bandpass', 500, 1.2, 0.3, 0.002, 0.08);
+      return;
+    }
+    if (change === 'nailed') {
+      this.burst(d, t, 'bandpass', 420, 1.1, 0.3, 0.002, 0.1);
+      this.tone(d, t, 'triangle', 160, 90, 0.2, 0.002, 0.1);
+      return;
+    }
+    // Splintering wood and the board clattering down.
+    for (let i = 0; i < 5; i++) {
+      const at = t + i * 0.025 + Math.random() * 0.02;
+      this.burst(d, at, 'bandpass', 900 + Math.random() * 1600, 1.5, 0.35, 0.001, 0.04);
+    }
+    this.tone(d, t, 'sine', 110, 50, 0.6, 0.002, 0.2);
+    this.burst(d, t + 0.35, 'bandpass', 380, 1.4, 0.3, 0.002, 0.09);
+    this.burst(d, t + 0.47, 'bandpass', 450, 1.4, 0.18, 0.002, 0.07);
+  }
+
+  /** A window pane smashing in. */
+  glassBreak(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.6, 5);
+    this.burst(d, t, 'highpass', 1800, 0.7, 0.8, 0.001, 0.25);
+    this.tone(d, t, 'sine', 140, 60, 0.3, 0.002, 0.1);
+    // Shards tinkling down onto the sill and the floor.
+    for (let i = 0; i < 16; i++) {
+      const f = 2600 + Math.random() * 5500;
+      this.tone(d, t + 0.05 + Math.random() * 0.7, 'sine', f, f * 0.99, 0.04, 0.001, 0.05 + Math.random() * 0.12);
+    }
+  }
+
   playerHurt(heavy: number): void {
     if (!this.ctx) return;
     const ctx = this.ctx;

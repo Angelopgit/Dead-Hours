@@ -271,7 +271,8 @@ export class ZombieView {
 
     const state = z.state;
     b.attack = state === 'attack' ? z.attackPhase : -1;
-    b.bash = state === 'bash' ? z.attackPhase : -1;
+    // Breaking in through a window pounds like a door; climbing through, it hauls itself over hunched with arms out.
+    b.bash = state === 'bash' || state === 'breach' ? z.attackPhase : state === 'vault' ? 0.5 : -1;
     b.scream = state === 'scream' ? z.attackPhase : -1;
     b.downTarget = state === 'down' ? 1 : 0;
     b.staggerTarget = state === 'stagger' ? 1 : 0;
@@ -285,7 +286,7 @@ export class ZombieView {
     b.setArm('armL', z.arms.armL);
     b.setArm('armR', z.arms.armR);
     b.goreShown = this.gore;
-    b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
+    b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: state === 'vault' ? 0.6 : 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
     v.probe.update(dt, this.tmp.set(x, y, zz), camera);
     if (v.bleeds.length) this.bleed(v, dt, cam);
   }

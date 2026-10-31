@@ -48,6 +48,16 @@ export type SimEvent =
   | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon' | 'supply' | 'serum'; amount: number; source: number; weapon?: WeaponId }
   | { type: 'doorPound'; door: number; pos: Vec3 }
   | { type: 'doorForced'; door: number; pos: Vec3 }
+  /** A board went up, was pried off or split off under pounding (`boards` is how many are left). */
+  | { type: 'barricade'; slot: number; boards: number; change: 'nailed' | 'pried' | 'broken'; player: string | null; pos: Vec3 }
+  /** A survivor's hammer blow while nailing a board up. */
+  | { type: 'hammer'; slot: number; player: string; pos: Vec3 }
+  /** A zombie's blow on a boarded window. */
+  | { type: 'barricadeHit'; slot: number; pos: Vec3 }
+  /** A window pane smashed in (`dir` the way the shards fly). */
+  | { type: 'glassBroken'; slot: number; pos: Vec3; dir: Vec3 }
+  /** A zombie climbs in (or out) through a window. */
+  | { type: 'vault'; zombie: number; slot: number }
   | { type: 'notice'; player: string | null; text: string; sub?: string }
   /**
    * A horde wave: `warning` (it starts at survival second `at`), `surge` (it lasts until `at`),

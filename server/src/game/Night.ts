@@ -211,9 +211,13 @@ export class Night {
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;
         const e = p.eye;
-        if (d && p.alive && Math.hypot(d.center.x - e.x, d.center.y - e.y, d.center.z - e.z) < 2.6) d.toggle(p.motion.pos.x, p.motion.pos.z);
+        if (d && p.alive && !sim.doorLocked(d.index) && Math.hypot(d.center.x - e.x, d.center.y - e.y, d.center.z - e.z) < 2.6) d.toggle(p.motion.pos.x, p.motion.pos.z);
         break;
       }
+      case 'barricade':
+        if (m.k === 'stop' || !Number.isInteger(m.slot)) p.work = null;
+        else if (m.k === 'board' || m.k === 'pry') sim.barricade(id, m.slot, m.k);
+        break;
       default:
         break;
     }

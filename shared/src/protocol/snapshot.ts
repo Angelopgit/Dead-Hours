@@ -10,7 +10,7 @@ import { clamp, type Quat, type Vec3 } from '../sim/math';
 
 // Index tables for the wire format (append only: old clients read new numbers otherwise).
 const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'];
-const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead', 'scream'];
+const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead', 'scream', 'breach', 'vault'];
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
 const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage'];
 const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper'];
@@ -63,6 +63,8 @@ export interface Snapshot {
   /** [door index, open, target ×1000, ...] */
   d: number[];
   i: number[][];
+  /** Barricades that aren't as the map starts them: [slot, boards, damage ×1000, glass in, ...]. */
+  b?: number[];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -119,7 +121,11 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
     if (!it) continue;
     items.push([it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range), it.weapon ? idx(WEAPON_IDS, it.weapon) : -1]);
   }
-  return { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items };
+  const bars: number[] = [];
+  for (const b of sim.barricades.slots) {
+    if (b.boards > 0 || (b.kind === 'window' && !b.glass)) bars.push(b.index, b.boards, milli(b.damage), b.glass ? 1 : 0);
+  }
+  return { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars };
 }
 
 // ------------------------------------------------------------------ motion messages
@@ -243,7 +249,7 @@ export class Mirror {
     const since = t - b.t;
     sim.phaseTime = b.phase === 'preparation' ? Math.max(0, b.phaseTime - since) : b.phase === 'survival' ? b.phaseTime + Math.max(0, since) : b.phaseTime;
     // Swipes and door pounding keep going between snapshots.
-    if (dt > 0 && dt < 0.5) for (const z of sim.zombies) if (z.state === 'attack' || z.state === 'bash' || z.state === 'scream') z.attackT += dt;
+    if (dt > 0 && dt < 0.5) for (const z of sim.zombies) if (z.state === 'attack' || z.state === 'bash' || z.state === 'scream' || z.state === 'breach') z.attackT += dt;
   }
 
   /** Fraction of the way from the previous arm poses to the newest (LimbView's interpolation). */
@@ -449,6 +455,17 @@ export class Mirror {
       d.remote(s.d[i + 1] === 1, s.d[i + 2] / 1000);
     }
 
+    // Boards and broken panes; slots left out are back as the map starts them (nobody re-glazes a window, but boards come off).
+    const listed = new Set<number>();
+    const bs = s.b ?? [];
+    for (let i = 0; i + 3 < bs.length; i += 4) {
+      const slot = sim.barricades.slots[bs[i]];
+      if (!slot) continue;
+      listed.add(slot.index);
+      sim.barricades.remote(slot, bs[i + 1], bs[i + 2] / 1000, bs[i + 3] === 1);
+    }
+    for (const slot of sim.barricades.slots) if (!listed.has(slot.index) && slot.boards > 0) sim.barricades.remote(slot, 0, 0, slot.glass);
+
     // Ammunition crates, first aid, weapon tables, landed supply crates.
     for (const r of s.i) {
       const id = r[0];
@@ -515,6 +532,10 @@ export class Mirror {
     } else if (e.type === 'limbGone') {
       const i = sim.limbs.findIndex((l) => l.id === e.limb);
       if (i >= 0) sim.limbs.splice(i, 1);
+    } else if (e.type === 'glassBroken') {
+      // At once, so the client's own shots and sight lines go through the empty frame.
+      const slot = sim.barricades.slots[e.slot];
+      if (slot) sim.barricades.breakGlass(slot);
     } else if (e.type === 'heli') {
       if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null, weapon: e.weapon ?? null, caseItem: -1, serum: !!e.serum, serumItem: -1 });
     } else if (e.type === 'supplyDrop') {

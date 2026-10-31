@@ -11,6 +11,7 @@ import {
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
+  BARRICADE, captureSnapshot, Mirror, NAV_INDOOR, type BarricadeSlot,
 } from '../src/index';
 
 let failures = 0;
@@ -1126,6 +1127,187 @@ section('Screamers and bloaters');
   const bursts = evs.filter((x) => x.type === 'zombieBurst').map((x) => (x as { zombie: number }).zombie);
   check(bursts.length === 3 && new Set(bursts).size === 3, `three bloaters in a row go off one after another (${bursts.length} bursts)`);
   check(sp.health === PLAYER.maxHealth, 'a chain 12 m away does not reach the shooter');
+  cleanup(sim, body);
+}
+section('Barricades');
+{
+  const homes = map.houses.filter((h) => h.enterable);
+  const { sim, body } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const slots = sim.barricades.slots;
+  check(homes.every((h) => slots.some((s) => s.houseId === h.id && s.kind === 'door')), `every enterable building has doors to board up (${slots.filter((s) => s.kind === 'door').length} doors)`);
+  const wins = slots.filter((s) => s.kind === 'window');
+  const climb = wins.filter((s) => s.outNode >= 0);
+  check(wins.length >= 50 && climb.length >= wins.length * 0.85, `ground-storey windows take boards and zombies can climb through most (${climb.length} of ${wins.length})`);
+  check(wins.every((s) => s.bottom < BARRICADE.maxSill && s.width >= BARRICADE.minWidth), 'no upstairs windows or bathroom slits among them');
+  check(wins.every((s) => s.pane !== null && s.glass), 'every window starts with its pane in');
+  cleanup(sim, body);
+}
+const houseSlots = (sim: Simulation, house: string, kind: 'door' | 'window') => sim.barricades.slots.filter((s) => s.houseId === house && s.kind === kind);
+{
+  // Nailing boards over a window from inside, prying them off, and what stops the work.
+  const { sim: probe, body: pb } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const pick = houseSlots(probe, 'house-sw', 'window').find((s) => s.outNode >= 0)!;
+  const inside = nav.nodePos(pick.inNode), outside = nav.nodePos(pick.outNode);
+  cleanup(probe, pb);
+  const { sim, sp, body } = makeSim({ x: inside.x, y: inside.y + 0.02, z: inside.z });
+  const slot = sim.barricades.slots[pick.index];
+  check(sim.barricade('p1', slot.index, 'board'), 'a survivor inside starts boarding up the window');
+  let res = run(sim, BARRICADE.boardTime * 3 + 0.4);
+  const nailed = res.events.filter((e) => e.type === 'barricade' && e.change === 'nailed').length;
+  check(slot.boards === BARRICADE.windowBoards && nailed === BARRICADE.windowBoards, `holding on nails board after board up to ${BARRICADE.windowBoards} (${slot.boards})`);
+  check(res.events.filter((e) => e.type === 'hammer').length >= 10 && sim.noises.some((n) => n.source === 'p1'), 'the hammering is heard');
+  check(sp.work === null && !sim.barricade('p1', slot.index, 'board'), 'a fully boarded window takes no more');
+  sp.arsenal.aim = 1;
+  run(sim, 0.7);
+  sim.barricade('p1', slot.index, 'pry');
+  run(sim, 0.3);
+  sim.fire('p1', sp.eye, { x: 0, y: 0, z: 1 }, true, 5);
+  check(sp.work === null && slot.boards === BARRICADE.windowBoards, 'firing stops the prying');
+  sim.barricade('p1', slot.index, 'pry');
+  res = run(sim, BARRICADE.pryTime + 0.1);
+  check(slot.boards === BARRICADE.windowBoards - 1 && res.events.some((e) => e.type === 'barricade' && e.change === 'pried'), 'prying takes a board off');
+  sim.barricade('p1', -1);
+  sp.motion.pos = { ...outside };
+  check(!sim.barricade('p1', slot.index, 'board'), 'boards only go up from inside');
+  sp.motion.pos = { x: inside.x + 6, y: inside.y, z: inside.z };
+  check(!sim.barricade('p1', slot.index, 'board'), 'out of reach, nothing happens');
+  cleanup(sim, body);
+}
+{
+  // A boarded door stays shut.
+  const { sim: probe, body: pb } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const front = houseSlots(probe, 'house-sw', 'door')[0];
+  const n = nav.nodeAt(front.center.x - front.normal.x * 1.0, front.bottom, front.center.z - front.normal.z * 1.0, 0.6);
+  const at = nav.nodePos(n);
+  cleanup(probe, pb);
+  const { sim, body } = makeSim({ x: at.x, y: at.y + 0.02, z: at.z });
+  const slot = sim.barricades.slots[front.index];
+  const door = doors[slot.ref]!;
+  door.setOpen(true, at.x, at.z);
+  check(!sim.barricade('p1', slot.index, 'board'), 'an open door can’t be boarded');
+  door.setOpen(false, at.x, at.z);
+  run(sim, 0.5);
+  check(sim.barricade('p1', slot.index, 'board'), 'a closed door can');
+  run(sim, BARRICADE.boardTime * 2 + 0.2);
+  check(slot.boards >= 2 && sim.doorLocked(slot.ref), `boards lock the door (${slot.boards} up)`);
+  let forced = false;
+  let blows = 0;
+  while (!forced && blows < 100) {
+    blows++;
+    forced = sim.poundDoor(door, ZOMBIES.walker.bash, slot.center.x + slot.normal.x, slot.center.z + slot.normal.z);
+  }
+  check(slot.boards === 0 && forced && blows >= 2 * Math.ceil(BARRICADE.boardStrength / ZOMBIES.walker.bash) + Math.ceil(1 / ZOMBIES.walker.bash) - 1,
+    `walkers have to beat the boards off before the door gives (${blows} blows)`);
+  cleanup(sim, body);
+}
+const insideHouse = (z: Zombie, house: string) => {
+  const h = map.houses.find((x) => x.id === house)!;
+  return Math.abs(z.pos.x - h.x) < h.w / 2 - 0.2 && Math.abs(z.pos.z - h.z) < h.d / 2 - 0.2 && z.pos.y > 0.2;
+};
+const outsideOf = (slot: BarricadeSlot, dist: number): Vec3 => {
+  const out = nav.nodePos(slot.outNode);
+  return nav.nodePos(nav.nodeAt(out.x + slot.normal.x * dist, out.y, out.z + slot.normal.z * dist, 1.5));
+};
+{
+  // Shooting out a window and shooting through a door.
+  const { sim: probe, body: pb } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const pick = houseSlots(probe, 'house-s', 'window').find((s) => s.outNode >= 0)!;
+  const doorPick = houseSlots(probe, 'house-s', 'door')[0];
+  cleanup(probe, pb);
+  const outside = outsideOf(pick, 2.5);
+  const { sim, sp, body } = makeSim({ x: outside.x, y: outside.y + 0.02, z: outside.z });
+  const slot = sim.barricades.slots[pick.index];
+  sp.arsenal.aim = 1;
+  run(sim, 0.8);
+  const aimAt = (p: Vec3) => {
+    const e = sp.eye;
+    const dx = p.x - e.x, dy = p.y - e.y, dz = p.z - e.z, l = Math.hypot(dx, dy, dz);
+    return { x: dx / l, y: dy / l, z: dz / l };
+  };
+  sim.fire('p1', sp.eye, aimAt(slot.center), true, 3);
+  let res = run(sim, 0.2);
+  const shot = res.events.find((e) => e.type === 'shot');
+  const end = shot && shot.type === 'shot' ? shot.pellets[0].end : null;
+  check(!slot.glass && res.events.some((e) => e.type === 'glassBroken' && e.slot === slot.index), 'a shot shatters the window');
+  check(!!end && sim.barricades.side(slot, end.x, end.z) < 0, 'and the round carries on into the room');
+  // The front door, from outside.
+  const dslot = sim.barricades.slots[doorPick.index];
+  const door = doors[dslot.ref]!;
+  const stand = nav.nodePos(nav.nodeAt(dslot.center.x + dslot.normal.x * 3, 0.1, dslot.center.z + dslot.normal.z * 3, 1.5));
+  sp.motion.pos = { x: stand.x, y: stand.y + 0.02, z: stand.z };
+  body.moveTo(sp.motion.pos);
+  dslot.boards = 1;
+  const target = { x: dslot.center.x + (dslot.axis === 'x' ? 0.25 : 0), y: dslot.center.y, z: dslot.center.z + (dslot.axis === 'z' ? 0.25 : 0) };
+  const events: SimEvent[] = [];
+  for (let i = 0; i < 40 && !door.open; i++) {
+    sp.arsenal.primary.mag = 30;
+    sim.fire('p1', sp.eye, aimAt(target), true, 40 + i);
+    events.push(...run(sim, 0.2).events);
+  }
+  const brokeAt = events.findIndex((e) => e.type === 'barricade' && e.change === 'broken');
+  const forcedAt = events.findIndex((e) => e.type === 'doorForced');
+  check(brokeAt >= 0 && forcedAt > brokeAt && door.open, `shots splinter the board, then the door swings in (${events.filter((e) => e.type === 'shot').length} shots)`);
+  cleanup(sim, body);
+}
+{
+  // Doors boarded shut, a window left bare: the zombie smashes the glass and climbs in.
+  const { sim: probe, body: pb } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const pick = houseSlots(probe, 'house-sw', 'window').find((s) => s.outNode >= 0)!;
+  const inside = nav.nodePos(pick.inNode);
+  cleanup(probe, pb);
+  const goal = nav.nodePos(nav.nodeAt(inside.x - pick.normal.x * 1.5, inside.y, inside.z - pick.normal.z * 1.5, 1));
+  const { sim, body } = makeSim({ x: goal.x, y: goal.y + 0.02, z: goal.z });
+  for (const s of houseSlots(sim, 'house-sw', 'door')) s.boards = s.max;
+  for (const s of houseSlots(sim, 'house-sw', 'window')) if (s.index !== pick.index) s.boards = s.max;
+  const start = outsideOf(pick, 3);
+  const z = chaseFrom(sim, 'walker', { x: start.x, y: start.y + 0.02, z: start.z }, goal);
+  const res = run(sim, 40, () => insideHouse(z, 'house-sw') && z.state !== 'vault');
+  check(res.events.some((e) => e.type === 'glassBroken' && e.slot === pick.index) && !sim.barricades.slots[pick.index].glass, 'the zombie smashes the window');
+  check(res.events.some((e) => e.type === 'vault' && e.slot === pick.index), 'and climbs through it');
+  check(insideHouse(z, 'house-sw') && res.time < 40, `it gets inside (${res.time.toFixed(1)} s, state ${z.state})`);
+  const n = nav.nodeAt(z.pos.x, z.pos.y, z.pos.z, 0.5);
+  check(n >= 0 && (nav.flags[n] & NAV_INDOOR) !== 0 && Number.isFinite(z.pos.x + z.pos.y + z.pos.z), 'it lands on the floor inside');
+  cleanup(sim, body);
+}
+{
+  // Everything boarded: the zombie beats boards off a window before it gets in.
+  const { sim: probe, body: pb } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const pick = houseSlots(probe, 'house-sw', 'window').find((s) => s.outNode >= 0)!;
+  const inside = nav.nodePos(pick.inNode);
+  cleanup(probe, pb);
+  const goal = nav.nodePos(nav.nodeAt(inside.x - pick.normal.x * 1.5, inside.y, inside.z - pick.normal.z * 1.5, 1));
+  const { sim, body } = makeSim({ x: goal.x, y: goal.y + 0.02, z: goal.z });
+  for (const s of houseSlots(sim, 'house-sw', 'door')) s.boards = s.max;
+  for (const s of houseSlots(sim, 'house-sw', 'window')) s.boards = s.max;
+  const start = outsideOf(pick, 3);
+  const z = chaseFrom(sim, 'walker', { x: start.x, y: start.y + 0.02, z: start.z }, goal);
+  const early = run(sim, 8);
+  check(!insideHouse(z, 'house-sw') && early.events.some((e) => e.type === 'barricadeHit' || e.type === 'doorPound'), `boards hold a walker off for a while (state ${z.state})`);
+  const res = run(sim, 90, () => insideHouse(z, 'house-sw') && z.state !== 'vault');
+  const broken = [...early.events, ...res.events].filter((e) => e.type === 'barricade' && e.change === 'broken').length;
+  check(broken >= 3 && insideHouse(z, 'house-sw'), `it splits boards off until it is through (${broken} boards, in after ${(8 + res.time).toFixed(1)} s)`);
+  cleanup(sim, body);
+}
+{
+  // Network clients get boards and broken panes in the snapshot.
+  const { sim, body } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const [a, b] = sim.barricades.slots.filter((s) => s.kind === 'window');
+  const d = sim.barricades.slots.find((s) => s.kind === 'door')!;
+  a.boards = 2;
+  a.damage = 0.2;
+  sim.barricades.breakGlass(b);
+  d.boards = 4;
+  const snap = captureSnapshot(sim, new Map());
+  const copy = new Simulation({ physics, map, nav, doors, seed: 9 });
+  const mirror = new Mirror(copy, 'p2');
+  mirror.apply(JSON.parse(JSON.stringify(snap)), 10);
+  const ca = copy.barricades.slots[a.index], cb = copy.barricades.slots[b.index], cd = copy.barricades.slots[d.index];
+  check(ca.boards === 2 && Math.abs(ca.damage - 0.2) < 1e-3 && !cb.glass && cd.boards === 4 && copy.doorLocked(cd.ref), 'boards, damage and broken panes reach clients');
+  check((snap.b ?? []).length === 12, `untouched openings stay out of the snapshot (${(snap.b ?? []).length / 4} listed)`);
+  a.boards = 0;
+  mirror.apply(JSON.parse(JSON.stringify(captureSnapshot(sim, new Map()))), 10.05);
+  check(ca.boards === 0 && !cb.glass, 'boards pried off on the server come off on clients');
+  copy.dispose();
   cleanup(sim, body);
 }
 

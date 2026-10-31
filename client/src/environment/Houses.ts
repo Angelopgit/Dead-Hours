@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { STORY, houseTop, type HouseSpec, type MapDefinition } from '@dead-hours/shared';
+import { STORY, houseTop, isBarricadeWindow, type HouseSpec, type MapDefinition } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
@@ -224,7 +224,8 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     const glassPush = house.enterable ? 0 : 0.015;
     const pane = frameAt(0, 0, w.w, w.h, 0.02, glassPush);
     if (house.enterable) {
-      batch.add(pane, clearGlass, false, false);
+      // Panes that can be smashed are drawn by the barricades, which take them out when they break.
+      if (!isBarricadeWindow(house, w)) batch.add(pane, clearGlass, false, false);
     } else if (w.lit) {
       batch.add(pane, (w.x * 7 + w.z * 3) % 2 > 1 ? warm : warmDim, false, false);
       batch.add(frameAt(-w.w * 0.32, 0, w.w * 0.34, w.h, 0.03, glassPush + 0.01), curtain, false);

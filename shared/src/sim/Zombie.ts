@@ -4,6 +4,8 @@ import { COMBAT, type HitZone } from '../config/weapons';
 import { LIMBS, type ArmState, type ArmZone, type LimbCut } from '../config/limbs';
 import { zombieZones, type ZoneShape } from './hitzones';
 import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
+import { BARRICADE } from '../config/barricades';
+import { WINDOW_LINK_BASE } from './Barricades';
 import { angleDiff, clamp, dist2D, rng, v3, type Vec3 } from './math';
 import type { SimPlayer, Simulation } from './Simulation';
 
@@ -13,7 +15,9 @@ export const ZOMBIE_GROUPS = groups(GROUP.zombie, GROUP.static | GROUP.dynamic |
 export const ZOMBIE_STEP = 0.4;
 
 export type ZombieState =
-  | 'idle' | 'wander' | 'approach' | 'investigate' | 'chase' | 'attack' | 'bash' | 'stagger' | 'down' | 'dead' | 'scream';
+  | 'idle' | 'wander' | 'approach' | 'investigate' | 'chase' | 'attack' | 'bash' | 'stagger' | 'down' | 'dead' | 'scream'
+  /** Smashing a window and pounding its boards, then climbing through it. */
+  | 'breach' | 'vault';
 
 const SEPARATION = 0.95;
 
@@ -46,6 +50,13 @@ export class Zombie {
   private path: Vec3[] = [];
   /** Doors the current path goes through. */
   private pathDoors: number[] = [];
+  /** Windows the current path climbs through: the waypoint index of the landing, and both ends. */
+  private pathVaults: { i: number; slot: number; from: Vec3; to: Vec3 }[] = [];
+  private breachSlot = -1;
+  private vaultFrom: Vec3 | null = null;
+  private vaultTo: Vec3 | null = null;
+  private vaultTop = 0;
+  private vaultDur = 1;
   private pathI = 0;
   private needPath = false;
   private repathAt = 0;
@@ -157,7 +168,7 @@ export class Zombie {
   loseArm(arm: ArmZone, cut: LimbCut, dir: Vec3): void {
     this.arms[arm] = cut;
     this.armDamage[arm] = 0;
-    if (!this.alive || this.state === 'down') return;
+    if (!this.alive || this.state === 'down' || this.state === 'vault') return;
     this.setState('stagger');
     this.staggerT = 0.85 + this.rand() * 0.3;
     const hl = Math.hypot(dir.x, dir.z) || 1;
@@ -178,7 +189,8 @@ export class Zombie {
 
   /** True while it is pursuing someone it knows about. */
   get engaged(): boolean {
-    return this.state === 'chase' || this.state === 'attack' || this.state === 'bash' || (this.target !== null && this.state !== 'wander');
+    return this.state === 'chase' || this.state === 'attack' || this.state === 'bash' || this.state === 'breach' || this.state === 'vault'
+      || (this.target !== null && this.state !== 'wander');
   }
 
   setState(s: ZombieState): void {
@@ -196,12 +208,14 @@ export class Zombie {
     }
     if (s === 'scream') this.screamCalled = false;
     if (s !== 'bash') this.bashDoor = -1;
+    if (s !== 'breach' && s !== 'vault') this.breachSlot = -1;
   }
 
   /** Starts walking somewhere (noise, alert from another zombie). */
   investigate(at: Vec3, spread: number): void {
     if (this.state === 'chase' && this.sim.time - this.lastSeen < 2) return;
-    if (this.state === 'attack' || this.state === 'stagger' || this.state === 'down' || this.state === 'dead' || this.state === 'bash') return;
+    if (this.state === 'attack' || this.state === 'stagger' || this.state === 'down' || this.state === 'dead' || this.state === 'bash'
+      || this.state === 'breach' || this.state === 'vault') return;
     const r = this.rand;
     const a = r() * Math.PI * 2;
     const d = Math.sqrt(r()) * spread;
@@ -277,7 +291,7 @@ export class Zombie {
       if (!loudest || score < loudest.score) loudest = { pos: n.pos, source: n.source, score };
     }
     this.heardUpTo = sim.time;
-    if (loudest && !best && this.state !== 'bash') {
+    if (loudest && !best && this.state !== 'bash' && this.state !== 'breach' && this.state !== 'vault') {
       const dist = dist2D(loudest.pos, this.pos);
       if (this.target && loudest.source === this.target) {
         // The one it hunts gave themselves away.
@@ -335,7 +349,8 @@ export class Zombie {
     if (this.state === 'idle' || this.state === 'wander' || this.state === 'approach' || this.state === 'investigate' || this.state === 'bash') {
       this.setState('chase');
     }
-    if (this.state === 'down') return false;
+    // Halfway through a window it can't be knocked about (it would end up inside the wall).
+    if (this.state === 'down' || this.state === 'vault') return false;
     if (this.legDamage >= this.def.health * 0.5 && this.rand() < 0.7) {
       this.legDamage = 0;
       this.setState('down');
@@ -371,6 +386,11 @@ export class Zombie {
     if (sim.time > this.groanAt) {
       this.groanAt = sim.time + (this.engaged ? 3 + this.rand() * 4 : 7 + this.rand() * 12);
       sim.emit({ type: 'zombieGroan', zombie: this.id, pos: { ...this.pos } });
+    }
+
+    if (this.state === 'vault') {
+      this.climb();
+      return;
     }
 
     let wishX = 0, wishZ = 0, speed = 0;
@@ -549,9 +569,48 @@ export class Zombie {
           sim.emit({ type: 'doorPound', door: door.index, pos: { ...this.pos } });
           // The pounding carries: others nearby come to help.
           sim.noise(door.center, 14, `z${this.id}`);
-          if (door.pound(this.def.bash * (1 - LIMBS.bashLoss * this.armsLost), this.pos.x, this.pos.z)) {
+          if (sim.poundDoor(door, this.def.bash * (1 - LIMBS.bashLoss * this.armsLost), this.pos.x, this.pos.z)) {
             sim.emit({ type: 'doorForced', door: door.index, pos: { ...door.center } });
           }
+        }
+        this.attackT += dt;
+        if (this.stateT > 30) this.wander();
+        break;
+      }
+      case 'breach': {
+        const b = sim.barricades;
+        const slot = b.slots[this.breachSlot];
+        if (!slot || slot.outNode < 0) {
+          this.setState(this.target ? 'chase' : 'investigate');
+          this.needPath = true;
+          break;
+        }
+        faceX = slot.center.x - this.pos.x;
+        faceZ = slot.center.z - this.pos.z;
+        const mySide = b.side(slot, this.pos.x, this.pos.z);
+        const seen = target && sim.time - this.lastSeen < 1.5;
+        // The one it hunts is out here after all: go after them.
+        if (target && seen && b.side(slot, target.motion.pos.x, target.motion.pos.z) === mySide) {
+          this.setState('chase');
+          this.needPath = true;
+          break;
+        }
+        if (b.clear(slot)) {
+          // Someone right behind an empty window gets clawed at through it.
+          if (target && seen && this.attackCd <= 0 && dist2D(this.pos, target.motion.pos) < this.def.attackRange + 0.5
+            && Math.abs(target.motion.pos.y - this.pos.y) < 1.5) {
+            this.setState('attack');
+            sim.emit({ type: 'zombieAttack', zombie: this.id, target: target.id });
+            break;
+          }
+          if (sim.time >= slot.busyUntil) this.startClimb(slot, mySide);
+          break;
+        }
+        if (sim.time > this.bashAt) {
+          this.bashAt = sim.time + 0.85 + this.rand() * 0.35;
+          this.attackT = 0;
+          sim.noise(slot.center, 14, `z${this.id}`);
+          sim.poundWindow(slot, this.def.bash * (1 - LIMBS.bashLoss * this.armsLost), this.pos);
         }
         this.attackT += dt;
         if (this.stateT > 30) this.wander();
@@ -615,17 +674,47 @@ export class Zombie {
         seed: this.seed,
         doorCost: (i) => {
           const d = sim.doors[i];
+          if (!d || d.open) return 0;
           // Hunting zombies will break a door down; idle ones walk around closed houses.
-          return d && !d.open ? (this.state === 'wander' ? 60 : 6) : 0;
+          const boards = sim.barricades.forDoor(i)?.boards ?? 0;
+          return this.state === 'wander' ? 60 + boards * 20 : 6 + boards * 7;
+        },
+        linkCost: (id) => {
+          const slot = sim.barricades.forLink(id);
+          if (!slot) return Infinity;
+          // Climbing in is slower than a door; idle ones only wander through a window already open.
+          if (this.state === 'wander') return sim.barricades.clear(slot) ? 6 : Infinity;
+          return 10 + (slot.glass ? 10 : 0) + slot.boards * 7;
         },
       });
       this.path = res ? this.alignDoors(res.points) : [];
       this.pathDoors = res ? res.doors : [];
+      this.pathVaults = [];
+      if (res) {
+        for (const l of res.links) {
+          const i = this.path.findIndex((p) => Math.abs(p.x - l.to.x) < 1e-3 && Math.abs(p.z - l.to.z) < 1e-3 && Math.abs(p.y - l.to.y) < 1e-3);
+          if (i > 0) this.pathVaults.push({ i, slot: l.id - WINDOW_LINK_BASE, from: l.from, to: l.to });
+        }
+      }
       this.pathI = this.path.length > 1 ? 1 : 0;
       this.pathTarget = { ...this.goal };
       if (res && !res.complete) this.repathAt = sim.time + 0.6;
     }
     while (this.pathI < this.path.length) {
+      const vault = this.pathVaults.find((v) => v.i === this.pathI);
+      if (vault) {
+        const dx = vault.from.x - this.pos.x, dz = vault.from.z - this.pos.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 0.8 && Math.abs(vault.from.y - this.pos.y) < 0.7) {
+          // At the window: smash it, beat the boards off, climb through.
+          this.pathI++;
+          this.setState('breach');
+          this.breachSlot = vault.slot;
+          this.bashAt = sim.time + 0.25;
+          return [0, 0];
+        }
+        if (d > 0.05) return [dx / d, dz / d];
+      }
       const wp = this.path[this.pathI];
       const dx = wp.x - this.pos.x, dz = wp.z - this.pos.z;
       const d = Math.hypot(dx, dz);
@@ -668,7 +757,7 @@ export class Zombie {
       }
     }
     let tx = wishX * speed, tz = wishZ * speed;
-    if (this.state !== 'stagger' && this.state !== 'down' && this.state !== 'bash') {
+    if (this.state !== 'stagger' && this.state !== 'down' && this.state !== 'bash' && this.state !== 'breach') {
       tx += sx * 1.4;
       tz += sz * 1.4;
     }
@@ -876,9 +965,61 @@ export class Zombie {
   /** Swipe progress 0..1 for the animation (-1 when not attacking). */
   get attackPhase(): number {
     if (this.state === 'attack') return clamp(this.attackT / (this.def.windup + 0.45), 0, 1);
-    if (this.state === 'bash') return clamp(this.attackT / 0.8, 0, 1);
+    if (this.state === 'bash' || this.state === 'breach') return clamp(this.attackT / 0.8, 0, 1);
     if (this.state === 'scream') return clamp(this.attackT / SPECIALS.screamer.duration, 0, 1);
     return -1;
+  }
+
+  /** Over the sill: from where it stands to the landing on the far side. */
+  private startClimb(slot: { index: number; bottom: number; outNode: number; inNode: number; busyUntil: number }, mySide: number): void {
+    const nav = this.sim.nav;
+    const far = mySide > 0 ? slot.inNode : slot.outNode;
+    this.vaultFrom = { ...this.pos };
+    this.vaultTo = nav.nodePos(far);
+    this.vaultTop = slot.bottom + 0.08;
+    this.vaultDur = this.kind === 'brute' ? BARRICADE.bruteVaultTime : BARRICADE.vaultTime;
+    slot.busyUntil = this.sim.time + this.vaultDur * 0.8;
+    const slotIndex = this.breachSlot;
+    this.setState('vault');
+    this.breachSlot = slotIndex;
+    this.vel.x = this.vel.z = 0;
+    this.sim.emit({ type: 'vault', zombie: this.id, slot: slot.index });
+  }
+
+  private climb(): void {
+    const from = this.vaultFrom, to = this.vaultTo;
+    if (!from || !to) {
+      this.setState('chase');
+      return;
+    }
+    const u = clamp(this.stateT / this.vaultDur, 0, 1);
+    // Hauls itself up onto the sill, then tips over and drops down the far side.
+    const lift = clamp(u / 0.45, 0, 1);
+    const across = clamp((u - 0.3) / 0.5, 0, 1);
+    const drop = clamp((u - 0.75) / 0.25, 0, 1);
+    const ease = (t: number) => t * t * (3 - 2 * t);
+    const x = from.x + (to.x - from.x) * ease(across);
+    const z = from.z + (to.z - from.z) * ease(across);
+    const top = Math.max(this.vaultTop, from.y, to.y);
+    const y = drop > 0 ? top + (to.y - top) * ease(drop) : from.y + (top - from.y) * ease(lift);
+    this.facing = Math.atan2(to.x - from.x, to.z - from.z);
+    this.turnRate = 0;
+    this.moveSpeed = 0.6;
+    this.pos.x = x;
+    this.pos.y = y;
+    this.pos.z = z;
+    this.body.setNextKinematicTranslation({ x, y: y + this.def.height / 2 + 0.02, z });
+    if (u < 1) return;
+    this.vy = 0;
+    this.grounded = true;
+    this.vaultFrom = this.vaultTo = null;
+    this.progressRef.x = x;
+    this.progressRef.y = y;
+    this.progressRef.z = z;
+    this.stuckT = 0;
+    this.setState(this.target ? 'chase' : this.goal ? 'investigate' : 'wander');
+    if (this.state === 'wander') this.wander();
+    this.needPath = true;
   }
 
   removeBody(): void {

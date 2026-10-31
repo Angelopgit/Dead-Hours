@@ -1,4 +1,4 @@
-import { RAPIER, GROUP, groups, type Physics } from '../physics/Physics';
+import { RAPIER, GROUP, groups, type Physics, type RayHit } from '../physics/Physics';
 import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
@@ -14,6 +14,8 @@ import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGri
 import { rayZones, along, type ZoneShape } from './hitzones';
 import { ZOMBIE_STEP, Zombie } from './Zombie';
 import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes';
+import { Barricades, type BarricadeSlot } from './Barricades';
+import { BARRICADE } from '../config/barricades';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 
@@ -60,6 +62,8 @@ export class SimPlayer {
   diedAt = 0;
   /** Wire form of the survivor's look (encodeAppearance), for the clients that render them. */
   appearance = '';
+  /** Nailing boards up or prying them off, while the key is held. */
+  work: { slot: number; kind: 'board' | 'pry'; t: number; hammerT: number } | null = null;
 
   constructor(readonly id: string, readonly name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number) {
     this.arsenal = new Arsenal(primary, secondary);
@@ -152,6 +156,9 @@ export interface SimOptions {
   preparation?: number;
 }
 
+/** Bullet damage that bursts a closed door open (an AR round is about 30). */
+const COMBAT_DOOR_HP = 420;
+
 const FALLOFF = (def: WeaponDef, t: number): number => {
   const r = def.range;
   if (t <= r * COMBAT.falloffStart) return 1;
@@ -222,6 +229,9 @@ export class Simulation {
   /** Bloaters killed and waiting to burst (a blast can set off another: they go in turn). */
   private readonly bursts: { z: Zombie; by: SimPlayer }[] = [];
   private bursting = false;
+  /** Boards on the doors and windows of the homes. */
+  readonly barricades: Barricades;
+  private readonly doorByCollider = new Map<number, DoorBody>();
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -240,6 +250,8 @@ export class Simulation {
       ctrl.setSlideEnabled(true);
       return ctrl;
     };
+    this.barricades = new Barricades(this.map, this.nav, this.doors, this.physics);
+    for (const d of this.doors) if (d) this.doorByCollider.set(d.collider.handle, d);
     this.zombieController = controller(true);
     this.zombieWalker = controller(false);
 
@@ -328,6 +340,126 @@ export class Simulation {
     return best;
   }
 
+  /** A boarded-up door won't open until the boards come off. */
+  doorLocked(door: number): boolean {
+    return (this.barricades.forDoor(door)?.boards ?? 0) > 0;
+  }
+
+  /** A zombie pounding on a closed door: boards first, then the door itself. Returns true when it bursts open. */
+  poundDoor(door: DoorBody, amount: number, fromX: number, fromZ: number): boolean {
+    const slot = this.barricades.forDoor(door.index);
+    if (slot && slot.boards > 0) {
+      if (this.barricades.pound(slot, amount)) this.boardBroke(slot);
+      return false;
+    }
+    return door.pound(amount, fromX, fromZ);
+  }
+
+  /**
+   * A zombie at a window: the first blow smashes the glass, the next ones work on the boards.
+   * Returns true once the way is clear.
+   */
+  poundWindow(slot: BarricadeSlot, amount: number, from: Vec3): boolean {
+    const b = this.barricades;
+    if (b.breakGlass(slot)) {
+      this.emit({ type: 'glassBroken', slot: slot.index, pos: { ...slot.center }, dir: { x: -slot.normal.x * b.side(slot, from.x, from.z), y: 0, z: -slot.normal.z * b.side(slot, from.x, from.z) } });
+      this.noise(slot.center, 18, null);
+    } else if (slot.boards > 0) {
+      this.emit({ type: 'barricadeHit', slot: slot.index, pos: { ...slot.center } });
+      if (b.pound(slot, amount)) this.boardBroke(slot);
+    }
+    return b.clear(slot);
+  }
+
+  /**
+   * A ray for bullets: window panes it meets shatter and it carries on through the empty frame.
+   * Returns what finally stops it.
+   */
+  castThrough(o: Vec3, d: Vec3, maxD: number): RayHit | null {
+    for (let i = 0; i < 4; i++) {
+      const hit = this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
+      const slot = hit ? this.barricades.forPane(hit.collider.handle) : undefined;
+      if (!hit || !slot || !this.barricades.breakGlass(slot)) return hit;
+      this.emit({ type: 'glassBroken', slot: slot.index, pos: { x: o.x + d.x * hit.distance, y: o.y + d.y * hit.distance, z: o.z + d.z * hit.distance }, dir: { ...d } });
+      this.noise(slot.center, 18, null);
+    }
+    return this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
+  }
+
+  /** A bullet in a closed door: it splinters boards first, then works the latch loose until the door swings in. */
+  shootDoor(door: DoorBody, damage: number, from: Vec3): void {
+    if (door.open) return;
+    if (this.poundDoor(door, damage / COMBAT_DOOR_HP, from.x, from.z)) this.emit({ type: 'doorForced', door: door.index, pos: { ...door.center } });
+  }
+
+  private boardBroke(slot: BarricadeSlot): void {
+    this.emit({ type: 'barricade', slot: slot.index, boards: slot.boards, change: 'broken', player: null, pos: { ...slot.center } });
+  }
+
+  /** Whether a survivor can work on a slot from where they stand: inside, within reach. */
+  canWork(p: SimPlayer, slot: BarricadeSlot): boolean {
+    if (!p.alive) return false;
+    const e = p.eye, c = slot.center;
+    if (Math.hypot(e.x - c.x, (e.y - c.y) * 0.5, e.z - c.z) > BARRICADE.reach) return false;
+    return this.barricades.side(slot, p.motion.pos.x, p.motion.pos.z) < 0;
+  }
+
+  /** What working on a slot would do now: nail a board, pry one off, or nothing. */
+  workFor(p: SimPlayer, slot: BarricadeSlot, kind: 'board' | 'pry'): boolean {
+    if (!this.canWork(p, slot)) return false;
+    if (kind === 'pry') return slot.boards > 0;
+    if (slot.boards >= slot.max) return false;
+    // A door is boarded shut, not open.
+    if (slot.kind === 'door' && this.doors[slot.ref]?.open) return false;
+    return true;
+  }
+
+  /** Starts (or, with slot -1, stops) nailing boards up or prying them off; it carries on board after board. */
+  barricade(id: string, slot: number, kind: 'board' | 'pry' = 'board'): boolean {
+    const p = this.players.get(id);
+    if (!p) return false;
+    const s = this.barricades.slots[slot];
+    if (!s || this.phase === 'over' || !this.workFor(p, s, kind)) {
+      p.work = null;
+      return false;
+    }
+    if (p.work && p.work.slot === slot && p.work.kind === kind) return true;
+    p.work = { slot, kind, t: 0, hammerT: 0 };
+    return true;
+  }
+
+  private updateWork(p: SimPlayer, dt: number): void {
+    const w = p.work;
+    if (!w) return;
+    const s = this.barricades.slots[w.slot];
+    const busy = p.arsenal.action === 'melee' || p.arsenal.action === 'bandage';
+    if (!s || busy || !this.workFor(p, s, w.kind)) {
+      p.work = null;
+      return;
+    }
+    w.t += dt;
+    if (w.kind === 'board') {
+      w.hammerT -= dt;
+      if (w.hammerT <= 0) {
+        w.hammerT = BARRICADE.hammerEvery;
+        this.emit({ type: 'hammer', slot: s.index, player: p.id, pos: { ...s.center } });
+        this.noise(s.center, BARRICADE.hammerNoise, p.id);
+      }
+    }
+    if (w.t < (w.kind === 'board' ? BARRICADE.boardTime : BARRICADE.pryTime)) return;
+    w.t = 0;
+    w.hammerT = 0;
+    if (w.kind === 'board') {
+      s.boards++;
+      s.damage = 0;
+    } else {
+      s.boards--;
+      s.damage = 0;
+    }
+    this.emit({ type: 'barricade', slot: s.index, boards: s.boards, change: w.kind === 'board' ? 'nailed' : 'pried', player: p.id, pos: { ...s.center } });
+    if (!this.workFor(p, s, w.kind)) p.work = null;
+  }
+
   /** Where an approaching zombie should head: near the closest survivor, never exactly at them. */
   approachGoal(z: Zombie): Vec3 | null {
     let best: SimPlayer | null = null;
@@ -360,6 +492,7 @@ export class Simulation {
     if (p.health <= 0) {
       p.alive = false;
       p.diedAt = this.time;
+      p.work = null;
       p.arsenal.cancelReload();
       this.dropLimb(p, false);
       this.emit({ type: 'playerDied', player: p.id });
@@ -384,6 +517,7 @@ export class Simulation {
     if (a.limb) return pressed && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
     const def = a.def;
     if (!def.auto && !pressed) return 'busy';
+    p.work = null;
     const state = a.fireState();
     if (state === 'busy') return 'busy';
     if (state === 'empty') {
@@ -418,7 +552,7 @@ export class Simulation {
 
   private traceRound(p: SimPlayer, o: Vec3, d: Vec3, def: WeaponDef): PelletTrace {
     const maxD = def.range * COMBAT.maxRangeFactor;
-    const world = this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
+    const world = this.castThrough(o, d, maxD);
     const worldD = world ? world.distance : maxD;
     const hits: { z: Zombie; zone: HitZone; t: number; along: number }[] = [];
     for (const z of this.zombies) {
@@ -440,7 +574,7 @@ export class Simulation {
     const tx = o.x + d.x * firstT - eye.x, ty = o.y + d.y * firstT - eye.y, tz = o.z + d.z * firstT - eye.z;
     const L = Math.hypot(tx, ty, tz);
     if (L > 0.6) {
-      const ob = this.physics.raycastHit(eye.x, eye.y, eye.z, tx / L, ty / L, tz / L, L - 0.25);
+      const ob = this.castThrough(eye, { x: tx / L, y: ty / L, z: tz / L }, L - 0.25);
       if (ob) {
         const pos = { x: eye.x + (tx / L) * ob.distance, y: eye.y + (ty / L) * ob.distance, z: eye.z + (tz / L) * ob.distance };
         this.emit({ type: 'impact', pos, normal: { x: ob.nx, y: ob.ny, z: ob.nz }, surface: ob.surface, dir: { x: tx / L, y: ty / L, z: tz / L } });
@@ -459,6 +593,8 @@ export class Simulation {
     if (world) {
       const pos = { x: o.x + d.x * world.distance, y: o.y + d.y * world.distance, z: o.z + d.z * world.distance };
       this.emit({ type: 'impact', pos, normal: { x: world.nx, y: world.ny, z: world.nz }, surface: world.surface, dir: { ...d } });
+      const door = this.doorByCollider.get(world.collider.handle);
+      if (door) this.shootDoor(door, def.damage * FALLOFF(def, world.distance), eye);
       return { end: pos, hit: 'world' };
     }
     return { end: { x: o.x + d.x * maxD, y: o.y + d.y * maxD, z: o.z + d.z * maxD }, hit: 'none' };
@@ -1142,6 +1278,7 @@ export class Simulation {
       ticks.length = 0;
       p.arsenal.step(dt, p.motion.aiming, ticks);
       for (const t of ticks) this.onArsenal(p, t);
+      this.updateWork(p, dt);
       // Footsteps carry: sprinting is heard much farther than walking; crouching is silent.
       const speed = p.speed;
       p.footstepT -= dt;

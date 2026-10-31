@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
-  type ActMsg, type ArmZone, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
+  BARRICADE, GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  type ActMsg, type ArmZone, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { codeLabel, typing, type Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
-import { settings } from '../core/Settings';
+import { settings, type Action } from '../core/Settings';
 import { PlayerController } from './PlayerController';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
 import type { Door, DoorSystem } from './Doors';
@@ -25,6 +25,7 @@ import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../wea
 import { Effects } from '../effects/Effects';
 import { ZombieView } from '../zombies/ZombieView';
 import { LimbView } from '../zombies/LimbView';
+import { BarricadeView } from './BarricadeView';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { ChatBox } from '../ui/ChatBox';
@@ -111,6 +112,9 @@ export class GameSession {
   private readonly effects: Effects;
   private readonly zombies: ZombieView;
   private readonly limbs: LimbView;
+  private readonly barricades: BarricadeView;
+  /** Boarding up or prying off: which opening, and how far into this board (this survivor's own estimate online). */
+  private work: { slot: number; kind: 'board' | 'pry'; t: number } | null = null;
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -242,6 +246,7 @@ export class GameSession {
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
+    this.barricades = new BarricadeView(engine.scene, this.sim, field);
     this.drops = new SupplyDrops(engine.scene);
     this.drops.onSmoke = (pos, strong) => this.effects.flareSmoke(pos, strong);
     this.drops.onLand = (pos) => {
@@ -608,6 +613,8 @@ export class GameSession {
       this.remotes!.update(live, this.sim, m, this.engine.camera);
       this.updateVoices();
     }
+    this.barricades.update(live, this.engine.camera);
+    if (this.work) this.work.t += live;
     this.bleedHeldLimb(live);
     if (running) this.drops.update(live, renderTime);
     this.drops.helicopters(this.helis);
@@ -914,11 +921,32 @@ export class GameSession {
 
   private handleInteraction(): void {
     const best = this.pickInteraction();
+    const slot = this.workableSlot();
+    // An opening in reach is boarded up from here unless something else is what the crosshair is on.
+    const own = slot && (!best || (best.kind === 'door' && slot.kind === 'door' && best.door!.body.index === slot.ref)) ? slot : null;
+    if (this.updateWork(own)) return;
+    const key = (a: Action) => codeLabel(settings.value.controls.bindings[a][0] ?? '') || '?';
+    if (own) {
+      const what = own.kind === 'door' ? 'DOOR' : 'WINDOW';
+      const count = `${own.boards}/${own.max}`;
+      if (own.boards > 0) {
+        this.hud.setPrompt('interact', `PRY A BOARD OFF THE ${what} · ${count}${own.boards < own.max ? ` · HOLD ${key('barricade')} TO ADD ONE` : ''}`);
+        return;
+      }
+      if (!best) {
+        this.hud.setPrompt('barricade', `HOLD TO BOARD UP THE ${what}${own.kind === 'window' && !own.glass ? ' · GLASS SMASHED' : ''}`);
+        return;
+      }
+    }
     if (!best) {
       this.hud.setPrompt(null);
       return;
     }
-    if (best.kind === 'door') this.hud.setPrompt('interact', best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR');
+    if (best.kind === 'door') {
+      const locked = this.sim.doorLocked(best.door!.body.index);
+      const hint = own && !best.door!.open ? ` · HOLD ${key('barricade')} TO BOARD UP` : '';
+      this.hud.setPrompt('interact', locked ? 'BOARDED UP FROM INSIDE' : `${best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR'}${hint}`);
+    }
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
     else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
@@ -931,6 +959,10 @@ export class GameSession {
     } else this.hud.setPrompt('interact', 'SELECT WEAPON');
     if (!this.input.pressed('interact')) return;
     if (best.kind === 'door') {
+      if (this.sim.doorLocked(best.door!.body.index)) {
+        audio.doorPound(best.door!.center);
+        return;
+      }
       best.door!.toggle(this.player.position);
       audio.door(best.door!.open);
       if (this.link) {
@@ -949,6 +981,48 @@ export class GameSession {
     } else {
       this.sim.use(this.myId, best.it!.id);
     }
+  }
+
+  /** The opening this survivor could work on from where they stand (inside, within reach), if any. */
+  private workableSlot(): BarricadeSlot | null {
+    if (!this.me.alive) return null;
+    const p = this.player.position;
+    const slot = this.barricades.nearest(this.tmpA.set(p.x, p.y + this.player.eyeHeight, p.z), BARRICADE.reach);
+    return slot && this.sim.canWork(this.me, slot) ? slot : null;
+  }
+
+  /**
+   * [barricade] held nails boards up on the opening in reach, [interact] held on a boarded one pries
+   * them off, a board after another while the key stays down. Returns true while working.
+   */
+  private updateWork(slot: BarricadeSlot | null): boolean {
+    let want: 'board' | 'pry' | null = null;
+    const input = this.input;
+    if (slot) {
+      if (input.held('barricade') && this.sim.workFor(this.me, slot, 'board')) want = 'board';
+      else if (input.held('interact') && (input.pressed('interact') || this.work?.kind === 'pry') && this.sim.workFor(this.me, slot, 'pry')) want = 'pry';
+    }
+    const cur = this.work;
+    if (!want || !slot) {
+      if (cur) this.sendWork(null);
+      return false;
+    }
+    if (!cur || cur.slot !== slot.index || cur.kind !== want) this.sendWork({ slot: slot.index, kind: want, t: 0 });
+    const w = this.work!;
+    const total = want === 'board' ? BARRICADE.boardTime : BARRICADE.pryTime;
+    const t = this.link ? w.t : (this.me.work?.t ?? w.t);
+    const pct = Math.min(99, Math.round((t / total) * 100));
+    const what = slot.kind === 'door' ? 'DOOR' : 'WINDOW';
+    this.hud.setPrompt(want === 'board' ? 'barricade' : 'interact',
+      want === 'board' ? `NAILING BOARD ${slot.boards + 1}/${slot.max} ON THE ${what} · ${pct}%` : `PRYING A BOARD OFF · ${slot.boards}/${slot.max} · ${pct}%`);
+    return true;
+  }
+
+  private sendWork(w: { slot: number; kind: 'board' | 'pry'; t: number } | null): void {
+    this.work = w;
+    if (this.link) this.link.act(w ? { a: 'barricade', slot: w.slot, k: w.kind } : { a: 'barricade', slot: -1, k: 'stop' });
+    else if (w) this.sim.barricade(this.myId, w.slot, w.kind);
+    else this.sim.barricade(this.myId, -1);
   }
 
   /** What [E] acts on: the reachable thing closest to where the camera looks. */
@@ -1129,9 +1203,47 @@ export class GameSession {
         if (e.by === this.myId) this.hud.feedLine('BLOATER BURST');
         break;
       }
-      case 'doorPound':
+      case 'doorPound': {
         audio.doorPound(v3(e.pos, A));
+        const slot = this.sim.barricades.forDoor(e.door);
+        if (slot && slot.boards > 0) this.barricades.hit(slot.index);
         break;
+      }
+      case 'barricadeHit':
+        audio.doorPound(v3(e.pos, A));
+        this.barricades.hit(e.slot);
+        break;
+      case 'hammer':
+        audio.hammer(v3(e.pos, A));
+        break;
+      case 'barricade': {
+        audio.board(v3(e.pos, A), e.change);
+        if (e.player === this.myId && this.work) this.work.t = 0;
+        if (e.change === 'broken') {
+          const slot = this.sim.barricades.slots[e.slot];
+          // Splinters fly into the room.
+          if (slot) this.effects.splinters(A, B.set(-slot.normal.x, 0, -slot.normal.z));
+          this.barricades.hit(e.slot);
+        }
+        break;
+      }
+      case 'glassBroken': {
+        v3(e.pos, A);
+        audio.glassBreak(A);
+        const slot = this.sim.barricades.slots[e.slot];
+        if (slot) {
+          B.set(slot.normal.x, 0, slot.normal.z);
+          if (B.dot(C.set(e.dir.x, e.dir.y, e.dir.z)) < 0) B.negate();
+          for (let i = 0; i < 4; i++) {
+            const p = this.tmpD.set(slot.center.x, slot.center.y, slot.center.z);
+            p.x += (Math.random() - 0.5) * slot.width * (slot.axis === 'x' ? 0.8 : 0);
+            p.z += (Math.random() - 0.5) * slot.width * (slot.axis === 'z' ? 0.8 : 0);
+            p.y += (Math.random() - 0.5) * slot.height * 0.8;
+            this.effects.impact(p, B, 'glass', C);
+          }
+        }
+        break;
+      }
       case 'doorForced': {
         v3(e.pos, A);
         audio.doorBurst(A);
@@ -1635,6 +1747,7 @@ export class GameSession {
     this.sim.dispose();
     this.zombies.dispose();
     this.limbs.dispose();
+    this.barricades.dispose();
     this.drops.dispose();
     audio.helicopters(new Map());
     this.effects.dispose();

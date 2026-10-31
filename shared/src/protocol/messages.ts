@@ -73,7 +73,9 @@ export type ActMsg =
   | { a: 'use'; id: number }
   | { a: 'primary'; weapon: WeaponId }
   | { a: 'grab'; limb: number }
-  | { a: 'door'; door: number };
+  | { a: 'door'; door: number }
+  /** Starts nailing boards up or prying them off a door or window (carries on while held); 'stop' lets go. */
+  | { a: 'barricade'; slot: number; k: 'board' | 'pry' | 'stop' };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

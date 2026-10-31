@@ -75,6 +75,8 @@ export class Physics {
   private readonly surfaces = new Map<number, Surface | 'ground'>();
   /** Visual-only ground covers (roads, gravel, patios) that decide what the terrain is made of. */
   private readonly covers: { x0: number; x1: number; z0: number; z1: number; top: number; surface: Surface }[] = [];
+  /** Window glass colliders of enterable buildings (smashed panes are switched off). */
+  private readonly panes: { x: number; y: number; z: number; collider: RAPIER.Collider }[] = [];
 
   constructor(readonly map: MapDefinition) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -84,6 +86,7 @@ export class Physics {
     const add = (desc: RAPIER.ColliderDesc, surface: Surface | 'ground') => {
       const c = this.world.createCollider(desc.setCollisionGroups(staticGroups), body);
       this.surfaces.set(c.handle, surface);
+      return c;
     };
 
     // Ground slab (open where basements are dug out) and world boundary.
@@ -105,7 +108,8 @@ export class Physics {
         }
         continue;
       }
-      add(RAPIER.ColliderDesc.cuboid(s.w / 2, s.h / 2, s.d / 2).setTranslation(s.x, s.y, s.z), s.glass ? 'glass' : MATERIAL_SURFACE[s.mat]);
+      const c = add(RAPIER.ColliderDesc.cuboid(s.w / 2, s.h / 2, s.d / 2).setTranslation(s.x, s.y, s.z), s.glass ? 'glass' : MATERIAL_SURFACE[s.mat]);
+      if (s.glass) this.panes.push({ x: s.x, y: s.y, z: s.z, collider: c });
     }
 
     for (const p of map.props) {
@@ -151,6 +155,12 @@ export class Physics {
   /** The terrain slab: nothing walkable lies under it. */
   isGround(collider: RAPIER.Collider): boolean {
     return this.surfaces.get(collider.handle) === 'ground';
+  }
+
+  /** The glass collider filling the window centred at a point, if any. */
+  paneAt(x: number, y: number, z: number): RAPIER.Collider | null {
+    for (const p of this.panes) if (Math.abs(p.x - x) < 0.05 && Math.abs(p.y - y) < 0.05 && Math.abs(p.z - z) < 0.05) return p.collider;
+    return null;
   }
 
   /** Registers what a collider created elsewhere (door leaves) is made of. */
