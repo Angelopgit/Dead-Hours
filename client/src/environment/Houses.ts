@@ -6,6 +6,9 @@ import { worldBox } from '../rendering/GeometryUtils';
 
 /** Tessellation for large static faces so baked lighting has vertices to live on. */
 export const BAKE_CELL = 1.25;
+/** The trim band between storeys: how far it stands out of the siding, and its depth into the wall. */
+const BAND_OUT = 0.04;
+const BAND_DEPTH = 0.12;
 
 /** Quad from four corners (counter-clockwise when viewed from the front) with metric UVs. */
 function quad(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3, texScale: number): THREE.BufferGeometry {
@@ -153,8 +156,13 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
       batch.add(worldBox(h.x, slab + (top - slab) / 2, h.z, h.w - 0.02, top - slab, h.d - 0.02, siding.texScale, { groundY: slab, strength: 0.4 }, BAKE_CELL), siding.material);
     }
     if (h.floors === 2) {
+      // Band between the storeys: four strips sunk into the walls' siding. (One box over the whole
+      // footprint used to hide inside the floor and show as a slab over the stairwell.)
       const y = slab + ground + STORY.floorThickness / 2;
-      batch.add(worldBox(h.x, y, h.z, h.w + 0.08, 0.22, h.d + 0.08, 1, null), trim);
+      for (const s of [-1, 1]) {
+        batch.add(worldBox(h.x, y, h.z + s * (h.d / 2 - BAND_DEPTH / 2 + BAND_OUT), h.w + BAND_OUT * 2, 0.22, BAND_DEPTH, 1, null), trim);
+        batch.add(worldBox(h.x + s * (h.w / 2 - BAND_DEPTH / 2 + BAND_OUT), y, h.z, BAND_DEPTH, 0.22, h.d + BAND_OUT * 2, 1, null), trim);
+      }
     }
     // Corner boards (not on walls shared with a neighbour).
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) {

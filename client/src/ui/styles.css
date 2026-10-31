@@ -183,6 +183,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 /* ── Pause ────────────────────────────────────────────── */
 .pause { position: absolute; inset: 0; background: rgba(5, 7, 10, 0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+/* Online the game stays in view behind the menu: it is still running. */
+.pause.live { background: linear-gradient(90deg, rgba(5, 7, 10, 0.78) 0%, rgba(5, 7, 10, 0.35) 45%, rgba(5, 7, 10, 0) 70%); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .pause .menu-main { left: 7vw; }
 .pause .title { font-size: 2.4em; }
 .click-to-play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); letter-spacing: 0.35em; font-family: var(--font-display); color: var(--fg-dim); font-size: 0.95em; }

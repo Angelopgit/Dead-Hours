@@ -608,7 +608,7 @@ export class GameSession {
     this.bleedHeldLimb(live);
     if (running) this.drops.update(live, renderTime);
     this.drops.helicopters(this.helis);
-    audio.helicopters(this.phase === 'paused' ? new Map() : this.helis);
+    audio.helicopters(this.phase === 'paused' && !this.link ? new Map() : this.helis);
     this.effects.update(live, this.engine.camera);
     this.rack?.update(dt, this.engine.camera);
 

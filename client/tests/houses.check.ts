@@ -5,14 +5,18 @@
  * Checks that walls have no gaps (solid wall everywhere except real openings, glass in every
  * window), that every floor and ceiling is whole except over stairs, that floorboards cover
  * every room and door threshold, that nothing blocks a doorway, a staircase or the inside of a
- * window, that furniture stands on a floor, that every room can be walked to, and that every
- * storey has a light.
+ * window, that furniture stands on a floor, that every room can be walked to, that every
+ * storey has a light, and that none of the renderer's house dressing hangs in a stairwell.
  */
 import {
   MAPLE_HOLLOW as map, NAV_REACHABLE, Physics, STORY, buildNavGridSync, propColliders, storeyFloors, houseTop,
   type HouseSpec, type StaticBox, type StairSpec,
 } from '@dead-hours/shared';
+import * as THREE from 'three';
 import { RAPIER, initPhysics } from '../src/core/Physics';
+import { dressHouses } from '../src/environment/Houses';
+import type { MaterialLibrary } from '../src/rendering/Materials';
+import type { StaticBatcher } from '../src/rendering/StaticBatcher';
 
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log('  FAIL ' + msg); };
@@ -323,6 +327,41 @@ console.log('Every room can be walked to from the safehouse');
     if (cut > 3) fail(`${h.id}: ${cut} of ${total} floor cells unreachable, e.g. ${cutAt.join(' ')}`);
     else ok(`${h.id}: ${total - cut}/${total} floor cells reachable over ${levels.length} level(s)`);
   }
+}
+
+console.log('Stairwells: no house dressing (trim, frames, roofs) inside a stairwell');
+{
+  // The renderer's dressing, built without a GPU: stand-in materials, a canvas that draws nothing.
+  const flat = () => new THREE.MeshBasicMaterial();
+  const lib = { get: () => ({ material: flat(), texScale: 1 }), custom: flat, standard: flat, textures: {} } as unknown as MaterialLibrary;
+  const pen = new Proxy({}, { get: () => () => ({ width: 0 }), set: () => true });
+  (globalThis as { document?: unknown }).document ??= { createElement: () => ({ width: 0, height: 0, getContext: () => pen }) };
+  const meshes: THREE.Mesh[] = [];
+  dressHouses(map, lib, { add: (g: THREE.BufferGeometry) => meshes.push(new THREE.Mesh(g)) } as unknown as StaticBatcher);
+  const ray = new THREE.Raycaster();
+  const down = new THREE.Vector3(0, -1, 0);
+  let n = 0;
+  for (const st of map.stairs) {
+    const len = Math.abs(st.to - st.from), dir = Math.sign(st.to - st.from);
+    const steps = Math.max(2, Math.round((st.y1 - st.y0) / 0.19));
+    const top = Math.max(st.y0, st.y1) + 1.8;
+    let hits = 0;
+    for (let s = 0.1; s < len - 0.05; s += 0.2) {
+      // Top of the step under this point (steps rise from `from`).
+      const tread = st.y0 + (Math.min(steps - 1, Math.floor((s / len) * steps)) + 1) * (st.y1 - st.y0) / steps;
+      // Kept clear of the side walls, where a window stool may stand out over a stairwell.
+      for (const across of [st.a0 + 0.2, (st.a0 + st.a1) / 2, st.a1 - 0.2]) {
+        const along = st.from + dir * s;
+        const o = st.axis === 'z' ? new THREE.Vector3(across, top, along) : new THREE.Vector3(along, top, across);
+        ray.set(o, down);
+        ray.far = top - tread - 0.02;
+        const hit = ray.intersectObjects(meshes, false)[0];
+        if (hit && ++hits <= 2) fail(`stairs ${st.houseId} (${f2(st.from)}->${f2(st.to)}): dressing at (${f2(hit.point.x)}, ${f2(hit.point.y)}, ${f2(hit.point.z)}) over the steps`);
+      }
+    }
+    if (hits) n++;
+  }
+  if (!n) ok(`${map.stairs.length} staircases: nothing of the dressing between the steps and ${f2(1.8)} m above the top`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL HOUSE CHECKS PASSED');

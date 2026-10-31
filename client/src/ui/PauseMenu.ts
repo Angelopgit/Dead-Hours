@@ -17,8 +17,9 @@ export class PauseMenu {
     const item = (label: string, fn: () => void) =>
       h('button', { class: 'menu-item', onmouseenter: () => audio.ui('hover'), onclick: () => { audio.ui('click'); fn(); } }, label);
     this.main = h('div', { class: 'menu-main' },
-      h('h1', { class: 'title' }, 'PAUSED'),
-      h('div', { class: 'subtitle' }, online ? 'The others play on. So do they.' : 'The night does not wait.'),
+      // Online nothing stops: the server runs the night for everyone, whoever has the menu open.
+      h('h1', { class: 'title' }, online ? 'MENU' : 'PAUSED'),
+      h('div', { class: 'subtitle' }, online ? 'The night goes on. You can still be hit.' : 'The night does not wait.'),
       h('nav', { class: 'menu-list' },
         item('RESUME', onResume),
         link ? item('PLAYERS', () => this.openPlayers()) : null,
@@ -26,7 +27,7 @@ export class PauseMenu {
         item(online ? 'LEAVE GAME' : 'QUIT TO MENU', onQuit),
       ),
     );
-    this.el = h('div', { class: 'pause' }, this.main);
+    this.el = h('div', { class: online ? 'pause live' : 'pause' }, this.main);
   }
 
   /** Everyone in the room: speaking lights, voice mute and volume, hiding chat, blocking. */
