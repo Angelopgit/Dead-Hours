@@ -24,6 +24,8 @@ import { BARRICADE } from '../config/barricades';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { GibPart, HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 import { Explosives } from './Explosives';
+import { Skateboards } from './Skateboards';
+import { SKATEBOARD } from '../config/skateboards';
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -39,6 +41,10 @@ export interface PlayerMotion {
   grounded: boolean;
   /** Their flashlight is switched on (others see the beam online). */
   light?: boolean;
+  /** Riding a skateboard: which way the deck points (radians, like a facing). */
+  board?: number;
+  /** Kicking along on the skateboard (others see the back foot push). */
+  pushing?: boolean;
 }
 
 export interface PlayerStats {
@@ -269,6 +275,8 @@ export class Simulation {
   private readonly doorByCollider = new Map<number, DoorBody>();
   /** Grenades and Molotovs in the air, and fires burning. */
   readonly explosives: Explosives;
+  /** Skateboards lying about, and who is riding which. */
+  readonly skateboards: Skateboards;
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -302,6 +310,7 @@ export class Simulation {
       if (f & NAV_REACHABLE && !(f & NAV_INDOOR)) nodes.push(i);
     }
     this.outdoorNodes = Int32Array.from(nodes);
+    this.skateboards = new Skateboards(this, opts.seed ?? 1, this.outdoorNodes);
 
     let id = 0;
     for (const p of this.map.props) {
@@ -347,6 +356,7 @@ export class Simulation {
     if (p) {
       this.dropLimb(p, false);
       this.dropMelee(p);
+      this.skateboards.hopOff(p, 'off');
     }
     this.players.delete(id);
     this.stopRevive(id);
@@ -548,6 +558,8 @@ export class Simulation {
     p.health = Math.max(0, p.health - damage);
     if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
     this.emit({ type: 'playerHurt', player: p.id, damage, from: { ...from }, health: p.health });
+    // A hard enough hit throws a skateboarder off the deck.
+    this.skateboards.hit(p, damage);
     if (p.health > 0) return;
     if (this.canGoDown(p)) this.downPlayer(p);
     else this.killPlayer(p);
@@ -571,6 +583,7 @@ export class Simulation {
     p.arsenal.cancelReload();
     if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
     this.dropLimb(p, false);
+    this.skateboards.hopOff(p, 'bail');
     this.stopRevive(p.id);
     this.emit({ type: 'playerDowned', player: p.id, bleed: p.bleed, last: p.downs >= DOWNED.maxDowns });
   }
@@ -588,6 +601,7 @@ export class Simulation {
     p.arsenal.cancelReload();
     this.dropLimb(p, false);
     this.dropMelee(p);
+    this.skateboards.hopOff(p, 'bail');
     this.stopRevive(p.id);
     this.emit({ type: 'playerDied', player: p.id });
     if (wipe) this.checkWipe();
@@ -718,7 +732,9 @@ export class Simulation {
     const eye = p.eye;
     let o = origin;
     if (!(Math.hypot(origin.x - eye.x, origin.y - eye.y, origin.z - eye.z) <= COMBAT.maxOriginOffset)) o = eye;
-    const spread = a.spread({ speed: p.speed, crouching: p.motion.crouching, grounded: p.motion.grounded, aiming: p.motion.aiming });
+    // Rolling on a skateboard is smooth: only part of the speed shakes the aim.
+    const speed = this.skateboards.ridden(id) ? p.speed * SKATEBOARD.spreadSpeed : p.speed;
+    const spread = a.spread({ speed, crouching: p.motion.crouching, grounded: p.motion.grounded, aiming: p.motion.aiming });
     a.consume();
     p.stats.shotsFired++;
     this.noise(p.motion.pos, def.noise, id);
@@ -1066,6 +1082,21 @@ export class Simulation {
   /** Nearest interactable in reach of a player. */
   interactableFor(id: string): Interactable | null {
     return this.reachable(id)[0] ?? null;
+  }
+
+  /** Hops onto a skateboard lying in reach. */
+  rideBoard(id: string, board: number): boolean {
+    const p = this.players.get(id);
+    return !!p && this.phase !== 'over' && this.skateboards.ride(p, board);
+  }
+
+  /**
+   * Steps off the skateboard (it comes to rest at `at`, where the rider's browser put it, when that
+   * is close by). `bail`: the rider's browser says a wall threw them off.
+   */
+  leaveBoard(id: string, at?: Vec3, yaw?: number, bail = false): boolean {
+    const p = this.players.get(id);
+    return !!p && this.skateboards.hopOff(p, bail ? 'bail' : 'off', at, yaw) !== null;
   }
 
   /** Uses an ammunition crate or first aid box. */
@@ -1744,6 +1775,7 @@ export class Simulation {
     for (const d of this.doors) d?.update(dt);
     this.updateLimbs();
     if (this.phase !== 'over') this.stepDowned(dt);
+    this.skateboards.step(dt);
     if (this.phase !== 'over') this.runPickups();
 
     const ticks: ArsenalTick[] = [];
@@ -1754,9 +1786,10 @@ export class Simulation {
       for (const t of ticks) this.onArsenal(p, t);
       this.updateWork(p, dt);
       // Footsteps carry: sprinting is heard much farther than walking; crouching is silent.
+      // On a skateboard the wheels make the noise instead (Skateboards.step).
       const speed = p.speed;
       p.footstepT -= dt;
-      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded) {
+      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded && !this.skateboards.ridden(p.id)) {
         const radius = p.motion.crouching ? 1.2 : speed > 4.5 ? 11 : 4.5;
         this.noise(p.motion.pos, radius, p.id);
         p.footstepT = speed > 4.5 ? 0.35 : 0.55;

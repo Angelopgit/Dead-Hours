@@ -40,6 +40,8 @@ export class ThirdPersonCamera {
   /** Eye position (first person) and unshaken view orientation, for lining up the sights. */
   readonly eye = new THREE.Vector3();
   readonly view = new THREE.Quaternion();
+  /** When the player last turned the view themselves (ms, performance.now). */
+  private lookedAt = -Infinity;
   /** Recoil climb still to be recovered (radians). */
   private recover = 0;
   private recoverYaw = 0;
@@ -58,7 +60,18 @@ export class ThirdPersonCamera {
     this.yaw -= d.x * sens + t.x * zoom * friction;
     this.pitch -= (d.y * sens + t.y * zoom * friction) * inv;
     this.pitch = THREE.MathUtils.clamp(this.pitch, -1.25, 0.95);
+    if (d.x || d.y || t.x || t.y) this.lookedAt = performance.now();
     if (input.pressed('shoulder')) this.shoulder *= -1;
+  }
+
+  /**
+   * Swings the view round behind `heading` (riding a skateboard), only once the player has left
+   * the look alone for a moment: turning to look or aim always wins.
+   */
+  follow(dt: number, heading: number, rate: number): void {
+    if (performance.now() - this.lookedAt < 1100 || rate <= 0) return;
+    const want = heading + Math.PI;
+    this.yaw += Math.atan2(Math.sin(want - this.yaw), Math.cos(want - this.yaw)) * (1 - Math.exp(-dt * rate));
   }
 
   /** Aim assist pull: turns the view by this much (radians, toward the target). */

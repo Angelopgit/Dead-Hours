@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
-  type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
+  type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
@@ -33,6 +33,7 @@ import { RaidView } from './RaidView';
 import { LimbView } from '../zombies/LimbView';
 import { BarricadeView } from './BarricadeView';
 import { MeleePickups } from './MeleePickups';
+import { SkateboardView, type BoardPose } from './Skateboards';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { ChatBox } from '../ui/ChatBox';
@@ -86,12 +87,13 @@ export interface SessionOptions {
 }
 
 interface Candidate {
-  kind: 'door' | 'limb' | 'revive' | Interactable['kind'];
+  kind: 'door' | 'limb' | 'revive' | 'board' | Interactable['kind'];
   pos: THREE.Vector3;
   door?: Door;
   it?: Interactable;
   limb?: SimLimb;
   mate?: SimPlayer;
+  board?: Skateboard;
   /** How near it counts as (default: straight-line distance from the chest). */
   near?: number;
 }
@@ -145,6 +147,14 @@ export class GameSession {
   /** Found melee weapons lying around indoors. */
   private readonly pickups: MeleePickups;
   private meleeHinted = false;
+  /** Skateboards lying about and under riders' feet. */
+  private readonly skates: SkateboardView;
+  private skateHinted = false;
+  /** Online: when this survivor asked to hop on (the server may have given the board to someone else). */
+  private rideAskedAt = 0;
+  /** Online: when this survivor said a wall threw them (the server's echo of it is not shown twice). */
+  private bailSentAt = -Infinity;
+  private readonly myBoard: BoardPose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, pop: -1, air: false, push: -1 };
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -296,6 +306,7 @@ export class GameSession {
     this.throws = new Throwables(engine.scene, physics, this.pyro);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
+    this.skates = new SkateboardView(engine.scene, field, physics);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     this.barricades = new BarricadeView(engine.scene, this.sim, field);
     this.drops = new SupplyDrops(engine.scene);
@@ -860,9 +871,11 @@ export class GameSession {
     p.render(dt, alpha);
     if (p.landed) {
       p.landed = false;
-      this.cam.addTrauma(0.12);
-      audio.footstep(0.8, this.indoors);
+      // On a board the wheels take the landing (the board's own clack plays).
+      this.cam.addTrauma(p.ride ? 0.06 : 0.12);
+      if (!p.ride) audio.footstep(0.8, this.indoors);
     }
+    this.updateRide(dt);
 
     // Camera.
     if (this.phase === 'table') {
@@ -904,6 +917,7 @@ export class GameSession {
     this.raid.update(live, this.sim, renderTime, this.engine.camera, !!m);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
     this.pickups.update(live, this.sim, this.engine.camera);
+    this.skates.update(live, this.sim, this.engine.camera, (b) => this.boardPose(b, alpha));
     if (m) {
       this.remotes!.update(live, this.sim, m, this.engine.camera);
       this.updateVoices();
@@ -1318,6 +1332,12 @@ export class GameSession {
 
   private handleInteraction(): void {
     if (this.keepReviving()) return;
+    // On a skateboard [interact] steps off (nothing else is in reach from the deck).
+    if (this.player.ride) {
+      this.hud.setPrompt('interact', 'HOP OFF THE SKATEBOARD');
+      if (this.input.pressed('interact')) this.leaveBoard(false);
+      return;
+    }
     const best = this.pickInteraction();
     const slot = this.workableSlot();
     // An opening in reach is boarded up from here unless something else is what the crosshair is on.
@@ -1360,6 +1380,7 @@ export class GameSession {
       this.hud.setPrompt('interact', mine === 'machete' ? `PICK UP ${what}` : `SWAP ${WEAPONS[mine].model} FOR ${what}`);
     }
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
+    else if (best.kind === 'board') this.hud.setPrompt('interact', 'RIDE THE SKATEBOARD');
     else if (best.kind === 'limb') {
       const l = best.limb!;
       const what = LIMB_NAME[l.cut];
@@ -1381,6 +1402,8 @@ export class GameSession {
       }
     } else if (best.kind === 'weapons') {
       this.openTable();
+    } else if (best.kind === 'board') {
+      this.rideBoard(best.board!);
     } else if (best.kind === 'limb') {
       if (this.link) this.act({ a: 'grab', limb: best.limb!.id });
       else this.sim.grabLimb(this.myId, best.limb!.id);
@@ -1389,6 +1412,119 @@ export class GameSession {
     } else {
       this.sim.use(this.myId, best.it!.id);
     }
+  }
+
+  // ------------------------------------------------------------------ skateboards
+
+  /** Hops onto a board in reach: at once here; online the server may give it to someone quicker. */
+  private rideBoard(b: Skateboard): void {
+    const p = this.player;
+    if (p.ride || !this.me.up) return;
+    if (this.link) {
+      p.mount(b.id, this.cam.yaw);
+      this.rideAskedAt = this.netNow;
+      b.rider = this.myId;
+      b.flipped = false;
+      this.mirror!.holdBoard(b.id, this.netNow + this.link.rtt + 0.5);
+      this.link.act({ a: 'board', id: b.id });
+    } else {
+      if (!this.sim.rideBoard(this.myId, b.id)) return;
+      p.mount(b.id, this.cam.yaw);
+    }
+    if (!this.skateHinted) {
+      this.skateHinted = true;
+      const d = this.input.device;
+      const k = (a: Action, alt: string) => actionLabel(a) || alt;
+      this.hud.notify('SKATEBOARD', d === 'touch'
+        ? 'STICK UP PUSHES · DOWN BRAKES · SIDEWAYS CARVES · JUMP OLLIES · USE HOPS OFF'
+        : d === 'pad'
+          ? `LEFT STICK PUSH · BRAKE · CARVE · ${k('jump', 'A')} OLLIE · ${k('sprint', 'L3')} PUSH HARDER · ${k('interact', 'RB')} HOP OFF`
+          : `${k('forward', 'W')} PUSH · ${k('back', 'S')} BRAKE · ${k('left', 'A')}/${k('right', 'D')} CARVE · ${k('jump', 'SPACE')} OLLIE · ${k('sprint', 'SHIFT')} PUSH HARDER · ${k('interact', 'E')} HOP OFF`,
+        4.5);
+    }
+  }
+
+  /** Steps off (or, `bail`, is thrown off by a wall): the board comes to rest on the floor where the session put it. */
+  private leaveBoard(bail: boolean): void {
+    const p = this.player;
+    const r = p.ride;
+    if (bail) p.bailed = true;
+    const at = p.dismount();
+    p.bailed = false;
+    if (!r || !at) return;
+    const pos = at.pos;
+    const d = this.physics.raycast(pos.x, pos.y + 0.5, pos.z, 0, -1, 0, 2);
+    if (d !== null) pos.y = pos.y + 0.5 - d;
+    if (this.link) {
+      const b = this.sim.skateboards.board(r.board);
+      if (b && b.rider === this.myId) {
+        b.rider = null;
+        b.pos = { ...pos };
+        b.yaw = at.yaw;
+      }
+      this.mirror!.holdBoard(r.board, this.netNow + this.link.rtt + 0.5);
+      this.link.act({ a: 'board', id: -1, at: pos, yaw: at.yaw, bail });
+      if (bail) {
+        this.bailSentAt = this.netNow;
+        this.bailFeedback(v3(pos, this.tmpE));
+      }
+    } else {
+      // A bail comes back as an event (the feedback is shown there).
+      this.sim.leaveBoard(this.myId, pos, at.yaw, bail);
+    }
+  }
+
+  /** Thrown off the deck: the board clatters away, the view jolts. */
+  private bailFeedback(pos: THREE.Vector3): void {
+    audio.skateBail(pos);
+    this.cam.addTrauma(0.35);
+    this.input.rumble(0.5, 220);
+    this.hud.feedLine('THROWN OFF THE SKATEBOARD');
+  }
+
+  /**
+   * Every frame on a board: a wall taken head-on throws the survivor off; a board the server gave
+   * to someone else (or took away) comes out from under the feet; at speed the view swings round
+   * behind the deck unless the player is looking about or aiming.
+   */
+  private updateRide(dt: number): void {
+    const p = this.player;
+    const r = p.ride;
+    if (!r) return;
+    p.kicked = p.popped = false;
+    if (p.bailed) {
+      this.leaveBoard(true);
+      return;
+    }
+    if (!this.me.up || this.phase === 'dead') {
+      p.dismount();
+      return;
+    }
+    const b = this.sim.skateboards.board(r.board);
+    const grace = this.link ? this.link.rtt + 0.8 : 0;
+    if (!b || (b.rider !== this.myId && this.netNow - this.rideAskedAt > grace)) {
+      p.dismount();
+      if (b?.rider) this.hud.feedLine('SOMEONE ELSE GOT TO THAT SKATEBOARD');
+      return;
+    }
+    if (this.phase === 'playing' && !p.aiming) this.cam.follow(dt, r.heading, 1.8 * THREE.MathUtils.smoothstep(r.speed, 2, 6));
+  }
+
+  /** Where a ridden board is drawn: under this survivor's feet, or another's. */
+  private boardPose(b: Skateboard, alpha: number): BoardPose | null {
+    if (!b.rider) return null;
+    if (b.rider !== this.myId) return this.remotes?.boardPose(b.rider, b) ?? null;
+    const p = this.player;
+    const r = p.ride;
+    if (!r || r.board !== b.id || this.phase === 'dead') return null;
+    const o = this.myBoard;
+    o.pos.copy(p.renderPosition);
+    o.yaw = p.rideHeading(alpha);
+    o.lean = r.lean;
+    o.pop = r.pop;
+    o.air = !p.grounded;
+    o.push = r.push;
+    return o;
   }
 
   /** The opening this survivor could work on from where they stand (inside, within reach), if any. */
@@ -1446,6 +1582,10 @@ export class GameSession {
     }
     const door = this.doors.nearest(eye, 1.9);
     if (door) cands.push({ kind: 'door', pos: door.center, door });
+    // Skateboards lying in reach count by how near they are underfoot, like things on the floor.
+    for (const b of this.sim.skateboards.inReach(this.me)) {
+      cands.push({ kind: 'board', pos: new THREE.Vector3(b.pos.x, b.pos.y + 0.1, b.pos.z), board: b, near: Math.hypot(b.pos.x - p.x, b.pos.z - p.z) });
+    }
     for (const it of this.sim.reachable(this.myId)) {
       if (it.supply <= 0) continue;
       // Weapons lying on the floor count by how near they are underfoot, like severed arms.
@@ -1631,6 +1771,21 @@ export class GameSession {
         break;
       case 'limbDropped':
         break;
+      case 'skate': {
+        if (e.stage !== 'bail') break;
+        v3(e.pos, A);
+        if (e.player === this.myId) {
+          // Thrown off by a hit (a wall the session saw itself, and showed then).
+          if (this.player.ride) {
+            this.player.bailed = true;
+            this.player.dismount();
+            this.player.bailed = false;
+          }
+          if (this.link && this.netNow - this.bailSentAt < this.link.rtt + 1) break;
+          this.bailFeedback(A);
+        } else audio.skateBail(A);
+        break;
+      }
       case 'meleeTaken': {
         v3(e.pos, A);
         audio.meleePickup(e.weapon, A);
@@ -2208,8 +2363,8 @@ export class GameSession {
     // (Not while the hands are full of something else to fight with.)
     hud.setWarning(limb ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
-    // Dynamic crosshair: gap follows the real spread cone.
-    const hv = Math.hypot(p.velocity.x, p.velocity.z);
+    // Dynamic crosshair: gap follows the real spread cone (rolling on a skateboard is smooth).
+    const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : 1);
     const spread = a.spread({ speed: hv, crouching: p.crouching, grounded: p.grounded, aiming: p.aiming });
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
@@ -2312,6 +2467,7 @@ export class GameSession {
     this.spectateLine.remove();
     this.reconnectLine.remove();
     this.remotes?.dispose();
+    this.skates.dispose();
     this.inventory.dispose();
     this.engine.canvas.style.cursor = '';
     this.input.enabled = false;

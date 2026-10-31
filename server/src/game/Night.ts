@@ -1,5 +1,5 @@
 import {
-  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, Simulation, captureSnapshot, groups, unpackMotion,
+  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, unpackMotion,
   BUILD_SLOTS, decodeBuild, sanitizeBuild,
   type ActMsg, type DebugMsg, type DoorBody, type Loadout, type Physics, type SimEvent, type Snapshot, type UnlockState, type Vec3,
   type WeaponBuild, type WeaponId, type ZombieKind,
@@ -8,6 +8,9 @@ import { createWorld } from './world';
 
 /** Fastest a survivor can legitimately move (sprint, plus slack for timing). */
 const MAX_SPEED = PLAYER.sprintSpeed * 1.25;
+/** The same on a skateboard (and for a moment after coming off one, while the client hears about it). */
+const BOARD_SPEED = SKATEBOARD.maxSpeed * 1.25;
+const BOARD_GRACE = 0.8;
 /** Fastest climb (stairs, jumps). */
 const MAX_CLIMB = 5.5;
 /** Movement that can be banked when messages arrive bunched together (seconds' worth). */
@@ -44,6 +47,8 @@ interface Extra {
   /** Put back here after a refused move; moves are ignored until the client is there. */
   correcting: Vec3 | null;
   correctedAt: number;
+  /** Last simulation time they were on a skateboard. */
+  boardAt: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
@@ -111,7 +116,7 @@ export class Night {
     this.extras.set(s.id, {
       facing: sp.yaw + Math.PI, trigger: false, aimO: eye, aimD: { x: -Math.sin(sp.yaw), y: 0, z: -Math.cos(sp.yaw) },
       press: 0, pressO: eye, pressD: { x: 0, y: 0, z: -1 }, budget: MAX_SPEED * BANK, climb: MAX_CLIMB * BANK,
-      correcting: null, correctedAt: 0, body, collider,
+      correcting: null, correctedAt: 0, boardAt: -Infinity, body, collider,
     });
     this.facing.set(s.id, sp.yaw + Math.PI);
     return { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw };
@@ -153,7 +158,7 @@ export class Night {
         return null;
       }
       x.correcting = null;
-      x.budget = MAX_SPEED * BANK;
+      x.budget = this.maxSpeed(id, x) * BANK;
       x.climb = MAX_CLIMB * BANK;
     }
     const edge = NEIGHBORHOOD.bounds, m = 0.4;
@@ -237,6 +242,14 @@ export class Night {
       case 'throw':
         if ((m.kind === 'frag' || m.kind === 'molotov') && isVec(m.o) && isVec(m.d)) sim.throwItem(id, m.kind, { origin: vec(m.o), dir: vec(m.d) });
         break;
+      case 'board':
+        if (!Number.isInteger(m.id)) break;
+        if (m.id >= 0) {
+          if (sim.rideBoard(id, m.id)) x.boardAt = sim.time;
+        } else {
+          sim.leaveBoard(id, isVec(m.at) ? vec(m.at) : undefined, typeof m.yaw === 'number' && Number.isFinite(m.yaw) ? m.yaw : undefined, m.bail === true);
+        }
+        break;
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;
         const e = p.eye;
@@ -296,6 +309,12 @@ export class Night {
     return { events, snapshot: due ? captureSnapshot(this.sim, this.facing) : null };
   }
 
+  /** How fast this survivor may move now: faster on a skateboard. */
+  private maxSpeed(id: string, x: Extra): number {
+    if (this.sim.skateboards.ridden(id)) x.boardAt = this.sim.time;
+    return this.sim.time - x.boardAt < BOARD_GRACE ? BOARD_SPEED : MAX_SPEED;
+  }
+
   /** `world` on snapshot steps: zombies move and the collision world catches up (see Simulation.step). */
   private step(world: boolean): void {
     const sim = this.sim;
@@ -305,7 +324,8 @@ export class Night {
         x.collider.setEnabled(false);
         continue;
       }
-      x.budget = Math.min(MAX_SPEED * BANK, x.budget + MAX_SPEED * STEP);
+      const max = this.maxSpeed(id, x);
+      x.budget = Math.min(max * BANK, x.budget + max * STEP);
       x.climb = Math.min(MAX_CLIMB * BANK, x.climb + MAX_CLIMB * STEP);
       // Same trigger handling as solo: a press fires as soon as the gun is ready, holding keeps an
       // automatic going (not on an empty magazine, which clicks once).

@@ -45,6 +45,22 @@ export interface LocomotionState {
   turn?: number;
 }
 
+/** Standing on a skateboard (Humanoid.skate): the owner fills this in every frame while riding. */
+export interface SkatePose {
+  /** Which way the deck points, relative to the body's facing (radians). */
+  yaw: number;
+  /** Height of the deck's top above the root (metres). */
+  deck: number;
+  /** Kick cycle 0..1 while pushing along, or -1 (feet both on the deck). */
+  push: number;
+  /** Carving: -1..1, leaning into the turn (positive: toward the body's left). */
+  lean: number;
+  /** In the air (an ollie): knees tucked up. */
+  air: boolean;
+  /** Crouched low on the deck. */
+  low: boolean;
+}
+
 export interface Limb {
   upper: THREE.Bone;
   lower: THREE.Bone;
@@ -387,6 +403,15 @@ export class Humanoid {
   private crawl = 0;
   /** True while a ragdoll owns the bones. */
   ragdoll = false;
+  /** On a skateboard (null on foot): the legs stand on the deck instead of walking. */
+  skate: SkatePose | null = null;
+  private skateW = 0;
+  private readonly lastSkate: SkatePose = { yaw: Math.PI / 2, deck: 0.11, push: -1, lean: 0, air: false, low: false };
+  /** +1 regular (left foot forward), -1 goofy. */
+  private stance = 1;
+  private pushK = 0;
+  private airK = 0;
+  private leanK = 0;
   /** Zombies: what is left of each arm, and the torn ends where they came off. */
   private readonly arms: Record<ArmZone, ArmState> = { armL: 'intact', armR: 'intact' };
   private readonly legs: Record<LegZone, LegState> = { legL: 'intact', legR: 'intact' };
@@ -821,7 +846,12 @@ export class Humanoid {
     if (dir !== this.moveDir && moving > 0.2) this.moveDir = dir;
     let hipTarget = back ? Math.atan2(Math.sin(ang - Math.PI), Math.cos(ang - Math.PI)) : ang;
     hipTarget = THREE.MathUtils.clamp(hipTarget, -0.8, 0.8) * moving;
-    this.hipYaw += (hipTarget - this.hipYaw) * (1 - Math.exp(-dt * 8));
+    // On a skateboard the hips stand side-on to the deck, the shoulders turning back toward the facing.
+    if (this.skate) Object.assign(this.lastSkate, this.skate);
+    this.skateW += ((this.skate ? 1 : 0) - this.skateW) * (1 - Math.exp(-dt * 12));
+    if (!this.skate && this.skateW < 0.003) this.skateW = 0;
+    if (this.skateW > 0) hipTarget = THREE.MathUtils.lerp(hipTarget, this.skateHip(dt), this.skateW);
+    this.hipYaw += (hipTarget - this.hipYaw) * (1 - Math.exp(-dt * (this.skateW > 0 ? 12 : 8)));
 
     // Turning on the spot shuffles the feet.
     const turn = Math.abs(target.turn ?? 0);
@@ -964,6 +994,7 @@ export class Humanoid {
     }
 
     if (z && this.crawl > 0.001) this.crawlPose(p, moving, sv);
+    if (this.skateW > 0.001) this.skatePose(crouch);
 
     // Knocked down: fall onto the back, feet toward the facing direction, arms splayed.
     const d = this.crawl > 0.5 ? 0 : this.down;
@@ -993,6 +1024,85 @@ export class Humanoid {
     }
     this.lastStepSign = sign;
     if (this.stumps.size) this.syncStumps();
+  }
+
+  /**
+   * Which way the hips turn on a skateboard (relative to the facing): side-on to the deck, the
+   * left foot forward (regular) or the right (goofy), whichever leaves the shoulders less to turn
+   * toward where the survivor faces (switching only past a margin, so it doesn't flicker); pushing
+   * opens them toward the nose. The shoulders only turn so far from the hips: past that the hips
+   * come round too.
+   */
+  private skateHip(dt: number): number {
+    const sk = this.lastSkate;
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+    const reg = wrap(sk.yaw - Math.PI / 2), goofy = wrap(sk.yaw + Math.PI / 2);
+    if (this.stance > 0 ? Math.abs(goofy) < Math.abs(reg) - 1.1 : Math.abs(reg) < Math.abs(goofy) - 1.1) this.stance = -this.stance;
+    const ease = (cur: number, to: number, rate: number) => cur + (to - cur) * (1 - Math.exp(-dt * rate));
+    this.pushK = ease(this.pushK, sk.push >= 0 ? 1 : 0, 9);
+    this.airK = ease(this.airK, sk.air ? 1 : 0, 14);
+    this.leanK = ease(this.leanK, sk.lean, 8);
+    const hip = (this.stance > 0 ? reg : goofy) + this.stance * 0.55 * this.pushK;
+    return THREE.MathUtils.clamp(wrap(hip), -1.25, 1.25);
+  }
+
+  /**
+   * Feet on the deck: the front foot over the front bolts, the back foot on the tail (or kicking
+   * along the ground beside the board while pushing), knees bent, lower when crouched or in the
+   * air, the body leaning into a carve. The feet are put there with leg IK, so they stay on the
+   * board whichever way the shoulders turn to aim.
+   */
+  private skatePose(crouch: number): void {
+    const w = this.skateW;
+    const e = w * w * (3 - 2 * w);
+    const sk = this.lastSkate;
+    const L = THREE.MathUtils.lerp;
+    const hipsY = sk.deck + 0.84 - crouch * 0.2 - this.pushK * 0.07 - this.airK * 0.12;
+    // Board axes in the root's space: forward (nose) and its left side.
+    const bx = Math.sin(sk.yaw), bz = Math.cos(sk.yaw);
+    const sx = Math.cos(sk.yaw), sz = -Math.sin(sk.yaw);
+    this.hips.position.y = L(this.hips.position.y, hipsY, e);
+    // A little forward over the deck, and the shoulders leaning in toward the middle of a carve.
+    this.spine.rotation.x += (0.1 * (1 - crouch) + sz * this.leanK * 0.16) * e;
+    this.spine.rotation.z -= sx * this.leanK * 0.16 * e;
+    // Looking down the street over the front shoulder (aiming, the head follows the gun).
+    const ahead = THREE.MathUtils.clamp(Math.atan2(Math.sin(sk.yaw), Math.cos(sk.yaw)), -1.6, 1.6) * 0.55;
+    this.head.rotation.y += ahead * (1 - this.smoothed.aim) * e;
+    this.root.updateMatrixWorld(true);
+    // The toe side: the side of the board the hips face.
+    const fx = Math.sin(this.hipYaw), fz = Math.cos(this.hipYaw);
+    const toe = fx * sx + fz * sz >= 0 ? 1 : -1;
+    const ankle = sk.deck + 0.035;
+    const front = this.stance > 0 ? this.legL : this.legR;
+    const rear = this.stance > 0 ? this.legR : this.legL;
+    const put = (out: THREE.Vector3, along: number, side: number, y: number) =>
+      out.set(bx * along + sx * side * toe, y, bz * along + sz * side * toe);
+    put(_sk1, 0.2, 0.015, ankle + this.airK * 0.02);
+    // Back foot: on the tail, or the kick (down beside the board ahead, push back along the ground, up onto the tail).
+    const p = sk.push;
+    if (p >= 0 && !sk.air) {
+      const a = 0.18, b = 0.62;
+      const tail = { along: -0.21, side: 0, y: ankle };
+      const down0 = { along: 0.1, side: 0.17, y: 0.035 };
+      const down1 = { along: -0.36, side: 0.17, y: 0.035 };
+      let from = tail, to = down0, u = 0, lift = 0;
+      if (p < a) { u = p / a; lift = 0.06; }
+      else if (p < b) { from = down0; to = down1; u = (p - a) / (b - a); }
+      else { from = down1; to = tail; u = (p - b) / (1 - b); lift = 0.1; }
+      const k = u * u * (3 - 2 * u);
+      put(_sk2, L(from.along, to.along, k), L(from.side, to.side, k), L(from.y, to.y, k) + Math.sin(u * Math.PI) * lift);
+      // Blend in and out of the push with the hips.
+      const tl = put(_sk3, -0.21, 0, ankle);
+      _sk2.lerpVectors(tl, _sk2, this.pushK);
+    } else {
+      put(_sk2, -0.21, 0, ankle + this.airK * 0.03);
+    }
+    this.root.localToWorld(_sk1);
+    this.root.localToWorld(_sk2);
+    // Knees bend the way the hips face, a little out over the toes.
+    const pole = _sk4.set(fx, -0.15, fz).applyQuaternion(this.root.getWorldQuaternion(_skq)).normalize();
+    this.reach(front, _sk1, pole, e);
+    this.reach(rear, _sk2, pole, e);
   }
 
   /** Shoulder and hip stumps turn with the (collapsed) upper limb, so they flail like the stub they are. */
@@ -1113,6 +1223,8 @@ export class Humanoid {
   /** Standing rest pose (pool reuse, after a ragdoll). */
   resetPose(): void {
     this.ragdoll = false;
+    this.skate = null;
+    this.skateW = 0;
     this.down = this.downTarget = 0;
     this.stagger = this.staggerTarget = 0;
     this.attack = this.bash = this.scream = -1;
@@ -1149,6 +1261,9 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 const _e = new THREE.Vector3(), _f = new THREE.Vector3(), _g = new THREE.Vector3(), _h = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
+/** Skate pose scratch (reach() uses the ones above). */
+const _sk1 = new THREE.Vector3(), _sk2 = new THREE.Vector3(), _sk3 = new THREE.Vector3(), _sk4 = new THREE.Vector3();
+const _skq = new THREE.Quaternion();
 
 /** Decay uniforms for a zombie look (`body` false for a severed arm cut from it). */
 export function decayOf(look: HumanoidLook, seed: number, body: boolean): DecayUniforms {

@@ -81,7 +81,9 @@ export type ActMsg =
   /** New attachments or finish for a carried gun (encodeBuild); the server checks the player's unlocks. */
   | { a: 'refit'; weapon: WeaponId; build: string }
   /** Throw a grenade or Molotov along the crosshair ray. */
-  | { a: 'throw'; kind: 'frag' | 'molotov'; o: Vec3; d: Vec3 };
+  | { a: 'throw'; kind: 'frag' | 'molotov'; o: Vec3; d: Vec3 }
+  /** Hop on skateboard `id`; -1 steps off (`bail`: thrown off by a wall), leaving it at `at` (where the rider's browser put it) pointing `yaw`. */
+  | { a: 'board'; id: number; at?: Vec3; yaw?: number; bail?: boolean };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

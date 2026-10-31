@@ -122,7 +122,9 @@ export type SimEvent =
    */
   | { type: 'fire'; id: number; player: string; pos: Vec3; ground: Vec3; patches: [number, number, number, number][]; start: number; end: number }
   /** A zombie caught fire. */
-  | { type: 'ignite'; zombie: number };
+  | { type: 'ignite'; zombie: number }
+  /** A survivor hopped on a skateboard, stepped off, or was thrown off it (a hit, a wall, going down). */
+  | { type: 'skate'; player: string; board: number; stage: 'on' | 'off' | 'bail'; pos: Vec3; yaw: number };
 
 /** A head or leg blown off a zombie a blast killed (arms come off as real limbs, see limbSevered). */
 export interface GibPart {

@@ -36,3 +36,5 @@ export * from './sim/Simulation';
 export * from './protocol/snapshot';
 export * from './config/throwables';
 export * from './sim/Explosives';
+export * from './config/skateboards';
+export * from './sim/Skateboards';

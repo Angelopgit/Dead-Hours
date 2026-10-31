@@ -85,14 +85,17 @@ export interface Snapshot {
   v?: number[];
   /** Raiders (see captureSnapshot). */
   r?: number[][];
+  /** Skateboards: [id, x, y, z (cm), yaw (mrad), rider id or 0, look × 2 + flipped]. */
+  sk?: (number | string)[][];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
-export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32 } as const;
+export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64 } as const;
 
 function flagsOf(m: PlayerMotion, trigger = false): number {
   return (m.crouching ? MOTION_FLAG.crouching : 0) | (m.sprinting ? MOTION_FLAG.sprinting : 0) | (m.aiming ? MOTION_FLAG.aiming : 0)
-    | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0) | (m.light ? MOTION_FLAG.light : 0);
+    | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0) | (m.light ? MOTION_FLAG.light : 0)
+    | (m.pushing ? MOTION_FLAG.pushing : 0);
 }
 
 /** Captures the world for clients. `facing` is each survivor's body facing (the server keeps it beside the sim). */
@@ -151,7 +154,9 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   for (const b of sim.barricades.slots) {
     if (b.boards > 0 || (b.kind === 'window' && !b.glass)) bars.push(b.index, b.boards, milli(b.damage), b.glass ? 1 : 0);
   }
-  const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars };
+  const boards: (number | string)[][] = [];
+  for (const k of sim.skateboards.boards) boards.push([k.id, cm(k.pos.x), cm(k.pos.y), cm(k.pos.z), milli(k.yaw), k.rider ?? 0, k.look * 2 + (k.flipped ? 1 : 0)]);
+  const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars, sk: boards };
   const raid = sim.raid;
   const van = raid.van;
   if (van) snap.v = [van.route, idx(RAID_STAGES, raid.stage), cm(van.pos.x), cm(van.pos.z), milli(van.yaw), cm(van.speed), van.door ? 1 : 0];
@@ -180,19 +185,24 @@ export interface MotionFrame {
   aimDir: Vec3;
 }
 
-/** [x, y, z (mm), vx, vy, vz (cm/s), yaw, pitch, facing (mrad), eyeHeight (mm), flags, aim origin (mm) ×3, aim dir ×10000 ×3] */
+/**
+ * [x, y, z (mm), vx, vy, vz (cm/s), yaw, pitch, facing (mrad), eyeHeight (mm), flags, aim origin (mm) ×3, aim dir ×10000 ×3,
+ * and while on a skateboard its heading (mrad)]
+ */
 export function packMotion(f: MotionFrame): number[] {
   const m = f.motion;
-  return [
+  const out = [
     mm(m.pos.x), mm(m.pos.y), mm(m.pos.z), cm(m.vel.x), cm(m.vel.y), cm(m.vel.z), milli(m.yaw), milli(m.pitch), milli(f.facing),
     mm(m.eyeHeight), flagsOf(m, f.trigger),
     mm(f.aimOrigin.x), mm(f.aimOrigin.y), mm(f.aimOrigin.z), Math.round(f.aimDir.x * 1e4), Math.round(f.aimDir.y * 1e4), Math.round(f.aimDir.z * 1e4),
   ];
+  if (m.board !== undefined && Number.isFinite(m.board)) out.push(milli(Math.atan2(Math.sin(m.board), Math.cos(m.board))));
+  return out;
 }
 
 /** Reads a motion message, or null when it is malformed. */
 export function unpackMotion(a: unknown): MotionFrame | null {
-  if (!Array.isArray(a) || a.length !== 17) return null;
+  if (!Array.isArray(a) || (a.length !== 17 && a.length !== 18)) return null;
   for (const v of a) if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > 1e7) return null;
   const n = a as number[];
   const flags = n[10];
@@ -204,6 +214,8 @@ export function unpackMotion(a: unknown): MotionFrame | null {
       crouching: !!(flags & MOTION_FLAG.crouching), sprinting: !!(flags & MOTION_FLAG.sprinting),
       aiming: !!(flags & MOTION_FLAG.aiming), grounded: !!(flags & MOTION_FLAG.grounded),
       light: !!(flags & MOTION_FLAG.light),
+      pushing: !!(flags & MOTION_FLAG.pushing),
+      board: n.length === 18 ? clamp(n[17] / 1000, -4, 4) : undefined,
     },
     facing: n[8] / 1000,
     trigger: !!(flags & MOTION_FLAG.trigger),
@@ -250,6 +262,7 @@ export class Mirror {
   private limbSpan = 0.05;
   private holdSelfUntil = -Infinity;
   private readonly doorHold = new Map<number, number>();
+  private readonly boardHold = new Map<number, number>();
   private readonly tracks = new Map<string, Track>();
   private readonly held = new Map<number, HeldLimb>();
   /** Each survivor's weapons and builds as last applied (snapshots repeat them). */
@@ -282,6 +295,11 @@ export class Mirror {
   /** Keeps a door the client just toggled as it is until `until`. */
   holdDoor(index: number, until: number): void {
     this.doorHold.set(index, until);
+  }
+
+  /** Keeps a skateboard the client just hopped on or off as it is until `until`. */
+  holdBoard(id: number, until: number): void {
+    this.boardHold.set(id, until);
   }
 
   /** Advances the copy's clock to the estimated server time (call every frame). */
@@ -490,6 +508,7 @@ export class Mirror {
         mo.aiming = !!(f & MOTION_FLAG.aiming);
         mo.grounded = !!(f & MOTION_FLAG.grounded);
         mo.light = !!(f & MOTION_FLAG.light);
+        mo.pushing = !!(f & MOTION_FLAG.pushing);
         let tr = this.tracks.get(sp.id);
         if (!tr) {
           tr = { prev: { ...pos }, pos: { ...pos }, at: T, span, facing: m[8] / 1000 };
@@ -540,6 +559,20 @@ export class Mirror {
     }
     for (const slot of sim.barricades.slots) if (!listed.has(slot.index) && slot.boards > 0) sim.barricades.remote(slot, 0, 0, slot.glass);
     this.applyRaid(s, T, span);
+
+    // Skateboards (older servers send none: the copy keeps its own, placed from the same seed).
+    if (s.sk) {
+      const sk = sim.skateboards;
+      for (const r of s.sk) {
+        const id = r[0] as number;
+        if ((this.boardHold.get(id) ?? -Infinity) > now) continue;
+        const rider = typeof r[5] === 'string' && r[5] ? (r[5] as string) : null;
+        const lk = r[6] as number;
+        sk.remote(id, { x: (r[1] as number) / 100, y: (r[2] as number) / 100, z: (r[3] as number) / 100 }, (r[4] as number) / 1000, rider, lk >> 1, (lk & 1) === 1);
+      }
+      // Ids run 0..n-1: any the copy placed beyond the server's are gone.
+      if (sk.boards.length > s.sk.length) sk.boards.length = s.sk.length;
+    }
 
     // Ammunition crates, first aid, weapon tables, landed supply crates.
     for (const r of s.i) {
@@ -676,6 +709,16 @@ export class Mirror {
     } else if (e.type === 'limbGone') {
       const i = sim.limbs.findIndex((l) => l.id === e.limb);
       if (i >= 0) sim.limbs.splice(i, 1);
+    } else if (e.type === 'skate') {
+      // Who rides what shows at once (a rider thrown off lets go of the board before the next snapshot).
+      const b = sim.skateboards.board(e.board);
+      if (b && (e.player !== this.me || e.stage === 'bail')) {
+        b.rider = e.stage === 'on' ? e.player : null;
+        if (e.stage !== 'on') {
+          b.pos = { ...e.pos };
+          b.yaw = e.yaw;
+        }
+      }
     } else if (e.type === 'glassBroken') {
       // At once, so the client's own shots and sight lines go through the empty frame.
       const slot = sim.barricades.slots[e.slot];

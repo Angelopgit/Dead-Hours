@@ -1,11 +1,33 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, type PlayerMotion } from '@dead-hours/shared';
+import { DOWNED, PLAYER, SKATEBOARD, type PlayerMotion } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
-import { Humanoid, type HumanoidLook } from '../characters/Humanoid';
+import { Humanoid, type HumanoidLook, type SkatePose } from '../characters/Humanoid';
 
 const capsuleHalf = (height: number) => (height - PLAYER.radius * 2) / 2;
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** Riding a skateboard: where the deck points, how fast it rolls, the kick and the carve. */
+export interface Ride {
+  board: number;
+  heading: number;
+  /** Heading at the previous fixed step (drawn in between). */
+  prevHeading: number;
+  speed: number;
+  /** Smoothed steering, -1..1 (positive turns left). */
+  steer: number;
+  /** Kick cycle 0..1 while pushing along, or -1. */
+  push: number;
+  /** Lean into the carve, -1..1. */
+  lean: number;
+  /** Seconds since the ollie popped, or -1. */
+  pop: number;
+  /** Seconds since hopping on. */
+  since: number;
+  /** Fixed steps in a row something has blocked the deck. */
+  blocked: number;
+}
 
 /**
  * Locally simulated third-person character on Rapier's kinematic character controller.
@@ -49,6 +71,16 @@ export class PlayerController {
   dead = false;
   /** Downed: on their back, dragging themselves along; no sprint, jump or aim. */
   downed = false;
+  /** On a skateboard (null on foot). */
+  ride: Ride | null = null;
+  /** Set when a head-on hit at speed threw the rider off (the session puts the board down). */
+  bailed = false;
+  /** Set when the back foot touches down for a kick, and when an ollie pops (sounds). */
+  kicked = false;
+  popped = false;
+  private readonly skatePose: SkatePose = { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false };
+  private moveX = 0;
+  private moveY = 0;
 
   constructor(private readonly physics: Physics, spawn: { x: number; y: number; z: number; yaw: number }, look: HumanoidLook) {
     this.position.set(spawn.x, spawn.y, spawn.z);
@@ -95,7 +127,51 @@ export class PlayerController {
     this.aiming = false;
     this.aimToggled = false;
     this.jumpBuffered = 0;
+    if (on) this.ride = null;
     if (on && !this.crouching) this.setCrouch(true);
+  }
+
+  /**
+   * Hops onto a skateboard. Running onto it, the deck points the way you were going and keeps
+   * the pace; from a standstill it points where the camera looks. `cameraYaw` is the camera's.
+   */
+  mount(board: number, cameraYaw: number): void {
+    if (this.dead || this.downed || this.ride) return;
+    const hv = Math.hypot(this.velocity.x, this.velocity.z);
+    const running = hv > 1.5;
+    const heading = running ? Math.atan2(this.velocity.x, this.velocity.z) : cameraYaw + Math.PI;
+    this.ride = {
+      board, heading, prevHeading: heading, speed: running ? Math.min(hv, SKATEBOARD.pushTop) : 0,
+      steer: 0, push: -1, lean: 0, pop: -1, since: 0, blocked: 0,
+    };
+    this.sprinting = false;
+    this.bailed = false;
+    if (this.grounded) {
+      this.intent.y = SKATEBOARD.mountHop;
+      this.grounded = false;
+      this.coyote = 0;
+    }
+  }
+
+  /**
+   * Steps off (or is thrown off) the board. Returns where the board comes to rest and which way
+   * it points; at speed the survivor runs it out.
+   */
+  dismount(): { pos: { x: number; y: number; z: number }; yaw: number } | null {
+    const r = this.ride;
+    if (!r) return null;
+    this.ride = null;
+    const keep = this.bailed ? 0 : Math.min(r.speed, SKATEBOARD.stepOffSpeed);
+    this.intent.x = Math.sin(r.heading) * keep;
+    this.intent.z = Math.cos(r.heading) * keep;
+    const ahead = this.bailed ? 0.1 : 0.3;
+    return { pos: { x: this.position.x + Math.sin(r.heading) * ahead, y: this.position.y, z: this.position.z + Math.cos(r.heading) * ahead }, yaw: r.heading };
+  }
+
+  /** Where the deck points now, between fixed steps. */
+  rideHeading(alpha: number): number {
+    const r = this.ride;
+    return r ? r.prevHeading + wrap(r.heading - r.prevHeading) * alpha : this.facing;
   }
 
   /** Turn the body toward the camera for a moment (hip fire, melee). */
@@ -119,6 +195,8 @@ export class PlayerController {
       sprinting: this.sprinting,
       aiming: this.aiming,
       grounded: this.grounded,
+      board: this.ride ? wrap(this.ride.heading) : undefined,
+      pushing: !!this.ride && this.ride.push >= 0,
     };
   }
 
@@ -146,6 +224,8 @@ export class PlayerController {
     }
     this.sprintHeld = input.held('sprint');
     this.forwardAmount = f;
+    this.moveX = r;
+    this.moveY = f;
   }
   private crouchHeld = false;
   private sprintHeld = false;
@@ -153,6 +233,7 @@ export class PlayerController {
 
   clearInput(): void {
     this.wish.set(0, 0, 0);
+    this.moveX = this.moveY = 0;
     this.sprintHeld = false;
     this.crouchHeld = false;
     this.aiming = false;
@@ -169,29 +250,40 @@ export class PlayerController {
     if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
 
     if (this.downed) this.aiming = false;
-    this.sprinting = this.sprintHeld && !this.downed && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
-    const speed = this.downed
-      ? DOWNED.crawlSpeed
-      : this.crouching
-      ? PLAYER.crouchSpeed
-      : this.aiming
-        ? PLAYER.aimSpeed
-        : this.sprinting
-          ? PLAYER.sprintSpeed
-          : PLAYER.walkSpeed;
-    const target = this.wish.clone().multiplyScalar(speed);
-    const accel = this.grounded ? PLAYER.acceleration : PLAYER.acceleration * PLAYER.airControl;
-    const k = 1 - Math.exp(-accel * dt);
-    this.intent.x += (target.x - this.intent.x) * k;
-    this.intent.z += (target.z - this.intent.z) * k;
+    const ride = this.ride;
+    if (ride) {
+      this.sprinting = false;
+      this.rideStep(dt);
+    } else {
+      this.sprinting = this.sprintHeld && !this.downed && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
+      const speed = this.downed
+        ? DOWNED.crawlSpeed
+        : this.crouching
+        ? PLAYER.crouchSpeed
+        : this.aiming
+          ? PLAYER.aimSpeed
+          : this.sprinting
+            ? PLAYER.sprintSpeed
+            : PLAYER.walkSpeed;
+      const target = this.wish.clone().multiplyScalar(speed);
+      const accel = this.grounded ? PLAYER.acceleration : PLAYER.acceleration * PLAYER.airControl;
+      const k = 1 - Math.exp(-accel * dt);
+      this.intent.x += (target.x - this.intent.x) * k;
+      this.intent.z += (target.z - this.intent.z) * k;
+    }
 
     this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
-    if (this.jumpBuffered > 0 && this.coyote > 0 && !this.crouching && !this.downed) {
-      this.intent.y = PLAYER.jumpVelocity;
+    // On the board the jump is an ollie (crouched too: that's how it's done).
+    if (this.jumpBuffered > 0 && this.coyote > 0 && (!this.crouching || ride) && !this.downed) {
+      this.intent.y = ride ? SKATEBOARD.ollie : PLAYER.jumpVelocity;
       this.jumpBuffered = 0;
       this.coyote = 0;
       this.grounded = false;
+      if (ride) {
+        ride.pop = 0;
+        this.popped = true;
+      }
     }
     this.intent.y += PLAYER.gravity * dt;
     // No downward push while grounded: snap-to-ground holds the feet down, and a slanted move
@@ -214,6 +306,7 @@ export class PlayerController {
     if (this.grounded && this.intent.y < 0) this.intent.y = 0;
     // Bonk head on ceilings.
     if (!this.grounded && desired.y > 0 && m.y < desired.y * 0.5) this.intent.y = 0;
+    if (ride) this.rideCollide(dt, desired, m);
     if (dt > 0) this.velocity.set(m.x / dt, this.intent.y, m.z / dt);
     const t = this.body.translation();
     const next = { x: t.x + m.x, y: t.y + m.y, z: t.z + m.z };
@@ -224,19 +317,96 @@ export class PlayerController {
     this.airTime = this.grounded ? 0 : this.airTime + dt;
     if (!wasGrounded && this.grounded && air > 0.18) this.landed = true;
 
-    // Facing: aim locks body to camera, otherwise turn toward travel direction.
+    // Facing: aim locks body to camera, otherwise turn toward travel direction. On a skateboard
+    // the shoulders sit side-on to the deck, opened a little toward the nose.
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     let desiredFacing = this.facing;
     const toCamera = this.aiming || this.faceT > 0;
     if (toCamera) desiredFacing = cameraYaw + Math.PI;
+    else if (this.ride) desiredFacing = this.ride.heading - Math.PI / 2 + 0.55;
     else if (hv > 0.4) desiredFacing = Math.atan2(this.velocity.x, this.velocity.z);
     const diff = Math.atan2(Math.sin(desiredFacing - this.facing), Math.cos(desiredFacing - this.facing));
-    const turned = diff * (1 - Math.exp(-dt * (toCamera ? 20 : 11)));
+    const turned = diff * (1 - Math.exp(-dt * (toCamera ? 20 : this.ride ? 9 : 11)));
     this.facing += turned;
     this.turnRate = dt > 0 ? turned / dt : 0;
   }
   landed = false;
   private airTime = 0;
+
+  /**
+   * One fixed step of skating: the stick's sideways axis carves (sharp at walking pace, wide at
+   * speed, a little in the air), forward kicks along up to the top speed (higher with sprint
+   * held), back brakes, and the board coasts on with only a little rolling resistance.
+   */
+  private rideStep(dt: number): void {
+    const r = this.ride!;
+    const S = SKATEBOARD;
+    r.since += dt;
+    r.prevHeading = r.heading;
+    const steerTo = THREE.MathUtils.clamp(-this.moveX, -1, 1);
+    r.steer += (steerTo - r.steer) * (1 - Math.exp(-dt * 8));
+    const rate = THREE.MathUtils.lerp(S.turnSlow, S.turnFast, THREE.MathUtils.smoothstep(r.speed, 1.5, 8)) * (this.grounded ? 1 : S.airTurn);
+    r.heading = wrap(r.heading + r.steer * rate * dt);
+    const leanTo = this.grounded ? THREE.MathUtils.clamp(r.steer * THREE.MathUtils.smoothstep(r.speed, 0.5, 5), -1, 1) : 0;
+    r.lean += (leanTo - r.lean) * (1 - Math.exp(-dt * 6));
+
+    // Off the pavement the wheels sink in: a board barely rolls on grass or dirt.
+    let soft = false;
+    if (this.grounded) {
+      const g = this.physics.raycastHit(this.position.x, this.position.y + 0.3, this.position.z, 0, -1, 0, 0.6);
+      soft = !!g && (g.surface === 'grass' || g.surface === 'dirt');
+    }
+    const top = this.sprintHeld && this.noSprintT <= 0 ? S.sprintTop : S.pushTop;
+    const wantPush = this.moveY > 0.3 && this.grounded && r.speed < top - 0.15;
+    if (r.push < 0 && wantPush) r.push = 0;
+    if (r.push >= 0) {
+      const before = r.push;
+      r.push += dt / S.pushPeriod;
+      if (before < S.pushFrom && r.push >= S.pushFrom) this.kicked = true;
+      if (r.push >= S.pushFrom && r.push < S.pushTo && this.grounded) {
+        // Easy from a standstill, harder the nearer the top speed.
+        r.speed += S.pushAccel * (soft ? S.offRoadPush : 1) * THREE.MathUtils.clamp(((top - r.speed) / top) * 1.6, 0, 1) * dt;
+      }
+      if (r.push >= 1) r.push = wantPush ? 0 : -1;
+    }
+    if (this.moveY < -0.3) r.speed -= S.brake * Math.min(1, -this.moveY) * dt;
+    if (this.grounded) r.speed -= (S.rolling + (soft ? S.offRoad : 0) + S.drag * r.speed * r.speed * (this.crouching ? 0.6 : 1)) * dt;
+    r.speed = THREE.MathUtils.clamp(r.speed, 0, S.maxSpeed);
+    if (r.pop >= 0) {
+      r.pop += dt;
+      if (r.pop > 0.7) r.pop = -1;
+    }
+    this.intent.x = Math.sin(r.heading) * r.speed;
+    this.intent.z = Math.cos(r.heading) * r.speed;
+  }
+
+  /**
+   * What got in the deck's way this step: a glancing blow scrapes speed off and turns the board
+   * along the obstacle; a head-on hit at speed throws the rider (`bailed`). A single blocked step
+   * (a curb edge before autostep takes it) counts for nothing.
+   */
+  private rideCollide(dt: number, desired: { x: number; z: number }, m: { x: number; z: number }): void {
+    const r = this.ride!;
+    const want = Math.hypot(desired.x, desired.z);
+    if (want < 1e-4) {
+      r.blocked = 0;
+      return;
+    }
+    const got = Math.hypot(m.x, m.z);
+    if (got >= want * 0.85) {
+      r.blocked = 0;
+      return;
+    }
+    if (++r.blocked < 2) return;
+    const along = m.x * Math.sin(r.heading) + m.z * Math.cos(r.heading);
+    if (r.speed > SKATEBOARD.bailSpeed && along < want * SKATEBOARD.bailKeep) {
+      this.bailed = true;
+      r.speed = 0;
+      return;
+    }
+    r.speed = Math.max(0, along / dt);
+    if (got > want * 0.2) r.heading = wrap(r.heading + wrap(Math.atan2(m.x, m.z) - r.heading) * 0.5);
+  }
 
   private setCrouch(on: boolean): void {
     const newHeight = on ? PLAYER.crouchHeight : PLAYER.height;
@@ -277,14 +447,25 @@ export class PlayerController {
     const moveAngle = hv > 0.3 ? Math.atan2(Math.sin(travel), Math.cos(travel)) : 0;
     const c = this.character;
     c.lookPitch += ((this.aiming || this.faceT > 0 ? this.lookPitch : this.lookPitch * 0.35) - c.lookPitch) * (1 - Math.exp(-dt * 12));
+    const r = this.ride;
+    if (r) {
+      const sp = this.skatePose;
+      sp.yaw = wrap(this.rideHeading(alpha) - this.facing);
+      sp.push = r.push;
+      sp.lean = r.lean;
+      sp.air = !this.grounded;
+      sp.low = this.crouching;
+    }
+    c.skate = r ? this.skatePose : null;
     this.character.update(dt, {
-      speed: hv,
+      // Standing on the deck: no stride (the skate pose does the legs).
+      speed: r ? 0 : hv,
       crouch: this.crouching ? 1 : 0,
       aim: this.aiming ? 1 : 0,
       grounded: this.grounded,
-      strafe,
-      moveAngle,
-      turn: this.turnRate,
+      strafe: r ? 0 : strafe,
+      moveAngle: r ? 0 : moveAngle,
+      turn: r ? 0 : this.turnRate,
     });
   }
 
@@ -298,12 +479,14 @@ export class PlayerController {
     this.body.setNextKinematicTranslation(c);
     this.intent.set(0, 0, 0);
     this.velocity.set(0, 0, 0);
+    if (this.ride) this.ride.speed = 0;
   }
 
   /** Stops movement and removes the capsule so nothing collides with the fallen survivor. */
   kill(): void {
     if (this.dead) return;
     this.dead = true;
+    this.ride = null;
     this.clearInput();
     this.sprinting = false;
     this.velocity.set(0, 0, 0);

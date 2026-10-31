@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, decodeAppearance, type Mirror, type SimPlayer, type Simulation } from '@dead-hours/shared';
+import { DOWNED, PLAYER, SKATEBOARD, decodeAppearance, type Mirror, type SimPlayer, type Simulation, type Skateboard } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
-import { Humanoid, survivorLook } from '../characters/Humanoid';
+import { Humanoid, survivorLook, type SkatePose } from '../characters/Humanoid';
+import type { BoardPose } from './Skateboards';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { DynamicProbe } from '../lighting/Probes';
@@ -27,6 +28,8 @@ interface Remote {
   lamp: ChestLamp;
   lightOn: boolean | null;
   beam: Beam;
+  /** On a skateboard: the deck as drawn (yaw eased between snapshots, the kick run here), else null. */
+  ride: { yaw: number; lean: number; push: number; pop: number; air: boolean; pose: SkatePose; board: BoardPose } | null;
 }
 
 const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3(), _want = new THREE.Vector3();
@@ -71,6 +74,7 @@ export class RemoteSurvivors {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0 },
+      ride: null,
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w, inS) => audio.foley(cue, this.hand(r, _q), w, inS);
@@ -89,7 +93,7 @@ export class RemoteSurvivors {
         r = this.create(p);
         this.remotes.set(p.id, r);
       }
-      this.animate(r, p, dt, mirror, camera);
+      this.animate(r, p, dt, mirror, camera, sim.skateboards.ridden(p.id));
     }
     for (const [id, r] of this.remotes) {
       if (sim.players.has(id)) continue;
@@ -122,9 +126,10 @@ export class RemoteSurvivors {
     r.lamp.show(b.level, camera);
   }
 
-  private animate(r: Remote, p: SimPlayer, dt: number, mirror: Mirror, camera: THREE.PerspectiveCamera): void {
+  private animate(r: Remote, p: SimPlayer, dt: number, mirror: Mirror, camera: THREE.PerspectiveCamera, deck: Skateboard | null): void {
     const b = r.body;
     const m = p.motion;
+    if (!p.alive || !deck) r.ride = null;
     if (!p.alive) {
       if (!r.ragdoll) this.fall(r, p);
       if (!r.ragdoll!.asleep) r.ragdoll!.update(dt);
@@ -152,9 +157,11 @@ export class RemoteSurvivors {
       b.downTarget = p.downed ? 1 : 0;
       r.weapon.setVisible(!p.downed);
     }
+    const ride = deck ? this.skate(r, deck, m, dt) : null;
+    b.skate = ride ? ride.pose : null;
     b.update(dt, {
-      speed: hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded, strafe, moveAngle,
-      turn: dt > 0 ? turned / dt : 0,
+      speed: ride ? 0 : hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded,
+      strafe: ride ? 0 : strafe, moveAngle: ride ? 0 : moveAngle, turn: ride || dt <= 0 ? 0 : turned / dt,
     });
     // Where they are looking, far out: the arms and gun line up on it.
     const cp = Math.cos(m.pitch);
@@ -163,6 +170,58 @@ export class RemoteSurvivors {
     this.light(r, p, dt, _aim, camera);
     r.probe.update(dt, r.pos, camera);
     this.placeTag(r, _q.copy(r.pos).setY(r.pos.y + (p.downed ? 0.8 : m.crouching ? PLAYER.crouchHeight : PLAYER.height) + 0.25), camera, p, false);
+  }
+
+  /**
+   * Their skateboard: the deck turns toward the heading the server last gave (smoothly, between
+   * snapshots), leans with how fast it turns, pops up when they leave the ground, and their back
+   * foot kicks along while they say they are pushing.
+   */
+  private skate(r: Remote, deck: Skateboard, m: SimPlayer['motion'], dt: number): NonNullable<Remote['ride']> {
+    let s = r.ride;
+    if (!s) {
+      s = {
+        yaw: deck.yaw, lean: 0, push: -1, pop: -1, air: false,
+        pose: { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false },
+        board: { pos: new THREE.Vector3(), yaw: deck.yaw, lean: 0, pop: -1, air: false, push: -1 },
+      };
+      r.ride = s;
+    }
+    const diff = Math.atan2(Math.sin(deck.yaw - s.yaw), Math.cos(deck.yaw - s.yaw));
+    const turn = diff * (1 - Math.exp(-dt * 12));
+    s.yaw += turn;
+    const rate = dt > 0 ? turn / dt : 0;
+    s.lean += (THREE.MathUtils.clamp(rate / 1.6, -1, 1) - s.lean) * (1 - Math.exp(-dt * 6));
+    if (s.push >= 0 || m.pushing) {
+      s.push += dt / SKATEBOARD.pushPeriod;
+      if (s.push >= 1) s.push = m.pushing ? 0 : -1;
+    }
+    const air = !m.grounded;
+    if (air && !s.air) s.pop = 0;
+    else if (s.pop >= 0) s.pop = s.pop + dt > 0.7 ? -1 : s.pop + dt;
+    s.air = air;
+    const pose = s.pose;
+    pose.yaw = Math.atan2(Math.sin(s.yaw - r.facing), Math.cos(s.yaw - r.facing));
+    pose.push = s.push;
+    pose.lean = s.lean;
+    pose.air = air;
+    pose.low = m.crouching;
+    const bp = s.board;
+    bp.pos.copy(r.pos);
+    bp.yaw = s.yaw;
+    bp.lean = s.lean;
+    bp.pop = s.pop;
+    bp.air = air;
+    bp.push = s.push;
+    return s;
+  }
+
+  /** Where another survivor's board is drawn (under their feet), or null when they aren't riding one. */
+  boardPose(id: string, deck: Skateboard): BoardPose | null {
+    const r = this.remotes.get(id);
+    if (!r || r.ragdoll || !r.ride) return null;
+    void deck;
+    return r.ride.board;
   }
 
   /** Name and health over their head (seen through walls: they are on your side). */
