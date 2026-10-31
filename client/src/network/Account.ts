@@ -1,8 +1,14 @@
 import { decodeAppearance, encodeAppearance, sanitizeAppearance, type PlayerStats } from '@dead-hours/shared';
 import { settings } from '../core/Settings';
-import { net } from './Net';
+import { HTTP_URL, net } from './Net';
 
 const STORAGE_KEY = 'deadhours.player.v1';
+/** The sign-in session and who it is (see server/src/net/auth.ts). */
+const SESSION_KEY = 'deadhours.session.v1';
+/** The nonce of a sign-in under way, and where a sign-in popup leaves its code for this page. */
+const NONCE_KEY = 'deadhours.signin-nonce';
+const RESULT_KEY = 'deadhours.signin-result';
+const POPUP_NAME = 'dh-signin';
 
 /** What the server keeps for a player (see server/src/store.ts). */
 export interface ServerProfile {
@@ -28,6 +34,22 @@ export interface Ranks {
   rankKills: number | null;
 }
 
+/** A signed-in player, as the server describes them. */
+export interface SignedIn {
+  id: string;
+  name: string;
+  email: string | null;
+  /** The services they have signed in with ('google', 'discord'). */
+  providers: string[];
+}
+
+export type Provider = 'google' | 'discord';
+
+interface StoredSession {
+  session: string;
+  account: SignedIn;
+}
+
 interface Stored {
   key: string;
   /** When this browser last changed the survivor (ms), to tell which copy is newer. */
@@ -37,6 +59,37 @@ interface Stored {
 function newKey(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(18));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function read<T>(key: string): T | null {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? 'null') as T | null;
+  } catch {
+    return null;
+  }
+}
+
+function write(key: string, v: unknown): void {
+  try {
+    if (v === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(v));
+  } catch {
+    // Not saved; it still works for this visit.
+  }
+}
+
+function loadSession(): StoredSession | null {
+  const s = read<StoredSession>(SESSION_KEY);
+  return s && typeof s.session === 'string' && s.account && typeof s.account.id === 'string' ? s : null;
+}
+
+/** The sign-in code a finished sign-in left in the page address (#dh_login=…), if any. */
+function loginInHash(): { code?: string; error?: string } | null {
+  if (!location.hash.includes('dh_login')) return null;
+  const q = new URLSearchParams(location.hash.slice(1));
+  const code = q.get('dh_login') ?? undefined;
+  const error = q.get('dh_login_error') ?? undefined;
+  return code || error ? { code, error } : null;
 }
 
 function load(): Stored {
@@ -55,12 +108,20 @@ const profileJson = () => {
 };
 
 /**
- * The browser's player key and the survivor saved under it on the server. The key is made here
- * and kept in local storage; entering it on another device brings the same survivor and stats
- * there. The survivor is saved again whenever it changes in the creator or loadout.
+ * Who is playing and the survivor saved for them on the server.
+ *
+ * Everyone has a browser player key, made here and kept in local storage (guest play; entering
+ * it on another device brings the same survivor there). Signing in with Google or Discord ties
+ * the survivor, stats and places to an account instead: the guest's progress is folded into it
+ * at sign-in, and every device signed in to it plays as the same survivor. The survivor is saved
+ * again whenever it changes in the creator or loadout.
  */
 class Account {
   private stored = load();
+  private signed = loadSession();
+  private providerList: Promise<Provider[]> | null = null;
+  /** Says how the last sign-in went (for the account panel). */
+  lastSignIn: 'ok' | 'cancelled' | 'failed' | null = null;
   private lastSent = '';
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** The latest copy from the server (stats and ranks), when it has been reached. */
@@ -75,6 +136,20 @@ class Account {
 
   get key(): string {
     return this.stored.key;
+  }
+
+  /** The sign-in session (null playing as a guest). */
+  get session(): string | null {
+    return this.signed?.session ?? null;
+  }
+
+  /** The signed-in player (null playing as a guest). */
+  get signedIn(): SignedIn | null {
+    return this.signed?.account ?? null;
+  }
+
+  private get auth() {
+    return { key: this.key, session: this.session };
   }
 
   /** The key shown to the player, grouped for reading out. */
@@ -123,7 +198,7 @@ class Account {
     if (net.status !== 'online') return;
     const body = profileJson();
     try {
-      this.profile = await net.api<ServerProfile>('/api/profile', { method: 'PUT', key: this.key, body: JSON.parse(body) });
+      this.profile = await net.api<ServerProfile>('/api/profile', { method: 'PUT', ...this.auth, body: JSON.parse(body) });
       this.lastSent = body;
       this.emit();
     } catch {
@@ -137,8 +212,17 @@ class Account {
    */
   async sync(): Promise<void> {
     if (!(await net.check())) return;
+    if (this.signed) {
+      try {
+        this.signed.account = await net.api<SignedIn>('/api/me', { session: this.session });
+        write(SESSION_KEY, this.signed);
+      } catch (e) {
+        // Signed out elsewhere or expired: back to playing as a guest.
+        if ((e as { status?: number }).status === 401) this.setSession(null);
+      }
+    }
     try {
-      const p = await net.api<ServerProfile>('/api/profile', { key: this.key });
+      const p = await net.api<ServerProfile>('/api/profile', this.auth);
       this.profile = p;
       if (p.updatedAt > this.stored.savedAt) this.adopt(p);
       else if (profileJson() !== JSON.stringify({ name: p.name, primary: p.primary, appearance: p.appearance })) await this.push();
@@ -167,7 +251,7 @@ class Account {
     const p = settings.value.profile;
     try {
       const r = await net.api<Ranks>('/api/runs', {
-        method: 'POST', key: this.key,
+        method: 'POST', ...this.auth,
         body: { name: p.name, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), survived, stats },
       });
       void this.sync();
@@ -175,6 +259,129 @@ class Account {
     } catch {
       return null;
     }
+  }
+
+  private setSession(s: StoredSession | null): void {
+    this.signed = s;
+    write(SESSION_KEY, s);
+    this.profile = null;
+    this.emit();
+  }
+
+  /** The services this server lets players sign in with (none when it is offline or not set up). */
+  providers(): Promise<Provider[]> {
+    this.providerList ??= net.check().then(async (up) => {
+      if (!up) return [];
+      try {
+        return (await net.api<{ providers: Provider[] }>('/api/auth/providers')).providers;
+      } catch {
+        return [];
+      }
+    }).then((l) => {
+      if (!l.length) this.providerList = null;
+      return l;
+    });
+    return this.providerList;
+  }
+
+  /**
+   * Starts signing in: a popup with the service's sign-in, or (when popups are blocked) the whole
+   * page goes there and comes back. The popup's code arrives through listen().
+   */
+  signIn(provider: Provider): void {
+    if (!HTTP_URL) return;
+    const bytes = crypto.getRandomValues(new Uint8Array(18));
+    const nonce = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_');
+    write(NONCE_KEY, nonce);
+    write(RESULT_KEY, null);
+    const back = `${location.origin}${location.pathname}${location.search}`;
+    const url = `${HTTP_URL}/auth/${provider}/start?${new URLSearchParams({ return: back, nonce })}`;
+    const w = 480;
+    const hgt = 680;
+    const popup = window.open(url, POPUP_NAME,
+      `popup,width=${w},height=${hgt},left=${Math.round(screenX + (outerWidth - w) / 2)},top=${Math.round(screenY + (outerHeight - hgt) / 2)}`);
+    if (!popup) location.assign(url);
+  }
+
+  /** A code handed back by the sign-in popup (postMessage from the server's page, or via storage). */
+  private listen(): void {
+    const serverOrigin = HTTP_URL ? new URL(HTTP_URL).origin : '';
+    window.addEventListener('message', (e) => {
+      const d = (e.data as { deadHoursLogin?: { dh_login?: string; dh_login_error?: string } } | null)?.deadHoursLogin;
+      if (!d || (e.origin !== serverOrigin && e.origin !== location.origin)) return;
+      void this.finish(d.dh_login, d.dh_login_error);
+    });
+    window.addEventListener('storage', (e) => {
+      if (e.key !== RESULT_KEY || !e.newValue) return;
+      const d = read<{ code?: string; error?: string }>(RESULT_KEY);
+      write(RESULT_KEY, null);
+      if (d) void this.finish(d.code, d.error);
+    });
+  }
+
+  /**
+   * Called first thing on page load. In the sign-in popup (when the server's page couldn't reach
+   * this window directly) it passes the code on and closes, and returns true: nothing else should
+   * start. After a whole-page sign-in it finishes signing in here.
+   */
+  takeSignInFromAddress(): boolean {
+    this.listen();
+    const got = loginInHash();
+    if (!got) return false;
+    history.replaceState(null, '', `${location.pathname}${location.search}`);
+    if (window.name === POPUP_NAME && window.opener) {
+      write(RESULT_KEY, got);
+      try {
+        (window.opener as Window).postMessage({ deadHoursLogin: { dh_login: got.code, dh_login_error: got.error } }, location.origin);
+      } catch {
+        // The storage note above reaches it instead.
+      }
+      window.close();
+      return true;
+    }
+    void this.finish(got.code, got.error);
+    return false;
+  }
+
+  private finishing = false;
+
+  /** Trades a sign-in code for a session; the guest's survivor and stats go into the account. */
+  private async finish(code: string | undefined, error: string | undefined): Promise<void> {
+    const nonce = read<string>(NONCE_KEY);
+    if (this.finishing || (!code && !error)) return;
+    if (!code || !nonce) {
+      this.lastSignIn = error === 'cancelled' ? 'cancelled' : 'failed';
+      this.emit();
+      return;
+    }
+    this.finishing = true;
+    try {
+      const r = await net.api<StoredSession>('/api/auth/exchange', { method: 'POST', body: { code, nonce, guestKey: this.key } });
+      write(NONCE_KEY, null);
+      this.lastSignIn = 'ok';
+      this.setSession(r);
+      // The account's survivor wins over this browser's copy (it already has this guest's runs).
+      this.stored.savedAt = 0;
+      this.persist();
+      await this.sync();
+    } catch {
+      this.lastSignIn = 'failed';
+      this.emit();
+    } finally {
+      this.finishing = false;
+    }
+  }
+
+  /** Back to playing as a guest on this browser (the account keeps its survivor). */
+  async signOut(): Promise<void> {
+    const session = this.session;
+    this.lastSignIn = null;
+    this.setSession(null);
+    // A fresh guest key: the old one's progress now belongs to the account.
+    this.stored = { key: newKey(), savedAt: Date.now() };
+    this.persist();
+    if (session) await net.api('/api/auth/logout', { method: 'POST', session }).catch(() => undefined);
+    await this.sync();
   }
 }
 

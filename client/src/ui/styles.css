@@ -381,6 +381,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .board-list .place { font-family: var(--font-display); color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 .board-list li:nth-child(-n+3) .place { color: var(--accent); }
 .board-list .who { font-family: var(--font-display); letter-spacing: 0.14em; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-list .signed { color: var(--ok); letter-spacing: 0; }
+.account-box { border-bottom: 1px solid var(--line); padding-bottom: 0.6em; margin-bottom: 0.8em; }
+.signin-row { flex-wrap: wrap; }
 .board-list .mode { font-size: 0.62em; letter-spacing: 0.2em; color: var(--fg-faint); border: 1px solid var(--line); border-radius: 2px; padding: 0.15em 0.45em; }
 .board-list .mode.online { color: var(--ok); border-color: rgba(127,163,122,0.35); }
 .board-list b { font-family: var(--font-display); font-weight: 300; font-size: 1.15em; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }

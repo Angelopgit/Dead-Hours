@@ -54,11 +54,12 @@ export const net = {
   },
 
   /** JSON over HTTP to the server's /api routes. */
-  async api<T>(path: string, init: { method?: string; body?: unknown; key?: string } = {}): Promise<T> {
+  async api<T>(path: string, init: { method?: string; body?: unknown; key?: string; session?: string | null } = {}): Promise<T> {
     if (!HTTP_URL) throw new ApiError(0, 'NO SERVER');
     const headers: Record<string, string> = {};
     if (init.body !== undefined) headers['content-type'] = 'application/json';
     if (init.key) headers['x-player-key'] = init.key;
+    if (init.session) headers.authorization = `Bearer ${init.session}`;
     let r: Response;
     try {
       r = await fetch(`${HTTP_URL}${path}`, { method: init.method ?? 'GET', headers, body: init.body !== undefined ? JSON.stringify(init.body) : undefined });

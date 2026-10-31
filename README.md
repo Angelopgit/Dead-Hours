@@ -53,7 +53,8 @@ server/   Colyseus server
   src/game         the world's collision and navigation (built once), a night of play (Night.ts)
   src/rooms        SurvivalRoom: lobby, host, start, the running night, results
   src/net          HTTP API (health, open games, join codes, leaderboards, profiles, solo runs), input cleaning
-  src/store.ts     profiles, runs and boards in Postgres (DATABASE_URL) or a JSON file
+  src/store.ts     profiles, runs, boards and accounts in Postgres (DATABASE_URL) or a JSON file
+  src/net/auth.ts  Google and Discord sign-in, sessions, whose profile a request plays as
   tests/           end-to-end server check (npm run check:server)
 assets/   reserved for models, textures, audio, lightmaps
 ```
@@ -111,6 +112,13 @@ Main menu → Play → **Host game** makes a room on the game server: give it a 
 
 **Survivors and stats.** Each browser makes a player key (kept in local storage). The survivor's name, look and primary weapon are saved under it on the server whenever they change, along with lifetime stats: runs, kills, headshots, arms torn off, time survived, best time and most kills. Main menu → Leaderboards → Your survivor shows the key; entering it on another device brings the same survivor and stats there.
 
+**Accounts.** Main menu → Account signs in with Google or Discord (whichever the server has keys for). Guests keep playing exactly as before; signing in ties the survivor, stats, places (and unlocks) to the account instead of the browser key, so every device signed in plays as the same survivor.
+
+- Signing in folds the browser's guest profile into the account: the first time it simply becomes the account's survivor; later ones add their totals and keep the better bests, and the account's look stays. A Google and a Discord login with the same verified email are the same account.
+- The sign-in runs in a popup (the whole page goes there and back when popups are blocked). The server does the OAuth code exchange itself, so the client never sees the service's tokens; it hands the game a one-time code (a minute, single use, bound to a nonce the game made) that `POST /api/auth/exchange` trades for a session. Sessions last 180 days, are stored hashed, and are sent as `Authorization: Bearer`. Sign-ins only ever return to an address in `CLIENT_ORIGINS`.
+- Boards mark signed-in players with ✓. Online rooms count a signed-in player's runs for their account.
+- Routes: `GET /auth/{google,discord}/start?return&nonce`, `GET /auth/{provider}/callback`, `GET /api/auth/providers`, `POST /api/auth/exchange`, `POST /api/auth/logout`, `GET /api/me`.
+
 **Voice and text chat.**
 
 - Voice goes straight between the players' browsers (WebRTC); the game server only passes the connection setup along and never hears it. Opus, mono, up to 40 kb/s, with in-band error correction and silence suppression, and the browser's echo cancellation, noise suppression and auto gain (each can be turned off in Settings → Voice).
@@ -139,7 +147,14 @@ The client is a static site (`npm run build`, publish `client/dist`). The server
 | `REDIS_URL` | server | Redis (Render Key Value) shared by several server instances, `redis://…` or `rediss://…`. Unset: one process on its own. |
 | `MAX_ROOMS` | server | Games one server process runs before new ones go to another or are refused (default 8). |
 | `SELF_HOSTNAME` | server | With `REDIS_URL`: this instance's private address, only if it can't find it itself. |
+| `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | server | Google sign-in (an OAuth client of type Web application). Redirect URI: `<server address>/auth/google/callback`. |
+| `AUTH_DISCORD_ID`, `AUTH_DISCORD_SECRET` | server | Discord sign-in (an application's OAuth2 client id and secret). Redirect: `<server address>/auth/discord/callback`. |
+| `CLIENT_ORIGINS` | server | Comma-separated addresses the game is played from, e.g. `https://play.example.com,https://deadhours.pages.dev`. Sign-ins return only to these (localhost works when it is unset). |
+| `AUTH_SECRET` | server | A long random string that signs sign-in state. Needed with several instances; one process makes its own on start. |
+| `PUBLIC_URL` | server | The server's public `https://` address for the redirect URIs. Render's `RENDER_EXTERNAL_URL` is used when unset; set it when the server has its own domain. |
 | `DEAD_HOURS_DEBUG` | server | `1` enables test commands in rooms (skip preparation, spawn zombies, hurt, full health). Never in production. |
+
+Accounts need a store (Postgres, or the data file on a single server). Sign-in is off until a provider's id and secret are set; the menu then says sign-in isn't available and guests play as before.
 
 `GET /health` answers `{ ok, version, store, games, maxGames, forwarded }` (the last three for this process). The server logs one line per room event (opened, joined, left, lost connection, reconnected, night started, night over with each survivor's time and kills). The HTTP API sends CORS headers for any origin, and Colyseus answers `/matchmake` with its own. Messages to the game server are capped at 16 kB (voice setup needs a few kB). A TURN relay needs open UDP ports, which web app hosts such as Render don't offer: run coturn on a small VPS or use a managed TURN service, and keep the secret out of the client. The server builds the map's navigation once at start (about two seconds) and each room builds its own physics.
 

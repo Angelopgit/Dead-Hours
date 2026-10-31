@@ -2,31 +2,36 @@ import { h } from './dom';
 import { clock } from './HUD';
 import { audio } from '../audio/AudioEngine';
 import { net } from '../network/Net';
-import { account } from '../network/Account';
+import { account, type Provider } from '../network/Account';
 
 interface BoardEntry {
   name: string;
   value: number;
   mode: 'solo' | 'online';
   at: number;
+  /** Set by a player signed in with an account. */
+  signedIn?: boolean;
 }
 
-type Tab = 'survival' | 'kills' | 'you';
+export type Tab = 'survival' | 'kills' | 'you';
+
+const PROVIDER_NAMES: Record<Provider, string> = { google: 'Google', discord: 'Discord' };
 
 /**
  * The two boards (longest survival, most kills; each player's best) and the player's own saved
- * survivor: lifetime stats, places, and the player key that carries them to another device.
+ * survivor: lifetime stats, places, sign-in, and (for guests) the player key that carries them
+ * to another device.
  */
 export class LeaderboardPanel {
   readonly el: HTMLElement;
   private readonly tabs = h('div', { class: 'tabs' });
   private readonly body = h('div', { class: 'board' });
-  private tab: Tab = 'survival';
   private boards: { survival: BoardEntry[]; kills: BoardEntry[] } | null = null;
   private failed = false;
+  private providers: Provider[] | null = null;
   private readonly off: () => void;
 
-  constructor(onClose: () => void) {
+  constructor(onClose: () => void, private tab: Tab = 'survival') {
     this.el = h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Leaderboards' },
       h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); onClose(); } }, 'CLOSE ✕'),
       h('h2', {}, 'LEADERBOARDS'),
@@ -37,6 +42,10 @@ export class LeaderboardPanel {
     this.render();
     void this.load();
     void account.sync();
+    void account.providers().then((p) => {
+      this.providers = p;
+      if (this.tab === 'you') this.render();
+    });
   }
 
   private async load(): Promise<void> {
@@ -73,11 +82,11 @@ export class LeaderboardPanel {
       rows.length
         ? h('ol', { class: 'board-list' }, ...rows.map((r, i) => h('li', {},
           h('span', { class: 'place' }, String(i + 1)),
-          h('span', { class: 'who' }, r.name.toUpperCase()),
+          h('span', { class: 'who' }, r.name.toUpperCase(), r.signedIn ? h('span', { class: 'signed', title: 'Signed in with an account' }, ' ✓') : null),
           h('span', { class: `mode ${r.mode}` }, r.mode.toUpperCase()),
           h('b', {}, kind === 'survival' ? clock(r.value) : String(r.value)))))
         : h('p', {}, 'Nobody is on the board yet. Survive a night to be the first.'),
-      h('p', { class: 'board-note' }, 'Each player\'s best run. Online runs are recorded by the game server; solo runs are reported by the player\'s own browser, checked for what a real run could reach, and marked SOLO.'),
+      h('p', { class: 'board-note' }, 'Each player\'s best run. Online runs are recorded by the game server; solo runs are reported by the player\'s own browser, checked for what a real run could reach, and marked SOLO. ✓ marks players signed in with an account.'),
     );
   }
 
@@ -102,6 +111,7 @@ export class LeaderboardPanel {
       },
     }, 'COPY');
     this.body.replaceChildren(
+      this.accountSection(),
       p
         ? h('div', {},
           h('h3', {}, p.name.toUpperCase()),
@@ -117,11 +127,44 @@ export class LeaderboardPanel {
             stat('KILLS PLACE', p.rankKills ? `#${p.rankKills}` : '—'),
           ))
         : h('p', {}, net.status === 'online' ? 'Your survivor is saved here once you change it or finish a night.' : 'The game server can\'t be reached right now.'),
-      h('h3', {}, 'Player key'),
-      h('p', {}, 'Your survivor, stats and places are saved under this key. Keep it to yourself; enter it on another device to play as the same survivor there.'),
-      h('div', { class: 'code-row' }, h('code', { class: 'player-key' }, account.displayKey), copy),
-      h('div', { class: 'code-row' }, keyInput, use),
-      note,
+      ...(account.signedIn ? [] : [
+        h('h3', {}, 'Player key'),
+        h('p', {}, 'Playing as a guest, your survivor, stats and places are saved under this key. Keep it to yourself; enter it on another device to play as the same survivor there, or sign in above instead.'),
+        h('div', { class: 'code-row' }, h('code', { class: 'player-key' }, account.displayKey), copy),
+        h('div', { class: 'code-row' }, keyInput, use),
+        note,
+      ]),
+    );
+  }
+
+  /** Signed in (as whom, sign out) or a guest (sign-in buttons for the services this server offers). */
+  private accountSection(): HTMLElement {
+    const me = account.signedIn;
+    if (me) {
+      const via = me.providers.map((p) => PROVIDER_NAMES[p as Provider] ?? p).join(' and ') || 'an account';
+      return h('div', { class: 'account-box' },
+        h('h3', {}, 'Account'),
+        h('p', {}, `Signed in with ${via} as `, h('b', {}, me.name || me.email || 'you'),
+          '. Your survivor, stats, places and unlocks follow you to every device you sign in on.'),
+        h('div', { class: 'code-row' }, h('button', {
+          class: 'btn', onclick: () => { audio.ui('back'); void account.signOut(); },
+        }, 'SIGN OUT')),
+      );
+    }
+    const list = this.providers;
+    const said = account.lastSignIn === 'failed' ? 'Signing in didn\'t work. Try again.' : account.lastSignIn === 'cancelled' ? 'Sign-in cancelled.' : '';
+    return h('div', { class: 'account-box' },
+      h('h3', {}, 'Account'),
+      list === null
+        ? h('p', {}, 'Checking sign-in…')
+        : list.length
+          ? h('p', {}, 'You\'re playing as a guest. Sign in to keep your survivor, stats, places and unlocks safe and on every device. What you have played on this browser comes with you.')
+          : h('p', {}, 'Sign-in isn\'t available on this server right now. You can keep playing as a guest.'),
+      list?.length ? h('div', { class: 'code-row signin-row' }, ...list.map((p) => h('button', {
+        class: `btn signin ${p}`,
+        onclick: () => { audio.ui('click'); account.signIn(p); },
+      }, `SIGN IN WITH ${PROVIDER_NAMES[p].toUpperCase()}`))) : null,
+      said ? h('p', { class: 'board-note' }, said) : null,
     );
   }
 

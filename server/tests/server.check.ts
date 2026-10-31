@@ -3,9 +3,11 @@
  * join code, the game list, joining by code, host-only start, snapshots mirrored into a
  * client's copy of the world, shooting a zombie, movement checks, the night ending, runs on
  * the leaderboards, saved survivors and solo run checks, text chat (cleaning, filter, limits,
- * blocks) and the voice negotiation relay. Run with `npm run check -w server`.
+ * blocks), the voice negotiation relay, and sign-in with Google and Discord against stand-in
+ * services (accounts, sessions, folding a guest's profile in). Run with `npm run check -w server`.
  */
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,17 +41,54 @@ async function until(fn: () => boolean, ms = 5000): Promise<boolean> {
 const PORT = 2611;
 const HTTP = `http://127.0.0.1:${PORT}`;
 const dir = mkdtempSync(join(tmpdir(), 'dh-check-'));
+
+/**
+ * Stand-ins for Google and Discord: the token endpoint hands back the code as the access token,
+ * and the user endpoint answers with the person that token names.
+ */
+const MOCK_PORT = 2612;
+const people: Record<string, Record<string, unknown>> = {
+  g1: { sub: 'google-1', email: 'Dana@Example.com', email_verified: true, name: 'Dana G' },
+  d1: { id: 'discord-1', username: 'dana', global_name: 'Dana D', email: 'dana@example.com', verified: true },
+  d2: { id: 'discord-2', username: 'eve', email: 'dana@example.com', verified: false },
+};
+const tokenCalls: string[] = [];
+const mock = createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => (body += c));
+  req.on('end', () => {
+    const json = (v: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)); };
+    if (req.url?.endsWith('/token') && req.method === 'POST') {
+      const f = new URLSearchParams(body);
+      tokenCalls.push(`${f.get('client_id')}|${f.get('client_secret')}|${f.get('redirect_uri')}`);
+      return people[f.get('code') ?? ''] ? json({ access_token: f.get('code'), token_type: 'Bearer' }) : json({ error: 'invalid_grant' }, 400);
+    }
+    if (req.url?.endsWith('/user')) {
+      const who = people[(req.headers.authorization ?? '').replace('Bearer ', '')];
+      return who ? json(who) : json({ error: 'unauthorized' }, 401);
+    }
+    json({ error: 'not found' }, 404);
+  });
+}).listen(MOCK_PORT);
+
 const server = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
   cwd: new URL('..', import.meta.url).pathname,
-  env: { ...process.env, PORT: String(PORT), DEAD_HOURS_DEBUG: '1', DATA_FILE: join(dir, 'data.json'), DATABASE_URL: '' },
+  env: {
+    ...process.env, PORT: String(PORT), DEAD_HOURS_DEBUG: '1', DATA_FILE: join(dir, 'data.json'),
+    // CHECK_DATABASE_URL runs the same checks on an empty Postgres database instead of a file.
+    DATABASE_URL: process.env.CHECK_DATABASE_URL ?? '',
+    AUTH_GOOGLE_ID: 'gid', AUTH_GOOGLE_SECRET: 'gsecret', AUTH_DISCORD_ID: 'did', AUTH_DISCORD_SECRET: 'dsecret',
+    AUTH_MOCK_URL: `http://127.0.0.1:${MOCK_PORT}`, CLIENT_ORIGINS: 'https://play.example.com', PUBLIC_URL: '', RENDER_EXTERNAL_URL: '',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverLog = '';
 server.stdout.on('data', (d) => (serverLog += d));
 server.stderr.on('data', (d) => (serverLog += d));
-const api = async (path: string, init: RequestInit & { key?: string } = {}) => {
+const api = async (path: string, init: RequestInit & { key?: string; session?: string } = {}) => {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (init.key) headers['x-player-key'] = init.key;
+  if (init.session) headers.authorization = `Bearer ${init.session}`;
   const r = await fetch(HTTP + path, { ...init, headers });
   return { status: r.status, body: (await r.json().catch(() => null)) as any, headers: r.headers };
 };
@@ -105,7 +144,8 @@ try {
   section('Server');
   check(up, 'server starts and answers /health');
   const health = await api('/health');
-  check(health.body?.ok === true && health.body?.store === 'file', 'health reports the file store when DATABASE_URL is unset');
+  const wantStore = process.env.CHECK_DATABASE_URL ? 'postgres' : 'file';
+  check(health.body?.ok === true && health.body?.store === wantStore, `health reports the ${wantStore} store`);
   const pre = await fetch(`${HTTP}/api/rooms`, { method: 'OPTIONS', headers: { origin: 'https://play.example.com' } });
   check(pre.status === 204 && pre.headers.get('access-control-allow-origin') === '*', 'API answers cross-origin preflight');
   const mm = await fetch(`${HTTP}/matchmake/joinOrCreate/nothing`, { method: 'OPTIONS', headers: { origin: 'https://play.example.com' } });
@@ -387,11 +427,81 @@ try {
   check((await solo(320, 41)).status === 429, 'runs can\'t be posted back to back');
   const board2 = (await api('/api/leaderboard')).body;
   check(board2?.survival?.[0]?.name === 'Charlie' && board2.survival[0].mode === 'solo', 'solo runs are marked solo on the board');
+  check(board2?.survival?.[0]?.signedIn === false, 'guest runs are not marked as signed in');
+
+  section('Sign-in accounts');
+  const providers = (await api('/api/auth/providers')).body?.providers;
+  check(JSON.stringify(providers) === '["google","discord"]', `both sign-ins are offered when configured (${providers})`);
+  const GAME_PAGE = 'http://localhost:5173/';
+  const start = (provider: string, ret: string, nonce: string) =>
+    fetch(`${HTTP}/auth/${provider}/start?${new URLSearchParams({ return: ret, nonce })}`, { redirect: 'manual' });
+  check((await start('google', 'https://evil.example.com/', 'n'.repeat(20))).status === 400, 'a sign-in can\'t return to another site');
+  check((await start('google', GAME_PAGE, 'short')).status === 400, 'a sign-in needs a nonce');
+  check((await start('github', GAME_PAGE, 'n'.repeat(20))).status === 404, 'a service that isn\'t set up is refused');
+  /** Runs a whole sign-in up to the page the service returns to; returns that page and the state. */
+  const signInAs = async (provider: string, person: string, nonce: string, ret = GAME_PAGE) => {
+    const r = await start(provider, ret, nonce);
+    const to = new URL(r.headers.get('location') ?? 'http://none/');
+    const state = to.searchParams.get('state') ?? '';
+    const cb = new URL(to.searchParams.get('redirect_uri') ?? 'http://none/');
+    const page = await fetch(`${cb}?${new URLSearchParams({ code: person, state })}`).then((x) => x.text());
+    return { redirected: r.status === 302 && to.pathname === `/${provider}/authorize`, to, cb, state, page, code: /dh_login=([A-Za-z0-9_-]+)/.exec(page)?.[1] ?? '' };
+  };
+  const nonceA = 'nonceA_0123456789abcdef';
+  const g = await signInAs('google', 'g1', nonceA);
+  check(g.redirected && g.to.searchParams.get('client_id') === 'gid' && g.to.searchParams.get('scope') === 'openid email profile', 'start sends the player to Google with the client id and scopes');
+  check(g.cb.toString() === `${HTTP}/auth/google/callback`, `callback address is this server's (${g.cb})`);
+  check(tokenCalls.at(-1) === `gid|gsecret|${HTTP}/auth/google/callback`, 'the code is traded with the client secret and the same callback');
+  check(g.code.length > 20 && g.page.includes('postMessage') && g.page.includes('"http://localhost:5173"'), 'the return page hands a one-time code to the game page only');
+  const bad = await fetch(`${g.cb}?${new URLSearchParams({ code: 'g1', state: g.state.slice(0, -2) + 'xx' })}`);
+  check(bad.status === 400, 'a tampered state is refused');
+  const wrong = await api('/api/auth/exchange', { method: 'POST', body: JSON.stringify({ code: g.code, nonce: 'someoneElse_0123456789', guestKey: a.key }) });
+  check(wrong.status === 401, 'a code with another sign-in\'s nonce is refused (no signing someone into your account by link)');
+  const g2 = await signInAs('google', 'g1', nonceA);
+  const ex = await api('/api/auth/exchange', { method: 'POST', body: JSON.stringify({ code: g2.code, nonce: nonceA, guestKey: a.key }) });
+  const session = ex.body?.session as string;
+  check(ex.status === 200 && typeof session === 'string' && ex.body?.account?.name === 'Dana G', 'the code and nonce trade for a session');
+  check((await api('/api/auth/exchange', { method: 'POST', body: JSON.stringify({ code: g2.code, nonce: nonceA }) })).status === 401, 'a sign-in code works only once');
+  const whoAmI = await api('/api/me', { session });
+  check(whoAmI.body?.email === 'dana@example.com' && JSON.stringify(whoAmI.body?.providers) === '["google"]', 'the session knows who is signed in');
+  const acctProfile = await api('/api/profile', { session });
+  check(acctProfile.body?.name === 'Alpha One b' && acctProfile.body?.stats?.runs === got.body?.stats?.runs && acctProfile.body?.stats?.kills === 1,
+    'the guest\'s browser survivor and stats became the account\'s');
+  check((await api('/api/profile', { key: a.key })).status === 404, 'and are no longer under the old browser key');
+  const charlieBefore = (await api('/api/profile', { key: c.key })).body;
+  const nonceB = 'nonceB_0123456789abcdef';
+  const d = await signInAs('discord', 'd1', nonceB);
+  check(d.redirected && d.to.searchParams.get('scope') === 'identify email', 'Discord sign-in asks for identity and email');
+  const ex2 = await api('/api/auth/exchange', { method: 'POST', body: JSON.stringify({ code: d.code, nonce: nonceB, guestKey: c.key }) });
+  check(ex2.body?.account?.id === ex.body?.account?.id && JSON.stringify(ex2.body?.account?.providers) === '["discord","google"]',
+    'Discord with the same verified email signs in to the same account');
+  const merged = (await api('/api/profile', { session: ex2.body?.session })).body;
+  check(merged?.stats?.runs === acctProfile.body.stats.runs + charlieBefore.stats.runs && merged?.stats?.bestSurvived === 300 && merged?.name === 'Alpha One b',
+    'a second guest profile is folded in: totals add up, bests keep the better, the account\'s survivor stays');
+  const d2 = await signInAs('discord', 'd2', 'nonceC_0123456789abcdef');
+  const ex3 = await api('/api/auth/exchange', { method: 'POST', body: JSON.stringify({ code: d2.code, nonce: 'nonceC_0123456789abcdef' }) });
+  check(ex3.status === 200 && ex3.body?.account?.id !== ex.body?.account?.id, 'an unverified email does not join an existing account');
+  const board3 = (await api('/api/leaderboard')).body;
+  check(board3?.survival?.[0]?.name === 'Alpha One b' && board3.survival[0].signedIn === true, 'boards mark signed-in players');
+  const saveAcct = await api('/api/profile', { method: 'PUT', session, body: JSON.stringify({ name: 'Dana', appearance: '', primary: 'ar' }) });
+  check(saveAcct.status === 200 && (await api('/api/profile', { session: ex2.body?.session })).body?.name === 'Dana', 'saving while signed in saves the account\'s survivor (seen from the other session)');
+  const sessionRoom = await client.create('survival', { name: 'Dana', primary: 'ar', appearance: '', session, private: true });
+  check(!!sessionRoom.sessionId, 'a signed-in player joins a room with their session');
+  await sessionRoom.leave();
+  const cancelled = await signInAs('google', 'nobody', 'nonceD_0123456789abcdef');
+  check(cancelled.page.includes('dh_login_error=failed') && !cancelled.code, 'a sign-in the service won\'t confirm comes back as failed');
+  const cb = `${g.cb}?${new URLSearchParams({ error: 'access_denied', state: g2.state })}`;
+  check((await fetch(cb).then((x) => x.text())).includes('dh_login_error=cancelled'), 'cancelling at the service comes back as cancelled');
+  const prod = await signInAs('google', 'g1', 'nonceE_0123456789abcdef', 'https://play.example.com/');
+  check(!!prod.code && prod.page.includes('"https://play.example.com"'), 'a listed game site (CLIENT_ORIGINS) can sign in');
+  check((await api('/api/auth/logout', { method: 'POST', session })).status === 200 && (await api('/api/me', { session })).status === 401, 'signing out ends the session');
+  check((await api('/api/me', { session: ex2.body?.session })).status === 200, 'other sessions of the account stay signed in');
 } catch (e) {
   failures++;
   console.log('  FAIL threw:', e);
 } finally {
   server.kill('SIGTERM');
+  mock.close();
 }
 await sleep(300);
 if (failures) console.log(serverLog.split('\n').slice(-30).join('\n'));

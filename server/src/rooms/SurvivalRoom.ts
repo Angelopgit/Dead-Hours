@@ -6,7 +6,8 @@ import {
 } from '@dead-hours/shared';
 import { Night } from '../game/Night';
 import { claimCode, releaseCode, renewCode } from '../net/codes';
-import { cleanAppearance, cleanName, cleanPrimary, cleanToken } from '../net/clean';
+import { resolveOwner, type Owner } from '../net/auth';
+import { cleanAppearance, cleanName, cleanPrimary } from '../net/clean';
 import { iceConfig } from '../net/ice';
 import { Bucket } from '../net/limit';
 import { gameClosed, gameOpened } from '../net/scale';
@@ -15,12 +16,14 @@ import type { Ranks } from '../store';
 
 interface Member {
   id: string;
-  /** Lasting player id shared with the others (mute and block lists): from the player key, else per connection. */
+  /** Lasting player id shared with the others (mute and block lists): from their profile, else per connection. */
   pid: string;
   name: string;
   primary: WeaponId;
   appearance: string;
-  token: string | null;
+  /** The profile their runs count for: the signed-in account's, else the browser key's (null: not recorded). */
+  owner: string | null;
+  signedIn: boolean;
   ready: boolean;
   /** Has the night's scene up: snapshots and events go only to loaded clients (no backlog while it builds). */
   loaded: boolean;
@@ -38,9 +41,9 @@ interface Member {
 const MAX_SDP = 12000;
 const MAX_CANDIDATE = 1000;
 
-/** A lasting id that others may see: derived from the player key, which itself never leaves the server. */
-function publicId(token: string | null, session: string): string {
-  return token ? createHash('sha256').update(`dead-hours player id:${token}`).digest('base64url').slice(0, 12) : `s-${session}`;
+/** A lasting id that others may see: derived from the player's profile key, which itself never leaves the server. */
+function publicId(owner: string | null, session: string): string {
+  return owner ? createHash('sha256').update(`dead-hours player id:${owner}`).digest('base64url').slice(0, 12) : `s-${session}`;
 }
 
 const text = (v: unknown, max: number) => (typeof v === 'string' && v.length <= max ? v : undefined);
@@ -164,16 +167,22 @@ export class SurvivalRoom extends Room {
     console.log(`[dead-hours] room ${this.code} ${text}`);
   }
 
-  onJoin(client: Client, o: Partial<JoinOptions>): void {
-    const token = cleanToken(o.token);
-    const pid = publicId(token, client.sessionId);
+  /** Who is joining: their sign-in session or browser key, looked up before they are let in. */
+  async onAuth(_client: Client, o: Partial<JoinOptions>): Promise<Owner | true> {
+    return (await resolveOwner(o.session, o.token)) ?? true;
+  }
+
+  onJoin(client: Client, o: Partial<JoinOptions>, auth?: Owner | true): void {
+    const who = auth && auth !== true ? auth : null;
+    const pid = publicId(who?.owner ?? null, client.sessionId);
     this.members.set(client.sessionId, {
       id: client.sessionId,
       pid,
       name: cleanName(o.name) || 'Survivor',
       primary: cleanPrimary(o.primary),
       appearance: cleanAppearance(o.appearance),
-      token,
+      owner: who?.owner ?? null,
+      signedIn: !!who?.account,
       ready: false,
       loaded: false,
       spawn: null,
@@ -292,8 +301,8 @@ export class SurvivalRoom extends Room {
     const store = services.store;
     // Gone before the outbreak with nothing done: not a run worth a place on the boards.
     const counts = survived > 0 || stats.kills > 0;
-    const ranks = store && m.token && counts
-      ? store.recordRun({ token: m.token, name: m.name, appearance: m.appearance, mode: 'online', survived, stats }).catch((e) => {
+    const ranks = store && m.owner && counts
+      ? store.recordRun({ owner: m.owner, name: m.name, appearance: m.appearance, mode: 'online', survived, stats }).catch((e) => {
         console.warn('[dead-hours] could not record a run:', e);
         return NO_RANK;
       })
@@ -313,8 +322,8 @@ export class SurvivalRoom extends Room {
       if (!m.run) continue;
       const { survived, stats } = m.run;
       const store = services.store;
-      const r = store && m.token && (await m.run.ranks) !== NO_RANK
-        ? await store.placeRun(m.token, survived, stats.kills).catch(() => NO_RANK)
+      const r = store && m.owner && (await m.run.ranks) !== NO_RANK
+        ? await store.placeRun(m.owner, survived, stats.kills).catch(() => NO_RANK)
         : NO_RANK;
       results.push({ id: m.id, name: m.name, survived, stats, ...r });
     }

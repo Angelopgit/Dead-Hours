@@ -5,7 +5,8 @@ import { services } from '../services';
 import type { BoardKind } from '../store';
 import { roomForCode } from './codes';
 import { MAX_ROOMS, forwarded, localGames } from './scale';
-import { cleanAppearance, cleanName, cleanPrimary, cleanToken } from './clean';
+import { cleanAppearance, cleanName, cleanPrimary } from './clean';
+import { accountView, authProviders, exchange, logout, ownerFor } from './auth';
 
 const VERSION = '0.4.0';
 
@@ -13,7 +14,7 @@ const VERSION = '0.4.0';
 function cors(res: ServerResponse): void {
   res.setHeader('access-control-allow-origin', '*');
   res.setHeader('access-control-allow-methods', 'GET, PUT, POST, OPTIONS');
-  res.setHeader('access-control-allow-headers', 'content-type, x-player-key');
+  res.setHeader('access-control-allow-headers', 'content-type, x-player-key, authorization');
   res.setHeader('access-control-max-age', '600');
 }
 
@@ -84,7 +85,7 @@ function plausibleSolo(body: unknown): { survived: number; stats: PlayerStats } 
   return { survived, stats };
 }
 
-/** One run every 15 seconds per key, 40 an hour per address. */
+/** One run every 15 seconds per player, 40 an hour per address. */
 const lastRun = new Map<string, number>();
 const perAddress = new Map<string, { n: number; since: number }>();
 function allowRun(key: string, addr: string): boolean {
@@ -99,7 +100,8 @@ function allowRun(key: string, addr: string): boolean {
 
 /**
  * Plain HTTP beside the game server: /health for the host's checks, the game list, join codes,
- * leaderboards and saved survivors (profiles keyed by the browser's player key).
+ * leaderboards, saved survivors (the signed-in account's profile, else the browser key's) and
+ * sign-in (see auth.ts).
  * Returns false for anything that isn't one of these routes.
  */
 export async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -118,8 +120,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     return true;
   }
   const store = services.store;
-  const token = cleanToken(req.headers['x-player-key']);
   try {
+    // Who is asking: only the routes that save something need it.
+    const who = /^\/api\/(profile|runs|me)$/.test(path) ? await ownerFor(req) : null;
+    const owner = who?.owner ?? null;
     if (path === '/api/rooms' && req.method === 'GET') {
       send(res, 200, await listRooms());
     } else if (path.startsWith('/api/code/') && req.method === 'GET') {
@@ -132,27 +136,38 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const [survival, kills] = await Promise.all((['survival', 'kills'] as BoardKind[]).map((k) => store.board(k, limit)));
       send(res, 200, { survival, kills });
     } else if (path === '/api/profile' && req.method === 'GET') {
-      if (!token) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
+      if (!owner) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
       if (!store) return send(res, 503, { error: 'PROFILES UNAVAILABLE' }), true;
-      const p = await store.getProfile(token);
+      const p = await store.getProfile(owner);
       if (p) send(res, 200, p);
       else send(res, 404, { error: 'NO SAVED SURVIVOR' });
     } else if (path === '/api/profile' && req.method === 'PUT') {
-      if (!token) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
+      if (!owner) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
       if (!store) return send(res, 503, { error: 'PROFILES UNAVAILABLE' }), true;
       const b = (await readJson(req)) as Record<string, unknown> | null;
       const name = cleanName(b?.name);
       if (!name) return send(res, 400, { error: 'NAME REQUIRED' }), true;
-      send(res, 200, await store.saveProfile(token, { name, appearance: cleanAppearance(b?.appearance), primary: cleanPrimary(b?.primary) }));
+      send(res, 200, await store.saveProfile(owner, { name, appearance: cleanAppearance(b?.appearance), primary: cleanPrimary(b?.primary) }));
     } else if (path === '/api/runs' && req.method === 'POST') {
-      if (!token) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
+      if (!owner) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
       if (!store) return send(res, 503, { error: 'LEADERBOARDS UNAVAILABLE' }), true;
       const b = (await readJson(req)) as Record<string, unknown> | null;
       const run = plausibleSolo(b);
       const name = cleanName(b?.name) || 'Survivor';
       if (!run) return send(res, 422, { error: 'RUN NOT ACCEPTED' }), true;
-      if (!allowRun(token, req.socket.remoteAddress ?? '')) return send(res, 429, { error: 'TOO MANY RUNS' }), true;
-      send(res, 200, await store.recordRun({ token, name, appearance: cleanAppearance(b?.appearance), mode: 'solo', ...run }));
+      if (!allowRun(owner, req.socket.remoteAddress ?? '')) return send(res, 429, { error: 'TOO MANY RUNS' }), true;
+      send(res, 200, await store.recordRun({ owner, name, appearance: cleanAppearance(b?.appearance), mode: 'solo', ...run }));
+    } else if (path === '/api/auth/providers' && req.method === 'GET') {
+      send(res, 200, { providers: store ? authProviders() : [] });
+    } else if (path === '/api/auth/exchange' && req.method === 'POST') {
+      const r = await exchange((await readJson(req)) as Record<string, unknown> | null);
+      send(res, r.status, r.body);
+    } else if (path === '/api/auth/logout' && req.method === 'POST') {
+      await logout(req);
+      send(res, 200, { ok: true });
+    } else if (path === '/api/me' && req.method === 'GET') {
+      if (who?.account) send(res, 200, accountView(who.account));
+      else send(res, 401, { error: 'NOT SIGNED IN' });
     } else {
       send(res, 404, { error: 'NOT FOUND' });
     }

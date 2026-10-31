@@ -5,7 +5,7 @@ import { SettingsPanel } from './SettingsPanel';
 import { LoadoutPanel } from './LoadoutPanel';
 import { CharacterCreator } from './CharacterCreator';
 import { OnlineMenu } from './OnlineMenu';
-import { LeaderboardPanel } from './LeaderboardPanel';
+import { LeaderboardPanel, type Tab } from './LeaderboardPanel';
 import { audio } from '../audio/AudioEngine';
 import type { Input } from '../core/Input';
 import { net } from '../network/Net';
@@ -32,6 +32,8 @@ export class MainMenu {
   private playOpen = false;
   private readonly sub: HTMLElement;
   private readonly main: HTMLElement;
+  private accountItem!: HTMLButtonElement;
+  private readonly offAccount: () => void;
 
   constructor(private readonly input: Input, private readonly cb: MainMenuCallbacks) {
     const item = (label: string, onClick: () => void, opts: { tag?: string; online?: boolean } = {}) => {
@@ -61,10 +63,8 @@ export class MainMenu {
         this.sub,
         item('SURVIVOR', () => this.openCreator(), { tag: 'CUSTOMIZE' }),
         item('LOADOUT', () => this.openPanel(new LoadoutPanel(() => this.closePanel()).el)),
-        item('LEADERBOARDS', () => {
-          const p = new LeaderboardPanel(() => this.closePanel());
-          this.openPanel(p.el, () => p.dispose());
-        }, { online: true }),
+        item('LEADERBOARDS', () => this.openBoards('survival'), { online: true }),
+        this.accountItem = item('ACCOUNT', () => this.openBoards('you'), { tag: 'GUEST · SIGN IN', online: true }),
         item('SETTINGS', () => this.openPanel(new SettingsPanel(this.input, () => this.closePanel()).el)),
         item('CREDITS', () => this.openPanel(this.credits())),
       ),
@@ -77,13 +77,28 @@ export class MainMenu {
       h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'NEEDS A KEYBOARD AND MOUSE'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);
+    this.offAccount = account.onChange(() => this.accountTag());
     this.refreshServer(false);
+  }
+
+  /** The account item says who is signed in (or that they play as a guest). */
+  private accountTag(show = true): void {
+    const me = account.signedIn;
+    const b = this.accountItem;
+    b.dataset.tag = me ? (me.name || 'SIGNED IN').toUpperCase() : 'GUEST · SIGN IN';
+    if (show && !b.disabled) b.querySelector('.tag')!.textContent = b.dataset.tag;
+  }
+
+  private openBoards(tab: Tab): void {
+    const p = new LeaderboardPanel(() => this.closePanel(), tab);
+    this.openPanel(p.el, () => p.dispose());
   }
 
   /** Online items work only with the game server there; until it answers they say why not. */
   private refreshServer(force: boolean): void {
     const set = () => {
       const st = net.status;
+      this.accountTag(false);
       for (const b of this.needServer) {
         b.disabled = st !== 'online';
         const tag = b.querySelector('.tag')!;
@@ -216,6 +231,7 @@ export class MainMenu {
     this.creator?.dispose();
     this.creator = null;
     window.removeEventListener('keydown', this.onKey);
+    this.offAccount();
     this.el.remove();
   }
 }

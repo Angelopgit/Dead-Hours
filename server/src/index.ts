@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { GAME, ROOMS } from '@dead-hours/shared';
 import { SurvivalRoom } from './rooms/SurvivalRoom';
 import { handleApi } from './net/api';
+import { authProviders, handleAuth } from './net/auth';
 import { initWorld } from './game/world';
 import { openStore } from './store';
 import { services } from './services';
@@ -22,10 +23,11 @@ if (scale.address) {
   if (services.store.kind !== 'postgres') console.warn('[dead-hours] several servers need DATABASE_URL: a data file is not shared between them');
 }
 console.log(`[dead-hours] up to ${MAX_ROOMS} games on this process`);
+console.log(`[dead-hours] sign-in: ${authProviders().join(', ') || 'off (set AUTH_GOOGLE_ID/SECRET or AUTH_DISCORD_ID/SECRET)'}`);
 
 // Colyseus answers its own matchmaking routes (with cross-origin headers) before this handler.
 const httpServer = createServer((req, res) => {
-  void handleApi(req, res).then((handled) => {
+  void handleAuth(req, res).then((done) => done || handleApi(req, res)).then((handled) => {
     if (handled) return;
     res.writeHead(404);
     res.end();

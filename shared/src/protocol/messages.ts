@@ -88,8 +88,10 @@ export interface JoinOptions {
   primary: string;
   /** encodeAppearance() of the survivor's look; the server sanitizes it and shares it. */
   appearance: string;
-  /** The browser's player key (saved profile and leaderboard entries). */
+  /** The browser's player key (saved profile and leaderboard entries) for guests. */
   token?: string;
+  /** A signed-in player's session: their runs count for their account instead of the key. */
+  session?: string;
 }
 
 export interface CreateOptions extends JoinOptions {
