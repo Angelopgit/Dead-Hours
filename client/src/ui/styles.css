@@ -95,6 +95,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .weapons { grid-template-columns: 1fr; }
   .menu-footer { left: max(16px, 6vw); }
 }
+/* Phones held upright: the build line and the hint don't fit side by side, so the hint sits above it. */
+@media (max-width: 600px) {
+  .menu-hint { left: max(16px, 6vw); right: auto; text-align: left; bottom: calc(4vh + 1.7em); }
+  .menu > .menu-main { bottom: calc(4vh + 4.8em); }
+}
 
 /* ── Panels ───────────────────────────────────────────── */
 .panel { position: absolute; right: 6vw; top: 50%; transform: translateY(-50%); width: min(620px, 88vw); max-height: 82vh;
