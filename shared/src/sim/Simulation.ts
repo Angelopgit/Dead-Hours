@@ -12,7 +12,7 @@ import type { MapDefinition } from '../types/world';
 import { Arsenal, type ArsenalTick, type HeldLimb } from './Arsenal';
 import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
 import { rayZones, along, type ZoneShape } from './hitzones';
-import { Zombie } from './Zombie';
+import { ZOMBIE_STEP, Zombie } from './Zombie';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 
@@ -181,6 +181,8 @@ export class Simulation {
   readonly noises: Noise[] = [];
   readonly interactables: Interactable[] = [];
   readonly zombieController: RAPIER.KinematicCharacterController;
+  /** The same without stepping up, which costs about half again: tried first (see Zombie.move). */
+  readonly zombieWalker: RAPIER.KinematicCharacterController;
   time = 0;
   phase: SimPhase = 'preparation';
   /** Seconds left in preparation, or survived so far. */
@@ -189,6 +191,8 @@ export class Simulation {
   private nextZombieId = 1;
   private spawnAt = 0;
   private pathBudget = 0;
+  /** Steps run while zombies were held (see step()): their path searches are saved up for the next. */
+  private heldSteps = 0;
   private stepDt = 1 / 60;
   private readonly rand: () => number;
   private readonly outdoorNodes: Int32Array;
@@ -210,14 +214,18 @@ export class Simulation {
     this.doors = opts.doors;
     this.rand = rng(opts.seed ?? 1);
     this.phaseTime = opts.preparation ?? GAME.preparationSeconds;
-    const ctrl = this.physics.world.createCharacterController(0.02);
-    ctrl.setUp({ x: 0, y: 1, z: 0 });
-    ctrl.enableAutostep(0.4, 0.15, false);
-    ctrl.enableSnapToGround(0.35);
-    ctrl.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
-    ctrl.setMinSlopeSlideAngle((60 * Math.PI) / 180);
-    ctrl.setSlideEnabled(true);
-    this.zombieController = ctrl;
+    const controller = (step: boolean) => {
+      const ctrl = this.physics.world.createCharacterController(0.02);
+      ctrl.setUp({ x: 0, y: 1, z: 0 });
+      if (step) ctrl.enableAutostep(ZOMBIE_STEP, 0.15, false);
+      ctrl.enableSnapToGround(0.35);
+      ctrl.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
+      ctrl.setMinSlopeSlideAngle((60 * Math.PI) / 180);
+      ctrl.setSlideEnabled(true);
+      return ctrl;
+    };
+    this.zombieController = controller(true);
+    this.zombieWalker = controller(false);
 
     const nodes: number[] = [];
     const nav = this.nav;
@@ -902,6 +910,7 @@ export class Simulation {
     for (const z of this.zombies) z.removeBody();
     this.zombies.length = 0;
     this.physics.world.removeCharacterController(this.zombieController);
+    this.physics.world.removeCharacterController(this.zombieWalker);
   }
 
   skipPreparation(): void {
@@ -910,10 +919,21 @@ export class Simulation {
 
   // ---------------------------------------------------------------- step
 
-  step(dt: number): void {
+  /**
+   * One step of the night. `zombies` false holds every zombie in place this step and saves up its
+   * time: the server moves them only on the steps it sends a snapshot, which is what clients see,
+   * at a third of the cost.
+   */
+  step(dt: number, zombies = true): void {
     this.time += dt;
     this.stepDt = dt;
-    this.pathBudget = 1;
+    if (zombies) {
+      this.pathBudget = 1 + this.heldSteps;
+      this.heldSteps = 0;
+    } else {
+      this.pathBudget = 0;
+      this.heldSteps++;
+    }
     if (this.phase === 'preparation') {
       this.phaseTime -= dt;
       if (this.phaseTime <= 0) {
@@ -951,6 +971,7 @@ export class Simulation {
     // Zombies far from everyone and not hunting update at a third of the rate.
     for (const z of this.zombies) {
       z.pending += dt;
+      if (!zombies) continue;
       if (!z.engaged && z.pending < dt * 3 - 1e-6) {
         let near = false;
         for (const p of this.players.values()) {

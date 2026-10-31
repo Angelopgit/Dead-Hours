@@ -1,4 +1,4 @@
-import { GAME, ROOMS, WEAPONS, encodeAppearance, sanitizeAppearance, type BeginMsg, type LobbyMsg, type RoomListing, type WeaponId } from '@dead-hours/shared';
+import { GAME, ROOMS, SERVERS_FULL, WEAPONS, encodeAppearance, sanitizeAppearance, type BeginMsg, type LobbyMsg, type RoomListing, type WeaponId } from '@dead-hours/shared';
 import { h } from './dom';
 import { clock } from './HUD';
 import { settings } from '../core/Settings';
@@ -13,9 +13,11 @@ export interface OnlineCallbacks {
   /** The host started the night. */
   onBegin: (link: NetLink, begin: BeginMsg) => void;
   onClose: () => void;
+  /** Play alone instead (offered when the servers are full). */
+  onSolo: () => void;
 }
 
-type View = 'browse' | 'host' | 'lobby';
+type View = 'browse' | 'host' | 'lobby' | 'full';
 
 function joinOptions() {
   const p = settings.value.profile;
@@ -96,6 +98,7 @@ export class OnlineMenu {
     this.close.textContent = this.view === 'lobby' ? 'LEAVE ✕' : 'CLOSE ✕';
     if (this.view === 'browse') this.renderBrowse();
     else if (this.view === 'host') this.renderHost();
+    else if (this.view === 'full') this.renderFull();
     else this.renderLobby();
   }
 
@@ -176,6 +179,19 @@ export class OnlineMenu {
     );
   }
 
+  /** Hosting refused because every game server is at its limit. */
+  private renderFull(): void {
+    this.body.replaceChildren(
+      h('h2', {}, 'SERVERS ARE FULL'),
+      h('p', {}, 'Every game server is running as many nights as it can, so a new game can\'t start right now. Games already running can still be joined with their code, and one opens up as soon as a night ends.'),
+      h('div', { class: 'actions' },
+        this.button('TRY AGAIN', () => { this.view = 'host'; this.render(); }),
+        this.button('JOIN A GAME', () => { this.view = 'browse'; this.render(); }),
+        this.button('PLAY SOLO', () => this.cb.onSolo(), 'btn primary'),
+      ),
+    );
+  }
+
   private async join(open: () => Promise<import('colyseus.js').Room>): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -189,7 +205,11 @@ export class OnlineMenu {
       this.say('');
       this.attach(new NetLink(room));
     } catch (e) {
-      this.say(reason(e), 'bad');
+      if ((e as { code?: unknown } | null)?.code === SERVERS_FULL) {
+        this.view = 'full';
+        this.say('');
+        this.render();
+      } else this.say(reason(e), 'bad');
     } finally {
       this.busy = false;
     }

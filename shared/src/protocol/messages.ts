@@ -7,6 +7,9 @@ export const ROOMS = {
   survival: 'survival',
 } as const;
 
+/** Matchmaking error when every game server already runs as many games as it takes. */
+export const SERVERS_FULL = 4503;
+
 /** Client → server messages. */
 export const C2S = {
   /** Lobby: ready or not. */

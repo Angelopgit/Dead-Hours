@@ -178,12 +178,22 @@ function makeSim(playerAt: Vec3, prep = 600) {
   return { sim, sp, body };
 }
 
+/** On: step like the game server does (zombies and the collision world only every third step). */
+let serverRate = false;
+let stepCount = 0;
+
 function run(sim: Simulation, seconds: number, until?: () => boolean): { events: SimEvent[]; time: number } {
   const events: SimEvent[] = [];
   const steps = Math.round(seconds / DT);
   for (let i = 0; i < steps; i++) {
-    sim.step(DT);
-    physics.world.step();
+    if (serverRate) {
+      const world = ++stepCount % 3 === 0;
+      sim.step(DT, world);
+      if (world) physics.advance(DT * 3);
+    } else {
+      sim.step(DT);
+      physics.world.step();
+    }
     events.push(...sim.drain());
     if (until?.()) return { events, time: (i + 1) * DT };
   }
@@ -305,6 +315,38 @@ section('Zombie perception and pursuit');
   check(Math.abs(z.pos.y - 3.55) < 0.4 && res.time < 60, `zombie climbs the stairs to the upper floor (${res.time.toFixed(1)} s)`);
   cleanup(sim, body);
 }
+section('Zombie pursuit at the server\'s rate (zombies and collision every third step)');
+serverRate = true;
+{
+  // Navigates in through the front door and down to the basement.
+  for (const d of doors) d?.reset();
+  const { sim, sp, body } = makeSim({ x: -4, y: -2.68, z: -19.5 });
+  for (const d of doors) if (d && (d.spec.houseId === 'safehouse')) d.setOpen(true, 0, 0);
+  run(sim, 1);
+  const z = sim.spawnZombie('walker', { x: 2, y: 0.17, z: -6 }, 'idle');
+  z.target = 'p1';
+  z.lastKnown = { ...sp.motion.pos };
+  z.lastSeen = sim.time;
+  z.setState('chase');
+  const res = run(sim, 70, () => Math.hypot(z.pos.x - sp.motion.pos.x, z.pos.z - sp.motion.pos.z) < 1.4 && Math.abs(z.pos.y - sp.motion.pos.y) < 0.6);
+  check(Math.abs(z.pos.y + 2.7) < 0.4 && res.time < 70, `at the server's rate: zombie follows the player into the basement (${res.time.toFixed(1)} s, at y ${z.pos.y.toFixed(2)})`);
+  cleanup(sim, body);
+}
+{
+  // Up the stairs.
+  const { sim, sp, body } = makeSim({ x: 4.3, y: 3.55, z: -22 });
+  for (const d of doors) if (d && d.spec.houseId === 'safehouse') d.setOpen(true, 0, 0);
+  run(sim, 1);
+  const z = sim.spawnZombie('walker', { x: 3.0, y: 0.32, z: -17.0 }, 'idle');
+  z.target = 'p1';
+  z.lastKnown = { ...sp.motion.pos };
+  z.lastSeen = sim.time;
+  z.setState('chase');
+  const res = run(sim, 60, () => Math.hypot(z.pos.x - sp.motion.pos.x, z.pos.z - sp.motion.pos.z) < 1.4 && Math.abs(z.pos.y - sp.motion.pos.y) < 0.6);
+  check(Math.abs(z.pos.y - 3.55) < 0.4 && res.time < 60, `at the server's rate: zombie climbs the stairs to the upper floor (${res.time.toFixed(1)} s)`);
+  cleanup(sim, body);
+}
+serverRate = false;
 {
   // Pounds on a closed door until it gives way.
   const { sim, sp, body } = makeSim({ x: 2.4, y: 0.32, z: -17 });

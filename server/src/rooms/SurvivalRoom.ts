@@ -5,10 +5,11 @@ import {
   type OverMsg, type PlayerStats, type RoomStatus, type RtcIn, type RunResult, type TalkMsg, type WeaponId,
 } from '@dead-hours/shared';
 import { Night } from '../game/Night';
-import { claimCode, releaseCode } from '../net/codes';
+import { claimCode, releaseCode, renewCode } from '../net/codes';
 import { cleanAppearance, cleanName, cleanPrimary, cleanToken } from '../net/clean';
 import { iceConfig } from '../net/ice';
 import { Bucket } from '../net/limit';
+import { gameClosed, gameOpened } from '../net/scale';
 import { services } from '../services';
 import type { Ranks } from '../store';
 
@@ -95,8 +96,10 @@ export class SurvivalRoom extends Room {
   private night: Night | null = null;
   private metaAt = 0;
 
-  onCreate(o: Partial<CreateOptions>): void {
-    this.code = claimCode(this.roomId);
+  async onCreate(o: Partial<CreateOptions>): Promise<void> {
+    gameOpened(this.roomId);
+    this.code = await claimCode(this.presence, this.roomId);
+    this.clock.setInterval(() => void renewCode(this.presence, this.code).catch(() => undefined), 10 * 60 * 1000);
     this.title = cleanName(o.lobbyName, 32) || `${cleanName(o.name) || 'Survivor'}'s safehouse`;
     this.hidden = !!o.private;
     if (this.hidden) void this.setPrivate(true);
@@ -207,7 +210,8 @@ export class SurvivalRoom extends Room {
 
   onDispose(): void {
     this.log('closed');
-    releaseCode(this.code);
+    void releaseCode(this.presence, this.code).catch(() => undefined);
+    gameClosed(this.roomId);
     this.night?.dispose();
     this.night = null;
   }

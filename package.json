@@ -1,7 +1,7 @@
 {
   "name": "dead-hours",
   "private": true,
-  "version": "0.3.9",
+  "version": "0.4.0",
   "type": "module",
   "workspaces": [
     "shared",
@@ -18,6 +18,7 @@
     "check:houses": "tsx client/tests/houses.check.ts",
     "check:audio": "tsx client/tests/audio.check.ts",
     "check:sim": "tsx shared/tests/sim.check.ts",
-    "check:server": "npm run check -w server"
+    "check:server": "npm run check -w server",
+    "check:cluster": "npm run check:cluster -w server"
   }
 }

@@ -13,6 +13,8 @@ const BANK = 0.8;
 /** Walls only: door leaves move on the server a moment behind the clients. */
 const WALLS = groups(0xffff, GROUP.static);
 const STEP = 1 / 60;
+/** Steps per snapshot (20 a second). Zombies and the collision world move on these steps only. */
+const SNAPSHOT_EVERY = 3;
 
 export interface Survivor {
   id: string;
@@ -246,9 +248,10 @@ export class Night {
     while (this.acc >= STEP && n < 6) {
       this.acc -= STEP;
       n++;
-      this.step();
+      const snap = ++this.steps % SNAPSHOT_EVERY === 0;
+      this.step(snap);
       for (const e of this.sim.drain()) events.push(e);
-      if (++this.steps % 3 === 0) due = true;
+      if (snap) due = true;
       for (const id of this.gods) {
         const p = this.sim.players.get(id);
         if (p?.alive) p.health = PLAYER.maxHealth;
@@ -259,7 +262,8 @@ export class Night {
     return { events, snapshot: due ? captureSnapshot(this.sim, this.facing) : null };
   }
 
-  private step(): void {
+  /** `world` on snapshot steps: zombies move and the collision world catches up (see Simulation.step). */
+  private step(world: boolean): void {
     const sim = this.sim;
     for (const [id, x] of this.extras) {
       const p = sim.players.get(id);
@@ -281,8 +285,8 @@ export class Night {
       const m = p.motion.pos;
       x.body.setNextKinematicTranslation({ x: m.x, y: m.y + PLAYER.height / 2, z: m.z });
     }
-    sim.step(STEP);
-    this.physics.step();
+    sim.step(STEP, world);
+    if (world) this.physics.advance(STEP * SNAPSHOT_EVERY);
   }
 
   dispose(): void {

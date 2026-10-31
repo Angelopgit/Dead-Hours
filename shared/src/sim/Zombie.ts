@@ -9,6 +9,8 @@ import type { SimPlayer, Simulation } from './Simulation';
 
 /** Zombies collide with the world, doors and players, but steer around each other. */
 export const ZOMBIE_GROUPS = groups(GROUP.zombie, GROUP.static | GROUP.dynamic | GROUP.player);
+/** Highest ledge a zombie steps up onto (m): door thresholds, porch steps, stairs. */
+export const ZOMBIE_STEP = 0.4;
 
 export type ZombieState =
   | 'idle' | 'wander' | 'approach' | 'investigate' | 'chase' | 'attack' | 'bash' | 'stagger' | 'down' | 'dead';
@@ -59,6 +61,7 @@ export class Zombie {
   private landed = false;
   private staggerT = 0;
   private readonly push = v3();
+  private readonly hit = new RAPIER.CharacterCollision();
   private downT = 0;
   private stuckT = 0;
   /** Sidestep around whatever it is stuck on: direction, and until when. */
@@ -643,8 +646,15 @@ export class Zombie {
     // defeats autostep at walking speed (zombies would stall on door thresholds).
     if (this.grounded && this.vy < 0) this.vy = 0;
 
-    const ctrl = sim.zombieController;
-    ctrl.computeColliderMovement(this.collider, { x: this.vel.x * dt, y: this.vy * dt, z: this.vel.z * dt }, undefined, ZOMBIE_GROUPS);
+    // Plain walking first; stepping up is only worked out again when that ran into something low
+    // and upright (a threshold or a stair) that it might climb.
+    const want = { x: this.vel.x * dt, y: this.vy * dt, z: this.vel.z * dt };
+    let ctrl = sim.zombieWalker;
+    ctrl.computeColliderMovement(this.collider, want, undefined, ZOMBIE_GROUPS);
+    if (this.hitLedge(ctrl)) {
+      ctrl = sim.zombieController;
+      ctrl.computeColliderMovement(this.collider, want, undefined, ZOMBIE_GROUPS);
+    }
     const m = ctrl.computedMovement();
     this.grounded = ctrl.computedGrounded();
     if (this.grounded && this.vy < 0) this.vy = 0;
@@ -670,6 +680,19 @@ export class Zombie {
       else this.stuckT = 0;
       if (this.stuckT > 0) this.unstick(tx, tz);
     }
+  }
+
+  /** Whether the last move touched an upright surface low enough to step onto. */
+  private hitLedge(ctrl: RAPIER.KinematicCharacterController): boolean {
+    const n = ctrl.numComputedCollisions();
+    if (n === 0) return false;
+    // Contact points come back in world space.
+    const top = this.collider.translation().y - this.def.height / 2 + ZOMBIE_STEP + 0.05;
+    for (let i = 0; i < n; i++) {
+      const c = ctrl.computedCollision(i, this.hit);
+      if (c && Math.abs(c.normal1.y) < 0.7 && c.witness2.y < top) return true;
+    }
+    return false;
   }
 
   private unstick(wx: number, wz: number): void {

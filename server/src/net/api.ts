@@ -4,9 +4,10 @@ import { COMBAT, GAME, ROOMS, type PlayerStats, type RoomListing } from '@dead-h
 import { services } from '../services';
 import type { BoardKind } from '../store';
 import { roomForCode } from './codes';
+import { MAX_ROOMS, forwarded, localGames } from './scale';
 import { cleanAppearance, cleanName, cleanPrimary, cleanToken } from './clean';
 
-const VERSION = '0.3.9';
+const VERSION = '0.4.0';
 
 /** The game is played from another address (the static site): every route allows any origin. */
 function cors(res: ServerResponse): void {
@@ -105,7 +106,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const url = new URL(req.url ?? '/', 'http://x');
   const path = url.pathname;
   if (path === '/health') {
-    send(res, 200, { ok: true, version: VERSION, store: services.store?.kind ?? null });
+    // Also this process's games against its cap, for load tests and dashboards.
+    send(res, 200, { ok: true, version: VERSION, store: services.store?.kind ?? null, games: localGames(), maxGames: MAX_ROOMS, forwarded: forwarded() });
     return true;
   }
   if (!path.startsWith('/api/')) return false;
@@ -121,7 +123,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/rooms' && req.method === 'GET') {
       send(res, 200, await listRooms());
     } else if (path.startsWith('/api/code/') && req.method === 'GET') {
-      const roomId = roomForCode(decodeURIComponent(path.slice('/api/code/'.length)));
+      const roomId = await roomForCode(matchMaker.presence, decodeURIComponent(path.slice('/api/code/'.length)));
       if (roomId) send(res, 200, { roomId });
       else send(res, 404, { error: 'NO GAME WITH THAT CODE' });
     } else if (path === '/api/leaderboard' && req.method === 'GET') {

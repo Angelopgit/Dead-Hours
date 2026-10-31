@@ -122,6 +122,32 @@ export class Physics {
     this.world.step();
   }
 
+  /**
+   * Brings the world `dt` seconds on when nothing in it needs the solver: kinematic bodies (zombies,
+   * survivors, doors, crates) jump to where they were sent and the query structures are rebuilt,
+   * at about half the cost of a full step. While a dynamic body (a loose arm) is awake it is a full
+   * step of `dt`.
+   */
+  advance(dt: number): void {
+    const w = this.world;
+    let awake = false;
+    w.bodies.forEach((b) => {
+      if (!awake && b.isDynamic() && !b.isSleeping()) awake = true;
+    });
+    if (awake) {
+      w.timestep = dt;
+      w.step();
+      w.timestep = this.fixedDt;
+      return;
+    }
+    w.bodies.forEach((b) => {
+      if (!b.isKinematic()) return;
+      b.setTranslation(b.nextTranslation(), false);
+      b.setRotation(b.nextRotation(), false);
+    });
+    w.updateSceneQueries();
+  }
+
   /** The terrain slab: nothing walkable lies under it. */
   isGround(collider: RAPIER.Collider): boolean {
     return this.surfaces.get(collider.handle) === 'ground';

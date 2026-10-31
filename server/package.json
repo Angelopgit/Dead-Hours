@@ -1,13 +1,16 @@
 {
   "name": "@dead-hours/server",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p .",
-    "check": "tsx tests/server.check.ts"
+    "check": "tsx tests/server.check.ts",
+    "check:cluster": "tsx tests/cluster.check.ts",
+    "load": "tsx tests/load.ts",
+    "bench": "tsx tests/bench.ts"
   },
   "dependencies": {
     "@colyseus/schema": "3.0.76",
