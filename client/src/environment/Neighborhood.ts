@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
+import { OAK, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
 import { MaterialLibrary } from '../rendering/Materials';
 import { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
@@ -84,6 +84,7 @@ export class Neighborhood {
     const baker = new LightBaker(field, this.map);
     const ground = await baker.bake(this.staticMeshes, onProgress);
     bakeUniforms.uGroundBake.value = ground;
+    bakeUniforms.uGroundRect.value.copy(baker.groundRect());
     for (const m of this.staticMeshes) patchBaked(m.material as THREE.Material);
     for (const m of this.staticMeshes) patchWet(m.material as THREE.Material);
     this.fogLights = new FogLights(this.map, field.tracer);
@@ -174,9 +175,10 @@ export class Neighborhood {
 
   private buildGround(batch: StaticBatcher): void {
     // Lawn planes with vertex-color variation (patchy dead grass; forest floor in the woods), open over basements.
-    const half = this.map.halfExtent + 60;
+    const b = this.map.bounds;
     const grass = this.lib.get('grass');
-    for (const r of subtractRects({ x0: -half, x1: half, z0: -half, z1: half }, this.map.excavations)) {
+    const nearTree = forestDistance(this.map);
+    for (const r of subtractRects({ x0: b.x0 - 60, x1: b.x1 + 60, z0: b.z0 - 60, z1: b.z1 + 60 }, this.map.excavations)) {
       const w = r.x1 - r.x0, d = r.z1 - r.z0;
       const g = new THREE.PlaneGeometry(w, d, Math.max(1, Math.round(w / 3.5)), Math.max(1, Math.round(d / 3.5)));
       g.rotateX(-Math.PI / 2);
@@ -191,9 +193,13 @@ export class Neighborhood {
         const n = Math.sin(x * 0.11) * Math.cos(z * 0.13) + Math.sin(x * 0.031 + z * 0.047) * 0.8;
         const dry = THREE.MathUtils.smoothstep(n, 0.2, 1.2);
         const v = 0.85 + n * 0.12;
+        // North of Elm and along the sides the forest floor starts on a straight line; south of Elm it
+        // follows the trees, so Oak Street's lots keep their grass. Past the edge of the map it's all woods.
         const woods = Math.max(
-          THREE.MathUtils.smoothstep(Math.abs(z), 50, 60),
+          THREE.MathUtils.smoothstep(-z, 50, 60),
           THREE.MathUtils.smoothstep(Math.abs(x), 113, 121),
+          z > 40 ? 1 - THREE.MathUtils.smoothstep(nearTree(x, z), 3, 9) : 0,
+          THREE.MathUtils.smoothstep(z - b.z1, -4, 2),
         );
         const r0 = v * (1 + dry * 0.35), g0 = v * (1 + dry * 0.12), b0 = v * (1 - dry * 0.1);
         colors[i * 3] = THREE.MathUtils.lerp(r0, 0.95 + n * 0.1, woods);
@@ -212,15 +218,21 @@ export class Neighborhood {
     const white = this.lib.custom('road-paint-white', () => new THREE.MeshStandardMaterial({
       color: 0x8a8a86, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, vertexColors: true,
     }));
-    const birch = -68;
+    const birch = OAK.birch;
     const inIntersection = (x: number) => x > birch - 8 && x < birch + 8;
     for (let x = -150; x < 150; x += 6) {
       if ((x * 13) % 7 === 0 || inIntersection(x + 1.5)) continue; // worn-off segments
       batch.add(worldBox(x + 1.5, 0.022, 0, 3, 0.004, 0.14, 1, null), paint, false);
     }
-    for (let z = -150; z < 150; z += 6) {
-      if ((z * 11) % 7 === 0 || Math.abs(z + 1.5) < 8) continue;
+    // Birch Lane runs on past Oak Street to the edge of the map.
+    for (let z = -150; z < this.map.bounds.z1 + 25; z += 6) {
+      if ((z * 11) % 7 === 0 || Math.abs(z + 1.5) < 8 || Math.abs(z + 1.5 - OAK.z) < 8) continue;
       batch.add(worldBox(birch, 0.022, z + 1.5, 0.14, 0.004, 3, 1, null), paint, false);
+    }
+    // Oak Street's centre line, from the junction to the dead end.
+    for (let x = birch + 8; x < OAK.end - 4; x += 6) {
+      if ((Math.round(x) * 17) % 7 === 0) continue;
+      batch.add(worldBox(x + 1.5, 0.022, OAK.z, 3, 0.004, 0.14, 1, null), paint, false);
     }
     // Stop lines and crosswalks at the Birch Lane intersection.
     batch.add(worldBox(birch + 2.25, 0.022, -5.6, 4.3, 0.004, 0.35, 1, null), white, false);
@@ -230,6 +242,12 @@ export class Neighborhood {
         batch.add(worldBox(birch + side * 6.2, 0.022, -4 + i, 1.6, 0.004, 0.5, 1, null), white, false);
         batch.add(worldBox(birch - 4 + i, 0.022, side * 6.2, 0.5, 0.004, 1.6, 1, null), white, false);
       }
+    }
+    // Oak Street's T-junction: a stop line behind a crosswalk on Oak, crosswalks over Birch either side.
+    batch.add(worldBox(birch + 7.4, 0.022, OAK.z - 2.25, 0.35, 0.004, 4.3, 1, null), white, false);
+    for (let i = 0; i < 9; i++) {
+      batch.add(worldBox(birch + 6.2, 0.022, OAK.z - 4 + i, 1.6, 0.004, 0.5, 1, null), white, false);
+      for (const side of [-1, 1]) batch.add(worldBox(birch - 4 + i, 0.022, OAK.z + side * 6.2, 0.5, 0.004, 1.6, 1, null), white, false);
     }
   }
 
@@ -399,4 +417,30 @@ function mergeAll(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   return out;
+}
+
+/** Distance from a ground point to the nearest forest tree (capped at 12 m), from a 6 m grid of the woods. */
+function forestDistance(map: MapDefinition): (x: number, z: number) => number {
+  const cell = 6;
+  const grid = new Map<number, number[]>();
+  const key = (cx: number, cz: number) => cx * 4096 + cz;
+  for (const p of map.props) {
+    if (!p.forest) continue;
+    const k = key(Math.floor(p.x / cell), Math.floor(p.z / cell));
+    let list = grid.get(k);
+    if (!list) grid.set(k, (list = []));
+    list.push(p.x, p.z);
+  }
+  return (x, z) => {
+    const cx = Math.floor(x / cell), cz = Math.floor(z / cell);
+    let best = 144;
+    for (let i = -2; i <= 2; i++) {
+      for (let j = -2; j <= 2; j++) {
+        const list = grid.get(key(cx + i, cz + j));
+        if (!list) continue;
+        for (let n = 0; n < list.length; n += 2) best = Math.min(best, (list[n] - x) ** 2 + (list[n + 1] - z) ** 2);
+      }
+    }
+    return Math.sqrt(best);
+  };
 }

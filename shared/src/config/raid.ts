@@ -81,15 +81,16 @@ export interface RaidRoute {
 }
 
 /**
- * Both ends of Birch Lane, weaving past the roadblocks and the abandoned cars, then east along
- * Elm Street to park in front of the safehouse. The route check (check:raid) sweeps the van's
- * box along each one against the map's collision.
+ * Both ends of Birch Lane (the south one past the Oak Street junction), weaving past the roadblocks
+ * and the abandoned cars, then east along Elm Street to park in front of the safehouse. The route
+ * check (check:raid) sweeps the van's box along each one against the map's collision.
  */
 export const RAID_ROUTES: RaidRoute[] = [
   {
     name: 'Birch Lane south',
     points: [
-      { x: -71.2, z: 150 }, { x: -71.2, z: 122 }, { x: -71.2, z: 108 }, { x: -71.0, z: 80 }, { x: -70.2, z: 52 },
+      { x: -71.2, z: 200 }, { x: -71.2, z: 172 }, { x: -71.2, z: 150 }, { x: -71.2, z: 122 }, { x: -71.2, z: 108 },
+      { x: -71.0, z: 80 }, { x: -70.2, z: 52 },
       { x: -65.6, z: 40 }, { x: -65.4, z: 24 }, { x: -65.6, z: 10 }, { x: -63.8, z: 2.4 }, { x: -58, z: -1.6 },
       { x: -48, z: -2.4 }, { x: -30, z: -2.4 }, { x: -18, z: -2.3 },
     ],

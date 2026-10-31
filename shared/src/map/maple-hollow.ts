@@ -1,19 +1,24 @@
 import type { HouseSpec, MapDefinition, PropKind } from '../types/world';
 import { MapBuilder, STORY, STREET, door, doorway, seededRandom, storeWin, upWin, win } from './builder';
+import { divider, fenceLine, streetlight } from './dressing';
 import { buildHome, type HomePlan } from './homes';
+import { OAK, oakClear, oakStreet } from './oak-street';
 
 /**
- * Maple Hollow: a 250 x 250 m suburban block on the edge of town.
+ * Maple Hollow: a 250 x 300 m suburban neighbourhood on the edge of town.
  *
  * Elm Street runs east-west along z = 0 and Birch Lane crosses it north-south at x = -68.
  * The safehouse sits on the north side of Elm, the gas station and the park on the east end,
  * the police checkpoint closes Elm to the west, gravel alleys run behind both rows of
- * backyards, and woods close the map to the north and south.
+ * backyards, and woods close the map to the north and south. Oak Street, the next street over,
+ * tees into Birch Lane 94 m south of Elm and shares Elm's south alley (oak-street.ts).
  *
  * Axes: +X east, +Z south, +Y up.
  */
 
 const HALF = 125;
+/** The south edge sits past Oak Street's back fences and a belt of woods. */
+const SOUTH = 175;
 const RW = STREET.roadHalfWidth;
 const SW = STREET.sidewalkWidth;
 const CURB = STREET.curbHeight;
@@ -21,28 +26,23 @@ const BIRCH = -68;
 const LIGHT_OFFSET = RW + 0.55;
 const T = STORY.wall;
 
-const STREETLIGHT = { color: 0xffb36b, intensity: 260, range: 24, angle: 0.95, penumbra: 0.65, decay: 1.6 } as const;
 const WARM_BULB = 0xffa35a;
-
-function rotate(x: number, z: number, rotY: number, lx: number, lz: number): [number, number] {
-  const c = Math.cos(rotY);
-  const s = Math.sin(rotY);
-  return [x + lx * c + lz * s, z - lx * s + lz * c];
-}
 
 function roads(b: MapBuilder): void {
   const far = HALF + 30;
+  const farSouth = SOUTH + 30;
   // Asphalt is visual; the terrain collider is the drivable surface.
   b.boxMinMax(-far, 0, -RW, far, 0.02, RW, 'asphalt', { collide: false });
   b.boxMinMax(BIRCH - RW, 0, -far, BIRCH + RW, 0.02, -RW, 'asphalt', { collide: false });
-  b.boxMinMax(BIRCH - RW, 0, RW, BIRCH + RW, 0.02, far, 'asphalt', { collide: false });
+  b.boxMinMax(BIRCH - RW, 0, RW, BIRCH + RW, 0.02, farSouth, 'asphalt', { collide: false });
   // Raised sidewalks (the character controller steps the curb).
   for (const [x0, x1] of [[-far, BIRCH - RW], [BIRCH + RW, far]]) {
     b.boxMinMax(x0, 0, -RW - SW, x1, CURB, -RW, 'sidewalk');
     b.boxMinMax(x0, 0, RW, x1, CURB, RW + SW, 'sidewalk');
   }
-  for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, far]]) {
-    b.boxMinMax(BIRCH - RW - SW, 0, z0, BIRCH - RW, CURB, z1, 'sidewalk');
+  for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, farSouth]]) b.boxMinMax(BIRCH - RW - SW, 0, z0, BIRCH - RW, CURB, z1, 'sidewalk');
+  // The east side breaks for Oak Street's junction as well as Elm's.
+  for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, OAK.z - RW - SW], [OAK.z + RW + SW, farSouth]]) {
     b.boxMinMax(BIRCH + RW, 0, z0, BIRCH + RW + SW, CURB, z1, 'sidewalk');
   }
   // Gravel back alleys behind both rows of backyards.
@@ -54,15 +54,6 @@ function roads(b: MapBuilder): void {
   b.prop('stopSign', BIRCH - RW - 0.6, RW + 0.6, -Math.PI / 2);
   b.prop('streetSign', BIRCH - RW - 0.6, -RW - 0.6, 0, { text: 'ELM ST|BIRCH LN' });
   b.prop('streetSign', BIRCH + RW + 0.6, RW + 0.6, Math.PI, { text: 'BIRCH LN|ELM ST' });
-}
-
-function streetlight(b: MapBuilder, x: number, z: number, rotY: number, mode: 'on' | 'flicker' | 'dead' = 'on'): void {
-  b.prop('streetlight', x, z, rotY, { flag: mode === 'flicker', variant: mode === 'dead' ? 1 : 0 });
-  // The flickering light stays realtime; the rest are baked.
-  if (mode !== 'on') return;
-  const [hx, hz] = rotate(x, z, rotY, 0, 1.65);
-  const [tx, tz] = rotate(x, z, rotY, 0, 2.4);
-  b.light({ kind: 'spot', x: hx, y: 5.8, z: hz, tx, ty: 0, tz, ...STREETLIGHT, fixture: 'none' });
 }
 
 function streetDressing(b: MapBuilder): void {
@@ -79,7 +70,7 @@ function streetDressing(b: MapBuilder): void {
   // Utility lines: Elm (0), north alley (1), south alley (2).
   for (const x of [-110, -88, -56, -32, -8, 16, 40, 62, 84, 108]) b.prop('utilityPole', x, RW + SW + 0.9, 0, { variant: 0 });
   for (const x of [-56, -30, -4, 22, 48, 70]) b.prop('utilityPole', x, -44.3, Math.PI, { variant: 1, flag: x === -30 });
-  for (const x of [-56, -30, -4, 22, 48]) b.prop('utilityPole', x, 44.3, 0, { variant: 2, flag: x === 22 });
+  for (const x of [-56, -30, -4, 22, 48]) b.prop('utilityPole', x, 44.3, 0, { variant: 2, flag: x === 22 || x === -4 });
 
   for (const [x, z] of [[-9.5, -5.1], [30.5, 5.1], [-60.4, -5.1], [78, -5.1], [-80, 5.1]] as const) b.prop('hydrant', x, z, 0);
 
@@ -479,38 +470,21 @@ function checkpoint(b: MapBuilder): void {
 
 /** Back fences with gates to the alley, lot dividers with gaps, sheds that make tight passages. */
 function backyards(b: MapBuilder): void {
-  const fenceLine = (z: number, x0: number, x1: number, gates: number[]) => {
-    const edges = [x0, ...gates.flatMap((g) => [g - 0.7, g + 0.7]), x1];
-    for (let i = 0; i < edges.length; i += 2) {
-      const a = edges[i], c = edges[i + 1];
-      if (c - a < 0.3) continue;
-      b.prop('fence', (a + c) / 2, z, 0, { length: c - a, variant: i % 4 === 2 ? 1 : 0 });
-    }
-  };
-  const divider = (x: number, z0: number, z1: number, gap: number | null) => {
-    if (gap === null) {
-      b.prop('fence', x, (z0 + z1) / 2, Math.PI / 2, { length: Math.abs(z1 - z0) });
-      return;
-    }
-    const lo = Math.min(z0, z1), hi = Math.max(z0, z1);
-    b.prop('fence', x, (lo + gap - 0.65) / 2, Math.PI / 2, { length: gap - 0.65 - lo });
-    b.prop('fence', x, (gap + 0.65 + hi) / 2, Math.PI / 2, { length: hi - gap - 0.65, variant: 1 });
-  };
   const westEdge = BIRCH + RW + SW + 0.6;
 
   // North row.
-  fenceLine(-42, westEdge, 64, [-50, -28, -2, 26, 52]);
-  divider(-40, -15, -42, -33);
-  divider(-14.5, -15, -42, null);
-  divider(17, -15, -42, -34.5);
-  divider(40, -15, -42, null);
-  divider(64, -9, -42, -30);
+  fenceLine(b, -42, westEdge, 64, [-50, -28, -2, 26, 52]);
+  divider(b, -40, -15, -42, -33);
+  divider(b, -14.5, -15, -42, null);
+  divider(b, 17, -15, -42, -34.5);
+  divider(b, 40, -15, -42, null);
+  divider(b, 64, -9, -42, -30);
   // South row.
-  fenceLine(42, westEdge, 64, [-44, -18, 10, 38, 55]);
-  divider(-31, 15, 42, 33);
-  divider(-4, 15, 42, null);
-  divider(24, 15, 42, 30.5);
-  divider(47, 15, 42, null);
+  fenceLine(b, 42, westEdge, 64, [-44, -18, 10, 38, 55]);
+  divider(b, -31, 15, 42, 33);
+  divider(b, -4, 15, 42, null);
+  divider(b, 24, 15, 42, 30.5);
+  divider(b, 47, 15, 42, null);
 
   // Sheds placed ~1.1 m off a fence leave narrow passages between yards and the alley.
   b.prop('shed', -37.3, -38.4, 0);
@@ -572,27 +546,40 @@ function frontYards(b: MapBuilder): void {
   bushes.forEach(([x, z], i) => b.prop('bush', x, z, i, { variant: i }));
 }
 
-/** Instanced woodland closing the map, with trunk colliders. Leaves the road corridors clear. */
+/**
+ * Instanced woodland closing the map, with trunk colliders. Leaves the road corridors and Oak
+ * Street (its lots, road and trail) clear.
+ */
 function woods(b: MapBuilder): void {
-  const r = seededRandom(4242);
   const spacing = 5.2;
   const inRoad = (x: number, z: number) => Math.abs(x - BIRCH) < RW + SW + 2 || Math.abs(z) < RW + SW + 3;
+  const grow = (r: () => number, x: number, z: number) => {
+    const jx = x + (r() - 0.5) * spacing * 0.9;
+    const jz = z + (r() - 0.5) * spacing * 0.9;
+    const north = jz < -53;
+    const south = jz > 54;
+    const eastEdge = jx > 115 && Math.abs(jz) > 9;
+    const westEdge = jx < -119 && Math.abs(jz) > 9;
+    if (!(north || south || eastEdge || westEdge)) return;
+    if (inRoad(jx, jz)) return;
+    if (r() < 0.12) return; // clearings
+    const rot = r() * Math.PI * 2, variant = Math.floor(r() * 6);
+    // Drawn whether or not the tree stands, so the woods elsewhere keep their old layout.
+    if (oakClear(jx, jz)) return;
+    b.prop('pine', jx, jz, rot, { variant, forest: true });
+  };
+  // The original square, then the belt past Oak Street on the same grid with its own stream.
+  const r = seededRandom(4242);
+  let z = -HALF + 2;
   for (let x = -HALF + 2; x < HALF - 1; x += spacing) {
-    for (let z = -HALF + 2; z < HALF - 1; z += spacing) {
-      const jx = x + (r() - 0.5) * spacing * 0.9;
-      const jz = z + (r() - 0.5) * spacing * 0.9;
-      const north = jz < -53;
-      const south = jz > 54;
-      const eastEdge = jx > 115 && Math.abs(jz) > 9;
-      const westEdge = jx < -119 && Math.abs(jz) > 9;
-      if (!(north || south || eastEdge || westEdge)) continue;
-      if (inRoad(jx, jz)) continue;
-      if (r() < 0.12) continue; // clearings
-      b.prop('pine', jx, jz, r() * Math.PI * 2, { variant: Math.floor(r() * 6), forest: true });
-    }
+    for (z = -HALF + 2; z < HALF - 1; z += spacing) grow(r, x, z);
+  }
+  const belt = seededRandom(4243);
+  for (let x = -HALF + 2; x < HALF - 1; x += spacing) {
+    for (let zz = z; zz < SOUTH - 1; zz += spacing) grow(belt, x, zz);
   }
   b.area('THE WOODS', -HALF, HALF, -HALF, -52);
-  b.area('THE WOODS', -HALF, HALF, 52, HALF);
+  b.area('THE WOODS', -HALF, HALF, 52, SOUTH);
 }
 
 function build(): MapDefinition {
@@ -607,12 +594,13 @@ function build(): MapDefinition {
   checkpoint(b);
   backyards(b);
   frontYards(b);
+  oakStreet(b);
   woods(b);
-  b.area('BIRCH LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, HALF);
+  b.area('BIRCH LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, SOUTH);
   b.area('ELM STREET', -HALF, HALF, -16, 16);
-  b.area('MAPLE HOLLOW', -HALF, HALF, -HALF, HALF);
+  b.area('MAPLE HOLLOW', -HALF, HALF, -HALF, SOUTH);
 
-  return b.finish('Maple Hollow', HALF, [
+  return b.finish('Maple Hollow', { x0: -HALF, x1: HALF, z0: -HALF, z1: SOUTH }, [
     { x: 4.8, y: 0.35, z: -22.3, yaw: Math.PI },
     { x: 3.0, y: 0.35, z: -17.0, yaw: Math.PI },
     { x: 5.1, y: 0.35, z: -17.3, yaw: Math.PI },

@@ -1527,8 +1527,9 @@ export class Simulation {
       return !hidden || alive.every((p) => dist2D(p.motion.pos, r.centre) > P.awayFromPlayers);
     });
     if (!open.length) return null;
-    // The gas station is the likeliest place, then basements, then bedrooms (there are many).
-    const weightOf = (r: PickupRoom) => (r.room === 'store' ? 4 : r.room === 'basement' ? 1.6 : 1);
+    // The gas station is the likeliest place, then basements, then bedrooms (there are many: with
+    // Oak Street's the store needs 8 to keep its sixth of the draws).
+    const weightOf = (r: PickupRoom) => (r.room === 'store' ? 8 : r.room === 'basement' ? 1.6 : 1);
     let x = this.pickRand() * open.reduce((s, r) => s + weightOf(r), 0);
     let room = open[open.length - 1];
     for (const r of open) if ((x -= weightOf(r)) < 0) { room = r; break; }

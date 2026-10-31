@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { GROUND_BAKE, GROUND_BAND } from './LightBaker';
+import { GROUND_BAND } from './LightBaker';
 
 /** Uniforms shared by every baked static material. */
 export const bakeUniforms = {
   uGroundBake: { value: new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1) as THREE.Texture },
-  uGroundRect: { value: new THREE.Vector4(-GROUND_BAKE.half, -GROUND_BAKE.half, 1 / (GROUND_BAKE.half * 2), 1 / (GROUND_BAKE.half * 2)) },
+  /** Where the ground lightmap lies: (x0, z0, 1 / width, 1 / depth), set by the bake. */
+  uGroundRect: { value: new THREE.Vector4(-128, -128, 1 / 256, 1 / 256) },
   /** Scales baked light (debug / tuning). */
   uBakeGain: { value: 1 },
 };

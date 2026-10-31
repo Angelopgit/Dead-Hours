@@ -40,7 +40,8 @@ section('Roads in');
     let curb = 0;
     for (let s = 0; s <= R.length; s += 0.5) {
       const at = routeAt(R, s);
-      if (Math.abs(at.x) > map.halfExtent - 3.2 || Math.abs(at.z) > map.halfExtent - 3.2) continue;
+      const edge = map.bounds;
+      if (at.x < edge.x0 + 3.2 || at.x > edge.x1 - 3.2 || at.z < edge.z0 + 3.2 || at.z > edge.z1 - 3.2) continue;
       physics.world.intersectionsWithShape(
         { x: at.x, y: 0.35 + (V.height - 0.35) / 2, z: at.z }, { x: 0, y: Math.sin(at.yaw / 2), z: 0, w: Math.cos(at.yaw / 2) }, shape,
         (c) => {

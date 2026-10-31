@@ -228,12 +228,15 @@ export class Clutter {
   /** Sidewalks, gutters, lawns and the leaf drifts under street trees. */
   private streets(): void {
     this.curbs();
-    const half = this.map.halfExtent;
-    const target = Math.round(900 * this.density);
+    // Lawn litter over the streets' blocks, not out in the woods: 900 pieces over Elm Street's block
+    // (the whole width, 70 m either side of the road), the same density over Oak Street's.
+    const b = this.map.bounds;
+    const x0 = b.x0 * 0.95, x1 = b.x1 * 0.95, z0 = -70, z1 = Math.min(b.z1 - 30, 140);
+    const target = Math.round(900 * ((z1 - z0) / 140) * this.density);
     const houses = this.map.houses;
     let placed = 0;
     for (let tries = 0; placed < target && tries < target * 6; tries++) {
-      const x = (this.r() * 2 - 1) * half * 0.95, z = (this.r() * 2 - 1) * 70;
+      const x = x0 + this.r() * (x1 - x0), z = z0 + this.r() * (z1 - z0);
       if (houses.some((h) => Math.abs(x - h.x) < h.w / 2 + 0.3 && Math.abs(z - h.z) < h.d / 2 + 0.3)) continue;
       this.litter(x, z);
       placed++;

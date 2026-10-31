@@ -212,8 +212,13 @@ export interface AreaSpec extends Rect {
 
 export interface MapDefinition {
   name: string;
-  /** Half extent of the playable square (meters). */
+  /**
+   * Distance from the origin to the farthest edge of the playable area (meters). Things that
+   * must start or end beyond every edge, like the supply helicopter, use it.
+   */
   halfExtent: number;
+  /** The playable area (meters); the map's boundary walls stand on its edges. */
+  bounds: Rect;
   solids: StaticBox[];
   houses: HouseSpec[];
   windows: WindowSpec[];

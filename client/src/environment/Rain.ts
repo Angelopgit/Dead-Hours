@@ -15,18 +15,20 @@ const HEIGHT = 16;
  */
 export function buildCoverMap(map: MapDefinition): THREE.DataTexture {
   const { maxH } = COVER;
-  // Square around the origin, big enough for the whole map (halfExtent is its farthest edge).
-  const half = Math.max(COVER.minHalf, Math.ceil(map.halfExtent + 8));
-  const res = Math.ceil((half * 2) / COVER.texel);
-  const data = new Uint8Array(res * res * 4);
-  const k = res / (half * 2);
-  weatherUniforms.uCoverRect.value.set(-half, -half, 1 / (half * 2), 1 / (half * 2));
+  // The whole map with a margin, and never less than the original square around the origin.
+  const b = map.bounds, m = COVER.minHalf;
+  const ox = Math.min(-m, Math.floor(b.x0 - 8)), oz = Math.min(-m, Math.floor(b.z0 - 8));
+  const w = Math.max(m, Math.ceil(b.x1 + 8)) - ox, d = Math.max(m, Math.ceil(b.z1 + 8)) - oz;
+  const resX = Math.ceil(w / COVER.texel), resZ = Math.ceil(d / COVER.texel);
+  const data = new Uint8Array(resX * resZ * 4);
+  const k = 1 / COVER.texel;
+  weatherUniforms.uCoverRect.value.set(ox, oz, 1 / (resX * COVER.texel), 1 / (resZ * COVER.texel));
   const raise = (x0: number, x1: number, z0: number, z1: number, top: number) => {
     const v = Math.max(0, Math.min(255, Math.round(((top + 4) / (maxH + 4)) * 255)));
-    const i0 = Math.max(0, Math.floor((x0 + half) * k)), i1 = Math.min(res - 1, Math.ceil((x1 + half) * k) - 1);
-    const j0 = Math.max(0, Math.floor((z0 + half) * k)), j1 = Math.min(res - 1, Math.ceil((z1 + half) * k) - 1);
+    const i0 = Math.max(0, Math.floor((x0 - ox) * k)), i1 = Math.min(resX - 1, Math.ceil((x1 - ox) * k) - 1);
+    const j0 = Math.max(0, Math.floor((z0 - oz) * k)), j1 = Math.min(resZ - 1, Math.ceil((z1 - oz) * k) - 1);
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const o = (j * res + i) * 4;
+      const o = (j * resX + i) * 4;
       if (v > data[o]) data[o] = v;
     }
   };
@@ -39,7 +41,7 @@ export function buildCoverMap(map: MapDefinition): THREE.DataTexture {
     raise(h.x - h.w / 2, h.x + h.w / 2, h.z - h.d / 2, h.z + h.d / 2, top);
   }
   // Open ground reads as "no cover" (the encoded floor of the range).
-  const t = new THREE.DataTexture(data, res, res, THREE.RGBAFormat);
+  const t = new THREE.DataTexture(data, resX, resZ, THREE.RGBAFormat);
   t.magFilter = THREE.NearestFilter;
   t.minFilter = THREE.NearestFilter;
   t.colorSpace = THREE.NoColorSpace;

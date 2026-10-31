@@ -7,7 +7,7 @@
  * closed and clearing when open, and furniture clipping into walls.
  */
 import * as THREE from 'three';
-import { MAPLE_HOLLOW as map, PLAYER, propColliders } from '@dead-hours/shared';
+import { MAPLE_HOLLOW as map, OAK, PLAYER, propColliders } from '@dead-hours/shared';
 import { Physics, initPhysics, RAPIER, GROUP, groups } from '../src/core/Physics';
 import { DoorSystem } from '../src/gameplay/Doors';
 import { Acoustics, type Space } from '../src/audio/Acoustics';
@@ -146,10 +146,13 @@ for (const st of map.stairs) {
 }
 
 console.log('Narrow backyard passages');
-// Sheds sit ~1.2 m from a lot divider; walk the gap between the shed's side and the fence.
-const dividers = [-40, -14.5, 17, 40, -31, -4, 24, 47];
+// Sheds sit ~1.2 m from a lot divider; walk the gap between the shed's side and the fence. The
+// divider is the nearest fence running along Z beside the shed.
+const dividerFences = map.props.filter((p) => p.kind === 'fence' && Math.abs(Math.abs(Math.sin(p.rotY)) - 1) < 1e-3);
 for (const s of map.props.filter((p) => p.kind === 'shed')) {
-  const fx = dividers.reduce((a, b) => (Math.abs(b - s.x) < Math.abs(a - s.x) ? b : a));
+  const beside = dividerFences.filter((f) => Math.abs(f.z - s.z) < (f.length ?? 0) / 2);
+  if (!beside.length) { fail(`shed at (${s.x}, ${s.z}) has no lot divider beside it`); continue; }
+  const fx = beside.reduce((a, b) => (Math.abs(b.x - s.x) < Math.abs(a.x - s.x) ? b : a)).x;
   const side = s.x + Math.sign(fx - s.x) * 1.5;
   const px = (fx + side) / 2;
   const front = Math.cos(s.rotY) > 0 ? 1 : -1;
@@ -161,6 +164,11 @@ route(phys, 'street -> gas station store', [70, 0.05, 0], [[85, -5], [92, -30], 
 route(phys, 'street -> park gazebo', [86, 0.05, 4], [[88, 10], [92, 30], [100, 39]]);
 route(phys, 'street -> checkpoint chicane', [-80, 0.05, -2], [[-90, 2.8], [-96, 3.0], [-100, 3.0], [-101.6, -4.6], [-106, -4.6], [-108.6, -0.4], [-109.5, -0.4]]);
 route(phys, 'safehouse back door -> north alley via gate', [-2.4, 0.05, -26.0], [[-3.7, -26.3], [-3.7, -29], [-2, -40], [-2, -47]]);
+// Oak Street, the next street over: down Birch Lane, through the shared alley, and in from the park.
+route(phys, 'Elm Street -> Oak Street via Birch Lane', [-65, 0.05, 6], [[-65, 30], [-65, 62], [-70.5, 70], [-70.5, 80], [-66, 92], [-50, 93], [-20, 93], [-10, 95.5], [5, 95.5], [14, 92], [32, 92], [50, 94], [62, 96], [84, 96], [92, 94]]);
+route(phys, 'Elm south alley -> Oak Street through a back gate and side yard', [2, 0.05, 46], [[4, 49], [4, 54], [12.5, 64], [12.5, 84], [12.5, 88.5]]);
+route(phys, 'park -> Oak Street dead end down the trail', [88, 0.05, 30], [[89, 40], [89, 52], [89, 70], [89, 86], [89, 92]]);
+route(phys, 'Oak Street -> past a parked car, out the back gate to the woods', [21.5, 0.05, 99.5], [[21.5, 104], [21.5, 120], [10, 134], [10, 138], [10, 142]]);
 
 console.log('Door leaves block when closed and clear when open');
 {
@@ -249,6 +257,9 @@ console.log('Acoustics: the space around each place, and walls between gun and e
     ['safehouse garage', ear(10, 0.15, -19), 'hall'],
     ['Quik-Stop shop floor', ear(92, 0.2, -36), 'hall'],
     ['park gazebo', ear(100, 0.4, 39), 'street'],
+    ['Oak Street', ear(-20, 0.15, OAK.z - 1), 'street'],
+    ['Oyelaran living room', ear(10, 0.32, 113.5), 'room'],
+    ['Oyelaran basement', ear(7, -2.68, 113.5), 'basement'],
   ];
   for (const [name, at, want] of places) {
     const got = ac.spaceAt(...at);

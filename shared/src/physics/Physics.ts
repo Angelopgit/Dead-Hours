@@ -90,13 +90,14 @@ export class Physics {
     };
 
     // Ground slab (open where basements are dug out) and world boundary.
-    const half = map.halfExtent;
-    const ground = { x0: -half - 40, x1: half + 40, z0: -half - 40, z1: half + 40 };
+    const { x0, x1, z0, z1 } = map.bounds;
+    const ground = { x0: x0 - 40, x1: x1 + 40, z0: z0 - 40, z1: z1 + 40 };
     for (const r of subtractRects(ground, map.excavations)) {
       add(RAPIER.ColliderDesc.cuboid((r.x1 - r.x0) / 2, 2, (r.z1 - r.z0) / 2).setTranslation((r.x0 + r.x1) / 2, -2, (r.z0 + r.z1) / 2), 'ground');
     }
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, hw = (x1 - x0) / 2, hd = (z1 - z0) / 2;
     for (const [x, z, hx, hz] of [
-      [0, -half, half, 0.5], [0, half, half, 0.5], [-half, 0, 0.5, half], [half, 0, 0.5, half],
+      [cx, z0, hw, 0.5], [cx, z1, hw, 0.5], [x0, cz, 0.5, hd], [x1, cz, 0.5, hd],
     ] as const) {
       add(RAPIER.ColliderDesc.cuboid(hx, 10, hz).setTranslation(x, 10, z), 'concrete');
     }

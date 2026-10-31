@@ -156,10 +156,10 @@ export class Night {
       x.budget = MAX_SPEED * BANK;
       x.climb = MAX_CLIMB * BANK;
     }
-    const half = NEIGHBORHOOD.halfExtent - 0.4;
+    const edge = NEIGHBORHOOD.bounds, m = 0.4;
     const dh = Math.hypot(to.x - from.x, to.z - from.z);
     const up = Math.max(0, to.y - from.y);
-    let ok = Math.abs(to.x) < half && Math.abs(to.z) < half && to.y > -12 && to.y < 30 && dh <= x.budget + 0.05 && up <= x.climb + 0.05;
+    let ok = to.x > edge.x0 + m && to.x < edge.x1 - m && to.z > edge.z0 + m && to.z < edge.z1 - m && to.y > -12 && to.y < 30 && dh <= x.budget + 0.05 && up <= x.climb + 0.05;
     if (ok && dh > 0.02) {
       const ay = from.y + 0.9, by = to.y + 0.9;
       const len = Math.hypot(to.x - from.x, by - ay, to.z - from.z);

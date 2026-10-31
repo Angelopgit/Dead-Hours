@@ -344,7 +344,7 @@ export class MapBuilder {
     this.prop('mailbox', doorX - 1.6, curbZ, spec.facing === 'south' ? 0 : Math.PI);
   }
 
-  finish(name: string, halfExtent: number, playerSpawns: MapDefinition['playerSpawns']): MapDefinition {
+  finish(name: string, bounds: Rect, playerSpawns: MapDefinition['playerSpawns']): MapDefinition {
     // Props placed inside an enterable building without an explicit height stand on its floor.
     for (const p of this.props) {
       if (p.y !== undefined) continue;
@@ -361,8 +361,9 @@ export class MapBuilder {
         if (Math.abs(p.x - s.x) < s.w / 2 && Math.abs(p.z - s.z) < s.d / 2) p.y = Math.max(p.y ?? 0, top);
       }
     }
+    const halfExtent = Math.max(-bounds.x0, bounds.x1, -bounds.z0, bounds.z1);
     return {
-      name, halfExtent,
+      name, halfExtent, bounds: { ...bounds },
       solids: this.solids, houses: this.houses, windows: this.windows, doors: this.doors,
       props: this.props, lights: this.lights, excavations: this.excavations, stairs: this.stairways, areas: this.areas, playerSpawns,
     };

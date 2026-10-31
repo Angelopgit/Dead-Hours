@@ -455,10 +455,10 @@ export class NavGrid implements NavBuffers {
 export function* buildNavGrid(physics: Physics, map: MapDefinition): Generator<number, NavGrid> {
   const R = RAPIER;
   const world = physics.world;
-  const half = map.halfExtent;
-  const cols = Math.round((half * 2) / NAV.cell);
-  const rows = cols;
-  const x0 = -half, z0 = -half;
+  const b = map.bounds;
+  const cols = Math.round((b.x1 - b.x0) / NAV.cell);
+  const rows = Math.round((b.z1 - b.z0) / NAV.cell);
+  const x0 = b.x0, z0 = b.z0;
   const staticOnly = groups(0xffff, GROUP.static);
   const box = new R.Cuboid(NAV.half, (NAV.clearTo - NAV.clearFrom) / 2, NAV.half);
   const rot = { x: 0, y: 0, z: 0, w: 1 };

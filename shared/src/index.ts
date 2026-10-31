@@ -13,6 +13,7 @@ export * from './config/progression';
 export * from './map/builder';
 export * from './map/colliders';
 export * from './map/maple-hollow';
+export * from './map/oak-street';
 export * from './protocol/messages';
 export * from './chat/filter';
 

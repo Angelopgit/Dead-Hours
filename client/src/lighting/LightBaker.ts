@@ -5,8 +5,18 @@ import type { LightField } from './LightField';
 /** Bump when the bake math changes so cached results are discarded. */
 export const BAKE_VERSION = 8;
 
-/** Ground lightmap: covers the play area at 0.5 m per texel. */
-export const GROUND_BAKE = { half: 128, res: 512 } as const;
+/** Ground lightmap: covers the play area and a few meters past its edges at 0.5 m per texel. */
+export const GROUND_BAKE = { texel: 0.5, margin: 3 } as const;
+
+/** The ground lightmap's rectangle and size for a map (an even number of texels each way). */
+export function groundBakeRect(map: MapDefinition): { x0: number; z0: number; w: number; d: number; resX: number; resZ: number } {
+  const { texel, margin } = GROUND_BAKE;
+  const b = map.bounds;
+  const resX = Math.ceil((b.x1 - b.x0 + margin * 2) / (texel * 2)) * 2;
+  const resZ = Math.ceil((b.z1 - b.z0 + margin * 2) / (texel * 2)) * 2;
+  const w = resX * texel, d = resZ * texel;
+  return { x0: (b.x0 + b.x1 - w) / 2, z0: (b.z0 + b.z1 - d) / 2, w, d, resX, resZ };
+}
 
 /** Up-facing surfaces in this height band read the ground lightmap instead of their vertices. */
 export const GROUND_BAND = { min: -0.3, max: 0.17 } as const;
@@ -111,7 +121,8 @@ export class LightBaker {
   async bake(meshes: THREE.Mesh[], onProgress: BakeProgress): Promise<THREE.DataTexture> {
     const key = this.key(meshes);
     const cached = await cacheGet(key);
-    if (cached && meshes.every((m) => cached.meshes[m.name]?.length === m.geometry.getAttribute('position').count * 4)) {
+    const rect = groundBakeRect(this.map);
+    if (cached && cached.ground?.length === rect.resX * rect.resZ * 4 && meshes.every((m) => cached.meshes[m.name]?.length === m.geometry.getAttribute('position').count * 4)) {
       for (const m of meshes) m.geometry.setAttribute('bake', new THREE.BufferAttribute(cached.meshes[m.name], 4));
       onProgress(1, 'LIGHTING LOADED');
       return this.groundTexture(cached.ground);
@@ -131,8 +142,15 @@ export class LightBaker {
     return this.groundTexture(ground);
   }
 
+  /** Where the ground lightmap lies, for the shader: (x0, z0, 1 / width, 1 / depth). */
+  groundRect(): THREE.Vector4 {
+    const r = groundBakeRect(this.map);
+    return new THREE.Vector4(r.x0, r.z0, 1 / r.w, 1 / r.d);
+  }
+
   private groundTexture(data: Uint16Array): THREE.DataTexture {
-    const t = new THREE.DataTexture(data, GROUND_BAKE.res, GROUND_BAKE.res, THREE.RGBAFormat, THREE.HalfFloatType);
+    const r = groundBakeRect(this.map);
+    const t = new THREE.DataTexture(data, r.resX, r.resZ, THREE.RGBAFormat, THREE.HalfFloatType);
     t.magFilter = THREE.LinearFilter;
     t.minFilter = THREE.LinearFilter;
     t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
@@ -142,8 +160,8 @@ export class LightBaker {
   }
 
   private async bakeGround(slicer: Slicer, progress: (f: number) => void): Promise<Uint16Array> {
-    const { half, res } = GROUND_BAKE;
-    const texel = (half * 2) / res;
+    const { x0, z0, resX, resZ } = groundBakeRect(this.map);
+    const texel = GROUND_BAKE.texel;
     const tr = this.field.tracer;
     // Surface height under each texel (ray down from above curbs and islands).
     const surface = (x: number, z: number): number | null => {
@@ -151,37 +169,37 @@ export class LightBaker {
       return tr.hit.t <= 1e-4 ? null : 0.6 - tr.hit.t;
     };
     // Sky visibility on a 1 m grid, upsampled.
-    const aoRes = res / 2;
-    const ao = new Float32Array(aoRes * aoRes);
-    for (let j = 0; j < aoRes; j++) {
-      for (let i = 0; i < aoRes; i++) {
-        const x = -half + (i + 0.5) * texel * 2;
-        const z = -half + (j + 0.5) * texel * 2;
+    const aoX = resX / 2, aoZ = resZ / 2;
+    const ao = new Float32Array(aoX * aoZ);
+    for (let j = 0; j < aoZ; j++) {
+      for (let i = 0; i < aoX; i++) {
+        const x = x0 + (i + 0.5) * texel * 2;
+        const z = z0 + (j + 0.5) * texel * 2;
         const y = surface(x, z);
-        ao[j * aoRes + i] = y === null ? 0 : this.field.ao(x, y, z, 0, 1, 0, 7, true);
+        ao[j * aoX + i] = y === null ? 0 : this.field.ao(x, y, z, 0, 1, 0, 7, true);
       }
-      progress((j / aoRes) * 0.6);
+      progress((j / aoZ) * 0.6);
       await slicer.tick();
     }
     const sampleAo = (u: number, v: number) => {
-      const fx = Math.min(Math.max(u * aoRes - 0.5, 0), aoRes - 1);
-      const fy = Math.min(Math.max(v * aoRes - 0.5, 0), aoRes - 1);
-      const x0 = Math.floor(fx), y0 = Math.floor(fy);
-      const x1 = Math.min(x0 + 1, aoRes - 1), y1 = Math.min(y0 + 1, aoRes - 1);
-      const tx = fx - x0, ty = fy - y0;
-      const a = ao[y0 * aoRes + x0] * (1 - tx) + ao[y0 * aoRes + x1] * tx;
-      const b = ao[y1 * aoRes + x0] * (1 - tx) + ao[y1 * aoRes + x1] * tx;
+      const fx = Math.min(Math.max(u * aoX - 0.5, 0), aoX - 1);
+      const fy = Math.min(Math.max(v * aoZ - 0.5, 0), aoZ - 1);
+      const ix = Math.floor(fx), iy = Math.floor(fy);
+      const ix1 = Math.min(ix + 1, aoX - 1), iy1 = Math.min(iy + 1, aoZ - 1);
+      const tx = fx - ix, ty = fy - iy;
+      const a = ao[iy * aoX + ix] * (1 - tx) + ao[iy * aoX + ix1] * tx;
+      const b = ao[iy1 * aoX + ix] * (1 - tx) + ao[iy1 * aoX + ix1] * tx;
       return a * (1 - ty) + b * ty;
     };
-    const data = new Uint16Array(res * res * 4);
+    const data = new Uint16Array(resX * resZ * 4);
     const rgb = new Float32Array(3);
     const toHalf = THREE.DataUtils.toHalfFloat;
-    for (let j = 0; j < res; j++) {
-      for (let i = 0; i < res; i++) {
-        const x = -half + (i + 0.5) * texel;
-        const z = -half + (j + 0.5) * texel;
-        const o = (j * res + i) * 4;
-        let a = sampleAo((i + 0.5) / res, (j + 0.5) / res);
+    for (let j = 0; j < resZ; j++) {
+      for (let i = 0; i < resX; i++) {
+        const x = x0 + (i + 0.5) * texel;
+        const z = z0 + (j + 0.5) * texel;
+        const o = (j * resX + i) * 4;
+        let a = sampleAo((i + 0.5) / resX, (j + 0.5) / resZ);
         rgb[0] = rgb[1] = rgb[2] = 0;
         const y = surface(x, z);
         if (y === null) {
@@ -195,7 +213,7 @@ export class LightBaker {
         data[o + 2] = toHalf(rgb[2]);
         data[o + 3] = toHalf(a);
       }
-      progress(0.6 + (j / res) * 0.4);
+      progress(0.6 + (j / resZ) * 0.4);
       await slicer.tick();
     }
     return data;

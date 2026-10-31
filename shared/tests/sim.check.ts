@@ -52,8 +52,12 @@ const spots: [string, Vec3][] = [
   ['park', { x: 90, y: 0, z: 30 }],
   ['checkpoint', { x: -100, y: 0, z: 10 }],
   ['north woods', { x: 20, y: 0, z: -95 }],
-  ['south woods', { x: -30, y: 0, z: 100 }],
+  ['south woods', { x: -30, y: 0, z: 155 }],
   ['back alley', { x: 0, y: 0, z: -47 }],
+  ['Oak Street', { x: -20, y: 0, z: 94 }],
+  ['Oyelaran house basement (Oak St)', { x: 7, y: -2.7, z: 113.5 }],
+  ['Delgado house living room (Oak St)', { x: 29, y: 0.3, z: 77 }],
+  ['Oak Street dead end', { x: 92, y: 0, z: 94 }],
 ];
 for (const [name, p] of spots) check(nav.reachable(nav.nodeAt(p.x, p.y, p.z, 0.6)), `${name} is reachable`);
 check(!nav.reachable(nav.nodeAt(0, 9, -20, 0.3)) || nav.nodeY[nav.nodeAt(0, 9, -20, 0.3)] < 5, 'safehouse roof is not part of the walkable area');
@@ -64,6 +68,10 @@ const routes: [string, Vec3, Vec3][] = [
   ['north woods to safehouse', { x: 30, y: 0, z: -100 }, spots[0][1]],
   ['park to garage', { x: 90, y: 0, z: 30 }, spots[4][1]],
   ['checkpoint to Henderson house', { x: -110, y: 0, z: 5 }, spots[5][1]],
+  ['Oak Street to safehouse living room', spots[12][1], spots[0][1]],
+  ['south woods to Oyelaran basement', spots[10][1], spots[13][1]],
+  ['safehouse to Delgado house', spots[0][1], spots[14][1]],
+  ['park to Oak Street dead end', spots[7][1], spots[15][1]],
 ];
 for (const [name, a, b] of routes) {
   t0 = performance.now();
@@ -384,6 +392,23 @@ section('Spawner and survival clock');
   check(closer.reduce((a, b) => a + b, 0) / closer.length < dists.reduce((a, b) => a + b, 0) / dists.length, 'zombies approach the survivors');
   cleanup(sim, body);
 }
+// The map grew south with Oak Street: a survivor anywhere still gets zombies spawning around them.
+for (const [where, at] of [
+  ['the safehouse', { x: 4.8, y: 0.32, z: -22.3 }], ['Elm Street', { x: -40, y: 0.15, z: 6 }],
+  ['Oak Street', { x: -10, y: 0.02, z: 94 }], ['an Oak Street basement', { x: 7, y: -2.7, z: 113.5 }],
+  ['the Oak Street dead end', { x: 90, y: 0.02, z: 94 }],
+] as [string, Vec3][]) {
+  const { sim, body } = makeSim(at);
+  let found = 0, south = 0;
+  for (let i = 0; i < 60; i++) {
+    const p = sim.findSpawnPoint();
+    if (!p) continue;
+    found++;
+    if (p.z > 50) south++;
+  }
+  check(found >= 54, `spawner finds a spot around a survivor at ${where} (${found} of 60 tries, ${south} south of the alley)`);
+  cleanup(sim, body);
+}
 
 section('Zombie kinds and getting unstuck');
 {
@@ -596,6 +621,23 @@ section('Helicopter supply drops');
     check(solid !== null && solid < 1.9, 'the crate is solid');
   }
   for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
+  cleanup(sim, body);
+}
+{
+  // Drops find open ground on Oak Street too: the road, the yards, the dead end.
+  const at = { x: 10, y: 0.02, z: 94 };
+  const { sim, body } = makeSim(at);
+  const plan = () => (sim as unknown as { planFlight(): { ground: Vec3 } | null }).planFlight();
+  let ok = 0, near = Infinity, far = 0;
+  for (let i = 0; i < 20; i++) {
+    const f = plan();
+    if (!f) continue;
+    const g = f.ground, d = Math.hypot(g.x - at.x, g.z - at.z);
+    near = Math.min(near, d);
+    far = Math.max(far, d);
+    if (d >= SUPPLY_DROPS.minDistance && d <= SUPPLY_DROPS.maxDistance && physics.raycast(g.x, g.y + 0.6, g.z, 0, 1, 0, 60) === null) ok++;
+  }
+  check(ok === 20, `supply drops for a survivor on Oak Street land in the open, in range (${ok} of 20, ${near.toFixed(0)}-${far.toFixed(0)} m)`);
   cleanup(sim, body);
 }
 
@@ -1388,6 +1430,10 @@ section('Barricades');
   check(wins.length >= 50 && climb.length >= wins.length * 0.85, `ground-storey windows take boards and zombies can climb through most (${climb.length} of ${wins.length})`);
   check(wins.every((s) => s.bottom < BARRICADE.maxSill && s.width >= BARRICADE.minWidth), 'no upstairs windows or bathroom slits among them');
   check(wins.every((s) => s.pane !== null && s.glass), 'every window starts with its pane in');
+  const oak = homes.filter((h) => h.id.startsWith('oak-'));
+  const oakWins = wins.filter((s) => s.houseId.startsWith('oak-'));
+  const oakClimb = oakWins.filter((s) => s.outNode >= 0);
+  check(oak.every((h) => oakWins.some((s) => s.houseId === h.id)) && oakClimb.length >= oakWins.length * 0.85, `Oak Street's homes take boards on their windows like Elm's (${oakClimb.length} of ${oakWins.length} climbable)`);
   cleanup(sim, body);
 }
 const houseSlots = (sim: Simulation, house: string, kind: 'door' | 'window') => sim.barricades.slots.filter((s) => s.houseId === house && s.kind === kind);
@@ -1565,6 +1611,14 @@ section('Found melee weapons');
   const kinds = new Set(rooms.map((r) => r.room));
   check(kinds.has('bedroom') && kinds.has('basement') && kinds.has('store'), `weapons can turn up in bedrooms, basements and the store (${rooms.length} rooms: ${rooms.filter((r) => r.room === 'bedroom').length} bedrooms, ${rooms.filter((r) => r.room === 'basement').length} basements)`);
   check(rooms.every((r) => r.nodes.every((n) => nav.reachable(n))), 'every spot is on walkable floor');
+  {
+    // Every enterable home on Oak Street has a bedroom to search; its basements count too.
+    const oakHomes = map.houses.filter((h) => h.id.startsWith('oak-'));
+    const inside = (h: (typeof oakHomes)[number], r: (typeof rooms)[number]) => Math.abs(r.centre.x - h.x) < h.w / 2 && Math.abs(r.centre.z - h.z) < h.d / 2;
+    const bare = oakHomes.filter((h) => !rooms.some((r) => r.room === 'bedroom' && inside(h, r)));
+    const basements = rooms.filter((r) => r.room === 'basement' && r.key.includes('oak-')).length;
+    check(!bare.length && basements === 5, `Oak Street's ${oakHomes.length} homes each have a bedroom to search, and ${basements} basements${bare.length ? ` (none in ${bare.map((h) => h.id).join(', ')})` : ''}`);
+  }
   check(rooms.every((r) => map.playerSpawns.every((sp) => Math.hypot(sp.x - r.centre.x, sp.z - r.centre.z) >= MELEE_PICKUPS.awayFromSpawn)), 'none in the safehouse the survivors start in');
 
   const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
