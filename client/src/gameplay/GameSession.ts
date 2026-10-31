@@ -2199,9 +2199,10 @@ export class GameSession {
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
     hud.setSpread(Math.min(70, px));
-    // Down the sights, the sights are the crosshair.
+    // Down the sights, the sights are the crosshair. Not while the mouse is free either: "CLICK TO
+    // CONTINUE" stands in the middle of the screen then, and the crosshair would strike through it.
     this.updateDownPanel();
-    hud.setCrosshairVisible(this.phase === 'playing' && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
+    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
     hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
