@@ -1,13 +1,15 @@
 /**
  * Dev-only outfit lineup: /dev/lineup.html?slot=headwear&view=head renders every item of a slot
- * side by side under studio lights, for checking how pieces fit. Not part of the game build.
+ * side by side under studio lights, for checking how pieces fit. `slot=zombies` shows walkers,
+ * `slot=specials` screamers and bloaters (`scream=0.5` poses them mid-scream). Not part of the game build.
  */
 import * as THREE from 'three';
 import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, sanitizeAppearance, type Appearance, type AppearanceSlot } from '@dead-hours/shared';
-import { Humanoid, survivorLook, zombieLook } from '../src/characters/Humanoid';
+import { Humanoid, survivorLook, zombieLook, zombieLookOf } from '../src/characters/Humanoid';
 
 const q = new URLSearchParams(location.search);
-const slot = (q.get('slot') ?? 'top') as AppearanceSlot | 'zombies';
+const slot = (q.get('slot') ?? 'top') as AppearanceSlot | 'zombies' | 'specials';
+const scream = Number(q.get('scream') ?? -1);
 const view = q.get('view') ?? 'body';
 const yaw = Number(q.get('yaw') ?? 0.35);
 const base: Appearance = sanitizeAppearance({ ...DEFAULT_APPEARANCE, ...JSON.parse(q.get('base') ?? '{}') });
@@ -31,6 +33,8 @@ scene.add(rim);
 
 const looks = slot === 'zombies'
   ? Array.from({ length: 12 }, (_, i) => ({ label: `zombie ${i}`, look: zombieLook(i) }))
+  : slot === 'specials'
+  ? (['screamer', 'bloater'] as const).flatMap((kind) => Array.from({ length: 4 }, (_, i) => ({ label: `${kind} ${i}`, look: zombieLookOf(kind, i) })))
   : (APPEARANCE_ITEMS[slot] as readonly { id: string; label: string }[]).map((it) => ({ label: it.label, look: survivorLook({ ...base, [slot]: it.id } as Appearance) }));
 const rows = Math.ceil(looks.length / cols);
 const people: Humanoid[] = [];
@@ -63,6 +67,7 @@ renderer.setScissorTest(true);
 
 function frame(): void {
   people.forEach((h, i) => {
+    if (h.gait === 'runner') h.scream = scream;
     h.update(0.016, { speed: 0, crouch: 0, aim: 0, grounded: true, strafe: 0 });
     const x = (i % cols) * cellW, y = innerHeight - (Math.floor(i / cols) + 1) * cellH;
     renderer.setViewport(x, y, cellW, cellH);

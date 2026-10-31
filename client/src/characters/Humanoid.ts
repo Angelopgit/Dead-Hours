@@ -677,8 +677,8 @@ export class Humanoid {
         // Chest out, head thrown back, shaking with the effort.
         const k = THREE.MathUtils.smoothstep(this.scream, 0, 0.3) * (1 - THREE.MathUtils.smoothstep(this.scream, 0.85, 1));
         const shake = this.scream > 0.3 ? Math.sin(performance.now() * 0.09) * 0.04 * k : 0;
-        this.spine.rotation.x -= (zLean + 0.25) * k;
-        this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, -0.75 + shake, k);
+        this.spine.rotation.x -= (zLean + 0.38) * k;
+        this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, -0.42 + shake, k);
         this.head.rotation.y *= 1 - k;
         this.head.rotation.z = THREE.MathUtils.lerp(this.head.rotation.z, shake, k);
       }

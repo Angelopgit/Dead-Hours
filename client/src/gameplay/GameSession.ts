@@ -159,6 +159,8 @@ export class GameSession {
   /** First arm torn off / first picked up: say once what can be done with it. */
   private limbHinted = false;
   private screamHinted = false;
+  /** When a bloater last burst (the arms it tears off then go unannounced). */
+  private burstAt = -1;
   private gripHinted = false;
   /** Blood off the arm in hand: seconds to the next drop, and where its torn end was. */
   private limbDrip = 0;
@@ -1116,6 +1118,7 @@ export class GameSession {
         break;
       }
       case 'zombieBurst': {
+        this.burstAt = performance.now();
         const at = this.zombies.burst(e.zombie, A) ?? v3(e.pos, A);
         this.effects.bloaterBurst(at);
         audio.bloaterBurst(at);
@@ -1239,7 +1242,7 @@ export class GameSession {
     this.zombies.severed(zombie, arm, cut, at, this.tmpC);
     this.effects.sever(at, dir, melee);
     audio.sever(at, melee);
-    if (!mine) return;
+    if (!mine || performance.now() - this.burstAt < 250) return;
     this.cam.addTrauma(melee ? 0.12 : 0.06);
     this.hud.feedLine(cut === 'shoulder' ? 'ARM TORN OFF' : 'FOREARM TORN OFF');
     if (!this.limbHinted) {
