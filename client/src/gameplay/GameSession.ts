@@ -44,6 +44,7 @@ import { AimAssist } from './AimAssist';
 import { GunsmithPanel } from '../ui/GunsmithPanel';
 import { GunsmithStage } from '../weapons/GunsmithStage';
 import { audio } from '../audio/AudioEngine';
+import { flashlight } from './Flashlight';
 import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
@@ -166,6 +167,9 @@ export class GameSession {
   private readonly touch: TouchControls;
   private readonly assist: AimAssist;
   private readonly fill = new THREE.PointLight(0xa8b8d0, 1.6, 9, 1.5);
+  private readonly tmpTorchDir = new THREE.Vector3();
+  private readonly tmpTorchRight = new THREE.Vector3();
+  private readonly tmpTorchAt = new THREE.Vector3();
   private readonly unsubSettings: () => void;
   private readonly doorColliders = new Set<number>();
 
@@ -267,6 +271,8 @@ export class GameSession {
     this.area = areaAt(NEIGHBORHOOD, this.player.position);
     // Soft fill that travels with the camera so the survivor stays readable at night.
     this.fill.position.set(0, 0.4, 0.6);
+    // A soft readability light: it would only add a glowing ball around the camera in the fog.
+    this.fill.userData.noFog = true;
     engine.camera.add(this.fill);
     if (!engine.camera.parent) engine.scene.add(engine.camera);
 
@@ -882,6 +888,18 @@ export class GameSession {
       // The fill light rides with the camera to keep the survivor readable; down the sights it
       // would only glare off the sights an inch from the eye.
       this.fill.intensity = 1.6 * (1 - 0.8 * ads);
+      // The weapon light: just right of and below the eyes, aimed at the crosshair.
+      const torch = flashlight();
+      if (torch) {
+        const eye = this.cam.eye;
+        const dir = this.tmpTorchDir.subVectors(this.cam.aimPoint, eye);
+        if (dir.lengthSq() < 1e-6) dir.set(-Math.sin(this.cam.yaw), 0, -Math.cos(this.cam.yaw));
+        dir.normalize();
+        const right = this.tmpTorchRight.set(Math.cos(this.cam.yaw), 0, -Math.sin(this.cam.yaw));
+        const at = this.tmpTorchAt.copy(eye).addScaledVector(dir, 0.25).addScaledVector(right, 0.14);
+        at.y -= 0.14;
+        torch.update(dt, this.phase === 'playing' || this.phase === 'paused', at, dir);
+      }
       this.hud.setScope(scope);
       this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming });
     }
@@ -1013,6 +1031,13 @@ export class GameSession {
     if (input.pressed('fire')) this.fireBuffer = 0.18;
     if (this.fireHeld || this.fireBuffer > 0) p.blockSprint(0.35);
     if (input.pressed('reload')) this.wantReload = true;
+    if (input.pressed('flashlight')) {
+      const f = flashlight();
+      if (f) {
+        f.on = !f.on;
+        audio.ui('click');
+      }
+    }
     if (input.pressed('weapon1')) this.wantSlot = 'primary';
     if (input.pressed('weapon2')) this.wantSlot = 'secondary';
     const wheel = input.consumeWheel();

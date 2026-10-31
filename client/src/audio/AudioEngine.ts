@@ -7,6 +7,7 @@ import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynt
 import type { MeleeId } from '@dead-hours/shared';
 import { RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
 import { RECORDED_FILES } from './recordedFiles';
+import { weather } from '../environment/Weather';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 const SHOT_TAKES = 4;
@@ -116,6 +117,9 @@ export class AudioEngine {
   private noise!: AudioBuffer;
   private windGain!: GainNode;
   private windFilter!: BiquadFilterNode;
+  private rainGain!: GainNode;
+  private rainFilter!: BiquadFilterNode;
+  private roofGain!: GainNode;
   private droneGain!: GainNode;
   private pulseGain!: GainNode;
   private reverb!: ConvolverNode;
@@ -217,6 +221,7 @@ export class AudioEngine {
     this.recordingsReady = this.loadRecordings(ctx);
 
     this.startWind();
+    this.startRain();
     this.startDrone();
     this.applyVolumes();
     this.unsub = settings.subscribe(() => this.applyVolumes());
@@ -244,6 +249,36 @@ export class AudioEngine {
     s.buffer = this.noise;
     s.loop = loop;
     return s;
+  }
+
+  /**
+   * Rain: a bright hiss of drops on the street and a low drum on the roof. Outside the hiss is
+   * open; inside it dulls behind the walls and the roof drum takes over; a basement hears little.
+   */
+  private startRain(): void {
+    const ctx = this.ctx!;
+    const src = this.noiseSource();
+    src.playbackRate.value = 1.6;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 900;
+    this.rainFilter = ctx.createBiquadFilter();
+    this.rainFilter.type = 'lowpass';
+    this.rainFilter.frequency.value = 9000;
+    this.rainGain = ctx.createGain();
+    this.rainGain.gain.value = 0;
+    src.connect(hp).connect(this.rainFilter).connect(this.rainGain).connect(this.ambient);
+    src.start();
+    const roof = this.noiseSource();
+    roof.playbackRate.value = 0.7;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 260;
+    bp.Q.value = 0.8;
+    this.roofGain = ctx.createGain();
+    this.roofGain.gain.value = 0;
+    roof.connect(bp).connect(this.roofGain).connect(this.ambient);
+    roof.start();
   }
 
   private startWind(): void {
@@ -751,6 +786,14 @@ export class AudioEngine {
       this.here = this.spaceOf(p);
       this.nextSpace = this.time + 0.2;
     }
+
+    // Rain, by the space the listener is in.
+    const r = weather.rain;
+    const inside = this.here !== 'street';
+    const deep = this.here === 'basement';
+    this.rainGain.gain.setTargetAtTime(r * (deep ? 0.012 : inside ? 0.05 : 0.16), ctx.currentTime, 0.5);
+    this.rainFilter.frequency.setTargetAtTime(deep ? 700 : inside ? 1800 : 9000, ctx.currentTime, 0.3);
+    this.roofGain.gain.setTargetAtTime(r * (deep ? 0.02 : inside ? 0.12 : 0.03), ctx.currentTime, 0.5);
 
     // Wind gusts.
     const gust = 0.1 + Math.max(0, Math.sin(this.time * 0.21) * Math.sin(this.time * 0.53 + 1)) * 0.16;

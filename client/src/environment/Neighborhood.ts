@@ -13,6 +13,11 @@ import { LightField } from '../lighting/LightField';
 import { LightBaker, type BakeProgress } from '../lighting/LightBaker';
 import { bakeUniforms, patchBaked, patchPuddle, PUDDLE_LAMPS, type ReflectedLamp } from '../lighting/BakeShader';
 import { settings, type Quality } from '../core/Settings';
+import { patchWet, setWetLamps, setWetLampBudget, updateWetLamps, weatherUniforms } from '../lighting/WetShader';
+import { FogLights } from '../lighting/FogLights';
+import { setLightConesVisible } from './LightCone';
+import { Rain, buildCoverMap } from './Rain';
+import { updateWeather, weather } from './Weather';
 
 const FOG_DENSITY: Record<Quality, number> = { low: 0.017, medium: 0.02, high: 0.022 };
 export const FOG_COLOR = 0x252e3c;
@@ -23,6 +28,9 @@ export class Neighborhood {
   readonly lib: MaterialLibrary;
   readonly sky = new Sky();
   readonly atmosphere = new Atmosphere();
+  readonly rain = new Rain();
+  /** Lights for the volumetric fog (set up with the bake). */
+  fogLights: FogLights | null = null;
   readonly lighting: Lighting;
   readonly props: PropBuildResult;
   field: LightField | null = null;
@@ -66,6 +74,8 @@ export class Neighborhood {
     this.staticMeshes = batch.build(this.root, 'map');
     this.buildForest();
     this.root.add(this.atmosphere.group);
+    this.root.add(this.rain.mesh);
+    weatherUniforms.uCover.value = buildCoverMap(map);
   }
 
   /** Bakes (or loads cached) static lighting and switches static materials over to it. */
@@ -75,6 +85,9 @@ export class Neighborhood {
     const ground = await baker.bake(this.staticMeshes, onProgress);
     bakeUniforms.uGroundBake.value = ground;
     for (const m of this.staticMeshes) patchBaked(m.material as THREE.Material);
+    for (const m of this.staticMeshes) patchWet(m.material as THREE.Material);
+    this.fogLights = new FogLights(this.map, field.tracer);
+    setWetLamps(this.fogLights.outdoor);
     const lamps = this.puddleLamps(field);
     for (const m of this.staticMeshes) {
       const mat = m.material as THREE.Material;
@@ -318,11 +331,19 @@ export class Neighborhood {
     }
   }
 
+  /** Current flat fog density (the volumetric fog matches it). */
+  get fogDensity(): number {
+    return this.fog.density;
+  }
+
   applySettings(renderer: THREE.WebGLRenderer, shadowSize: number, focus: THREE.Vector3): void {
     const g = settings.value.graphics;
     this.fog.density = FOG_DENSITY[g.fogQuality];
     this.lighting.setShadowSize(shadowSize, renderer);
     this.atmosphere.setQuality(g.particleQuality, focus);
+    this.rain.setQuality(g.particleQuality);
+    setWetLampBudget(g.fogQuality === 'high' ? 8 : g.fogQuality === 'medium' ? 6 : 3);
+    setLightConesVisible(g.fogQuality === 'low');
     this.lib.setAnisotropy(g.textureQuality === 'low' ? 1 : g.textureQuality === 'medium' ? 4 : 8);
     void this.lib.loadPbr(renderer, g.textureQuality);
   }
@@ -333,6 +354,14 @@ export class Neighborhood {
     this.lighting.update(dt);
     this.lighting.follow(focus);
     this.atmosphere.update(dt, t, focus);
+    updateWeather(dt);
+    const u = weatherUniforms;
+    u.uWxTime.value = weather.time;
+    u.uWetness.value = weather.wetness;
+    u.uRainAmt.value = weather.rain;
+    u.uWxWind.value.set(this.atmosphere.wind.x, this.atmosphere.wind.z).multiplyScalar(this.atmosphere.windStrength);
+    updateWetLamps(camera.position);
+    this.rain.update(camera, this.fog.density, this.lighting.flash * (settings.value.accessibility.reducedFlashing ? 0.2 : 1));
     this.propFactory.foliageUniforms.uTime.value = t;
     this.propFactory.foliageUniforms.uWind.value = this.atmosphere.windStrength;
     for (const d of this.dynamic) d.update(dt, t);
@@ -345,6 +374,7 @@ export class Neighborhood {
       if (m.isMesh) m.geometry.dispose();
     });
     this.sky.dispose();
+    this.rain.dispose();
     this.atmosphere.dispose();
     this.lib.dispose();
     this.envMap?.dispose();

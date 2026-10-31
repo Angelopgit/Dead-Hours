@@ -120,6 +120,14 @@ Static lighting is baked in the browser on first load and cached in IndexedDB (a
 
 The bake is injected into the standard materials' irradiance, so realtime lights (moon with shadows, the flickering streetlight, police strobes, the muzzle flash later) still shade on top. Characters and door leaves are lit by light probes sampled from the same light field, and exposure adapts between indoors and out. Baked light has no highlights of its own, so puddles get the nearest unoccluded static lamps as mirror-like reflections (`patchPuddle` in `client/src/lighting/BakeShader.ts`); the night-sky environment map holds only the sky and the moon, never stand-in lamp glints. Bump `BAKE_VERSION` in `client/src/lighting/LightBaker.ts` when the baker changes; map edits invalidate the cache automatically.
 
+### Fog, rain and post-processing
+
+- **Volumetric fog** (`client/src/rendering/SceneFX.ts`): each pixel's view ray is marched through height fog with drifting 3D noise at half resolution (High) or a third (Medium), gathering light from the 12 (or 8) brightest lights near the camera with spot cones and forward scattering. That gives real light shafts under streetlamps, from the flashlight, the helicopter searchlight, flares, muzzle flashes and fires. Baked lamps are each confined to the box of walls around them (`client/src/lighting/FogLights.ts`), so a room lamp never glows through into the street, and the air under a roof is clearer than outside. Live point and spot lights are found by a scene scan twice a second, so new light sources need no registration (`userData.fogScale` tunes one, `userData.noFog` leaves it out). Low fog keeps the flat fog and the cheap cone meshes.
+- **Rain** (`client/src/environment/Rain.ts`, `Weather.ts`): GPU streaks that wrap in a box around the camera, stop under roofs (a top-down cover map built from the map) and catch the light of nearby lamps and the flashlight. It follows the wall clock, so everyone in an online room sees the same downpour. Exposed surfaces soak in about 20 seconds and dry over a couple of minutes (`client/src/lighting/WetShader.ts`): sky-exposed surfaces (from the baked sky visibility) darken and turn glossy, hard flat ground collects puddles with raindrop ripples, and the nearest outdoor lamps reflect in the wet street. Rain is heard by space: an open hiss outside, a roof drum indoors, a murmur in basements.
+- **Post chain**: scene → SSAO (depth-only, half resolution, for contact shadows the bake can't know about) → volumetric fog → camera motion blur (from depth reprojection; the gun and hands are left sharp) → bloom → ACES → night grade (a 32³ 3D LUT, `client/src/rendering/ColorLUT.ts`) with vignette and film grain. With every effect off the scene draws straight into the composer's buffer, so the Phone preset pays nothing for them.
+- **Flashlight**: a weapon light (L toggles it) that casts shadows on Medium and High and lights the fog and the rain. It sits in the scene from boot at zero intensity, since adding a light later would recompile every material.
+- Settings → Graphics: Ambient occlusion, Motion blur and Rain toggles; Fog quality Medium/High turns on volumetrics. Presets: Phone and Low (flat fog, no AO or blur, light rain), Medium (third-resolution volumetrics, AO), High (half-resolution volumetrics, AO, motion blur, MSAA).
+
 ## Combat
 
 Solo play runs the same authoritative simulation the game server runs online (`shared/src/sim`). The client only sends intents (fire along the camera ray, reload, switch, melee, bandage, use) and renders the events that come back, so damage, ammunition and health never live in the client.
@@ -260,7 +268,7 @@ All recordings are CC0 (public domain dedication) from [Freesound](https://frees
 
 ## Controls
 
-WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact (hold to pry a board off) · G board up (hold) · F melee · H gunsmith · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc menu (pauses solo play; online the night goes on). Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
+WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact (hold to pry a board off) · G board up (hold) · F melee · H gunsmith · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · L flashlight · Esc menu (pauses solo play; online the night goes on). Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
 
 ## Roadmap status
 

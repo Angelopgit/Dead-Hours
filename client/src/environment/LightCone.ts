@@ -1,8 +1,17 @@
 import * as THREE from 'three';
 
-/** Soft additive volumetric cone used for streetlight shafts in fog. */
+const cones = new Set<THREE.ShaderMaterial>();
+let conesVisible = true;
+
+/** The fake cones stand in for volumetric fog; with real volumetrics on they are hidden. */
+export function setLightConesVisible(on: boolean): void {
+  conesVisible = on;
+  for (const m of cones) m.visible = on;
+}
+
+/** Soft additive cone used for streetlight shafts in flat fog (low fog quality). */
 export function createLightConeMaterial(color: number): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
+  const mat = new THREE.ShaderMaterial({
     uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 1 } },
     vertexShader: /* glsl */ `
       varying float vH;
@@ -47,4 +56,8 @@ export function createLightConeMaterial(color: number): THREE.ShaderMaterial {
     side: THREE.DoubleSide,
     fog: false,
   });
+  mat.visible = conesVisible;
+  cones.add(mat);
+  mat.addEventListener('dispose', () => cones.delete(mat));
+  return mat;
 }

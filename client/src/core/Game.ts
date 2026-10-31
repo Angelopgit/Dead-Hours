@@ -15,6 +15,9 @@ import { MainMenu } from '../ui/MainMenu';
 import { audio } from '../audio/AudioEngine';
 import { AutoExposure } from '../lighting/Probes';
 import type { LightField } from '../lighting/LightField';
+import { Flashlight, setFlashlight } from '../gameplay/Flashlight';
+import { weather } from '../environment/Weather';
+import { weatherUniforms } from '../lighting/WetShader';
 
 type State = 'menu' | 'session';
 
@@ -35,6 +38,7 @@ export class Game {
   private field!: LightField;
   private exposure!: AutoExposure;
   private nav!: NavGrid;
+  private flashlight!: Flashlight;
   private readonly ui = document.getElementById('ui-root')!;
 
   async boot(): Promise<void> {
@@ -62,6 +66,9 @@ export class Game {
       const next = `MAPPING STREETS ${Math.round(f * 100)}%`;
       if (label && next !== lastLabel) label.textContent = lastLabel = next;
     });
+    // In the scene from the start (at zero), so turning it on never recompiles materials.
+    this.flashlight = new Flashlight(this.engine.scene);
+    setFlashlight(this.flashlight);
     this.menuCine = new MenuCinematic(this.engine.camera, this.engine.scene);
     this.menuCine.applyProbe(this.field);
     this.applyRenderSettings();
@@ -88,7 +95,7 @@ export class Game {
     document.querySelector('.boot')?.remove();
     gsap.to(document.getElementById('fade'), { opacity: 0, duration: 2.2, ease: 'power2.out' });
     this.menu.show(this.ui);
-    if (import.meta.env.DEV) Object.assign(window, { __deadHours: this, THREE });
+    if (import.meta.env.DEV) Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
   }
 
   private unlockAudio = (): void => {
@@ -112,6 +119,7 @@ export class Game {
       this.lastParticle = key;
       this.lastFog = g.fogQuality;
       this.lastTex = g.textureQuality;
+      this.flashlight.setShadows(g.shadows);
       this.world.applySettings(this.engine.renderer, this.engine.shadowMapSize, focus);
     }
   }
@@ -212,18 +220,31 @@ export class Game {
   }
 
   private readonly tmpFocus = new THREE.Vector3();
+  private readonly tmpDir = new THREE.Vector3();
   private update(dt: number, t: number): void {
     this.input.poll(dt);
     if (this.state === 'menu' || !this.session) {
       this.input.uiNav = true;
       this.menuCine.update(dt);
       this.doors.update(dt, this.engine.camera);
+      this.flashlight.update(dt, false, this.engine.camera.position, this.tmpDir.set(0, 0, -1));
       this.tmpFocus.copy(this.menuCine.focus);
     } else {
       this.session.update(dt);
       this.tmpFocus.copy(this.session.focus);
     }
     this.world.update(dt, t, this.engine.camera, this.tmpFocus);
+    // Volumetric fog: the brightest lights near the camera, at the flat fog's density (a little
+    // thicker in rain), drifting with the wind.
+    const fx = this.engine.post.scene;
+    if (fx.fogOn && this.world.fogLights) {
+      this.world.fogLights.update(dt, this.engine.scene, this.engine.camera.position, fx.lights, 12);
+      fx.fogDensity = this.world.fogDensity * (1 + weather.rain * 0.35);
+      fx.time = t;
+      fx.cover = weatherUniforms.uCover.value;
+      fx.coverRect.copy(weatherUniforms.uCoverRect.value);
+      fx.wind.copy(this.world.atmosphere.wind).multiplyScalar(this.world.atmosphere.windStrength);
+    }
     this.engine.renderer.toneMappingExposure = 1.45 * this.exposure.update(dt, this.engine.camera);
     audio.update(dt, this.engine.camera);
     this.input.endFrame();

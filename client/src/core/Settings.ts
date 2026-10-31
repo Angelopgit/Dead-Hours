@@ -19,7 +19,7 @@ export type Action =
   | 'sprint' | 'crouch' | 'jump' | 'interact' | 'barricade'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2'
   | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
-  | 'talk' | 'radio' | 'chat' | 'gunsmith' | 'grenade' | 'molotov';
+  | 'talk' | 'radio' | 'chat' | 'gunsmith' | 'grenade' | 'molotov' | 'flashlight';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
@@ -28,6 +28,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
   talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat', gunsmith: 'Customize weapon',
   grenade: 'Throw grenade (hold to aim)', molotov: 'Throw Molotov (hold to aim)',
+  flashlight: 'Flashlight',
 };
 
 export interface SettingsData {
@@ -39,6 +40,13 @@ export interface SettingsData {
     antialias: boolean;
     bloom: boolean;
     filmGrain: boolean;
+    /** Screen-space ambient occlusion (contact shadows). */
+    ambientOcclusion: boolean;
+    /** Camera motion blur. */
+    motionBlur: boolean;
+    /** Rain, wet streets and puddles. */
+    rain: boolean;
+    /** Low fog is flat; medium and high add volumetric light shafts. */
     fogQuality: Quality;
     particleQuality: Quality;
     gore: GoreLevel;
@@ -119,6 +127,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   gunsmith: ['KeyH'],
   grenade: ['Digit3'],
   molotov: ['Digit4'],
+  flashlight: ['KeyL'],
 };
 
 export const DEFAULT_SETTINGS: SettingsData = {
@@ -130,6 +139,9 @@ export const DEFAULT_SETTINGS: SettingsData = {
     antialias: true,
     bloom: true,
     filmGrain: true,
+    ambientOcclusion: true,
+    motionBlur: true,
+    rain: true,
     fogQuality: 'high',
     particleQuality: 'high',
     gore: 'full',
@@ -154,19 +166,23 @@ export const DEFAULT_SETTINGS: SettingsData = {
 export const GRAPHICS_PRESETS: Record<GraphicsPreset, Partial<SettingsData['graphics']>> = {
   phone: {
     resolutionScale: 0.7, adaptiveResolution: true, shadows: 'off', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, fogQuality: 'low', particleQuality: 'low', renderDistance: 120, fpsLimit: 30,
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', particleQuality: 'low',
+    renderDistance: 120, fpsLimit: 30,
   },
   low: {
     resolutionScale: 0.8, adaptiveResolution: true, shadows: 'low', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, fogQuality: 'low', particleQuality: 'low', renderDistance: 150, fpsLimit: 0,
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', particleQuality: 'low',
+    renderDistance: 150, fpsLimit: 0,
   },
   medium: {
     resolutionScale: 1, adaptiveResolution: true, shadows: 'medium', textureQuality: 'high', antialias: false,
-    bloom: true, filmGrain: true, fogQuality: 'medium', particleQuality: 'medium', renderDistance: 200, fpsLimit: 0,
+    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: false, rain: true, fogQuality: 'medium', particleQuality: 'medium',
+    renderDistance: 200, fpsLimit: 0,
   },
   high: {
     resolutionScale: 1, adaptiveResolution: true, shadows: 'high', textureQuality: 'high', antialias: true,
-    bloom: true, filmGrain: true, fogQuality: 'high', particleQuality: 'high', renderDistance: 260, fpsLimit: 0,
+    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: true, rain: true, fogQuality: 'high', particleQuality: 'high',
+    renderDistance: 260, fpsLimit: 0,
   },
 };
 

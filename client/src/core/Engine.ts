@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PostFX } from '../rendering/PostFX';
-import { settings, isPhone, type ShadowQuality } from './Settings';
+import { settings, isPhone, type SettingsData, type ShadowQuality } from './Settings';
+import type { SceneFXOptions } from '../rendering/SceneFX';
 
 export type FrameCallback = (dt: number, time: number) => void;
 
@@ -9,6 +10,22 @@ const SHADOW_SIZE: Record<ShadowQuality, number> = { off: 0, low: 1024, medium: 
 const PHONE = isPhone();
 const MAX_PIXEL_RATIO = PHONE ? 1.5 : 2;
 const MIN_DYNAMIC_SCALE = PHONE ? 0.45 : 0.55;
+
+/**
+ * Scene effects per graphics settings. Low fog keeps the flat fog (and the cheap cone meshes under
+ * lamps); medium and high march volumetric light at a third and half resolution.
+ */
+export function sceneFxFor(g: SettingsData['graphics']): SceneFXOptions {
+  const fog = g.fogQuality;
+  return {
+    aoSamples: g.ambientOcclusion ? (fog === 'high' ? 12 : 8) : 0,
+    fogScale: fog === 'high' ? 0.5 : fog === 'medium' ? 0.34 : 0,
+    fogSteps: fog === 'high' ? 24 : 16,
+    fogLights: fog === 'high' ? 12 : 8,
+    blurTaps: g.motionBlur ? 8 : 0,
+    msaa: g.antialias,
+  };
+}
 
 /** Owns the WebGL renderer, the main camera, post-processing and the frame loop. */
 export class Engine {
@@ -45,19 +62,21 @@ export class Engine {
 
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.08, settings.value.graphics.renderDistance + 200);
     this.post = new PostFX(this.renderer, this.scene, this.camera, settings.value.graphics.antialias);
+    this.post.configure(sceneFxFor(settings.value.graphics));
 
     window.addEventListener('resize', this.onResize);
     this.onResize();
-    let prevAA = settings.value.graphics.antialias;
+    let prevFx = JSON.stringify(sceneFxFor(settings.value.graphics));
     this.unsub = settings.subscribe((s) => {
       this.onResize();
       this.post.bloom.enabled = s.graphics.bloom;
       this.post.uniforms.uGrain.value = s.graphics.filmGrain ? 0.045 : 0;
       this.camera.far = s.graphics.renderDistance + 200;
       this.camera.updateProjectionMatrix();
-      if (s.graphics.antialias !== prevAA) {
-        prevAA = s.graphics.antialias;
-        this.post.setMsaa(prevAA);
+      const fx = sceneFxFor(s.graphics);
+      if (JSON.stringify(fx) !== prevFx) {
+        prevFx = JSON.stringify(fx);
+        this.post.configure(fx);
         this.onResize();
       }
       document.documentElement.style.setProperty('--ui-scale', String(s.accessibility.uiScale));
