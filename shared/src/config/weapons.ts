@@ -1,5 +1,5 @@
 export type WeaponSlot = 'primary' | 'secondary' | 'melee';
-export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete';
+export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -32,6 +32,10 @@ export interface WeaponDef {
   perShell?: boolean;
   /** Carry limit for reserve ammunition. */
   maxReserve: number;
+  /** Magazines an ammunition crate hands out (default COMBAT.crateMagsPrimary). */
+  crateMags?: number;
+  /** Only found in supply drops: never on the loadout screen or a weapon table. */
+  exclusive?: boolean;
   /** How the model is held: two-handed long gun, pistol, or blade. */
   hold: 'rifle' | 'pistol' | 'melee';
   /** 0..1 summary bars for the loadout screen. */
@@ -87,10 +91,37 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     mode: 'MELEE', noise: 5, draw: 0.3, penetration: 0, maxReserve: 0, hold: 'melee',
     stats: { damage: 0.6, fireRate: 0.25, handling: 0.7, range: 0.05 },
   },
+  // Supply drop exclusives: rare finds that outclass the loadout guns at a price in handling.
+  lmg: {
+    id: 'lmg', name: 'Light Machine Gun', model: 'M249 SAW', slot: 'primary', exclusive: true,
+    description: 'A 100-round belt of 5.56 mm. Holds a street on its own, slow to reload and to raise.',
+    damage: 31, pellets: 1, fireRate: 800, magazine: 100, startReserve: 200, reloadTime: 5.4,
+    hipSpread: 4.4, aimSpread: 0.95, recoil: 0.6, range: 115, auto: true,
+    mode: 'AUTO', noise: 80, draw: 0.95, penetration: 0, maxReserve: 400, crateMags: 1, hold: 'rifle',
+    stats: { damage: 0.6, fireRate: 0.85, handling: 0.2, range: 0.7 },
+  },
+  battle: {
+    id: 'battle', name: 'Battle Rifle', model: 'SCAR-H', slot: 'primary', exclusive: true,
+    description: 'Full-auto 7.62 mm: drops anything in two or three rounds and punches through.',
+    damage: 50, pellets: 1, fireRate: 600, magazine: 20, startReserve: 100, reloadTime: 2.5,
+    hipSpread: 3.4, aimSpread: 0.45, recoil: 0.85, range: 150, auto: true,
+    mode: 'AUTO', noise: 78, draw: 0.6, penetration: 1, maxReserve: 180, hold: 'rifle',
+    stats: { damage: 0.75, fireRate: 0.65, handling: 0.5, range: 0.85 },
+  },
+  sniper: {
+    id: 'sniper', name: '.50 Cal Sniper', model: 'M107 .50 CAL', slot: 'primary', exclusive: true,
+    description: 'Very rare. One .50 BMG round goes through a line of the dead; a head shot drops a brute.',
+    damage: 270, pellets: 1, fireRate: 55, magazine: 10, startReserve: 30, reloadTime: 3.8,
+    hipSpread: 7.5, aimSpread: 0.05, recoil: 2.2, range: 320, auto: false,
+    mode: 'SEMI', noise: 120, draw: 1.0, penetration: 4, maxReserve: 50, hold: 'rifle',
+    stats: { damage: 1, fireRate: 0.12, handling: 0.15, range: 1 },
+  },
 };
 
 export const PRIMARY_WEAPONS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman'];
 export const SECONDARY_WEAPONS: WeaponId[] = ['pistol'];
+/** Primaries that only come out of supply drops. */
+export const EXCLUSIVE_WEAPONS: WeaponId[] = ['lmg', 'battle', 'sniper'];
 
 /** Hit zones on a zombie and their damage multipliers. */
 export type HitZone = 'head' | 'torso' | 'armL' | 'armR' | 'legL' | 'legR';

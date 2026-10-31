@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { SUPPLY_DROPS, type HeliFlight } from '@dead-hours/shared';
+import { SUPPLY_DROPS, WEAPONS, caseSpot, type HeliFlight, type WeaponId } from '@dead-hours/shared';
 import { createLightConeMaterial } from '../environment/LightCone';
+import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
 
 /** Where the helicopter is along its flight, how it is tilted and how fast it goes. */
 export interface HeliPose {
@@ -333,6 +334,103 @@ class CrateModel {
   }
 }
 
+const cases = new Map<WeaponId, THREE.CanvasTexture>();
+/** Black hard-case lid with the gun's name in yellow, drawn once per gun. */
+function caseTexture(weapon: WeaponId): THREE.CanvasTexture | null {
+  const have = cases.get(weapon);
+  if (have) return have;
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 128;
+  const g = c.getContext('2d');
+  if (!g) return null;
+  g.fillStyle = '#17181a';
+  g.fillRect(0, 0, 512, 128);
+  g.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let i = 0; i < 9; i++) g.fillRect(0, i * 14 + 3, 512, 3);
+  g.fillStyle = '#e6c35a';
+  g.font = 'bold 46px Oswald, Impact, sans-serif';
+  g.textAlign = 'center';
+  g.fillText(WEAPONS[weapon].model, 256, 72);
+  g.fillRect(60, 94, 392, 6);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  cases.set(weapon, t);
+  return t;
+}
+
+/**
+ * The rare part of a drop: a hard rifle case lying open beside the crate, the exclusive gun on
+ * its foam, a yellow band round it that reads at night. The gun goes when someone takes it.
+ */
+class WeaponCase {
+  readonly root = new THREE.Group();
+  private readonly lid = new THREE.Group();
+  private readonly band: THREE.Mesh;
+  private readonly gun: WeaponModel;
+  private readonly materials: THREE.Material[] = [];
+  private readonly geometries: THREE.BufferGeometry[] = [];
+
+  constructor(weapon: WeaponId, flight: HeliFlight) {
+    this.gun = createWeaponModel(weapon);
+    const box = new THREE.Box3().setFromObject(this.gun.root);
+    const len = box.max.z - box.min.z + 0.16;
+    const shell = this.mat(std(0x1b1c1e, 0.55, 0.2));
+    const foam = this.mat(std(0x2a2b2d, 0.95, 0));
+    const metal = this.mat(std(0x77786f, 0.4, 0.7));
+    const top = this.mat(new THREE.MeshStandardMaterial({ color: 0xffffff, map: caseTexture(weapon), roughness: 0.6 }));
+    const add = (g: THREE.BufferGeometry, m: THREE.Material | THREE.Material[], x: number, y: number, z: number, parent: THREE.Object3D = this.root) => {
+      this.geometries.push(g);
+      const mesh = new THREE.Mesh(g, m);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = mesh.receiveShadow = true;
+      parent.add(mesh);
+      return mesh;
+    };
+    // Base along local Z, foam inside, latches on the front edge.
+    add(new THREE.BoxGeometry(0.42, 0.1, len), shell, 0, 0.05, 0);
+    add(new THREE.BoxGeometry(0.38, 0.02, len - 0.04), foam, 0, 0.1, 0);
+    for (const z of [-len * 0.3, len * 0.3]) add(new THREE.BoxGeometry(0.03, 0.04, 0.06), metal, 0.215, 0.07, z);
+    // Lid hinged on the back edge, thrown open; its outside carries the stencil.
+    this.lid.position.set(-0.21, 0.1, 0);
+    this.root.add(this.lid);
+    add(new THREE.BoxGeometry(0.42, 0.06, len), [shell, shell, top, shell, shell, shell], 0.21, 0.03, 0, this.lid);
+    this.lid.rotation.z = 1.95;
+    // A self-lit yellow band round the base, so it can be found in the dark.
+    this.band = add(new THREE.BoxGeometry(0.43, 0.014, len + 0.01), this.mat(new THREE.MeshBasicMaterial({ color: 0xe6c35a })), 0, 0.085, 0);
+    this.band.castShadow = false;
+    // The gun on its side in the foam, centred on the case.
+    const g = this.gun.root;
+    g.rotation.set(0, 0, Math.PI / 2);
+    g.position.set(0.02, 0.15, -(box.min.z + box.max.z) / 2);
+    this.root.add(g);
+    const c = caseSpot(flight);
+    this.root.position.set(c.x, c.y, c.z);
+    this.root.rotation.y = c.yaw;
+  }
+
+  private mat<M extends THREE.Material>(m: M): M {
+    this.materials.push(m);
+    return m;
+  }
+
+  taken(): void {
+    this.gun.root.visible = false;
+  }
+
+  pose(time: number): void {
+    (this.band.material as THREE.MeshBasicMaterial).color.setHex(time % 1.4 < 0.7 ? 0xe6c35a : 0x9c8235);
+  }
+
+  dispose(): void {
+    this.gun.dispose();
+    this.root.removeFromParent();
+    for (const g of this.geometries) g.dispose();
+    for (const m of this.materials) m.dispose();
+  }
+}
+
 // ---------------------------------------------------------------------------- system
 
 interface Drop {
@@ -340,6 +438,9 @@ interface Drop {
   flight: HeliFlight;
   heli: Helicopter | null;
   crate: CrateModel;
+  /** The exclusive weapon's case (rare drops), shown once the crate is down. */
+  weapon: WeaponCase | null;
+  weaponLeft: boolean;
   landed: boolean;
   empty: boolean;
   emptyAt: number;
@@ -386,13 +487,18 @@ export class SupplyDrops {
   }
 
   /** A helicopter took off for a drop. */
-  flight(id: number, f: HeliFlight): void {
+  flight(id: number, f: HeliFlight, weapon: WeaponId | null = null): void {
     if (this.drops.has(id)) return;
     const heli = new Helicopter();
     const crate = new CrateModel();
     this.root.add(heli.root, crate.root);
+    const wcase = weapon ? new WeaponCase(weapon, f) : null;
+    if (wcase) {
+      wcase.root.visible = false;
+      this.root.add(wcase.root);
+    }
     this.drops.set(id, {
-      id, flight: f, heli, crate, landed: false, empty: false, emptyAt: 0, smokeT: 0, hang: new THREE.Vector3(f.over.x, f.ground.y + f.releaseHeight, f.over.z),
+      id, flight: f, heli, crate, weapon: wcase, weaponLeft: !!wcase, landed: false, empty: false, emptyAt: 0, smokeT: 0, hang: new THREE.Vector3(f.over.x, f.ground.y + f.releaseHeight, f.over.z),
       pose: { pos: new THREE.Vector3(), yaw: 0, pitch: 0, roll: 0, speed: 0, hover: 0 },
     });
   }
@@ -404,11 +510,20 @@ export class SupplyDrops {
     d.emptyAt = time;
   }
 
+  /** Someone took the exclusive weapon out of its case. */
+  weaponTaken(id: number): void {
+    const d = this.drops.get(id);
+    if (!d || !d.weapon) return;
+    d.weaponLeft = false;
+    d.weapon.taken();
+  }
+
   gone(id: number): void {
     const d = this.drops.get(id);
     if (!d) return;
     d.heli?.dispose();
     d.crate.dispose();
+    d.weapon?.dispose();
     this.drops.delete(id);
   }
 
@@ -421,7 +536,7 @@ export class SupplyDrops {
   /** The drop worth pointing at on the HUD: the newest one that still has ammunition. */
   marker(): DropMarker | null {
     let best: Drop | null = null;
-    for (const d of this.drops.values()) if (!d.empty && (!best || d.id > best.id)) best = d;
+    for (const d of this.drops.values()) if ((!d.empty || d.weaponLeft) && (!best || d.id > best.id)) best = d;
     if (!best) return null;
     const g = best.flight.ground;
     return { pos: this.tmp.set(g.x, g.y + 0.8, g.z), stage: best.landed ? 'landed' : best.heli && this.timeNow < best.flight.release ? 'inbound' : 'falling' };
@@ -470,6 +585,10 @@ export class SupplyDrops {
         const open = THREE.MathUtils.smoothstep(fall, 0.3, 1.6);
         const collapse = time >= f.land ? Math.min(1, (time - f.land) / 2.6) : 0;
         d.crate.pose(open, collapse, time, d.landed && !d.empty, d.empty ? Math.min(1, (time - d.emptyAt) / 0.5) : 0);
+      }
+      if (d.weapon) {
+        d.weapon.root.visible = time >= f.land;
+        d.weapon.pose(time);
       }
       if (!d.landed && time >= f.land) {
         d.landed = true;

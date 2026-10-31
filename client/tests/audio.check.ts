@@ -76,7 +76,7 @@ for (const id of [...Object.keys(GUN_SOUNDS), 'knife']) {
     if (failures === before) rendered++;
   }
 }
-if (rendered === kinds.length * 6) ok(`${rendered} handling sounds, every kind for every gun (and an unknown id)`);
+if (rendered === kinds.length * (Object.keys(GUN_SOUNDS).length + 1)) ok(`${rendered} handling sounds, every kind for every gun (and an unknown id)`);
 
 console.log('Echo');
 const spaces: [string, Channels, number][] = [['street', streetIR(SR, 7), 2.6]];

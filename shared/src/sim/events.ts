@@ -50,8 +50,8 @@ export type SimEvent =
    * `over` (outlasted at `at`).
    */
   | { type: 'horde'; wave: number; stage: 'warning' | 'surge' | 'over'; at: number }
-  | { type: 'heli'; drop: number; flight: HeliFlight }
-  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'gone'; pos: Vec3 }
+  | { type: 'heli'; drop: number; flight: HeliFlight; weapon?: WeaponId }
+  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'weaponTaken' | 'gone'; pos: Vec3 }
   /** An arm came off: `pos` is the cut, `dir` the way the blow was going. */
   | { type: 'limbSevered'; zombie: number; limb: number; arm: ArmZone; cut: LimbCut; pos: Vec3; dir: Vec3; by: string; melee: boolean; killed: boolean }
   | { type: 'limbGrabbed'; player: string; limb: number }

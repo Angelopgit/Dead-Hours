@@ -4,7 +4,7 @@ import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type W
 import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
 import { HORDES, SPAWNING, type ZombieKind } from '../config/zombies';
-import { SUPPLY_DROPS } from '../config/drops';
+import { SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
@@ -89,7 +89,7 @@ export interface Noise {
   source: string | null;
 }
 
-export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply';
+export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive';
 
 export interface Interactable {
   id: number;
@@ -100,6 +100,8 @@ export interface Interactable {
   range: number;
   /** Supply crates: how many times each survivor has taken from it. */
   takenBy?: Map<string, number>;
+  /** Weapon cases from a supply drop: the exclusive gun inside. */
+  weapon?: WeaponId;
 }
 
 /** One helicopter supply drop, from the flight in to the crate being emptied or taken away. */
@@ -110,6 +112,9 @@ export interface SupplyDrop {
   /** Interactable index once landed, else -1. */
   interactable: number;
   body: RAPIER.RigidBody | null;
+  /** Exclusive weapon in a case beside the crate (rare), and that case's interactable (-1 until landed). */
+  weapon: WeaponId | null;
+  caseItem: number;
 }
 
 /**
@@ -564,7 +569,8 @@ export class Simulation {
     if (it.kind === 'ammo') {
       if (it.supply <= 0) return false;
       const a = p.arsenal;
-      const got = a.addReserve('primary', WEAPONS[a.primary.id].magazine * COMBAT.crateMagsPrimary)
+      const pd = WEAPONS[a.primary.id];
+      const got = a.addReserve('primary', pd.magazine * (pd.crateMags ?? COMBAT.crateMagsPrimary))
         + a.addReserve('secondary', WEAPONS[a.secondary.id].magazine * COMBAT.crateMagsSecondary);
       if (got <= 0) {
         this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
@@ -595,6 +601,24 @@ export class Simulation {
       this.emit({ type: 'pickup', player: id, item: 'supply', amount: got, source: it.id });
       const drop = this.drops.find((d) => d.interactable === it.id);
       if (drop && it.supply <= 0) this.emit({ type: 'supplyDrop', drop: drop.id, stage: 'empty', pos: { ...drop.flight.ground } });
+      return true;
+    }
+    if (it.kind === 'exclusive') {
+      if (it.supply <= 0 || !it.weapon || p.arsenal.action === 'melee') return false;
+      if (p.arsenal.primary.id === it.weapon) {
+        this.emit({ type: 'notice', player: id, text: 'YOU ALREADY CARRY ONE' });
+        return false;
+      }
+      it.supply = 0;
+      this.dropLimb(p, false);
+      // Comes loaded with its own ammunition; whatever primary they had stays behind.
+      p.arsenal.replacePrimary(it.weapon, true);
+      p.stats.suppliesCollected++;
+      this.emit({ type: 'pickup', player: id, item: 'weapon', amount: 1, source: it.id, weapon: it.weapon });
+      if (p.arsenal.active === 'primary') this.emit({ type: 'draw', player: id, slot: 'primary', weapon: it.weapon });
+      const drop = this.drops.find((d) => d.caseItem === it.id);
+      if (drop) this.emit({ type: 'supplyDrop', drop: drop.id, stage: 'weaponTaken', pos: { ...it.pos } });
+      this.emit({ type: 'notice', player: null, text: `${p.name.toUpperCase()} TOOK THE ${WEAPONS[it.weapon].model}` });
       return true;
     }
     if (it.kind === 'medical') {
@@ -1115,9 +1139,11 @@ export class Simulation {
       const flight = this.planFlight();
       if (flight) {
         const id = this.drops.length;
-        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null });
-        this.emit({ type: 'heli', drop: id, flight });
-        this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: 'Universal ammo · refills every weapon' });
+        const weapon = this.rollExclusive();
+        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null, weapon, caseItem: -1 });
+        this.emit({ type: 'heli', drop: id, flight, ...(weapon ? { weapon } : {}) });
+        if (weapon) this.emit({ type: 'notice', player: null, text: 'RARE SUPPLY DROP INBOUND', sub: `Universal ammo · ${WEAPONS[weapon].model} aboard` });
+        else this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: 'Universal ammo · refills every weapon' });
         const [lo, hi] = D.interval;
         this.nextDropAt = this.phaseTime + lo + this.rand() * (hi - lo);
       } else {
@@ -1146,12 +1172,32 @@ export class Simulation {
         const w = this.physics.world;
         d.body = w.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(g.x, g.y + 0.36, g.z));
         w.createCollider(RAPIER.ColliderDesc.cuboid(0.55, 0.36, 0.38).setCollisionGroups(groups(GROUP.dynamic, 0xffff)), d.body);
+        if (d.weapon) {
+          const c = caseSpot(f);
+          d.caseItem = this.interactables.length;
+          this.interactables.push({ id: d.caseItem, kind: 'exclusive', pos: { x: c.x, y: c.y + 0.2, z: c.z }, supply: 1, range: 1.9, weapon: d.weapon });
+        }
         this.noise(g, D.landNoise, null);
         this.emit({ type: 'supplyDrop', drop: d.id, stage: 'landed', pos: { ...g } });
       } else if (d.stage === 'landed' && this.time - f.land > D.lifetime) {
         this.removeDrop(d);
       }
     }
+  }
+
+  /** Whether this drop carries an exclusive weapon, and which: none before five minutes survived. */
+  private rollExclusive(): WeaponId | null {
+    const D = SUPPLY_DROPS;
+    if (this.forceExclusive) {
+      const w = this.forceExclusive;
+      this.forceExclusive = null;
+      return w;
+    }
+    if (this.phaseTime < D.exclusiveAfter || this.rand() >= D.exclusiveChance) return null;
+    const total = D.exclusiveWeights.reduce((s, [, k]) => s + k, 0);
+    let x = this.rand() * total;
+    for (const [w, k] of D.exclusiveWeights) if ((x -= k) < 0) return w;
+    return D.exclusiveWeights[D.exclusiveWeights.length - 1][0];
   }
 
   private lastDt(): number {
@@ -1162,6 +1208,7 @@ export class Simulation {
     if (d.stage === 'gone') return;
     d.stage = 'gone';
     if (d.interactable >= 0) this.interactables[d.interactable].supply = 0;
+    if (d.caseItem >= 0) this.interactables[d.caseItem].supply = 0;
     if (d.body) this.physics.world.removeRigidBody(d.body);
     d.body = null;
     this.emit({ type: 'supplyDrop', drop: d.id, stage: 'gone', pos: { ...d.flight.ground } });
@@ -1221,8 +1268,12 @@ export class Simulation {
     return null;
   }
 
-  /** Starts a supply drop now (debugging and tests). */
-  callSupplyDrop(): SupplyDrop | null {
+  /** The next drop carries this weapon whatever the roll (debugging and tests). */
+  forceExclusive: WeaponId | null = null;
+
+  /** Starts a supply drop now (debugging and tests); `weapon` puts an exclusive in it. */
+  callSupplyDrop(weapon?: WeaponId): SupplyDrop | null {
+    if (weapon && WEAPONS[weapon]?.exclusive) this.forceExclusive = weapon;
     if (this.phase !== 'survival') return null;
     this.nextDropAt = this.phaseTime;
     this.runDrops();

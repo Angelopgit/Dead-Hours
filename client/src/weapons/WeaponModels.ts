@@ -47,6 +47,9 @@ const SIGHT_DEFS: Partial<Record<WeaponId, { eye: V3; fov: number; optic: Optic 
   shotgun: { eye: [0, 0.088, -0.26], fov: 50, optic: 'iron' },
   marksman: { eye: [0, 0.135, -0.15], fov: 14, optic: 'scope' },
   pistol: { eye: [0, 0.0885, -0.45], fov: 50, optic: 'iron' },
+  lmg: { eye: [0, 0.125, -0.2], fov: 48, optic: 'iron' },
+  battle: { eye: [0, 0.14, -0.17], fov: 42, optic: 'dot' },
+  sniper: { eye: [0, 0.16, -0.22], fov: 7, optic: 'scope' },
 };
 
 /** Sights of a weapon (null for blades), without building its model. */
@@ -125,6 +128,10 @@ const STEEL = 0x141516;
 const WOOD = 0x5a3b24;
 const TAN = 0x6b5f48;
 const COYOTE = 0x8b7556;
+/** Flat dark earth (SCAR). */
+const FDE = 0x8f7a5a;
+const OLIVE = 0x3b4231;
+const BRASS = 0xb8913a;
 
 interface Spec {
   body: Builder;
@@ -235,6 +242,118 @@ function mk14(): Spec {
   };
 }
 
+function m249(): Spec {
+  const b = new Builder()
+    // Receiver with the feed tray cover on top, handguard and a long barrel under a carry handle.
+    .box(0.07, 0.085, 0.36, DARK, 0, 0.045, 0.06)
+    .box(0.072, 0.024, 0.2, BLACK, 0, 0.1, 0.03)
+    .box(0.074, 0.006, 0.04, STEEL, 0, 0.113, 0.11)
+    .box(0.076, 0.06, 0.2, BLACK, 0, 0.03, 0.34)
+    .tube(0.014, 0.44, 0.8, STEEL, 0, 0.05)
+    .tube(0.019, 0.8, 0.86, STEEL, 0, 0.05, 6)
+    .tube(0.009, 0.44, 0.68, STEEL, 0, 0.018)
+    .box(0.012, 0.04, 0.012, BLACK, -0.05, 0.08, 0.46)
+    .box(0.012, 0.04, 0.012, BLACK, -0.05, 0.08, 0.58)
+    .box(0.018, 0.014, 0.15, BLACK, -0.05, 0.105, 0.52)
+    // Folded bipod under the barrel.
+    .box(0.01, 0.01, 0.28, STEEL, 0.012, 0.0, 0.62)
+    .box(0.01, 0.01, 0.28, STEEL, -0.012, 0.0, 0.62)
+    .box(0.03, 0.016, 0.03, BLACK, 0, 0.012, 0.76)
+    // Hooded front post on the barrel, rear aperture on the cover.
+    .box(0.022, 0.035, 0.02, BLACK, 0, 0.073, 0.76)
+    .box(0.004, 0.035, 0.005, BLACK, 0, 0.1075, 0.76)
+    .box(0.004, 0.03, 0.016, BLACK, 0.012, 0.11, 0.76)
+    .box(0.004, 0.03, 0.016, BLACK, -0.012, 0.11, 0.76)
+    .box(0.03, 0.006, 0.03, BLACK, 0, 0.115, -0.06)
+    .ring(0.006, 0.004, -0.066, -0.054, BLACK, 0, 0.125, 10)
+    // Grip, trigger guard, skeleton stock and butt.
+    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3)
+    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08)
+    .box(0.03, 0.025, 0.2, BLACK, 0, 0.065, -0.22)
+    .box(0.03, 0.02, 0.2, BLACK, 0, 0.0, -0.22, 0.12)
+    .box(0.05, 0.12, 0.022, 0x121212, 0, 0.025, -0.33);
+  // The belt box hangs under the left of the receiver, a strip of rounds running up into the feed.
+  const mag = new Builder()
+    .box(0.075, 0.12, 0.11, OLIVE, -0.005, -0.06, 0)
+    .box(0.077, 0.01, 0.112, 0x2c3125, -0.005, -0.004, 0)
+    .box(0.028, 0.016, 0.05, BRASS, 0.02, 0.006, 0);
+  return {
+    body: b, mag: { b: mag, at: [-0.012, 0.0, 0.14] },
+    muzzle: [0, 0.05, 0.87], fore: [0.04, -0.005, 0.34], eject: [-0.035, 0.01, 0.1], stock: [0, 0.03, -0.34], bolt: [0.04, 0.05, 0.12],
+  };
+}
+
+function scarH(): Spec {
+  const b = new Builder()
+    // Angular FDE upper with a full-length rail, black lower.
+    .box(0.058, 0.065, 0.42, FDE, 0, 0.06, 0.13)
+    .box(0.026, 0.012, 0.42, BLACK, 0, 0.098, 0.13)
+    .box(0.062, 0.03, 0.16, FDE, 0, 0.04, 0.27)
+    .box(0.05, 0.05, 0.2, BLACK, 0, 0.005, 0.05)
+    .tube(0.013, 0.34, 0.56, STEEL, 0, 0.055)
+    .tube(0.019, 0.56, 0.62, STEEL, 0, 0.055, 6)
+    // Holographic sight: a rectangular window on the rail, the reticle at its front pane.
+    .box(0.036, 0.02, 0.07, BLACK, 0, 0.114, 0.08)
+    .box(0.046, 0.006, 0.04, BLACK, 0, 0.158, 0.09)
+    .box(0.006, 0.036, 0.04, BLACK, 0.02, 0.14, 0.09)
+    .box(0.006, 0.036, 0.04, BLACK, -0.02, 0.14, 0.09)
+    .box(0.046, 0.004, 0.04, BLACK, 0, 0.124, 0.09)
+    .glow(0.0024, 0.0024, 0.0008, 0xff2414, 0, 0.14, 0.108)
+    .glow(0.012, 0.0008, 0.0008, 0xff2414, 0, 0.1465, 0.108)
+    .glow(0.012, 0.0008, 0.0008, 0xff2414, 0, 0.1335, 0.108)
+    .glow(0.0008, 0.012, 0.0008, 0xff2414, 0.0065, 0.14, 0.108)
+    .glow(0.0008, 0.012, 0.0008, 0xff2414, -0.0065, 0.14, 0.108)
+    // Charging handle on the left, grip, folding stock with a cheek riser.
+    .box(0.03, 0.012, 0.02, BLACK, -0.04, 0.07, 0.2)
+    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3)
+    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08)
+    .box(0.04, 0.06, 0.24, BLACK, 0, 0.045, -0.185)
+    .box(0.034, 0.022, 0.12, FDE, 0, 0.085, -0.2)
+    .box(0.05, 0.12, 0.025, 0x121212, 0, 0.03, -0.3);
+  const mag = new Builder().box(0.03, 0.14, 0.072, 0x1c1c1c, 0, -0.07, 0, 0.1);
+  return {
+    body: b, mag: { b: mag, at: [0, -0.01, 0.12] },
+    muzzle: [0, 0.055, 0.63], fore: [0.035, -0.005, 0.27], eject: [-0.03, 0.06, 0.1], stock: [0, 0.03, -0.31], bolt: [-0.04, 0.07, 0.2],
+  };
+}
+
+function m107(): Spec {
+  const b = new Builder()
+    // Long boxy receiver and rail, a heavy barrel ending in a two-port brake.
+    .box(0.075, 0.09, 0.55, DARK, 0, 0.05, 0.1)
+    .box(0.03, 0.014, 0.5, BLACK, 0, 0.102, 0.1)
+    .box(0.08, 0.06, 0.12, BLACK, 0, 0.04, 0.42)
+    .tube(0.019, 0.48, 0.98, STEEL, 0, 0.06, 10)
+    .box(0.07, 0.05, 0.09, STEEL, 0, 0.06, 1.02)
+    .box(0.076, 0.014, 0.014, BLACK, 0, 0.06, 1.0)
+    .box(0.076, 0.014, 0.014, BLACK, 0, 0.06, 1.035)
+    // A big scope on two rings.
+    .tube(0.021, -0.05, 0.2, 0x111214, 0, 0.16, 10)
+    .tube(0.031, -0.13, -0.05, 0x111214, 0, 0.16, 10, 0.023)
+    .tube(0.023, 0.2, 0.31, 0x111214, 0, 0.16, 10, 0.038)
+    .tube(0.026, 0.06, 0.09, 0x111214, 0, 0.16, 8)
+    .box(0.03, 0.045, 0.025, BLACK, 0, 0.13, 0.0)
+    .box(0.03, 0.045, 0.025, BLACK, 0, 0.13, 0.16)
+    // Bipod folded along the barrel.
+    .box(0.012, 0.012, 0.34, STEEL, 0.02, 0.02, 0.68)
+    .box(0.012, 0.012, 0.34, STEEL, -0.02, 0.02, 0.68)
+    .box(0.05, 0.025, 0.04, BLACK, 0, 0.03, 0.5)
+    // Grip, trigger guard, stock with butt pad and monopod.
+    .box(0.035, 0.1, 0.04, BLACK, 0, -0.05, 0.035, -0.3)
+    .box(0.01, 0.012, 0.07, BLACK, 0, -0.02, 0.08)
+    .box(0.05, 0.1, 0.24, DARK, 0, 0.03, -0.29)
+    .box(0.04, 0.03, 0.14, BLACK, 0, 0.09, -0.3)
+    .box(0.056, 0.15, 0.03, 0x101010, 0, 0.02, -0.42)
+    .box(0.015, 0.08, 0.015, STEEL, 0, -0.04, -0.36);
+  const mag = new Builder()
+    .box(0.05, 0.1, 0.12, 0x1a1a1a, 0, -0.05, 0)
+    .box(0.03, 0.012, 0.09, BRASS, 0, 0.004, 0);
+  return {
+    body: b, mag: { b: mag, at: [0, 0.0, 0.16] },
+    muzzle: [0, 0.06, 1.07], fore: [0.04, 0.0, 0.32], eject: [-0.04, 0.07, 0.12], stock: [0, 0.03, -0.43], bolt: [0.045, 0.07, 0.15],
+  };
+}
+
 function m17(): Spec {
   const b = new Builder()
     .box(0.028, 0.025, 0.16, COYOTE, 0, 0.035, 0.1)
@@ -269,7 +388,7 @@ function machete(): Spec {
   };
 }
 
-const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete };
+const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107 };
 
 const v = (a: V3) => new THREE.Vector3(...a);
 

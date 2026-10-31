@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -594,6 +594,91 @@ section('Helicopter supply drops');
   }
   for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
   cleanup(sim, body);
+}
+
+section('Exclusive supply drop weapons');
+{
+  check(EXCLUSIVE_WEAPONS.every((w) => WEAPONS[w].exclusive && WEAPONS[w].slot === 'primary' && !PRIMARY_WEAPONS.includes(w)), 'M249, SCAR-H and M107 are primaries kept off the loadout and weapon tables');
+  const at = { x: 0, y: 0.15, z: 6 };
+  const { sim, sp, body } = makeSim(at, 0.5);
+  run(sim, 1);
+  const roll = () => (sim as unknown as { rollExclusive(): string | null }).rollExclusive();
+  sim.phaseTime = SUPPLY_DROPS.exclusiveAfter - 1;
+  let early = 0;
+  for (let i = 0; i < 2000; i++) if (roll()) early++;
+  check(early === 0, 'no exclusive weapon in any drop before five minutes survived');
+  sim.phaseTime = SUPPLY_DROPS.exclusiveAfter + 1;
+  const got: Record<string, number> = {};
+  let rolled = 0;
+  const N = 20000;
+  for (let i = 0; i < N; i++) {
+    const w = roll();
+    if (w) {
+      rolled++;
+      got[w] = (got[w] ?? 0) + 1;
+    }
+  }
+  check(Math.abs(rolled / N - SUPPLY_DROPS.exclusiveChance) < 0.015, `after five minutes ${(100 * rolled / N).toFixed(1)}% of drops carry one`);
+  check((got.sniper ?? 0) < (got.lmg ?? 0) * 0.65 && (got.sniper ?? 0) < (got.battle ?? 0) * 0.65 && (got.sniper ?? 0) > 0,
+    `the .50 cal is the rare one (${JSON.stringify(got)})`);
+
+  // A drop forced to carry the .50 cal, flown all the way down.
+  const clear = () => {
+    for (const z of [...sim.zombies]) z.removeBody();
+    sim.zombies.splice(0, sim.zombies.length);
+    sp.health = PLAYER.maxHealth;
+    return false;
+  };
+  clear();
+  const drop = sim.callSupplyDrop('sniper');
+  let res = run(sim, 0.1, clear);
+  check(!!drop && drop.weapon === 'sniper', 'debug drop carries the requested weapon');
+  check(res.events.some((e) => e.type === 'notice' && e.text === 'RARE SUPPLY DROP INBOUND'), 'a rare drop is announced as such');
+  if (drop) {
+    const f = drop.flight;
+    res = run(sim, f.land - sim.time + 0.2, clear);
+    const wcase = sim.interactables.find((it) => it.kind === 'exclusive');
+    check(!!wcase && wcase.weapon === 'sniper' && wcase.supply === 1, 'a weapon case lands with the crate, one gun inside');
+    const c = caseSpot(f);
+    const off = Math.hypot(c.x - f.ground.x, c.z - f.ground.z);
+    check(Math.abs(off - SUPPLY_DROPS.caseOffset) < 1e-6 && off < SUPPLY_DROPS.clearRadius, 'the case lies on the cleared ground beside the crate');
+    const snap = captureSnapshot(sim, new Map());
+    const row = snap.i.find((r) => r[0] === wcase?.id);
+    check(!!row && row[7] >= 0, 'snapshots carry the weapon in the case to online players');
+    sim.setMotion('p1', { pos: { x: c.x + 0.5, y: f.ground.y, z: c.z } });
+    check(sim.reachable('p1').some((it) => it.kind === 'exclusive'), 'case in reach beside it');
+    const prev = sp.arsenal.primary.id;
+    const took = sim.use('p1', wcase!.id);
+    res = run(sim, 0.05, clear);
+    check(res.events.some((e) => e.type === 'supplyDrop' && e.stage === 'weaponTaken'), 'everyone is told the case is empty');
+    check(took && sp.arsenal.primary.id === 'sniper' && sp.arsenal.primary.mag === WEAPONS.sniper.magazine && sp.arsenal.primary.reserve === WEAPONS.sniper.startReserve,
+      `taking it swaps out the ${prev} for a loaded M107`);
+    check(wcase!.supply === 0 && !sim.use('p1', wcase!.id), 'there is only one');
+    const crate = sim.interactables.find((it) => it.kind === 'supply')!;
+    sp.arsenal.primary.reserve = 0;
+    check(sim.use('p1', crate.id) && sp.arsenal.primary.reserve === WEAPONS.sniper.maxReserve, 'universal ammo fills the .50 cal too');
+    sim.setMotion('p1', { pos: { x: c.x + 0.5, y: f.ground.y, z: c.z } });
+    check(!sim.selectPrimary('p1', 'lmg'), 'exclusives cannot be picked at a weapon table');
+  }
+  for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
+  cleanup(sim, body);
+}
+{
+  // Each exclusive fires, reloads and draws through the shared arsenal like any other gun.
+  for (const w of EXCLUSIVE_WEAPONS) {
+    const a = new Arsenal('ar', 'pistol');
+    a.replacePrimary(w, true);
+    a.step(WEAPONS[w].draw + 0.05, false, []);
+    let shots = 0;
+    for (let t = 0; t < 2; t += 1 / 60) {
+      if (a.fireState() === 'ok') { a.consume(); shots++; }
+      a.step(1 / 60, false, []);
+    }
+    const want = Math.min(WEAPONS[w].magazine, WEAPONS[w].fireRate / 30);
+    check(Math.abs(shots - want) <= 1.5, `${WEAPONS[w].model} cycles at its fire rate (${shots} rounds in 2 s)`);
+    a.weapon.mag = 0;
+    check(a.startReload(), `${WEAPONS[w].model} reloads`);
+  }
 }
 
 section('Interactables and death');

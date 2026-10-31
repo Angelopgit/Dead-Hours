@@ -255,9 +255,10 @@ export class HUD {
   }
 
   /** Top-center contextual message, e.g. location titles or SUPPLY HELICOPTER INBOUND. */
-  notify(title: string, sub = '', hold = 2.6, tone: '' | 'danger' = ''): void {
+  notify(title: string, sub = '', hold = 2.6, tone: '' | 'danger' | 'rare' = ''): void {
     this.notice.replaceChildren(title, sub ? h('small', {}, sub) : '');
     this.notice.classList.toggle('danger', tone === 'danger');
+    this.notice.classList.toggle('rare', tone === 'rare');
     gsap.killTweensOf(this.notice);
     gsap.timeline()
       .fromTo(this.notice, { opacity: 0, letterSpacing: '0.6em' }, { opacity: 1, letterSpacing: '0.4em', duration: 0.9, ease: 'power2.out' })

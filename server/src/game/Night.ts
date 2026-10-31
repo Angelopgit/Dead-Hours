@@ -225,7 +225,7 @@ export class Night {
     const p = this.sim.players.get(id);
     if (!m || !p) return;
     if (m.cmd === 'skipPreparation') this.sim.skipPreparation();
-    else if (m.cmd === 'supplyDrop') this.sim.callSupplyDrop();
+    else if (m.cmd === 'supplyDrop') this.sim.callSupplyDrop(typeof m.weapon === 'string' ? m.weapon : undefined);
     else if (m.cmd === 'hurt' && Number.isFinite(m.amount)) this.sim.damagePlayer(p, Math.max(0, m.amount), p.motion.pos);
     else if (m.cmd === 'god') {
       if (m.on) this.gods.add(id);

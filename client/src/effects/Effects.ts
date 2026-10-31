@@ -38,6 +38,7 @@ const BLOOD_DECAL: [number, number, number] = [0.34, 0.03, 0.025];
 const FLASH: Record<WeaponId, { size: number; light: number }> = {
   ar: { size: 0.42, light: 1 }, smg: { size: 0.32, light: 0.8 }, shotgun: { size: 0.65, light: 1.4 },
   marksman: { size: 0.55, light: 1.2 }, pistol: { size: 0.3, light: 0.7 }, machete: { size: 0, light: 0 },
+  lmg: { size: 0.45, light: 1.0 }, battle: { size: 0.5, light: 1.1 }, sniper: { size: 0.85, light: 1.7 },
 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -389,7 +390,7 @@ export class Effects {
       vx: dir.x * 9, vy: dir.y * 9, vz: dir.z * 9,
       life: 0.04, size: f.size * 0.35, r: 4 * dim, g: 2.4 * dim, b: 1 * dim, alpha: 0.9, stretch: 0.03, shape: SHAPE.spark,
     });
-    for (let i = 0; i < (weapon === 'shotgun' || weapon === 'marksman' ? 3 : 1); i++) {
+    for (let i = 0; i < (weapon === 'shotgun' || weapon === 'marksman' || weapon === 'sniper' ? 3 : 1); i++) {
       this.emitSoft({
         x: pos.x, y: pos.y, z: pos.z,
         vx: dir.x * rand(0.6, 1.6), vy: dir.y * rand(0.6, 1.6) + 0.15, vz: dir.z * rand(0.6, 1.6),

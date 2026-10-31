@@ -13,8 +13,8 @@ const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler'];
 const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead'];
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
 const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage'];
-const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete'];
-const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply'];
+const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper'];
+const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive'];
 const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
 const ARMS: ArmZone[] = ['armL', 'armR'];
 const CUTS: LimbCut[] = ['shoulder', 'elbow'];
@@ -115,7 +115,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   const items: number[][] = [];
   for (const it of sim.interactables) {
     if (!it) continue;
-    items.push([it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range)]);
+    items.push([it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range), it.weapon ? idx(WEAPON_IDS, it.weapon) : -1]);
   }
   return { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items };
 }
@@ -452,7 +452,11 @@ export class Mirror {
       const supply = r[5] < 0 ? Infinity : r[5];
       const it = sim.interactables[id];
       if (it) it.supply = supply;
-      else sim.interactables[id] = { id, kind: ITEM_KINDS[r[1]] ?? 'ammo', pos: { x: r[2] / 100, y: r[3] / 100, z: r[4] / 100 }, supply, range: r[6] / 100 };
+      else {
+        sim.interactables[id] = { id, kind: ITEM_KINDS[r[1]] ?? 'ammo', pos: { x: r[2] / 100, y: r[3] / 100, z: r[4] / 100 }, supply, range: r[6] / 100 };
+        const weapon = r[7] !== undefined && r[7] >= 0 ? WEAPON_IDS[r[7]] : undefined;
+        if (weapon) sim.interactables[id].weapon = weapon;
+      }
     }
   }
 
@@ -509,7 +513,7 @@ export class Mirror {
       const i = sim.limbs.findIndex((l) => l.id === e.limb);
       if (i >= 0) sim.limbs.splice(i, 1);
     } else if (e.type === 'heli') {
-      if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null });
+      if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null, weapon: e.weapon ?? null, caseItem: -1 });
     } else if (e.type === 'supplyDrop') {
       const d = sim.drops.find((x) => x.id === e.drop);
       if (!d) return;

@@ -78,7 +78,7 @@ export type ActMsg =
 export type DebugMsg =
   | { cmd: 'skipPreparation' }
   | { cmd: 'spawn'; dist: number; angle: number; kind?: string }
-  | { cmd: 'supplyDrop' }
+  | { cmd: 'supplyDrop'; weapon?: WeaponId }
   | { cmd: 'hurt'; amount: number }
   /** Health stays full (for slow test clients); 'hurt' still kills. */
   | { cmd: 'god'; on: boolean };

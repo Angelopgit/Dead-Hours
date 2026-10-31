@@ -919,6 +919,7 @@ export class GameSession {
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
     else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
+    else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'limb') {
       const l = best.limb!;
       const what = l.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM';
@@ -1174,11 +1175,13 @@ export class GameSession {
           this.hud.notify('ALL WEAPONS RESUPPLIED', 'Every gun you carry is full', 2.2);
         }
         else if (e.item === 'bandage') this.hud.feedLine(`BANDAGE +${e.amount}`);
+        else if (e.weapon && WEAPONS[e.weapon].exclusive) this.hud.notify(`${WEAPONS[e.weapon].model} EQUIPPED`, WEAPONS[e.weapon].description, 3, 'rare');
         else if (e.weapon) this.hud.feedLine(`${WEAPONS[e.weapon].model} EQUIPPED`);
         break;
       case 'notice':
         if (e.player === this.myId || e.player === null) {
           if (e.text === 'SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 3.2);
+          else if (e.text === 'RARE SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 4.2, 'rare');
           else this.hud.feedLine(e.text);
         }
         break;
@@ -1186,10 +1189,11 @@ export class GameSession {
         this.onHorde(e.wave, e.stage, e.at);
         break;
       case 'heli':
-        this.drops.flight(e.drop, e.flight);
+        this.drops.flight(e.drop, e.flight, e.weapon ?? null);
         break;
       case 'supplyDrop':
         if (e.stage === 'empty') this.drops.emptied(e.drop, this.sim.time);
+        else if (e.stage === 'weaponTaken') this.drops.weaponTaken(e.drop);
         else if (e.stage === 'gone') this.drops.gone(e.drop);
         break;
       case 'phase':
@@ -1570,7 +1574,7 @@ export class GameSession {
     },
     phase: () => this.phase,
     /** Calls a supply helicopter now (during the outbreak). */
-    supplyDrop: () => (this.link ? (this.link.debug({ cmd: 'supplyDrop' }), null) : this.sim.callSupplyDrop()?.flight ?? null),
+    supplyDrop: (weapon?: WeaponId) => (this.link ? (this.link.debug({ cmd: 'supplyDrop', weapon }), null) : this.sim.callSupplyDrop(weapon)?.flight ?? null),
     hurt: (amount: number) => this.link?.debug({ cmd: 'hurt', amount }),
     /** Online: health stays full (the server's test mode only). */
     god: (on = true) => this.link?.debug({ cmd: 'god', on }),

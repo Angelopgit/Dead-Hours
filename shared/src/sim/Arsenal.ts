@@ -220,10 +220,10 @@ export class Arsenal {
   }
 
   /** Replaces the primary (weapon table). Keeps the same share of ammunition. */
-  replacePrimary(id: WeaponId): void {
+  replacePrimary(id: WeaponId, full = false): void {
     const old = this.primary;
     const od = WEAPONS[old.id];
-    const share = clamp((old.mag + old.reserve) / (od.magazine + od.startReserve), 0, 1);
+    const share = full ? 1 : clamp((old.mag + old.reserve) / (od.magazine + od.startReserve), 0, 1);
     const nd = WEAPONS[id];
     const total = Math.round(share * (nd.magazine + nd.startReserve));
     const mag = Math.min(nd.magazine, total);

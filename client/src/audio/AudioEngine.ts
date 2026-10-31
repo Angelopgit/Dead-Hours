@@ -32,6 +32,9 @@ const FOLEY_SET: Record<string, FoleyKind[]> = {
   marksman: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
   pistol: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'slide'],
   shotgun: ['draw', 'holster', 'dryFire', 'pump', 'shellIn', 'shellGrab'],
+  lmg: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
+  battle: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
+  sniper: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
 };
 
 function seedOf(key: string): number {

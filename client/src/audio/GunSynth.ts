@@ -404,6 +404,54 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
     },
     level: 0.75, echo: 0.8, mechLevel: 0.12, velocity: 365,
   },
+  // M249, 5.56 mm from a 16" barrel, firing from an open bolt: the AR's crack with a heavier
+  // receiver clunk under every round.
+  lmg: {
+    shot: {
+      blast: 0.00065, gasTau: 0.013, gasLo: 2000, gas: 0.82, snapTau: 0.004, snap: 0.6,
+      crack: 0.0003, crackGain: 0.82, boomHi: 155, boomLo: 58, boomTau: 0.032, boom: 0.22,
+      rumbleTau: 0.05, rumble: 0.13, ring: [[1600, 0.014, 0.05], [2800, 0.01, 0.04], [4900, 0.006, 0.03]], drive: 1.9,
+    },
+    mech: {
+      hits: [
+        [0.02, [[320, 0.022, 0.6], [880, 0.014, 0.5], [1900, 0.008, 0.3]], 0.85, 0.4],
+        [0.05, [[1500, 0.01, 0.5], [2700, 0.007, 0.4], [4200, 0.004, 0.25]], 0.6, 0.4],
+      ],
+    },
+    level: 0.9, echo: 1.1, mechLevel: 0.13, velocity: 915,
+  },
+  // SCAR-H, 7.62 mm NATO from a 16" barrel: shorter than the MK14 so a touch more blast and
+  // less length, the same hard crack.
+  battle: {
+    shot: {
+      blast: 0.00095, gasTau: 0.015, gasLo: 1800, gas: 0.87, snapTau: 0.0045, snap: 0.7,
+      crack: 0.0004, crackGain: 0.95, boomHi: 150, boomLo: 52, boomTau: 0.04, boom: 0.25,
+      rumbleTau: 0.055, rumble: 0.16, ring: [[1500, 0.014, 0.05], [2700, 0.01, 0.04], [4600, 0.006, 0.03]], drive: 2.1,
+    },
+    mech: {
+      hits: [
+        [0.026, [[400, 0.022, 0.6], [1000, 0.014, 0.5], [1900, 0.009, 0.3]], 0.8, 0.3],
+        [0.058, [[1600, 0.011, 0.5], [2800, 0.008, 0.4], [4100, 0.005, 0.25]], 0.8, 0.5],
+      ],
+    },
+    level: 0.97, echo: 1.25, mechLevel: 0.1, velocity: 790,
+  },
+  // M107, .50 BMG: a huge slow blast thrown sideways by the brake, the deepest thump, and the
+  // recoiling barrel slamming back into battery.
+  sniper: {
+    shot: {
+      blast: 0.002, gasTau: 0.026, gasLo: 1000, gas: 0.95, snapTau: 0.006, snap: 0.7,
+      crack: 0.0008, crackGain: 1.15, boomHi: 110, boomLo: 34, boomTau: 0.065, boom: 0.4,
+      rumbleTau: 0.08, rumble: 0.26, ring: [[900, 0.02, 0.04], [1700, 0.015, 0.035], [3100, 0.01, 0.03]], drive: 2.6,
+    },
+    mech: {
+      hits: [
+        [0.04, [[220, 0.04, 0.6], [600, 0.025, 0.5], [1300, 0.012, 0.3]], 1, 0.3],
+        [0.09, [[1100, 0.015, 0.5], [2100, 0.01, 0.4], [3500, 0.006, 0.25]], 0.7, 0.4],
+      ],
+    },
+    level: 1.1, echo: 1.6, mechLevel: 0.12, velocity: 890,
+  },
 };
 
 // --------------------------------------------------------------- surroundings
@@ -570,6 +618,9 @@ const HANDLING: Record<string, { pitch: number; weight: number }> = {
   shotgun: { pitch: 0.9, weight: 1.1 },
   marksman: { pitch: 0.82, weight: 1.25 },
   pistol: { pitch: 1.3, weight: 0.7 },
+  lmg: { pitch: 0.88, weight: 1.35 },
+  battle: { pitch: 0.86, weight: 1.15 },
+  sniper: { pitch: 0.7, weight: 1.6 },
 };
 
 /** Renders one handling sound for a gun. Mono. */

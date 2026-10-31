@@ -1,3 +1,5 @@
+import type { WeaponId } from './weapons';
+
 /**
  * Helicopter supply drops during survival: a helicopter crosses the neighbourhood, hovers over
  * open ground near the survivors and lets a crate of universal ammunition down on a chute.
@@ -29,4 +31,22 @@ export const SUPPLY_DROPS = {
   /** Noise radius of the rotors over the drop, and of the crate landing. */
   hoverNoise: 48,
   landNoise: 26,
+  /**
+   * Exclusive weapons: once the survivors have lasted `exclusiveAfter` seconds, each drop has
+   * `exclusiveChance` of carrying a weapon case beside the ammunition, one gun for whoever gets
+   * there first. The weights pick which; the .50 cal is the rare one.
+   */
+  exclusiveAfter: 300,
+  exclusiveChance: 0.25,
+  exclusiveWeights: [['lmg', 0.4], ['battle', 0.4], ['sniper', 0.2]] as [WeaponId, number][],
+  /** The case lies this far from the crate's centre, across the helicopter's way in. */
+  caseOffset: 1.15,
 } as const;
+
+/** Where a drop's weapon case lies: beside the crate, the same on every machine. */
+export function caseSpot(f: { from: { x: number; z: number }; over: { x: number; z: number }; ground: { x: number; y: number; z: number } }): { x: number; y: number; z: number; yaw: number } {
+  const yaw = Math.atan2(f.over.x - f.from.x, f.over.z - f.from.z);
+  // Perpendicular to the way in: the crate's long side faces it.
+  const r = SUPPLY_DROPS.caseOffset;
+  return { x: f.ground.x + Math.cos(yaw) * r, y: f.ground.y, z: f.ground.z - Math.sin(yaw) * r, yaw };
+}
