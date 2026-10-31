@@ -27,6 +27,7 @@ SOURCES = {
     702225: ('https://cdn.freesound.org/previews/702/702225_15072041-hq.ogg', 'areniporgen', 'FN SCAR-H'),
     169170: ('https://cdn.freesound.org/previews/169/169170_1050391-hq.ogg', 'kvgarlic', '50CaliberOnePigRoast2012'),
     668071: ('https://cdn.freesound.org/previews/668/668071_7842170-hq.ogg', 'ajhartman42295', '50 cal shot'),
+    629008: ('https://cdn.freesound.org/previews/629/629008_433447-hq.ogg', 'realgtro', 'flashlight click'),
 }
 # Recordings whose loudest moments were clipped (flat-topped): repaired before use.
 CLIPPED = {702225, 668071}
@@ -142,6 +143,13 @@ take('wet-0', 495118, 0.07, length=0.5, fade_from=0.25, low_gain=2, bark=(1000, 
 take('wet-1', 641040, 0.01, length=0.45, fade_from=0.25, low_gain=2, bark=(1200, 1), drive=2)
 take('head-0', 511194, 0.07, length=0.6, fade_from=0.3, low_gain=3, bark=(2500, 2), drive=3)
 take('punch-0', 399183, 0.10, length=0.4, fade_from=0.3, low_gain=3, bark=(800, 1), drive=3)
+
+# Flashlight: a clicky tailcap switch pressed and let go, three times (each take holds both clicks).
+fla = source(629008)
+for i, t in enumerate([0.172, 1.846, 3.244]):
+    o = onset(fla, t, search=0.04)
+    finish(fla[o - int(0.003 * SR):], f'torch-{i}', length=0.24, fade_from=0.65, low_gain=0, bark=(3000, 0), drive=0)
+    made[f'torch-{i}'] = dict(source=629008, at=round(o / SR, 3), length=0.24)
 
 credits = {str(k): dict(url=f'https://freesound.org/s/{k}/', author=v[1], title=v[2], license='CC0 1.0') for k, v in SOURCES.items()}
 if report_path:

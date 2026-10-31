@@ -37,6 +37,8 @@ export interface PlayerMotion {
   sprinting: boolean;
   aiming: boolean;
   grounded: boolean;
+  /** Their flashlight is switched on (others see the beam online). */
+  light?: boolean;
 }
 
 export interface PlayerStats {

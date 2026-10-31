@@ -28,7 +28,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
   talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat', gunsmith: 'Customize weapon',
   grenade: 'Throw grenade (hold to aim)', molotov: 'Throw Molotov (hold to aim)',
-  flashlight: 'Flashlight',
+  flashlight: 'Flashlight on / off',
 };
 
 export interface SettingsData {

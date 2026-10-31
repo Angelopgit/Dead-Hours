@@ -163,6 +163,9 @@ if (recorded === Object.keys(GUN_SOUNDS).length) ok(`all ${recorded} guns play o
 const missing = FLESH_SETS.filter((set) => !sets[set]?.length);
 if (missing.length) fail(`flesh layers missing: ${missing.join(', ')}`);
 else ok(`flesh hit layers: ${FLESH_SETS.map((set) => `${set} ×${sets[set].length}`).join(', ')}`);
+const clicks = (sets.torch ?? []).filter(Boolean).length;
+if (clicks < 2) fail(`flashlight switch: ${clicks} recorded takes of 'torch', expected at least 2`);
+else ok(`flashlight switch: ${clicks} recorded clicks`);
 const ffmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
 let sane = 0;
 for (const f of recFiles) {

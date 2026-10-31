@@ -23,6 +23,8 @@ export interface WeaponReadout {
   /** Grenades and Molotovs carried. */
   frags?: number;
   molotovs?: number;
+  /** The flashlight's switch. */
+  light?: boolean;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -62,6 +64,7 @@ export class HUD {
   private readonly bandages: HTMLElement;
   private readonly fragLine: HTMLElement;
   private readonly molotovLine: HTMLElement;
+  private readonly lightLine: HTMLElement;
   private readonly feed: HTMLElement;
   private readonly waypoint: HTMLElement;
   private readonly waypointText: HTMLElement;
@@ -117,6 +120,7 @@ export class HUD {
       h('div', { class: 'abar' }, this.armorFill));
     this.fragLine = h('div', { class: 'w-heal w-throw' });
     this.molotovLine = h('div', { class: 'w-heal w-throw' });
+    this.lightLine = h('div', { class: 'w-heal w-throw w-light' });
     this.el = h('div', { class: 'hud' },
       this.scope,
       this.arcs,
@@ -143,6 +147,7 @@ export class HUD {
         this.bandages,
         this.fragLine,
         this.molotovLine,
+        this.lightLine,
       ),
       this.fps,
     );
@@ -246,6 +251,9 @@ export class HUD {
     this.fragLine.classList.toggle('none', !r.frags);
     this.molotovLine.textContent = `${keyM ? `${keyM}  ` : ''}MOLOTOV × ${r.molotovs ?? 0}`;
     this.molotovLine.classList.toggle('none', !r.molotovs);
+    const keyL = actionLabel('flashlight');
+    this.lightLine.textContent = `${keyL ? `${keyL}  ` : ''}FLASHLIGHT ${r.light ? 'ON' : 'OFF'}`;
+    this.lightLine.classList.toggle('none', !r.light);
   }
 
   /** "SURVIVED 18:42" or "OUTBREAK IMMINENT — 00:45". */

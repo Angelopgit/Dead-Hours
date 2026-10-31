@@ -30,6 +30,7 @@ const BUTTONS: ButtonDef[] = [
   { action: 'swap', label: 'SWAP', cls: 'swap', mode: 'tap' },
   { action: 'heal', label: 'HEAL', cls: 'heal', mode: 'tap' },
   { action: 'inventory', label: 'BAG', cls: 'bag', mode: 'hold' },
+  { action: 'flashlight', label: 'LIGHT', cls: 'light', mode: 'tap' },
   { action: 'talk', label: 'TALK', cls: 'talk', mode: 'hold' },
   { action: 'pause', label: 'II', cls: 'pause', mode: 'tap' },
 ];
@@ -201,6 +202,11 @@ export class TouchControls {
     this.shown = on;
     this.el.classList.toggle('hidden', !on);
     if (!on) this.reset();
+  }
+
+  /** Shows whether the flashlight is on (its button glows). */
+  setLight(on: boolean): void {
+    this.buttons.get('flashlight')?.classList.toggle('lit', on);
   }
 
   /** Lights the USE or BOARD button when there is something to do, with what it does. */

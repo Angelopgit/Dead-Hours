@@ -66,5 +66,40 @@ check(!!on && on.friction < 0.6, `on target: turning slows (friction ${on?.frict
 const none = a.update(1 / 60, { zombies: [] } as unknown as Simulation, origin, dirFor(0, 0), 0, 0, true, false, 'standard');
 check(none === null, 'nothing near: full speed');
 
+// Controller: D-pad up taps the flashlight and, held, switches shoulders. Input needs a page,
+// so it gets just enough of one (and a fake controller) to read the pad.
+{
+  const noop = () => {};
+  const g = globalThis as Record<string, unknown>;
+  g.window = Object.assign(globalThis, { addEventListener: noop, dispatchEvent: noop });
+  g.document = { body: { classList: { toggle: noop, add: noop, remove: noop } }, addEventListener: noop, pointerLockElement: null, getElementById: () => null };
+  const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+  const pad = { buttons, axes: [0, 0, 0, 0], connected: true, index: 0, mapping: 'standard', id: 'test pad' };
+  Object.defineProperty(globalThis, 'navigator', { value: { getGamepads: () => [pad], userAgent: 'node' }, configurable: true });
+  const { Input } = await import('../src/core/Input');
+  const input = new Input({ requestPointerLock: noop } as unknown as HTMLElement);
+  input.enabled = true;
+  input.uiNav = false;
+  const UP = 12;
+  /** Holds D-pad up for `secs` at 60 fps, then lets go; which actions were pressed on the way. */
+  const hold = (secs: number) => {
+    const seen = new Set<string>();
+    const frame = (down: boolean) => {
+      buttons[UP].pressed = down;
+      input.poll(1 / 60);
+      for (const a of ['flashlight', 'shoulder'] as const) if (input.pressed(a)) seen.add(a);
+      input.endFrame();
+    };
+    for (let t = 0; t < secs; t += 1 / 60) frame(true);
+    frame(false);
+    frame(false);
+    return [...seen].sort().join(',');
+  };
+  hold(0.05);
+  check(hold(0.12) === 'flashlight', 'controller: a tap of D-pad up switches the flashlight');
+  check(hold(0.8) === 'shoulder', 'controller: holding D-pad up switches shoulders (and leaves the light alone)');
+  check(hold(0.3) === 'flashlight', 'controller: a slow tap still switches the flashlight');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

@@ -1223,6 +1223,35 @@ export class AudioEngine {
     src.start(now + along / gun.velocity + miss / SPEED_OF_SOUND);
   }
 
+  /**
+   * A flashlight's clicky tailcap switch, pressed and let go: your own close at hand, another
+   * survivor's from their chest (quiet: heard a few metres off).
+   */
+  flashlight(on: boolean, position?: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = position ? this.out(position, 0.03, 1.2) : this.out(null, 0.02);
+    d.gain.value = position ? 0.45 : 0.3;
+    const take = this.recording('torch');
+    // Switching off sounds a touch lower: the spring lets the cap back out.
+    const rate = (on ? 1.03 : 0.95) * (1 + (Math.random() * 2 - 1) * 0.02);
+    if (take) {
+      const src = ctx.createBufferSource();
+      src.buffer = take;
+      src.playbackRate.value = rate;
+      src.connect(d);
+      src.start();
+      return;
+    }
+    // Until the recording is decoded: two snaps of plastic and spring.
+    const t = ctx.currentTime;
+    for (const [at, peak] of [[0, 0.5], [0.12, 0.75]] as const) {
+      this.burst(d, t + at, 'highpass', 3200 * rate, 0.8, peak, 0.0004, 0.012);
+      this.tone(d, t + at, 'sine', 5400 * rate, 5000 * rate, peak * 0.2, 0.0004, 0.02);
+      this.burst(d, t + at, 'bandpass', 1300, 2, peak * 0.3, 0.0008, 0.02);
+    }
+  }
+
   dryFire(position: THREE.Vector3, weapon = 'ar'): void {
     this.foley('dryFire', position, weapon);
   }

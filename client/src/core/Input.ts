@@ -10,20 +10,22 @@ const B = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, BACK: 8, START: 
 /** Fixed controller layout for play. Sprint is a click of the left stick (it stays on while moving). */
 const PAD_ACTIONS: [Action, number][] = [
   ['fire', B.RT], ['aim', B.LT], ['jump', B.A], ['crouch', B.B], ['reload', B.X],
-  ['interact', B.RB], ['heal', B.LB], ['melee', B.RS], ['shoulder', B.UP], ['barricade', B.DOWN], ['inventory', B.BACK],
+  ['interact', B.RB], ['heal', B.LB], ['melee', B.RS], ['barricade', B.DOWN], ['inventory', B.BACK],
   ['talk', B.LEFT], ['radio', B.RIGHT],
 ];
 
 /** Button names shown in prompts while a controller is in use. */
 export const PAD_LABELS: Partial<Record<Action, string>> = {
   fire: 'RT', aim: 'LT', jump: 'A', crouch: 'B', reload: 'X', interact: 'RB', heal: 'LB', melee: 'R3',
-  shoulder: '↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y',
+  flashlight: '↑', shoulder: 'hold ↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y',
 };
 
 const STICK_DEAD = 0.14;
 const TRIGGER_DOWN = 0.35;
 /** Full right-stick tilt turns this fast (rad/s) at sensitivity 1. */
 const PAD_TURN = 3.5;
+/** D-pad up held this long switches shoulders; a shorter press switches the flashlight. */
+const UP_HOLD = 0.4;
 
 let current: Device = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
 const deviceListeners = new Set<(d: Device) => void>();
@@ -89,6 +91,8 @@ export class Input {
   private padPrev: boolean[] = [];
   private padSprint = false;
   private padHold = 0;
+  /** Seconds D-pad up has been held (-1: not pressed, or its hold already fired). */
+  private upT = -1;
   private readonly menus = new PadMenus();
 
   constructor(target: HTMLElement) {
@@ -167,6 +171,12 @@ export class Input {
     this.setState(code, isDown);
   }
 
+  /** A press and release seen as one press this frame. */
+  private tap(source: 'Pad' | 'Touch', action: Action): void {
+    this.virtual(source, action, true);
+    this.virtual(source, action, false);
+  }
+
   /** Switch to the other weapon (as one notch of the mouse wheel). */
   swapWeapon(): void {
     this.wheel += 1;
@@ -241,6 +251,7 @@ export class Input {
       this.releaseSource('Pad');
       this.padMove.x = this.padMove.y = 0;
       this.padSprint = false;
+      this.upT = -1;
       this.menus.update(dt, now, edge, lx, ly, ry);
       return;
     }
@@ -249,6 +260,20 @@ export class Input {
     for (const [action, i] of PAD_ACTIONS) if (now[i] !== this.down.has(`Pad:${action}`)) this.virtual('Pad', action, now[i]);
     // Y swaps between the two weapons, as the mouse wheel does.
     if (edge(B.Y)) this.swapWeapon();
+    // D-pad up: a tap switches the flashlight, a hold switches shoulders.
+    if (now[B.UP]) {
+      if (edge(B.UP)) this.upT = 0;
+      else if (this.upT >= 0) {
+        this.upT += dt;
+        if (this.upT >= UP_HOLD) {
+          this.upT = -1;
+          this.tap('Pad', 'shoulder');
+        }
+      }
+    } else if (this.upT >= 0) {
+      this.upT = -1;
+      this.tap('Pad', 'flashlight');
+    }
     this.padMove.x = lx;
     this.padMove.y = -ly;
     // Sprint latches on a stick click and ends when the stick comes back.

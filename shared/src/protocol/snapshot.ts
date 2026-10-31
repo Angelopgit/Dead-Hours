@@ -88,11 +88,11 @@ export interface Snapshot {
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
-export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16 } as const;
+export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32 } as const;
 
 function flagsOf(m: PlayerMotion, trigger = false): number {
   return (m.crouching ? MOTION_FLAG.crouching : 0) | (m.sprinting ? MOTION_FLAG.sprinting : 0) | (m.aiming ? MOTION_FLAG.aiming : 0)
-    | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0);
+    | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0) | (m.light ? MOTION_FLAG.light : 0);
 }
 
 /** Captures the world for clients. `facing` is each survivor's body facing (the server keeps it beside the sim). */
@@ -203,6 +203,7 @@ export function unpackMotion(a: unknown): MotionFrame | null {
       yaw: n[6] / 1000, pitch: clamp(n[7] / 1000, -1.6, 1.6), eyeHeight: clamp(n[9] / 1000, 0.5, 2),
       crouching: !!(flags & MOTION_FLAG.crouching), sprinting: !!(flags & MOTION_FLAG.sprinting),
       aiming: !!(flags & MOTION_FLAG.aiming), grounded: !!(flags & MOTION_FLAG.grounded),
+      light: !!(flags & MOTION_FLAG.light),
     },
     facing: n[8] / 1000,
     trigger: !!(flags & MOTION_FLAG.trigger),
@@ -488,6 +489,7 @@ export class Mirror {
         mo.sprinting = !!(f & MOTION_FLAG.sprinting);
         mo.aiming = !!(f & MOTION_FLAG.aiming);
         mo.grounded = !!(f & MOTION_FLAG.grounded);
+        mo.light = !!(f & MOTION_FLAG.light);
         let tr = this.tracks.get(sp.id);
         if (!tr) {
           tr = { prev: { ...pos }, pos: { ...pos }, at: T, span, facing: m[8] / 1000 };

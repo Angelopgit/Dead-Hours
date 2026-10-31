@@ -4,7 +4,7 @@ import {
   BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
-  type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
+  type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
@@ -44,7 +44,7 @@ import { AimAssist } from './AimAssist';
 import { GunsmithPanel } from '../ui/GunsmithPanel';
 import { GunsmithStage } from '../weapons/GunsmithStage';
 import { audio } from '../audio/AudioEngine';
-import { flashlight } from './Flashlight';
+import { ChestLamp, flashlight } from './Flashlight';
 import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
@@ -167,8 +167,9 @@ export class GameSession {
   private readonly touch: TouchControls;
   private readonly assist: AimAssist;
   private readonly fill = new THREE.PointLight(0xa8b8d0, 1.6, 9, 1.5);
+  /** The flashlight clipped to the survivor's chest. */
+  private readonly lamp: ChestLamp;
   private readonly tmpTorchDir = new THREE.Vector3();
-  private readonly tmpTorchRight = new THREE.Vector3();
   private readonly tmpTorchAt = new THREE.Vector3();
   private readonly unsubSettings: () => void;
   private readonly doorColliders = new Set<number>();
@@ -265,6 +266,8 @@ export class GameSession {
     this.probe.attach(this.weapon.materials());
     this.weapon.onMaterials = (m) => this.probe.attach(m);
     this.weapon.onCue = (cue, weapon) => audio.foley(cue, this.handPos(), weapon);
+    this.lamp = new ChestLamp(this.player.character);
+    this.probe.attach(this.lamp.materials());
     this.cam = new ThirdPersonCamera(engine.camera, physics);
     this.cam.yaw = spawn.yaw;
     this.focus.copy(this.player.position);
@@ -324,6 +327,7 @@ export class GameSession {
     }
     this.touch = new TouchControls(input, !!online);
     this.touch.setVisible(false);
+    this.touch.setLight(flashlight()?.on ?? true);
     ui.append(this.touch.el);
     this.hud.onPrompt = (action, text) => this.touch.setUse(action, text);
     this.assist = new AimAssist(physics);
@@ -825,7 +829,7 @@ export class GameSession {
     let steps = 0;
     while (this.accumulator >= step && steps < 5) {
       p.fixedUpdate(step, this.cam.yaw);
-      this.sim.setMotion(this.myId, p.motion(this.cam.yaw, this.cam.pitch));
+      this.sim.setMotion(this.myId, this.myMotion());
       if (this.link) {
         if (this.phase === 'playing') this.sendOnline(step);
         this.stepOnline(step);
@@ -888,21 +892,10 @@ export class GameSession {
       // The fill light rides with the camera to keep the survivor readable; down the sights it
       // would only glare off the sights an inch from the eye.
       this.fill.intensity = 1.6 * (1 - 0.8 * ads);
-      // The weapon light: just right of and below the eyes, aimed at the crosshair.
-      const torch = flashlight();
-      if (torch) {
-        const eye = this.cam.eye;
-        const dir = this.tmpTorchDir.subVectors(this.cam.aimPoint, eye);
-        if (dir.lengthSq() < 1e-6) dir.set(-Math.sin(this.cam.yaw), 0, -Math.cos(this.cam.yaw));
-        dir.normalize();
-        const right = this.tmpTorchRight.set(Math.cos(this.cam.yaw), 0, -Math.sin(this.cam.yaw));
-        const at = this.tmpTorchAt.copy(eye).addScaledVector(dir, 0.25).addScaledVector(right, 0.14);
-        at.y -= 0.14;
-        torch.update(dt, this.phase === 'playing' || this.phase === 'paused', at, dir);
-      }
       this.hud.setScope(scope);
       this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming });
     }
+    this.updateLamp(dt);
     this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
 
     // World (online: the mirror's clock, a snapshot behind the server).
@@ -993,6 +986,46 @@ export class GameSession {
     c.updateProjectionMatrix();
   }
 
+  /** Where this survivor is and aims, for the simulation and the server (with the light switch). */
+  private myMotion(): PlayerMotion {
+    const m = this.player.motion(this.cam.yaw, this.cam.pitch);
+    m.light = flashlight()?.on ?? false;
+    return m;
+  }
+
+  private toggleLight(): void {
+    const f = flashlight();
+    if (!f) return;
+    const on = f.toggle();
+    audio.flashlight(on);
+    this.touch.setLight(on);
+  }
+
+  /**
+   * The chest lamp's beam. In play it lights what the crosshair is on (from the chest, not the
+   * camera); otherwise (the intro, the weapon table) it points ahead of the survivor, a little down.
+   */
+  private updateLamp(dt: number): void {
+    const torch = flashlight();
+    if (!torch) return;
+    const alive = this.phase !== 'dead' && this.me.alive;
+    const lens = this.lamp.origin(this.tmpTorchAt);
+    const want = this.tmpTorchDir;
+    if (this.phase === 'playing' || this.phase === 'paused') {
+      want.subVectors(this.cam.aimPoint, lens);
+      const len = want.length();
+      // Something right up against the lamp (or behind it, past the camera's ray): straight down the view.
+      if (len < 1 || want.dot(this.cam.aimDir) < len * 0.4) want.copy(this.cam.aimDir);
+      else want.divideScalar(len);
+    } else {
+      const yaw = this.player.character.root.rotation.y;
+      want.set(Math.sin(yaw), -0.25, Math.cos(yaw)).normalize();
+    }
+    const dir = this.lamp.follow(want, dt);
+    torch.update(dt, alive, this.lamp.source(this.tmpTorchAt), dir);
+    this.lamp.show(torch.level, this.engine.camera);
+  }
+
   private gatherInput(dt: number): void {
     const input = this.input;
     const p = this.player;
@@ -1016,6 +1049,8 @@ export class GameSession {
     p.sampleInput(input, this.cam.yaw);
     const a = this.me.arsenal;
     if (a.action === 'bandage') p.blockSprint(0.1);
+    // The light works on the ground too: a downed survivor's beam helps the others find them.
+    if (input.pressed('flashlight')) this.toggleLight();
     if (!this.me.up) {
       // On the ground: look about, drag yourself along, call for help.
       if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
@@ -1031,13 +1066,6 @@ export class GameSession {
     if (input.pressed('fire')) this.fireBuffer = 0.18;
     if (this.fireHeld || this.fireBuffer > 0) p.blockSprint(0.35);
     if (input.pressed('reload')) this.wantReload = true;
-    if (input.pressed('flashlight')) {
-      const f = flashlight();
-      if (f) {
-        f.on = !f.on;
-        audio.ui('click');
-      }
-    }
     if (input.pressed('weapon1')) this.wantSlot = 'primary';
     if (input.pressed('weapon2')) this.wantSlot = 'secondary';
     const wheel = input.consumeWheel();
@@ -1154,7 +1182,7 @@ export class GameSession {
       if (this.motionT < 0) this.motionT = 0;
       const o = this.cam.aimOrigin, d = this.cam.aimDir;
       this.link!.motion(packMotion({
-        motion: this.player.motion(this.cam.yaw, this.cam.pitch), facing: this.player.facing,
+        motion: this.myMotion(), facing: this.player.facing,
         trigger: this.phase === 'playing' && this.fireHeld && !this.me.arsenal.limb,
         aimOrigin: { x: o.x, y: o.y, z: o.z }, aimDir: { x: d.x, y: d.y, z: d.z },
       }));
@@ -2179,6 +2207,7 @@ export class GameSession {
       wear: limb ? limb.wear / limb.maxWear : null,
       frags: a.throwables.frag,
       molotovs: a.throwables.molotov,
+      light: flashlight()?.on ?? false,
     });
     const s = this.sim;
     const w = s.phase === 'survival' ? hordeAt(s.phaseTime).stage : 'calm';
@@ -2283,6 +2312,7 @@ export class GameSession {
     this.tableTween?.kill();
     for (const el of [...this.letterbox, this.skip, this.clickToPlay]) el.remove();
     this.touch.dispose();
+    this.lamp.dispose();
     this.input.uiNav = true;
     this.table?.el.remove();
     if (this.smith) {

@@ -315,6 +315,21 @@ try {
   const seenByB = bView.sim.players.get(a.room.sessionId)!.motion.pos;
   check(Math.abs(seenByB.x - pos.x) < 0.05, `the other survivor sees the walk (${seenByB.x.toFixed(2)} vs ${pos.x.toFixed(2)})`);
   check(a.corrections.length === 0, 'a normal walk is accepted');
+  // The flashlight switch rides in the motion flags: the other survivor sees it go on and off.
+  const lit = (on: boolean) => packMotion({
+    motion: { pos, vel: { x: 0, y: 0, z: 0 }, yaw: spawnA.yaw, pitch: 0, eyeHeight: 1.6, crouching: false, sprinting: false, aiming: false, grounded: true, light: on },
+    facing: 0, trigger: false, aimOrigin: { x: pos.x, y: pos.y + 1.6, z: pos.z }, aimDir: { x: 0, y: 0, z: 1 },
+  });
+  let seen = b.snaps.length;
+  const lightSeen = async (on: boolean) => {
+    a.room.send(C2S.motion, lit(on));
+    return until(() => {
+      while (seen < b.snaps.length) bView.apply(b.snaps[seen++], now());
+      return bView.sim.players.get(a.room.sessionId)!.motion.light === on;
+    });
+  };
+  check(await lightSeen(true), 'the other survivor sees the flashlight switched on');
+  check(await lightSeen(false), 'and switched off');
   a.room.send(C2S.motion, motion({ x: pos.x + 30, y: pos.y, z: pos.z }));
   check(await until(() => a.corrections.length === 1), 'a jump of 30 m is refused and the survivor put back');
   check(Math.hypot(a.corrections[0].x - pos.x, a.corrections[0].z - pos.z) < 0.05, 'put back where the server last had them');

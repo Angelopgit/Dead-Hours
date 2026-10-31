@@ -65,7 +65,7 @@ function padLayout(): HTMLElement[] {
     [PAD_LABELS.jump!, ACTION_LABELS.jump], [PAD_LABELS.crouch!, ACTION_LABELS.crouch],
     [PAD_LABELS.reload!, ACTION_LABELS.reload], ['Y', 'Switch weapon'],
     [PAD_LABELS.interact!, ACTION_LABELS.interact], [PAD_LABELS.heal!, ACTION_LABELS.heal],
-    [PAD_LABELS.melee!, ACTION_LABELS.melee], ['D-pad ↑ / ↓', 'Switch shoulder / Board up'], ['View', 'Inventory (hold)'],
+    [PAD_LABELS.melee!, ACTION_LABELS.melee], ['D-pad ↑', 'Flashlight · hold: switch shoulder'], ['D-pad ↓', ACTION_LABELS.barricade], ['View', 'Inventory (hold)'],
     ['D-pad ← / →', 'Push to talk / Team radio'], ['Start', 'Pause'],
     ['Menus', 'D-pad moves · A selects · B back · LB/RB tabs'],
   ];

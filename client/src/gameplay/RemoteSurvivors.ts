@@ -7,6 +7,7 @@ import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { DynamicProbe } from '../lighting/Probes';
 import type { LightField } from '../lighting/LightField';
 import { audio } from '../audio/AudioEngine';
+import { ChestLamp, flashlight, type Beam } from './Flashlight';
 import { h } from '../ui/dom';
 
 interface Remote {
@@ -22,9 +23,13 @@ interface Remote {
   /** Direction the last hit came from (the fall goes the other way). */
   hurtDir: THREE.Vector3;
   downed: boolean;
+  /** Their flashlight, the switch as last reported (null before the first report), and its beam. */
+  lamp: ChestLamp;
+  lightOn: boolean | null;
+  beam: Beam;
 }
 
-const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3();
+const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3(), _want = new THREE.Vector3();
 
 /**
  * The other survivors in an online game: each one's own character in their own look, carrying
@@ -34,6 +39,7 @@ const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vecto
 export class RemoteSurvivors {
   private readonly remotes = new Map<string, Remote>();
   private readonly tags = h('div', { class: 'name-tags' });
+  private readonly beams: Beam[] = [];
   gore = true;
 
   constructor(
@@ -55,6 +61,8 @@ export class RemoteSurvivors {
     probe.attach(weapon.materials());
     weapon.onMaterials = (m) => probe.attach(m);
     weapon.gore = this.gore;
+    const lamp = new ChestLamp(body);
+    probe.attach(lamp.materials());
     const tagHp = h('i');
     const tag = h('div', { class: 'name-tag' }, h('span', {}, p.name.toUpperCase()), h('b', {}, tagHp));
     this.tags.append(tag);
@@ -62,6 +70,7 @@ export class RemoteSurvivors {
     const r: Remote = {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
+      lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0 },
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w) => audio.foley(cue, this.hand(r, _q), w);
@@ -87,6 +96,30 @@ export class RemoteSurvivors {
       this.remotes.delete(id);
       this.free(r);
     }
+    this.beams.length = 0;
+    for (const r of this.remotes.values()) this.beams.push(r.beam);
+    flashlight()?.placeRemotes(this.beams, camera.position);
+  }
+
+  /**
+   * Their lamp: on while they say it is and they live, aimed where they look (`aimPoint`), with
+   * the click heard when they flip it nearby.
+   */
+  private light(r: Remote, p: SimPlayer, dt: number, aimPoint: THREE.Vector3 | null, camera: THREE.PerspectiveCamera): void {
+    const on = !!p.motion.light;
+    if (r.lightOn !== null && on !== r.lightOn && p.alive) {
+      const at = r.lamp.origin(_q);
+      if (at.distanceTo(camera.position) < 18) audio.flashlight(on, at);
+    }
+    r.lightOn = on;
+    const b = r.beam;
+    b.level = on && p.alive ? 1 : Math.max(0, b.level - dt * 6);
+    if (aimPoint) {
+      _want.subVectors(aimPoint, r.lamp.origin(_q));
+      if (_want.lengthSq() > 1e-4) b.dir.copy(r.lamp.follow(_want.normalize(), dt));
+    }
+    r.lamp.source(b.origin);
+    r.lamp.show(b.level, camera);
   }
 
   private animate(r: Remote, p: SimPlayer, dt: number, mirror: Mirror, camera: THREE.PerspectiveCamera): void {
@@ -97,6 +130,7 @@ export class RemoteSurvivors {
       if (!r.ragdoll!.asleep) r.ragdoll!.update(dt);
       r.probe.update(dt, r.ragdoll!.center(_p), camera);
       this.placeTag(r, r.ragdoll!.center(_p).setY(r.ragdoll!.floorY + 0.6), camera, p, true);
+      this.light(r, p, dt, null, camera);
       return;
     }
     const facing = mirror.playerPose(p.id, _p) ?? m.yaw + Math.PI;
@@ -126,6 +160,7 @@ export class RemoteSurvivors {
     const cp = Math.cos(m.pitch);
     _aim.set(r.pos.x - Math.sin(m.yaw) * cp * 30, r.pos.y + m.eyeHeight + Math.sin(m.pitch) * 30, r.pos.z - Math.cos(m.yaw) * cp * 30);
     r.weapon.update(dt, p.arsenal, { aim: p.arsenal.aim, sprinting: m.sprinting, aimPoint: _aim });
+    this.light(r, p, dt, _aim, camera);
     r.probe.update(dt, r.pos, camera);
     this.placeTag(r, _q.copy(r.pos).setY(r.pos.y + (p.downed ? 0.8 : m.crouching ? PLAYER.crouchHeight : PLAYER.height) + 0.25), camera, p, false);
   }
@@ -214,6 +249,7 @@ export class RemoteSurvivors {
   }
 
   private free(r: Remote): void {
+    r.lamp.dispose();
     r.weapon.dispose();
     r.body.root.removeFromParent();
     r.body.dispose();
@@ -223,6 +259,7 @@ export class RemoteSurvivors {
   dispose(): void {
     for (const r of this.remotes.values()) this.free(r);
     this.remotes.clear();
+    flashlight()?.placeRemotes([], new THREE.Vector3());
     this.tags.remove();
   }
 }

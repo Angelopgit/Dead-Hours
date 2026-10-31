@@ -262,6 +262,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .w-heal { margin-top: 0.8em; font-size: 0.64em; letter-spacing: 0.26em; color: var(--fg-dim); white-space: pre; }
 .w-heal.none { color: var(--fg-faint); opacity: 0.6; }
 .w-throw { margin-top: 0.35em; }
+.w-light:not(.none) { color: #e9d9b8; }
 .vitals .name span.low { color: #e2725f; animation: pulse 0.9s ease-in-out infinite; }
 
 /* Hit confirmation and damage direction */
@@ -569,7 +570,9 @@ body.pad-nav #viewport { cursor: none; }
 .tc-btn.use.ready, .tc-btn.board.ready { opacity: 1; border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
 .tc-btn.heal { --s: 44px; right: calc(28px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.bag { --s: 44px; right: calc(84px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
-.tc-btn.talk { --s: 44px; right: calc(140px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
+.tc-btn.light { --s: 44px; right: calc(140px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); font-size: calc(10px * var(--tc-scale)); }
+.tc-btn.light.lit { border-color: rgba(255,226,170,0.85); color: #fff3d8; box-shadow: 0 0 14px rgba(255,214,150,0.35); }
+.tc-btn.talk { --s: 44px; right: calc(196px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.pause { --s: 44px; left: calc(12px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); font-size: 12px; }
 /* Thumbs cover the bottom corners: health, ammo and the feed move to the top. */
 body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); width: 200px; font-size: 0.85em; }
