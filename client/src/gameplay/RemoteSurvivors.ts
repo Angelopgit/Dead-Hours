@@ -73,7 +73,7 @@ export class RemoteSurvivors {
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0 },
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
-    weapon.onCue = (cue, w) => audio.foley(cue, this.hand(r, _q), w);
+    weapon.onCue = (cue, w, inS) => audio.foley(cue, this.hand(r, _q), w, inS);
     return r;
   }
 

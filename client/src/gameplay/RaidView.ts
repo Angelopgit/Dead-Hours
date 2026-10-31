@@ -125,7 +125,7 @@ export class RaidView {
       id: r.id, body, weapon, probe, pos: new THREE.Vector3(r.pos.x, r.pos.y, r.pos.z), vel: new THREE.Vector3(), facing: r.facing, ragdoll: null, deadT: 0,
     };
     body.onFootstep = (l) => audio.footstep(l, false, v.pos);
-    weapon.onCue = (cue, w) => audio.foley(cue, body.armR.end.getWorldPosition(_q), w);
+    weapon.onCue = (cue, w, inS) => audio.foley(cue, body.armR.end.getWorldPosition(_q), w, inS);
     return v;
   }
 

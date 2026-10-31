@@ -7,12 +7,17 @@
  * character the engine relies on (louder guns echo harder, rifles crack, the shotgun booms longest).
  * Then the real recordings the engine plays in their place: four takes for every gun, the flesh-hit
  * layers, each a sane MP3 (decoded and measured when ffmpeg is installed), and every source credited.
+ * Reloads: every gun's script sits on its hand animation, sends the bolt home only from empty, and
+ * its cues, played out frame by frame the way PlayerWeapon does, land every hit once and on time;
+ * every handling recording set exists, each take with its main hit early in it.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
-import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
+import { WEAPONS } from '@dead-hours/shared';
+import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
 import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
-import { FLESH_SETS, RECORDED_SHOTS, groupRecordings } from '../src/audio/Recordings';
+import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings } from '../src/audio/Recordings';
+import { RELOAD_STEPS, dueCues, reloadTimeline } from '../src/weapons/reloadScript';
 
 const SR = 44100;
 let failures = 0;
@@ -73,7 +78,7 @@ for (const [id, g] of Object.entries(GUN_SOUNDS)) {
 }
 
 console.log('Handling');
-const kinds: FoleyKind[] = ['magOut', 'magIn', 'bolt', 'pump', 'slide', 'shellIn', 'holster', 'draw', 'shellGrab', 'dryFire'];
+const kinds: FoleyKind[] = FOLEY_KINDS;
 let rendered = 0;
 for (const id of [...Object.keys(GUN_SOUNDS), 'knife']) {
   for (const k of kinds) {
@@ -83,6 +88,60 @@ for (const id of [...Object.keys(GUN_SOUNDS), 'knife']) {
   }
 }
 if (rendered === kinds.length * (Object.keys(GUN_SOUNDS).length + 1)) ok(`${rendered} handling sounds, every kind for every gun (and an unknown id)`);
+
+console.log('Reloads');
+{
+  const before = failures;
+  // The hand animation's keyframes (PlayerWeapon.leftHand): where the new magazine seats.
+  const SEAT = { rifle: 0.74, pistol: 0.66 };
+  const HOME: FoleyKind[] = ['bolt', 'charge', 'slap', 'opRod', 'slide'];
+  for (const id of Object.keys(GUN_SOUNDS)) {
+    const def = WEAPONS[id as keyof typeof WEAPONS];
+    const steps = RELOAD_STEPS[id];
+    if (!steps?.length) { fail(`${id}: no reload script`); continue; }
+    if (steps.some((st) => st.at < 0 || st.at > 1)) fail(`${id}: a reload step outside the reload`);
+    if (def.perShell) {
+      if (!steps.some((st) => st.cue === 'shellIn')) fail(`${id}: no shell going in`);
+      continue;
+    }
+    const seat = steps.find((st) => st.cue === 'magIn');
+    const want = def.hold === 'pistol' ? SEAT.pistol : SEAT.rifle;
+    if (!seat || Math.abs(seat.at - want) > 0.02) fail(`${id}: the magazine seats at ${seat?.at}, the hand pushes it home at ${want}`);
+    const empty = reloadTimeline(id, true, def.reloadTime + 0.35).map((c) => c.cue);
+    const tactical = reloadTimeline(id, false, def.reloadTime).map((c) => c.cue);
+    if (!empty.some((c) => HOME.includes(c))) fail(`${id}: an empty reload never sends the bolt home`);
+    if (tactical.some((c) => HOME.includes(c))) fail(`${id}: a reload with a round chambered works the bolt`);
+    if (empty.indexOf('magOut') > empty.indexOf('magIn')) fail(`${id}: the magazine goes in before the old one is out`);
+  }
+  // Played out at 60 fps the way PlayerWeapon does: every hit once, within a frame of the script.
+  const play = (id: string, empty: boolean, segments: number[]): { cue: FoleyKind; t: number }[] => {
+    const heard: { cue: FoleyKind; t: number }[] = [];
+    let t0 = 0;
+    for (const len of segments) {
+      let last = -Infinity;
+      for (let t = 0; t <= len + 1e-9; t += 1 / 60) {
+        const p = Math.min(1, t / len);
+        for (const c of dueCues(id, empty, last, p, len)) heard.push({ cue: c.cue, t: t0 + t + c.inS });
+        last = p;
+      }
+      t0 += len;
+    }
+    return heard.sort((a, b) => a.t - b.t);
+  };
+  let played = 0;
+  for (const id of Object.keys(GUN_SOUNDS)) {
+    const def = WEAPONS[id as keyof typeof WEAPONS];
+    for (const empty of [true, false]) {
+      const per = def.reloadTime / def.magazine;
+      const want = def.perShell ? reloadTimeline(id, empty, 0, 4, per).filter((c) => c.cue !== 'pumpBack' && c.cue !== 'pumpFwd') : reloadTimeline(id, empty, def.reloadTime + (empty ? 0.35 : 0));
+      const got = play(id, empty, def.perShell ? [0.4, per, per, per] : [def.reloadTime + (empty ? 0.35 : 0)]);
+      const off = want.length !== got.length ? Infinity : Math.max(...want.map((w, k) => (w.cue === got[k].cue ? Math.abs(w.t - got[k].t) : Infinity)));
+      if (off > 1 / 60 + 1e-6) fail(`${id} ${empty ? 'empty' : 'tactical'} reload: cues ${got.map((c) => `${c.cue}@${c.t.toFixed(2)}`).join(' ')}, script ${want.map((c) => `${c.cue}@${c.t.toFixed(2)}`).join(' ')}`);
+      else played++;
+    }
+  }
+  if (failures === before) ok(`${Object.keys(GUN_SOUNDS).length} reload scripts on their animations, bolts home only from empty; ${played} reloads cue every hit once and on time`);
+}
 
 console.log('Echo');
 const spaces: [string, Channels, number][] = [['street', streetIR(SR, 7), 2.6]];
@@ -163,6 +222,21 @@ if (recorded === Object.keys(GUN_SOUNDS).length) ok(`all ${recorded} guns play o
 const missing = FLESH_SETS.filter((set) => !sets[set]?.length);
 if (missing.length) fail(`flesh layers missing: ${missing.join(', ')}`);
 else ok(`flesh hit layers: ${FLESH_SETS.map((set) => `${set} ×${sets[set].length}`).join(', ')}`);
+{
+  const before = failures;
+  const short = HANDLING_SETS.filter((set) => (sets[set] ?? []).filter(Boolean).length < 2);
+  if (short.length) fail(`handling sets with fewer than 2 takes: ${short.join(', ')}`);
+  for (const [id, voices] of Object.entries(RECORDED_HANDLING)) {
+    for (const [kind, v] of Object.entries(voices)) {
+      if (!(HANDLING_SETS as readonly string[]).includes(v.set)) fail(`${id} ${kind}: plays '${v.set}', not a handling set`);
+      if (!(v.rate > 0.7 && v.rate < 1.3) || !(v.level > 0 && v.level < 1)) fail(`${id} ${kind}: rate ${v.rate}, level ${v.level}`);
+    }
+    const scripted = new Set([...(RELOAD_STEPS[id] ?? []).map((st) => st.cue)]);
+    const unvoiced = (['magOut', 'magIn', 'shellIn'] as FoleyKind[]).filter((k) => scripted.has(k) && !voices[k]);
+    if (unvoiced.length) fail(`${id}: ${unvoiced.join(', ')} not recorded`);
+  }
+  if (failures === before) ok(`reloads: ${HANDLING_SETS.length} recorded sets (${HANDLING_SETS.reduce((n, set) => n + sets[set].filter(Boolean).length, 0)} takes), every gun's magazine or shells recorded`);
+}
 const clicks = (sets.torch ?? []).filter(Boolean).length;
 if (clicks < 2) fail(`flashlight switch: ${clicks} recorded takes of 'torch', expected at least 2`);
 else ok(`flashlight switch: ${clicks} recorded clicks`);
@@ -181,7 +255,14 @@ for (const f of recFiles) {
     while (onset < x.length && Math.abs(x[onset]) < s.peak * 0.05) onset++;
     if (!s.finite) { fail(`${f}: NaN samples`); continue; }
     if (s.peak > 1 || s.peak < 0.7) { fail(`${f}: peak ${s.peak.toFixed(3)}, expected about -1 dBFS`); continue; }
-    if (onset > 0.005 * SR) { fail(`${f}: starts ${(onset / SR * 1000).toFixed(1)} ms late`); continue; }
+    const handling = (HANDLING_SETS as readonly string[]).includes(f.replace(/-\d+\.mp3$/, ''));
+    if (handling) {
+      // Handling takes lead up to their main hit (the loudest moment), which the game lines up with the hand.
+      let at = 0;
+      for (let i = 0; i < x.length; i++) if (Math.abs(x[i]) > Math.abs(x[at])) at = i;
+      if (at > 0.4 * SR) { fail(`${f}: main hit ${(at / SR * 1000).toFixed(0)} ms in`); continue; }
+      if (x.length > 0.75 * SR) { fail(`${f}: ${(x.length / SR).toFixed(2)} s long`); continue; }
+    } else if (onset > 0.005 * SR) { fail(`${f}: starts ${(onset / SR * 1000).toFixed(1)} ms late`); continue; }
     if (x.length > 2.1 * SR) { fail(`${f}: ${(x.length / SR).toFixed(2)} s long`); continue; }
   }
   sane++;
@@ -195,6 +276,10 @@ const uncredited = ids.filter((id) => !readme.includes(`freesound.org/s/${id}`))
 if (!ids.length) fail('no sources found in make_recorded_sounds.py');
 else if (uncredited.length) fail(`README doesn't credit Freesound ${uncredited.join(', ')}`);
 else ok(`all ${ids.length} source recordings credited in the README`);
+const library = /LIBRARY_URL = '[^']*FreeFirearmsSFXLibrary\/([0-9a-f]{40})\//.exec(maker);
+if (!library) fail('make_recorded_sounds.py: no pinned Free Firearm Sound Library source');
+else if (!readme.includes('Free Firearm Sound Library') || !readme.includes(library[1].slice(0, 7))) fail(`README doesn't credit the Free Firearm Sound Library at ${library[1].slice(0, 7)}`);
+else ok('the Free Firearm Sound Library (reloads) credited in the README');
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL AUDIO CHECKS PASSED');
 process.exit(failures ? 1 : 0);

@@ -609,7 +609,23 @@ export function roomIR(sr: number, seed: number): Channels {
 
 // ---------------------------------------------------------------------- foley
 
-export type FoleyKind = 'magOut' | 'magIn' | 'bolt' | 'pump' | 'slide' | 'shellIn' | 'holster' | 'draw' | 'shellGrab' | 'dryFire';
+/**
+ * Handling sounds. Reloads: magazine out and in (a belt box on the M249), the bolt or slide sent home
+ * on an empty gun ('bolt' bolt catch, 'charge' charging handle, 'slap' an MP5's handle slapped down,
+ * 'opRod' an M14's op rod, 'slide' a pistol's), 'cock' the MP5's bolt locked back first, shells and
+ * the pump, the M249's feed cover and belt, the pouch the old magazine goes into and the new one
+ * comes out of, and a pistol magazine landing on the floor.
+ */
+export type FoleyKind =
+  | 'magOut' | 'magIn' | 'bolt' | 'charge' | 'cock' | 'slap' | 'opRod' | 'slide'
+  | 'pumpBack' | 'pumpFwd' | 'shellIn' | 'shellGrab' | 'coverOpen' | 'coverClose' | 'belt'
+  | 'pouch' | 'pouchGrab' | 'magDrop' | 'holster' | 'draw' | 'dryFire';
+
+/** Every handling sound (checks and the startup bank walk this). */
+export const FOLEY_KINDS: FoleyKind[] = [
+  'magOut', 'magIn', 'bolt', 'charge', 'cock', 'slap', 'opRod', 'slide', 'pumpBack', 'pumpFwd', 'shellIn', 'shellGrab',
+  'coverOpen', 'coverClose', 'belt', 'pouch', 'pouchGrab', 'magDrop', 'holster', 'draw', 'dryFire',
+];
 
 /** How each gun's parts sound when handled: smaller guns ring higher, heavier ones thud. */
 const HANDLING: Record<string, { pitch: number; weight: number }> = {
@@ -623,7 +639,10 @@ const HANDLING: Record<string, { pitch: number; weight: number }> = {
   sniper: { pitch: 0.7, weight: 1.6 },
 };
 
-/** Renders one handling sound for a gun. Mono. */
+/**
+ * Renders one handling sound for a gun, synthesized: what plays until the recordings are decoded
+ * (and the pouch, belt and dropped magazine, which have none). Mono.
+ */
 export function renderFoley(kind: FoleyKind, weapon: string, sr: number, seed: number): Channels {
   const r = rng(seed);
   const { pitch: p, weight: w } = HANDLING[weapon] ?? HANDLING.ar;
@@ -657,17 +676,76 @@ export function renderFoley(kind: FoleyKind, weapon: string, sr: number, seed: n
       hit(0.105, [[600, 0.02, 0.4], [1450, 0.014, 0.6], [2600, 0.01, 0.5], [4100, 0.006, 0.4]], 1, 0.7);
       hit(0.122, [[2200, 0.006, 0.3], [3500, 0.004, 0.2]], 0.3, 0.15);
       break;
+    case 'charge':
+      // Charging handle hauled all the way back, then let go: a long scrape and a heavy slam.
+      scrape(out, sr, 0, 0.16 * w, 2400 * p, 0.32, r);
+      hit(0.17 * w, [[180, 0.03, 0.3], [560, 0.022, 0.45], [1350, 0.015, 0.6], [2500, 0.01, 0.5], [3900, 0.006, 0.35]], 1, 0.75);
+      hit(0.17 * w + 0.018, [[2100, 0.006, 0.3]], 0.3, 0.15);
+      break;
+    case 'cock':
+      // Bolt pulled back and rotated up into its notch: a scrape, then two clicks.
+      scrape(out, sr, 0, 0.08, 2600 * p, 0.3, r);
+      hit(0.085, [[1700, 0.008, 0.5], [3000, 0.006, 0.5], [4600, 0.004, 0.3]], 0.75, 0.5);
+      hit(0.14, [[2300, 0.005, 0.4], [3900, 0.004, 0.3]], 0.5, 0.35);
+      break;
+    case 'slap':
+    case 'opRod':
+      // The bolt let fly off the hand: a short rush and a hard slam home.
+      scrape(out, sr, 0, 0.025, 3000 * p, 0.25, r);
+      hit(0.028, [[480, 0.022, 0.45], [1250, 0.016, 0.6], [2300, 0.011, 0.55], [3700, 0.007, 0.4]], 1, 0.8);
+      hit(0.046, [[2600, 0.005, 0.25]], 0.25, 0.1);
+      break;
+    case 'coverOpen':
+      // Latch popped, the hinged cover swinging up to its stop.
+      hit(0, [[3300, 0.004, 0.4], [5200, 0.003, 0.3]], 0.5, 0.3);
+      scrape(out, sr, 0.01, 0.07, 1800 * p, 0.12, r);
+      hit(0.085, [[720, 0.02, 0.5], [1600, 0.014, 0.5], [2900, 0.009, 0.35]], 0.7, 0.3);
+      break;
+    case 'coverClose':
+      // Slammed down and the latch snapping over.
+      hit(0, [[650, 0.024, 0.5], [1500, 0.016, 0.6], [2700, 0.011, 0.5], [4100, 0.007, 0.3]], 1, 0.6);
+      hit(0.03, [[3600, 0.004, 0.4], [5400, 0.003, 0.3]], 0.45, 0.25);
+      break;
+    case 'belt':
+      // A belt of linked rounds laid across the feed tray: links clinking one after another.
+      for (let k = 0; k < 9; k++) {
+        const at = 0.012 + k * 0.022 + r() * 0.008;
+        hit(at, [[3800 + r() * 900, 0.006, 0.4], [6100 + r() * 900, 0.004, 0.3], [1900, 0.01, 0.15]], 0.35 + r() * 0.35, 0.2);
+      }
+      break;
+    case 'pouch':
+    case 'pouchGrab': {
+      // A magazine stuffed into (or pulled from) a fabric pouch: cloth rustle, a muffled knock.
+      const stow = kind === 'pouch';
+      const rustle = new Float32Array(out.length);
+      scrape(rustle, sr, 0, stow ? 0.16 : 0.12, 700, 0.55, r, 0.9);
+      scrape(rustle, sr, 0.02, stow ? 0.12 : 0.09, 2300, 0.2, r, 0.9);
+      filter(rustle, 'lowpass', sr, 3200, 0.7);
+      for (let i = 0; i < out.length; i++) out[i] += rustle[i];
+      if (stow) modes(out, sr, 0.13, [[260, 0.018, 0.5], [610, 0.012, 0.4], [1200, 0.008, 0.2]], 0.55, r, p);
+      break;
+    }
+    case 'magDrop':
+      // An empty polymer magazine hitting the floor and bouncing twice.
+      for (const [at, g] of [[0, 1], [0.12, 0.45], [0.19, 0.2]] as const) {
+        modes(out, sr, at, [[900, 0.012, 0.5], [1800, 0.009, 0.5], [3100, 0.006, 0.35], [380, 0.02, 0.3]], g, r, p);
+        tick(out, sr, at, 0.25 * g, 0.0007, 1500, r);
+      }
+      break;
     case 'slide':
       // Slide release: a small click, then the slide snapping forward.
       hit(0, [[4500, 0.003, 0.3]], 0.3, 0.15);
       hit(0.02, [[1600, 0.012, 0.5], [2700, 0.009, 0.6], [4300, 0.006, 0.4], [6200, 0.004, 0.2]], 1, 0.6);
       break;
-    case 'pump':
-      // Shk-chk: the forend racked back to the stop, then shoved forward to lock.
+    case 'pumpBack':
+      // Shk-: the forend racked back to the stop.
       scrape(out, sr, 0, 0.12, 1500 * p, 0.28, r, 0.75);
       hit(0.125, [[480, 0.025, 0.5], [1100, 0.016, 0.6], [2000, 0.01, 0.4], [260, 0.03, 0.3]], 0.85, 0.45);
-      scrape(out, sr, 0.14, 0.12, 1700 * p, 0.25, r, 0.75);
-      hit(0.27, [[560, 0.02, 0.6], [1300, 0.014, 0.7], [2400, 0.01, 0.5], [3600, 0.007, 0.3]], 1, 0.6);
+      break;
+    case 'pumpFwd':
+      // -chk: shoved forward to lock.
+      scrape(out, sr, 0, 0.12, 1700 * p, 0.25, r, 0.75);
+      hit(0.13, [[560, 0.02, 0.6], [1300, 0.014, 0.7], [2400, 0.01, 0.5], [3600, 0.007, 0.3]], 1, 0.6);
       break;
     case 'shellIn':
       // A shell thumbed past the carrier into the tube.

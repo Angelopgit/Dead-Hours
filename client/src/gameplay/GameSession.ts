@@ -181,7 +181,6 @@ export class GameSession {
   private wantSlot: 'primary' | 'secondary' | null = null;
   private wantMelee = false;
   private wantHeal = false;
-  private reloadFromEmpty = false;
 
   private readonly later: { t: number; fn: () => void }[] = [];
   private hurtFlash = 0;
@@ -265,7 +264,7 @@ export class GameSession {
     this.weapon = new PlayerWeapon(engine.scene, this.player.character);
     this.probe.attach(this.weapon.materials());
     this.weapon.onMaterials = (m) => this.probe.attach(m);
-    this.weapon.onCue = (cue, weapon) => audio.foley(cue, this.handPos(), weapon);
+    this.weapon.onCue = (cue, weapon, inS) => audio.foley(cue, this.handPos(), weapon, inS, true);
     this.lamp = new ChestLamp(this.player.character);
     this.probe.attach(this.lamp.materials());
     this.cam = new ThirdPersonCamera(engine.camera, physics);
@@ -1118,9 +1117,7 @@ export class GameSession {
     }
     if (this.wantReload) {
       this.wantReload = false;
-      const w = this.me.arsenal.weapon;
-      const empty = w.mag === 0;
-      if (sim.reload(this.myId)) this.reloadFromEmpty = empty;
+      sim.reload(this.myId);
     }
     const a = this.me.arsenal;
     const pressed = this.fireBuffer > 0;
@@ -1133,7 +1130,6 @@ export class GameSession {
     const d = this.cam.aimDir;
     const r = sim.fire(this.myId, { x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, pressed, (Math.random() * 2 ** 31) | 1);
     if (r !== 'busy') this.fireBuffer = 0;
-    if (r === 'dry' && a.action === 'reload') this.reloadFromEmpty = true;
   }
 
   // ------------------------------------------------------------------ online
@@ -1228,21 +1224,15 @@ export class GameSession {
     if (this.wantThrow) {
       const kind = this.wantThrow;
       this.wantThrow = null;
-      const reloading = a.action === 'reload';
       if (a.startThrow(kind)) {
         const { o, d } = aim();
         this.act({ a: 'throw', kind, o, d });
-        if (reloading) this.reloadFromEmpty = false;
         this.onEvent({ type: 'throwStart', player: this.myId, kind });
       }
     }
     if (this.wantReload) {
       this.wantReload = false;
-      const empty = a.weapon.mag === 0;
-      if (a.startReload()) {
-        this.reloadFromEmpty = empty;
-        this.act({ a: 'reload' });
-      }
+      if (a.startReload()) this.act({ a: 'reload' });
     }
     const pressed = this.fireBuffer > 0;
     this.fireBuffer = Math.max(0, this.fireBuffer - step);
@@ -1262,9 +1252,9 @@ export class GameSession {
     this.fireBuffer = 0;
     if (state === 'empty') {
       a.dryFire();
-      audio.dryFire(this.handPos(), a.weapon.id);
+      audio.dryFire(this.handPos(), a.weapon.id, true);
       this.act({ a: 'fire', ...aim() });
-      if (a.startReload()) this.reloadFromEmpty = true;
+      a.startReload();
       return;
     }
     a.consume();
@@ -1578,7 +1568,7 @@ export class GameSession {
         break;
       }
       case 'dryFire':
-        if (e.player === this.myId) audio.dryFire(this.handPos(), e.weapon);
+        if (e.player === this.myId) audio.dryFire(this.handPos(), e.weapon, true);
         else if (this.remotes?.handOf(e.player, A)) audio.dryFire(A, e.weapon);
         break;
       case 'impact': {
@@ -1815,16 +1805,12 @@ export class GameSession {
         if (e.player === this.myId) this.hud.feedLine(`HEALTH +${Math.round(e.amount)}`);
         break;
       case 'reload':
-        if (e.player !== this.myId) {
-          if (e.stage === 'shell' && (this.remotes?.handOf(e.player, A) ?? this.raid.handOf(e.player, A))) audio.foley('shellIn', A, e.weapon);
-          break;
+        // The sounds follow each survivor's reload animation (PlayerWeapon cues); a pump gun loaded
+        // from empty is racked once the last shell is in.
+        if (e.stage === 'end') {
+          const w = e.player === this.myId ? this.weapon : (this.remotes?.weaponOf(e.player) ?? this.raid.weaponOf(e.player));
+          w?.finishReload();
         }
-        if (e.stage === 'shell') audio.foley('shellIn', this.handPos(), e.weapon);
-        if (e.stage === 'end' && e.weapon === 'shotgun' && this.reloadFromEmpty) {
-          this.weapon.cycleAction();
-          this.later.push({ t: 0.12, fn: () => audio.foley('pump', this.handPos(), 'shotgun') });
-        }
-        if (e.stage === 'end' || e.stage === 'cancel') this.reloadFromEmpty = false;
         break;
       case 'melee':
         if (e.player !== this.myId) {
@@ -1848,7 +1834,7 @@ export class GameSession {
         break;
       case 'refit':
         if (e.player !== this.myId) break;
-        audio.foley('magIn', this.handPos(), e.weapon);
+        audio.foley('magIn', this.handPos(), e.weapon, 0, true);
         this.hud.feedLine(`${WEAPONS[e.weapon].model} REFITTED`);
         this.rack?.setBuilds(this.me.arsenal.builds);
         this.smith?.panel.render();

@@ -4,6 +4,8 @@ import type { Humanoid } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
 import { createThrowableModel, type ThrowableModel } from './ThrowableModels';
+import { PUMP_HITS, dueCues } from './reloadScript';
+import type { FoleyKind } from '../audio/GunSynth';
 
 /** What the hands are doing, read from the authoritative arsenal (or a network snapshot). */
 export interface HeldState {
@@ -43,8 +45,8 @@ export interface HandsInput {
 /** Turns camera space (looking down -Z) into weapon space (barrel along +Z). */
 const FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
-/** Sound cues the animation reaches (reload steps, holstering). */
-export type WeaponCue = 'magOut' | 'magIn' | 'bolt' | 'pump' | 'slide' | 'holster' | 'draw' | 'shellGrab';
+/** Sound cues the animation reaches (reload steps, the pump, holstering): see reloadScript.ts. */
+export type WeaponCue = FoleyKind;
 
 type V3 = [number, number, number];
 interface PoseDef { at: V3; rot?: V3 }
@@ -204,7 +206,13 @@ export class PlayerWeapon {
   private shown = true;
   /** Called when new weapon materials appear (light probe patching). */
   onMaterials: ((m: THREE.Material[]) => void) | null = null;
-  onCue: ((cue: WeaponCue, weapon: WeaponId) => void) | null = null;
+  /**
+   * A handling sound is due: `inS` is how long until its main hit lands (the magazine seats as the
+   * hand pushes it home), so the sound can start early enough to lead up to it.
+   */
+  onCue: ((cue: WeaponCue, weapon: WeaponId, inS: number) => void) | null = null;
+  /** The reload under way started on an empty gun (the bolt has to go home; a pump gun is racked after). */
+  private reloadEmpty = false;
 
   private readonly anchor = new THREE.Vector3();
   private readonly quat = new THREE.Quaternion();
@@ -295,6 +303,7 @@ export class PlayerWeapon {
     if (def.id === 'shotgun') {
       this.actionCycle = 0;
       this.actionKind = 'pump';
+      this.pumpCues(0);
     } else if (def.id === 'pistol') {
       this.actionCycle = 0;
       this.actionKind = 'slide';
@@ -305,6 +314,19 @@ export class PlayerWeapon {
   cycleAction(): void {
     this.actionCycle = 0.08;
     this.actionKind = 'pump';
+    this.pumpCues(0.08);
+  }
+
+  /** The rack's two hits, timed to the animation (the forend reaches the back stop, then locks forward). */
+  private pumpCues(from: number): void {
+    this.onCue?.('pumpBack', 'shotgun', PUMP_HITS.back - from);
+    this.onCue?.('pumpFwd', 'shotgun', PUMP_HITS.forward - from);
+  }
+
+  /** A reload finished: a pump gun loaded from empty racks a shell into the chamber. */
+  finishReload(): void {
+    if (this.reloadEmpty && this.lastActive && WEAPONS[this.lastActive].perShell) this.cycleAction();
+    this.reloadEmpty = false;
   }
 
   /** Last IK targets (tests and debugging). */
@@ -381,7 +403,7 @@ export class PlayerWeapon {
     const poses = POSES[hold];
     const progress = s.actionTotal > 0 ? THREE.MathUtils.clamp(1 - s.actionT / s.actionTotal, 0, 1) : 1;
     if (activeId !== this.lastActive) {
-      if (this.lastActive) this.onCue?.('holster', this.lastActive);
+      if (this.lastActive) this.onCue?.('holster', this.lastActive, 0);
       this.lastActive = activeId;
     }
     this.cues(s, def, progress);
@@ -782,26 +804,26 @@ export class PlayerWeapon {
     // Pump: rack back then forward.
     const k = t < 0.12 ? 0 : t < 0.26 ? smooth((t - 0.12) / 0.14) : t < 0.4 ? 1 - smooth((t - 0.26) / 0.14) : 0;
     m.action.position.z -= k * 0.085;
-    if (t >= 0.12 && t - dt < 0.12) this.onCue?.('pump', m.id);
     if (t > 0.42) this.actionCycle = -1;
   }
 
-  /** Reload/draw sound cues at choreography milestones. */
+  /**
+   * Reload and draw sounds at the animation's milestones (reloadScript.ts). Each goes out CUE_LEAD s
+   * before its hit with the time left until it lands, so the take's lead-in plays first and the hit
+   * meets the hand. Shell-by-shell reloads start over for every shell.
+   */
   private cues(s: HeldState, def: WeaponDef, p: number): void {
-    const cross = (t: number) => this.lastAction === s.action && this.lastProgress < t && p >= t;
     const id = def.id;
     // Taking hold of a severed arm is its own sound, not a gun coming out.
-    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb) this.onCue?.('draw', id);
-    if (s.action !== 'reload' || def.perShell) return;
-    if (def.hold === 'pistol') {
-      if (cross(0.15)) this.onCue?.('magOut', id);
-      if (cross(0.66)) this.onCue?.('magIn', id);
-      if (cross(0.82)) this.onCue?.('slide', id);
-    } else {
-      if (cross(0.18)) this.onCue?.('magOut', id);
-      if (cross(0.74)) this.onCue?.('magIn', id);
-      if (cross(0.87)) this.onCue?.('bolt', id);
-    }
+    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb) this.onCue?.('draw', id, 0);
+    if (s.action !== 'reload') return;
+    const fresh = this.lastAction !== 'reload';
+    if (fresh) this.reloadEmpty = (s.active === 'primary' ? s.primary.mag : s.secondary.mag) === 0;
+    // A reload (or the next shell) just begun: everything due so far plays now. Caught halfway
+    // (someone else's, first seen mid-reload), it carries on from here.
+    const restart = fresh || (!!def.perShell && p < this.lastProgress - 0.2);
+    const prev = restart ? (p < 0.25 ? -Infinity : p) : this.lastProgress;
+    for (const c of dueCues(id, this.reloadEmpty, prev, p, Math.max(0.05, s.actionTotal))) this.onCue?.(c.cue, id, c.inS);
   }
 
   /** Hides every weapon model (death, cutscenes). */

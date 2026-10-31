@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { settings } from '../core/Settings';
 import type { Vec3 } from '@dead-hours/shared';
 import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from './GunSynth';
+import { RELOAD_STEPS } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
 import type { MeleeId } from '@dead-hours/shared';
-import { RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
+import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
 import { RECORDED_FILES } from './recordedFiles';
 import { weather } from '../environment/Weather';
 
@@ -55,21 +56,22 @@ const ZOMBIE_LEVEL = 2.4;
 const MAX_GROANS = 12;
 /** Zombie footsteps by gait: loud enough to hear them coming down the street, not just groaning. */
 const STEP_LEVEL = { walker: 1.8, runner: 1.7, brute: 1.2 };
-/** Playback level of each handling sound. */
+/** Playback level of each synthesized handling sound (recorded ones are levelled in Recordings.ts). */
 const FOLEY_LEVEL: Record<FoleyKind, number> = {
-  magOut: 0.3, magIn: 0.42, bolt: 0.45, pump: 0.45, slide: 0.42, shellIn: 0.3, shellGrab: 0.08, holster: 0.16, draw: 0.16, dryFire: 0.3,
+  magOut: 0.3, magIn: 0.42, bolt: 0.45, charge: 0.48, cock: 0.38, slap: 0.48, opRod: 0.48, slide: 0.42,
+  pumpBack: 0.42, pumpFwd: 0.45, shellIn: 0.3, shellGrab: 0.08, coverOpen: 0.32, coverClose: 0.42, belt: 0.2,
+  pouch: 0.09, pouchGrab: 0.07, magDrop: 0.3, holster: 0.16, draw: 0.16, dryFire: 0.3,
 };
-/** Handling sounds each gun makes, rendered ahead of time. */
-const FOLEY_SET: Record<string, FoleyKind[]> = {
-  ar: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
-  smg: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
-  marksman: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
-  pistol: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'slide'],
-  shotgun: ['draw', 'holster', 'dryFire', 'pump', 'shellIn', 'shellGrab'],
-  lmg: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
-  battle: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
-  sniper: ['draw', 'holster', 'dryFire', 'magOut', 'magIn', 'bolt'],
-};
+/** Synthesized handling sounds each gun makes, rendered ahead of time: its reload's, and the pump's. */
+const FOLEY_SET: Record<string, FoleyKind[]> = Object.fromEntries(Object.keys(GUN_SOUNDS).map((id) => [id, [
+  ...new Set<FoleyKind>(['draw', 'holster', 'dryFire', ...(RELOAD_STEPS[id] ?? []).map((s) => s.cue), ...(id === 'shotgun' ? ['pumpBack', 'pumpFwd'] as const : [])]),
+]]));
+/** How far someone else's reload carries (m). */
+const FOLEY_RANGE = 30;
+/** How much a handling sound sets its space ringing: a basement answers a magazine going in, the street hardly. */
+const FOLEY_ECHO: Record<Space, number> = { street: 0.01, room: 0.04, hall: 0.05, basement: 0.06 };
+
+const _foleyAt = new THREE.Vector3();
 
 /** Transfer curve for the master's WaveShaper, which sees the signal scaled down by CLIP_RANGE. */
 function softClipCurve(): Float32Array<ArrayBuffer> {
@@ -138,6 +140,8 @@ export class AudioEngine {
   private readonly listenerPos = new THREE.Vector3();
   /** When each groan now sounding ends. */
   private groaning: number[] = [];
+  /** Where in each handling take its main hit is (s): its loudest moment. */
+  private readonly hits = new WeakMap<AudioBuffer, number>();
   private rotorBuffer: AudioBuffer | null = null;
   private readonly rotors = new Map<number, { src: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode }>();
   private vanSound: { oscs: OscillatorNode[]; rumble: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode; panner: PannerNode } | null = null;
@@ -1252,20 +1256,55 @@ export class AudioEngine {
     }
   }
 
-  dryFire(position: THREE.Vector3, weapon = 'ar'): void {
-    this.foley('dryFire', position, weapon);
+  dryFire(position: THREE.Vector3, weapon = 'ar', own = false): void {
+    this.foley('dryFire', position, weapon, 0, own);
   }
 
-  /** Reload and handling foley, voiced for the gun in hand. */
-  foley(kind: FoleyKind, position: THREE.Vector3, weapon = 'ar'): void {
+  /**
+   * A handling sound (a reload's magazine, bolt or shell, the pump, drawing and holstering) voiced
+   * for the gun: a recorded take once decoded, pitched for the size of the gun's parts, else the
+   * synthesized one. `inS`: how long until its main hit should land (the magazine seating as the
+   * hand pushes it home); the take starts early enough that what leads up to it plays first. Your
+   * own (`own`) come from your hands; anyone else's carry FOLEY_RANGE m and are muffled through
+   * walls. Each one rings in the space it is made in.
+   */
+  foley(kind: FoleyKind, position: THREE.Vector3, weapon = 'ar', inS = 0, own = false): void {
     if (!this.ctx) return;
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.foleyBuffer(kind, GUN_SOUNDS[weapon] ? weapon : 'ar', Math.floor(Math.random() * FOLEY_TAKES));
-    src.playbackRate.value = 1 + (Math.random() * 2 - 1) * 0.04;
-    const d = this.out(position, 0.05, 2);
-    d.gain.value = FOLEY_LEVEL[kind];
-    src.connect(d);
-    src.start();
+    const ctx = this.ctx;
+    // A dropped magazine lands at the feet, about 1.1 m under the hand.
+    const at = kind === 'magDrop' ? _foleyAt.set(position.x, position.y - 1.1, position.z) : position;
+    if (!own && at.distanceTo(this.listenerPos) > FOLEY_RANGE) return;
+    const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
+    const voice = RECORDED_HANDLING[id]?.[kind];
+    const take = voice ? this.recording(voice.set) : null;
+    const buffer = take ?? this.foleyBuffer(kind, id, Math.floor(Math.random() * FOLEY_TAKES));
+    const rate = (take ? voice!.rate : 1) * (1 + (Math.random() * 2 - 1) * 0.03);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = rate;
+    const g = ctx.createGain();
+    g.gain.value = (take ? voice!.level : FOLEY_LEVEL[kind]) * (0.92 + Math.random() * 0.16);
+    src.connect(g);
+    const p = this.makePanner(at);
+    p.refDistance = own ? 2 : 1.5;
+    const m = own ? CLEAR : this.muffle(at);
+    this.muffled(g, m).connect(p).connect(this.effects);
+    const space = own ? this.here : this.spaceOf(at);
+    this.sendTo(g, space, FOLEY_ECHO[space], m);
+    src.start(ctx.currentTime + Math.max(0, inS - this.hitOf(buffer) / rate));
+  }
+
+  /** Where a take's main hit is (s from its start): its loudest sample. */
+  private hitOf(buf: AudioBuffer): number {
+    let at = this.hits.get(buf);
+    if (at === undefined) {
+      const x = buf.getChannelData(0);
+      let k = 0;
+      for (let i = 1; i < x.length; i++) if (Math.abs(x[i]) > Math.abs(x[k])) k = i;
+      at = k / buf.sampleRate;
+      this.hits.set(buf, at);
+    }
+    return at;
   }
 
   casing(position: THREE.Vector3, shell: boolean, strength: number): void {
