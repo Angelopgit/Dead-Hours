@@ -1524,11 +1524,11 @@ export class GameSession {
         v3(e.dir, B);
         this.effects.blood(A, B, e.damage, { exit: null, killed: e.killed, head: e.zone === 'head', melee: e.melee });
         this.raid.hit(e.raider, e.zone, B, e.damage);
-        audio.flesh(A, Math.min(1, e.damage / 60) + (e.melee ? 0.4 : 0));
+        audio.flesh(A, { damage: e.damage, head: e.zone === 'head', own: e.by === this.myId, melee: e.melee });
         if (e.by === this.myId) {
           const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
+          // Seen, not heard: the round going in is the sound of a hit.
           this.hud.hitMarker(kind);
-          audio.hitMarker(kind);
         }
         break;
       }
