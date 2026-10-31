@@ -27,6 +27,7 @@ export class MainMenu {
   private panelDispose: (() => void) | null = null;
   private online: OnlineMenu | null = null;
   private creator: CharacterCreator | null = null;
+  private armory: LoadoutPanel | null = null;
   /** Items that need the game server: enabled only once it has answered. */
   private readonly needServer: HTMLButtonElement[] = [];
   private playOpen = false;
@@ -62,7 +63,7 @@ export class MainMenu {
         item('PLAY', () => this.togglePlay()),
         this.sub,
         item('SURVIVOR', () => this.openCreator(), { tag: 'CUSTOMIZE' }),
-        item('LOADOUT', () => this.openPanel(new LoadoutPanel(() => this.closePanel()).el)),
+        item('LOADOUT', () => this.openArmory(), { tag: 'GUNSMITH' }),
         item('LEADERBOARDS', () => this.openBoards('survival'), { online: true }),
         this.accountItem = item('ACCOUNT', () => this.openBoards('you'), { tag: 'GUEST · SIGN IN', online: true }),
         item('SETTINGS', () => this.openPanel(new SettingsPanel(this.input, () => this.closePanel()).el)),
@@ -150,6 +151,7 @@ export class MainMenu {
   private onKey = (e: KeyboardEvent): void => {
     if (e.code !== 'Escape' || !this.el.isConnected || this.input.captureNext) return;
     if (this.creator) this.closeCreator();
+    else if (this.armory) this.closeArmory();
     else if (this.online) this.online.back();
     else if (this.panel) this.closePanel();
   };
@@ -170,6 +172,27 @@ export class MainMenu {
     this.creator = null;
     this.cb.onCreator?.(false);
     gsap.to(c.el, { opacity: 0, duration: 0.3, ease: 'power2.in', onComplete: () => c.dispose() });
+    gsap.to([this.main, this.el.querySelector('.menu-footer'), this.el.querySelector('.menu-hint')], { opacity: 1, duration: 0.45, delay: 0.1 });
+    this.main.style.pointerEvents = '';
+  }
+
+  /** The armory covers the menu like the creator (and the street stops drawing behind it). */
+  private openArmory(): void {
+    if (this.armory || this.creator) return;
+    this.closePanel();
+    this.armory = new LoadoutPanel(() => this.closeArmory());
+    this.el.append(this.armory.el);
+    gsap.to([this.main, this.el.querySelector('.menu-footer'), this.el.querySelector('.menu-hint')], { opacity: 0, duration: 0.3 });
+    this.main.style.pointerEvents = 'none';
+    this.cb.onCreator?.(true);
+  }
+
+  private closeArmory(): void {
+    const a = this.armory;
+    if (!a) return;
+    this.armory = null;
+    this.cb.onCreator?.(false);
+    gsap.to(a.el, { opacity: 0, duration: 0.3, ease: 'power2.in', onComplete: () => a.dispose() });
     gsap.to([this.main, this.el.querySelector('.menu-footer'), this.el.querySelector('.menu-hint')], { opacity: 1, duration: 0.45, delay: 0.1 });
     this.main.style.pointerEvents = '';
   }
@@ -230,6 +253,8 @@ export class MainMenu {
     this.panelDispose?.();
     this.creator?.dispose();
     this.creator = null;
+    this.armory?.dispose();
+    this.armory = null;
     window.removeEventListener('keydown', this.onKey);
     this.offAccount();
     this.el.remove();

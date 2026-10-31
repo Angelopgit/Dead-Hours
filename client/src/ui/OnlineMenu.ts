@@ -1,4 +1,4 @@
-import { GAME, ROOMS, SERVERS_FULL, WEAPONS, encodeAppearance, sanitizeAppearance, type BeginMsg, type LobbyMsg, type RoomListing, type WeaponId } from '@dead-hours/shared';
+import { GAME, ROOMS, SERVERS_FULL, WEAPONS, encodeAppearance, encodeLoadout, sanitizeAppearance, type BeginMsg, type LobbyMsg, type RoomListing, type WeaponId } from '@dead-hours/shared';
 import { h } from './dom';
 import { clock } from './HUD';
 import { settings } from '../core/Settings';
@@ -21,7 +21,7 @@ type View = 'browse' | 'host' | 'lobby' | 'full';
 
 function joinOptions() {
   const p = settings.value.profile;
-  return { name: p.name, primary: p.primary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), token: account.key, session: account.session ?? undefined };
+  return { name: p.name, primary: p.primary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), token: account.key, session: account.session ?? undefined, builds: encodeLoadout(account.loadout) };
 }
 
 /** What a failed join or create means for the player. */

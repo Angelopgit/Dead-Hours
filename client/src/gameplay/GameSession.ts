@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import {
   BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type ArmZone, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
@@ -35,13 +36,24 @@ import { ResultsScreen, TeamResults } from '../ui/ResultsScreen';
 import { WeaponTablePanel } from '../ui/WeaponTablePanel';
 import { TouchControls } from '../ui/TouchControls';
 import { AimAssist } from './AimAssist';
+import { GunsmithPanel } from '../ui/GunsmithPanel';
+import { GunsmithStage } from '../weapons/GunsmithStage';
 import { audio } from '../audio/AudioEngine';
 import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 
-type Phase = 'intro' | 'playing' | 'paused' | 'table' | 'dead';
+/** 'gunsmith': customizing the guns in the field (the night goes on around the survivor). */
+type Phase = 'intro' | 'playing' | 'paused' | 'table' | 'gunsmith' | 'dead';
+
+interface Smith {
+  stage: GunsmithStage;
+  panel: GunsmithPanel;
+  el: HTMLElement;
+  /** Opened from the workbench (the weapon table's panel comes back on closing). */
+  bench: boolean;
+}
 
 /** Name of the map area containing a point (areas are ordered most specific first). */
 export function areaAt(map: MapDefinition, p: THREE.Vector3): string {
@@ -126,6 +138,7 @@ export class GameSession {
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
   private table: WeaponTablePanel | null = null;
+  private smith: Smith | null = null;
   private results: ResultsScreen | null = null;
   private phase: Phase = 'intro';
   private accumulator = 0;
@@ -160,7 +173,7 @@ export class GameSession {
   private impactSoundAt = 0;
   private lastHurtDir = new THREE.Vector3(0, 0, 1);
   private ragdoll: Ragdoll | null = null;
-  private readonly sights = new Map<WeaponId, Sight | null>();
+  private readonly sights = new Map<string, Sight | null>();
   private dropped: Dropped | null = null;
   private deathT = 0;
   private deathYaw = 0;
@@ -222,7 +235,7 @@ export class GameSession {
     const profile = settings.value.profile;
     const primary = (PRIMARY_WEAPONS as string[]).includes(profile.primary) ? (profile.primary as WeaponId) : 'ar';
     const look = sanitizeAppearance(profile.appearance);
-    this.me = this.sim.addPlayer(this.myId, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look));
+    this.me = this.sim.addPlayer(this.myId, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look), account.loadout);
     this.mirror = online ? new Mirror(this.sim, this.myId) : null;
     this.remotes = online ? new RemoteSurvivors(engine.scene, physics, field, ui, this.myId) : null;
 
@@ -267,6 +280,7 @@ export class GameSession {
     const bench = NEIGHBORHOOD.props.find((p) => p.use === 'weapons');
     if (bench) {
       this.rack = new WeaponRack(engine.scene, bench, field);
+      this.rack.setBuilds(this.me.arsenal.builds);
       this.rack.highlight(null, this.me.arsenal.primary.id);
     }
     this.applySettings();
@@ -346,6 +360,11 @@ export class GameSession {
     }
     if (this.phase === 'intro') {
       this.finishIntro();
+      return;
+    }
+    if (this.smith) {
+      const b = settings.value.controls.bindings;
+      if (e.code === 'Escape' || b.interact.includes(e.code) || b.gunsmith.includes(e.code)) this.closeGunsmith();
       return;
     }
     if (this.phase === 'table') {
@@ -565,6 +584,121 @@ export class GameSession {
     this.downPanel.classList.toggle('helped', !!helper);
   }
 
+  // ------------------------------------------------------------------ gunsmith
+
+  /**
+   * Customizing the carried guns: in the field (the night goes on, so it closes when hit) or
+   * from the workbench. The gun is held up in front of the camera, side-on, with clickable
+   * labels on its fittings; hovering an option shows it on the gun, clicking fits it for real
+   * (the gun in hand is down for a moment while that's done).
+   */
+  private openGunsmith(bench: boolean): void {
+    if (this.smith || (bench ? this.phase !== 'table' : this.phase !== 'playing') || !this.me.up) return;
+    const a = this.me.arsenal;
+    const guns = [a.primary.id, a.secondary.id].filter(buildable);
+    if (!guns.length) return;
+    if (bench) this.table?.el.remove();
+    else {
+      this.phase = 'gunsmith';
+      this.input.clear();
+      this.player.clearInput();
+      this.clearIntents();
+      this.inventory.hide();
+      this.input.releaseLock();
+      this.hud.setPrompt(null);
+    }
+    const stage = new GunsmithStage(true);
+    stage.onMaterials = (m) => this.probe.attach(m);
+    const buildOf = (id: WeaponId) => this.me.arsenal.builds[id] ?? defaultBuild(id);
+    const panel = new GunsmithPanel(guns, buildOf, () => account.unlocks, () => account.xp, {
+      onWeapon: (id) => stage.show(id, buildOf(id)),
+      onPreview: (id, b) => stage.show(id, b ?? buildOf(id)),
+      onApply: (id, b) => this.refit(id, b, panel),
+      onSlot: (slot) => stage.face(slot),
+    }, bench ? 'WORKBENCH' : 'GUNSMITH');
+    if (a.active === 'secondary' && guns.includes(a.secondary.id)) panel.selectWeapon(a.secondary.id);
+    stage.show(panel.current, buildOf(panel.current));
+    stage.face(panel.currentSlot);
+    this.engine.camera.add(stage.holder);
+    const drag = h('div', {
+      class: 'gs-drag',
+      onpointerdown: (e: Event) => stage.pointerDown(e as PointerEvent),
+    });
+    const move = (e: PointerEvent) => stage.pointerMove(e);
+    const up = () => stage.pointerUp();
+    window.addEventListener('pointermove', move, { signal: this.abort.signal });
+    window.addEventListener('pointerup', up, { signal: this.abort.signal });
+    const el = h('div', { class: 'gs-layer' },
+      bench ? null : h('div', { class: 'gs-field-veil' }),
+      drag,
+      panel.labels,
+      h('div', { class: 'panel gunsmith-panel', role: 'dialog', 'aria-label': 'Gunsmith' },
+        h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closeGunsmith(); } }, bench ? '◂ WEAPONS' : 'CLOSE ✕'),
+        panel.el,
+        h('p', { class: 'gs-hint' }, bench
+          ? 'Drag the gun to turn it. Click a label on it or pick below. [Esc] back to the weapon table.'
+          : `The night goes on: you stand still, and a hit closes this. Drag the gun to turn it. ${actionLabel('gunsmith') ? `[${actionLabel('gunsmith')}] or ` : ''}[Esc] to put it away.`),
+      ),
+    );
+    this.smith = { stage, panel, el, bench };
+    this.ui.append(el);
+    gsap.fromTo(el.querySelector('.gunsmith-panel'), { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.35, ease: 'power3.out' });
+    audio.ui('click');
+  }
+
+  /** Puts the gun away (`keepTable`: the weapon table is closing too, don't bring its panel back). */
+  private closeGunsmith(keepTable = false): void {
+    const s = this.smith;
+    if (!s) return;
+    this.smith = null;
+    s.stage.dispose();
+    s.el.remove();
+    if (s.bench) {
+      if (!keepTable && this.table && this.phase === 'table') this.ui.append(this.table.el);
+      return;
+    }
+    if (this.phase === 'gunsmith') {
+      this.phase = 'playing';
+      this.cam.snapNext();
+      this.input.requestLock();
+      this.promptClick();
+    }
+  }
+
+  private updateGunsmith(dt: number): void {
+    const s = this.smith;
+    if (!s) return;
+    s.stage.update(dt);
+    // Held up in front of the camera, a little left of center (the panel takes the right), filling about half the width.
+    const cam = this.engine.camera;
+    const tanH = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * cam.aspect;
+    const d = Math.max(0.35, s.stage.radius / (0.5 * tanH));
+    s.stage.holder.position.set(-0.32 * d * tanH, -0.02 * d, -d);
+    const r = this.engine.canvas.getBoundingClientRect();
+    s.panel.place(s.stage.hotspots(cam, r.width, r.height));
+  }
+
+  /** Fits a build to a carried gun: at once in solo, predicted and sent to the server online. */
+  private refit(id: WeaponId, want: WeaponBuild, panel: GunsmithPanel | null = this.smith?.panel ?? null): void {
+    const build = sanitizeBuild(id, want, account.unlocks);
+    const code = encodeBuild(build);
+    if (this.link) {
+      if (!this.me.arsenal.refit(id, build)) {
+        panel?.setNote('HANDS ARE BUSY · TRY AGAIN IN A MOMENT');
+        return;
+      }
+      this.act({ a: 'refit', weapon: id, build: code });
+      this.onEvent({ type: 'refit', player: this.myId, weapon: id, build: code });
+      // Should the server refuse, the next snapshot after this puts the real build back.
+      this.later.push({ t: 1.5, fn: () => this.mirror?.forgetBuilds(this.myId) });
+    } else if (!this.sim.refit(this.myId, id, build)) {
+      panel?.setNote('HANDS ARE BUSY · TRY AGAIN IN A MOMENT');
+      return;
+    }
+    // Saved to the profile: the next night starts with it too.
+    account.setLoadout({ ...account.loadout, [id]: build });
+  }
+
   // ------------------------------------------------------------------ weapon table
 
   private openTable(): void {
@@ -591,6 +725,7 @@ export class GameSession {
       onHover: (id) => this.rack?.highlight(id, this.me.arsenal.primary.id),
       onPick: (id) => this.choose(id),
       onClose: () => this.closeTable(),
+      onGunsmith: () => this.openGunsmith(true),
     });
     this.ui.append(this.table.el);
     gsap.fromTo(this.table.el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, delay: 0.25, ease: 'power3.out' });
@@ -610,6 +745,7 @@ export class GameSession {
 
   private closeTable(): void {
     if (this.phase !== 'table') return;
+    if (this.smith) this.closeGunsmith(true);
     this.tableTween?.kill();
     this.tableTween = null;
     this.table?.el.remove();
@@ -745,6 +881,7 @@ export class GameSession {
     audio.helicopters(this.phase === 'paused' && !this.link ? new Map() : this.helis);
     this.effects.update(live, this.engine.camera);
     this.rack?.update(dt, this.engine.camera);
+    this.updateGunsmith(dt);
 
     this.updateHud(dt);
 
@@ -781,10 +918,12 @@ export class GameSession {
   }
 
   private sightFor(id: WeaponId): Sight | null {
-    let s = this.sights.get(id);
+    const b = this.me.arsenal.builds[id];
+    const key = b ? `${id}:${encodeBuild(b)}` : id;
+    let s = this.sights.get(key);
     if (s === undefined) {
-      s = sightOf(id);
-      this.sights.set(id, s);
+      s = sightOf(id, b);
+      this.sights.set(key, s);
     }
     return s;
   }
@@ -856,6 +995,10 @@ export class GameSession {
     if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
       this.chatBox.open();
       input.clear();
+    }
+    if (input.pressed('gunsmith')) {
+      this.openGunsmith(false);
+      return;
     }
     if (input.pressed('heal')) {
       if (this.me.bandages <= 0) this.hud.feedLine('NO BANDAGES');
@@ -933,7 +1076,7 @@ export class GameSession {
   /** This survivor's own actions the session already showed when they were made. */
   private predicted(e: SimEvent): boolean {
     if (!('player' in e) || e.player !== this.myId) return false;
-    return e.type === 'dryFire' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start');
+    return e.type === 'dryFire' || e.type === 'refit' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start');
   }
 
   /** What the server would do between snapshots: hands keep moving, doors keep swinging, zombies stay solid. */
@@ -1036,11 +1179,11 @@ export class GameSession {
 
   /** Muzzle flash, report, recoil and the spent case for this survivor's own shot. */
   private shotFeedback(weapon: WeaponId): void {
-    const def = WEAPONS[weapon];
+    const def = this.me.arsenal.defOf(weapon);
     const muzzle = this.weapon.muzzleWorld(this.tmpA);
     const dir = this.weapon.muzzleDir(this.tmpB);
     this.effects.muzzle(muzzle, dir, weapon);
-    audio.gunshot(weapon, muzzle, true);
+    audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor');
     this.weapon.fired(def);
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
@@ -1061,10 +1204,11 @@ export class GameSession {
       if (e.pellets.length > 1 && i % 3 !== 0) continue;
       this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
     }
-    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end));
+    const shooter = this.sim.players.get(e.player)?.arsenal;
+    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor');
     const w = r.weaponOf(e.player);
     if (w) {
-      w.fired(WEAPONS[e.weapon]);
+      w.fired(shooter ? shooter.defOf(e.weapon) : WEAPONS[e.weapon]);
       const pos = this.tmpC, d = this.tmpD;
       w.ejectWorld(pos, d);
       const floor = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 3);
@@ -1506,6 +1650,13 @@ export class GameSession {
         if (e.stage === 'start') audio.bandage();
         if (e.stage === 'cancel') this.hud.feedLine('BANDAGE INTERRUPTED');
         break;
+      case 'refit':
+        if (e.player !== this.myId) break;
+        audio.foley('magIn', this.handPos(), e.weapon);
+        this.hud.feedLine(`${WEAPONS[e.weapon].model} REFITTED`);
+        this.rack?.setBuilds(this.me.arsenal.builds);
+        this.smith?.panel.render();
+        break;
       case 'pickup':
         if (e.player !== this.myId) break;
         audio.pickup(e.item);
@@ -1617,11 +1768,13 @@ export class GameSession {
     this.input.rumble(0.45 + Math.min(0.5, damage / 50), 160);
     this.hurtFlash = Math.min(1, this.hurtFlash + 0.35 + damage / 50);
     audio.playerHurt(Math.min(1, damage / 30));
+    if (this.smith && !this.smith.bench) this.closeGunsmith();
     if (this.phase === 'table') this.closeTable();
   }
 
   private onDeath(): void {
     if (this.phase === 'dead') return;
+    if (this.smith && !this.smith.bench) this.closeGunsmith();
     if (this.phase === 'table') this.closeTable();
     // Online the night goes on behind the pause menu, so death can come while it is open.
     this.pause.hide();
@@ -1643,7 +1796,7 @@ export class GameSession {
     // The held weapon falls; the survivor goes limp.
     const held = this.weapon.heldModel;
     if (held) {
-      const model = createWeaponModel(held.id);
+      const model = createWeaponModel(held.id, held.build);
       model.root.position.copy(held.root.position);
       model.root.quaternion.copy(held.root.quaternion);
       this.engine.scene.add(model.root);
@@ -1733,8 +1886,12 @@ export class GameSession {
     if (!this.link) {
       this.results = new ResultsScreen(run, [['RETRY', () => this.onRetry()], ['MAIN MENU', () => this.onQuit()]]);
       this.results.show(this.ui);
-      // On the boards (when the game server can be reached), marked as a solo run.
-      void account.reportSolo(run.survived, run.stats).then((r) => { if (r) this.results?.setRanks(r); });
+      // On the boards (when the game server can be reached), marked as a solo run, and its XP on the profile.
+      const before = account.xp;
+      void account.reportSolo(run.survived, run.stats).then((r) => {
+        this.results?.setRanks(r);
+        this.results?.setXp(r.gained, before, account.xp, run, r.offline);
+      });
       return;
     }
     const alive = [...this.sim.players.values()].filter((p) => p.alive && p.id !== this.myId);
@@ -1781,6 +1938,11 @@ export class GameSession {
     actions.push(['LEAVE GAME', () => this.onQuit()]);
     this.teamResults = new TeamResults(over, this.myId, actions);
     this.teamResults.show(this.ui);
+    // The server put the night's XP on the profile: fetch the new level for the results.
+    const mine = over.results.find((r) => r.id === this.myId);
+    const before = account.xp;
+    const team = this.teamResults;
+    if (mine?.xp) void account.refresh().then(() => team.setXp(mine.xp ?? 0, before, account.xp, mine));
   }
 
   /** Seconds survived since the outbreak, frozen at death. */
@@ -1941,6 +2103,12 @@ export class GameSession {
     this.touch.dispose();
     this.input.uiNav = true;
     this.table?.el.remove();
+    if (this.smith) {
+      this.smith.stage.dispose();
+      this.smith.el.remove();
+      this.smith.panel.labels.remove();
+      this.smith = null;
+    }
     this.results?.dispose();
     this.teamResults?.dispose();
     this.spectateLine.remove();

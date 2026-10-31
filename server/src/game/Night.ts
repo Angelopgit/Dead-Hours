@@ -1,6 +1,8 @@
 import {
   GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, Simulation, captureSnapshot, groups, unpackMotion,
-  type ActMsg, type DebugMsg, type DoorBody, type Physics, type SimEvent, type Snapshot, type Vec3, type WeaponId, type ZombieKind,
+  BUILD_SLOTS, decodeBuild, sanitizeBuild,
+  type ActMsg, type DebugMsg, type DoorBody, type Loadout, type Physics, type SimEvent, type Snapshot, type UnlockState, type Vec3,
+  type WeaponBuild, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import { createWorld } from './world';
 
@@ -21,6 +23,10 @@ export interface Survivor {
   name: string;
   primary: WeaponId;
   appearance: string;
+  /** Weapon builds, already checked against `unlocks`. */
+  builds: Loadout;
+  /** What the survivor's profile has unlocked: every refit during the night is checked against it. */
+  unlocks: UnlockState;
 }
 
 /** What the server keeps about a survivor beside the simulation. */
@@ -65,6 +71,9 @@ export class Night {
   private readonly doors: (DoorBody | null)[];
   private readonly extras = new Map<string, Extra>();
   private readonly facing = new Map<string, number>();
+  private readonly unlocks = new Map<string, UnlockState>();
+  /** A survivor's refit that went through (the room keeps it for their next night). */
+  onRefit: ((id: string, weapon: WeaponId, build: WeaponBuild) => void) | null = null;
   private steps = 0;
   private acc = 0;
   /** Test only (DEAD_HOURS_DEBUG): survivors whose health stays full. */
@@ -88,7 +97,8 @@ export class Night {
   addSurvivor(s: Survivor, index: number): { x: number; y: number; z: number; yaw: number } {
     const spawns = NEIGHBORHOOD.playerSpawns;
     const sp = spawns[index % spawns.length];
-    const p = this.sim.addPlayer(s.id, s.name, s.primary, 'pistol', { x: sp.x, y: sp.y, z: sp.z }, sp.yaw, s.appearance);
+    const p = this.sim.addPlayer(s.id, s.name, s.primary, 'pistol', { x: sp.x, y: sp.y, z: sp.z }, sp.yaw, s.appearance, s.builds);
+    this.unlocks.set(s.id, s.unlocks);
     // A capsule zombies bump into, like the one the survivor's own browser moves.
     const w = this.physics.world;
     const half = (PLAYER.height - PLAYER.radius * 2) / 2;
@@ -112,6 +122,7 @@ export class Night {
     if (x) this.physics.world.removeRigidBody(x.body);
     this.extras.delete(id);
     this.facing.delete(id);
+    this.unlocks.delete(id);
     this.sim.removePlayer(id);
   }
 
@@ -205,6 +216,18 @@ export class Night {
       case 'primary':
         if (PRIMARY_WEAPONS.includes(m.weapon)) sim.selectPrimary(id, m.weapon);
         break;
+      case 'refit': {
+        if (typeof m.weapon !== 'string' || typeof m.build !== 'string') break;
+        const a = p.arsenal;
+        if (m.weapon !== a.primary.id && m.weapon !== a.secondary.id) break;
+        // Every option must be one this survivor has unlocked: a locked one refuses the whole refit.
+        const want = decodeBuild(m.weapon, m.build);
+        const u = this.unlocks.get(id) ?? { level: 1, entitlements: [] };
+        const ok = sanitizeBuild(m.weapon, want, u);
+        if (!BUILD_SLOTS.every((s) => ok[s] === want[s])) break;
+        if (sim.refit(id, m.weapon, ok)) this.onRefit?.(id, m.weapon, ok);
+        break;
+      }
       case 'grab':
         if (Number.isInteger(m.limb)) sim.grabLimb(id, m.limb);
         break;

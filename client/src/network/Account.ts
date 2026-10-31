@@ -1,4 +1,7 @@
-import { decodeAppearance, encodeAppearance, sanitizeAppearance, type PlayerStats } from '@dead-hours/shared';
+import {
+  decodeAppearance, decodeLoadout, encodeAppearance, encodeLoadout, levelFor, runXp, sanitizeAppearance, sanitizeLoadout,
+  type Loadout, type PlayerStats, type UnlockState,
+} from '@dead-hours/shared';
 import { settings } from '../core/Settings';
 import { HTTP_URL, net } from './Net';
 
@@ -15,6 +18,12 @@ export interface ServerProfile {
   name: string;
   appearance: string;
   primary: string;
+  /** encodeLoadout() as the server keeps it (checked against the unlocks). */
+  builds: string;
+  xp: number;
+  level: number;
+  /** Grants such as 'supporter'. */
+  entitlements: string[];
   updatedAt: number;
   stats: {
     runs: number;
@@ -48,6 +57,12 @@ export type Provider = 'google' | 'discord';
 interface StoredSession {
   session: string;
   account: SignedIn;
+}
+
+/** A solo run once reported: its places and the XP it earned (saved on the server, or offline in this browser). */
+export interface SoloOutcome extends Ranks {
+  gained: number;
+  offline: boolean;
 }
 
 interface Stored {
@@ -104,8 +119,10 @@ function load(): Stored {
 
 const profileJson = () => {
   const p = settings.value.profile;
-  return JSON.stringify({ name: p.name, primary: p.primary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)) });
+  return JSON.stringify({ name: p.name, primary: p.primary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), builds: p.builds });
 };
+
+const serverJson = (p: ServerProfile) => JSON.stringify({ name: p.name, primary: p.primary, appearance: p.appearance, builds: p.builds ?? '1' });
 
 /**
  * Who is playing and the survivor saved for them on the server.
@@ -184,13 +201,37 @@ class Account {
   }
 
   private adopt(p: ServerProfile): void {
-    this.lastSent = JSON.stringify({ name: p.name, primary: p.primary, appearance: p.appearance });
+    this.lastSent = serverJson(p);
     settings.update((s) => {
       s.profile.name = p.name;
       s.profile.primary = p.primary;
       s.profile.appearance = decodeAppearance(p.appearance);
+      if (p.builds) s.profile.builds = p.builds;
     });
     this.lastSent = profileJson();
+  }
+
+  /**
+   * XP that counts: the server's once it has answered (it awards XP for every run it records),
+   * else what this browser earned offline.
+   */
+  get xp(): number {
+    return this.profile ? this.profile.xp ?? 0 : settings.value.profile.offlineXp;
+  }
+
+  get unlocks(): UnlockState {
+    return { level: levelFor(this.xp), entitlements: this.profile?.entitlements ?? [] };
+  }
+
+  /** The saved builds as they may be used now. */
+  get loadout(): Loadout {
+    return sanitizeLoadout(decodeLoadout(settings.value.profile.builds), this.unlocks);
+  }
+
+  /** Saves one gun's build (the server keeps it only as far as it's unlocked). */
+  setLoadout(l: Loadout): void {
+    const code = encodeLoadout(sanitizeLoadout(l, this.unlocks));
+    if (code !== settings.value.profile.builds) settings.update((s) => { s.profile.builds = code; });
   }
 
   /** Saves the survivor on the server. */
@@ -225,7 +266,7 @@ class Account {
       const p = await net.api<ServerProfile>('/api/profile', this.auth);
       this.profile = p;
       if (p.updatedAt > this.stored.savedAt) this.adopt(p);
-      else if (profileJson() !== JSON.stringify({ name: p.name, primary: p.primary, appearance: p.appearance })) await this.push();
+      else if (profileJson() !== serverJson(p)) await this.push();
       this.emit();
     } catch {
       // Nothing saved under this key yet.
@@ -245,19 +286,30 @@ class Account {
     return true;
   }
 
-  /** Puts a finished solo run on the boards (solo runs are marked as such). */
-  async reportSolo(survived: number, stats: PlayerStats): Promise<Ranks | null> {
-    if (!(await net.check())) return null;
+  /**
+   * Puts a finished solo run on the boards (solo runs are marked as such) and its XP on the
+   * profile. With no server to reach, the XP is kept in this browser instead.
+   */
+  async reportSolo(survived: number, stats: PlayerStats): Promise<SoloOutcome> {
+    const offline = (): SoloOutcome => {
+      const gained = runXp(survived, stats).total;
+      settings.update((s) => { s.profile.offlineXp += gained; });
+      this.emit();
+      return { rankSurvival: null, rankKills: null, gained, offline: true };
+    };
+    if (!(await net.check())) return offline();
     const p = settings.value.profile;
     try {
-      const r = await net.api<Ranks>('/api/runs', {
+      const r = await net.api<Ranks & { gained?: number; xp?: number }>('/api/runs', {
         method: 'POST', ...this.auth,
         body: { name: p.name, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), survived, stats },
       });
+      if (this.profile && typeof r.xp === 'number') this.profile.xp = r.xp;
       void this.sync();
-      return r;
+      return { rankSurvival: r.rankSurvival, rankKills: r.rankKills, gained: r.gained ?? 0, offline: false };
     } catch {
-      return null;
+      // Refused (too many runs, not plausible): nothing saved.
+      return { rankSurvival: null, rankKills: null, gained: 0, offline: false };
     }
   }
 
@@ -381,6 +433,11 @@ class Account {
     this.stored = { key: newKey(), savedAt: Date.now() };
     this.persist();
     if (session) await net.api('/api/auth/logout', { method: 'POST', session }).catch(() => undefined);
+    await this.sync();
+  }
+
+  /** After an online night: the server has added the XP, fetch the new total. */
+  async refresh(): Promise<void> {
     await this.sync();
   }
 }

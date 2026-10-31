@@ -77,7 +77,9 @@ export type ActMsg =
   /** Starts nailing boards up or prying them off a door or window (carries on while held); 'stop' lets go. */
   | { a: 'barricade'; slot: number; k: 'board' | 'pry' | 'stop' }
   /** Hold interact on a downed teammate (null: let go). */
-  | { a: 'revive'; target: string | null };
+  | { a: 'revive'; target: string | null }
+  /** New attachments or finish for a carried gun (encodeBuild); the server checks the player's unlocks. */
+  | { a: 'refit'; weapon: WeaponId; build: string };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }
@@ -96,6 +98,8 @@ export interface JoinOptions {
   token?: string;
   /** A signed-in player's session: their runs count for their account instead of the key. */
   session?: string;
+  /** encodeLoadout() of the survivor's weapon builds; the server keeps only what the profile has unlocked. */
+  builds?: string;
 }
 
 export interface CreateOptions extends JoinOptions {
@@ -157,6 +161,8 @@ export interface RunResult {
   /** Leaderboard place this run reached for survival time and for kills (null when not ranked). */
   rankSurvival: number | null;
   rankKills: number | null;
+  /** XP the run earned (0 when it wasn't saved: no player key or no store). */
+  xp?: number;
 }
 
 export interface OverMsg {

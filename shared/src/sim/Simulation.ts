@@ -10,6 +10,7 @@ import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
 import { findPickupRooms, pickFoundWeapon, type PickupRoom } from './MeleePickups';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
+import { encodeBuild, type Loadout, type WeaponBuild } from '../config/progression';
 import type { MapDefinition } from '../types/world';
 import { Arsenal, type ArsenalTick, type HeldLimb } from './Arsenal';
 import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
@@ -78,8 +79,8 @@ export class SimPlayer {
   /** Nailing boards up or prying them off, while the key is held. */
   work: { slot: number; kind: 'board' | 'pry'; t: number; hammerT: number } | null = null;
 
-  constructor(readonly id: string, readonly name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number) {
-    this.arsenal = new Arsenal(primary, secondary);
+  constructor(readonly id: string, readonly name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number, builds: Loadout = {}) {
+    this.arsenal = new Arsenal(primary, secondary, builds);
     this.motion = {
       pos: { ...spawn }, vel: v3(), yaw, pitch: 0, eyeHeight: PLAYER.eyeHeight,
       crouching: false, sprinting: false, aiming: false, grounded: true,
@@ -315,8 +316,9 @@ export class Simulation {
     return e;
   }
 
-  addPlayer(id: string, name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number, appearance = ''): SimPlayer {
-    const p = new SimPlayer(id, name, primary, secondary, spawn, yaw);
+  /** `builds` must already be checked against the player's unlocks (sanitizeLoadout). */
+  addPlayer(id: string, name: string, primary: WeaponId, secondary: WeaponId, spawn: Vec3, yaw: number, appearance = '', builds: Loadout = {}): SimPlayer {
+    const p = new SimPlayer(id, name, primary, secondary, spawn, yaw, builds);
     p.appearance = encodeAppearance(decodeAppearance(appearance));
     this.players.set(id, p);
     return p;
@@ -991,9 +993,9 @@ export class Simulation {
     if (it.kind === 'ammo') {
       if (it.supply <= 0) return false;
       const a = p.arsenal;
-      const pd = WEAPONS[a.primary.id];
+      const pd = a.defOf(a.primary.id);
       const got = a.addReserve('primary', pd.magazine * (pd.crateMags ?? COMBAT.crateMagsPrimary))
-        + a.addReserve('secondary', WEAPONS[a.secondary.id].magazine * COMBAT.crateMagsSecondary);
+        + a.addReserve('secondary', a.defOf(a.secondary.id).magazine * COMBAT.crateMagsSecondary);
       if (got <= 0) {
         this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
         return false;
@@ -1012,7 +1014,7 @@ export class Simulation {
       }
       // Universal rounds: whatever the survivor carries, every weapon is filled up.
       const a = p.arsenal;
-      const got = a.addReserve('primary', WEAPONS[a.primary.id].maxReserve) + a.addReserve('secondary', WEAPONS[a.secondary.id].maxReserve);
+      const got = a.addReserve('primary', a.defOf(a.primary.id).maxReserve) + a.addReserve('secondary', a.defOf(a.secondary.id).maxReserve);
       if (got <= 0) {
         this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
         return false;
@@ -1086,6 +1088,18 @@ export class Simulation {
     p.arsenal.replacePrimary(weapon);
     this.emit({ type: 'pickup', player: id, item: 'weapon', amount: 1, source: it.id, weapon });
     if (p.arsenal.active === 'primary') this.emit({ type: 'draw', player: id, slot: 'primary', weapon });
+    return true;
+  }
+
+  /**
+   * Fits attachments or a finish to a carried gun, anywhere (the gun in hand is down while it's
+   * done). `build` must already be checked against the player's unlocks.
+   */
+  refit(id: string, weapon: WeaponId, build: WeaponBuild): boolean {
+    const p = this.players.get(id);
+    if (!p || !p.up || this.phase === 'over') return false;
+    if (!p.arsenal.refit(weapon, build)) return false;
+    this.emit({ type: 'refit', player: id, weapon, build: encodeBuild(build) });
     return true;
   }
 

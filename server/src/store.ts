@@ -2,13 +2,15 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import pg from 'pg';
-import type { PlayerStats } from '@dead-hours/shared';
+import { levelFor, runXp, type PlayerStats, type UnlockState } from '@dead-hours/shared';
 
-/** A survivor as they saved them: name, look and the rifle they carry. */
+/** A survivor as they saved them: name, look, the rifle they carry and how their guns are built. */
 export interface ProfileData {
   name: string;
   appearance: string;
   primary: string;
+  /** encodeLoadout(), already checked against the profile's unlocks. */
+  builds?: string;
 }
 
 /** Everything a player has done across their runs. */
@@ -24,8 +26,13 @@ export interface ProfileStats {
 }
 
 export interface Profile extends ProfileData {
+  builds: string;
   updatedAt: number;
   stats: ProfileStats;
+  /** Progression: total XP, the level it makes, and grants such as 'supporter' (written by the server only). */
+  xp: number;
+  level: number;
+  entitlements: string[];
   /** Places on the two boards (null before the first run). */
   rankSurvival: number | null;
   rankKills: number | null;
@@ -49,6 +56,17 @@ export interface Ranks {
   rankKills: number | null;
 }
 
+/** A recorded run: its places, the XP it earned and the profile's total after it. */
+export interface RunOutcome extends Ranks {
+  gained: number;
+  xp: number;
+}
+
+/** What a profile may fit (level from XP, plus grants). */
+export const unlocksOf = (p: Pick<Profile, 'xp' | 'entitlements'> | null): UnlockState =>
+  p ? { level: levelFor(p.xp), entitlements: p.entitlements } : { level: 1, entitlements: [] };
+
+const splitGrants = (s: string | undefined | null): string[] => (s ? s.split(',').filter(Boolean) : []);
 export interface BoardEntry {
   name: string;
   value: number;
@@ -93,8 +111,8 @@ export interface Store {
   readonly kind: 'postgres' | 'file';
   getProfile(owner: string): Promise<Profile | null>;
   saveProfile(owner: string, data: ProfileData): Promise<Profile>;
-  /** Records a run and returns its places (see placeRun). */
-  recordRun(run: RunRecord): Promise<Ranks>;
+  /** Records a run, adds the XP it earned (runXp) and returns its places (see placeRun). */
+  recordRun(run: RunRecord): Promise<RunOutcome>;
   /**
    * Where a run of this player stands on each board now: a place only when it is their best
    * (each board holds one entry per player) and above zero.
@@ -118,6 +136,8 @@ export interface Store {
   createLoginCode(hash: string, accountId: string, nonce: string, expires: number): Promise<void>;
   /** Uses up a sign-in code: returns it once, never again. */
   takeLoginCode(hash: string): Promise<{ accountId: string; nonce: string } | null>;
+  /** Adds a grant to a profile (the Supporter Pack, once purchases exist; tests until then). */
+  grant(owner: string, entitlement: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -138,6 +158,9 @@ const emptyStats = (): ProfileStats => ({ runs: 0, kills: 0, headshots: 0, limbs
 interface FileProfile extends ProfileData {
   updatedAt: number;
   stats: ProfileStats;
+  xp?: number;
+  /** Comma-separated grants. */
+  entitlements?: string;
   survivedMode: RunMode;
   survivedAt: number;
   killsMode: RunMode;
@@ -179,6 +202,10 @@ function foldStats(from: FileProfile, into: FileProfile): void {
     into.killsMode = from.killsMode;
     into.killsAt = from.killsAt;
   }
+  // Progression: XP adds up, grants are kept from both, the newer weapon builds win.
+  into.xp = (into.xp ?? 0) + (from.xp ?? 0);
+  into.entitlements = [...new Set([...splitGrants(into.entitlements), ...splitGrants(from.entitlements)])].join(',');
+  if (from.builds && from.updatedAt > into.updatedAt) into.builds = from.builds;
 }
 
 /**
@@ -244,8 +271,10 @@ export class FileStore implements Store {
 
   private view(key: string, p: FileProfile): Profile {
     const ranked = p.stats.runs > 0;
+    const xp = p.xp ?? 0;
     return {
-      name: p.name, appearance: p.appearance, primary: p.primary, updatedAt: p.updatedAt, stats: { ...p.stats },
+      name: p.name, appearance: p.appearance, primary: p.primary, builds: p.builds ?? '', updatedAt: p.updatedAt, stats: { ...p.stats },
+      xp, level: levelFor(xp), entitlements: splitGrants(p.entitlements),
       rankSurvival: ranked ? this.rank('bestSurvived', p.stats.bestSurvived, key) : null,
       rankKills: ranked ? this.rank('bestKills', p.stats.bestKills, key) : null,
     };
@@ -267,14 +296,16 @@ export class FileStore implements Store {
 
   async saveProfile(owner: string, data: ProfileData): Promise<Profile> {
     const p = this.ensure(owner, data);
-    Object.assign(p, data, { updatedAt: Date.now() });
+    Object.assign(p, data, { builds: data.builds ?? p.builds ?? '', updatedAt: Date.now() });
     this.schedule();
     return this.view(owner, p);
   }
 
-  async recordRun(run: RunRecord): Promise<Ranks> {
+  async recordRun(run: RunRecord): Promise<RunOutcome> {
     const p = this.ensure(run.owner, { name: run.name, appearance: run.appearance, primary: 'ar' });
     const s = p.stats;
+    const gained = runXp(run.survived, run.stats).total;
+    p.xp = (p.xp ?? 0) + gained;
     s.runs++;
     s.kills += run.stats.kills;
     s.headshots += run.stats.headshots;
@@ -292,7 +323,17 @@ export class FileStore implements Store {
       p.killsAt = now;
     }
     this.schedule();
-    return this.placeRun(run.owner, run.survived, run.stats.kills);
+    return { ...(await this.placeRun(run.owner, run.survived, run.stats.kills)), gained, xp: p.xp };
+  }
+
+  /** Test and admin use: adds a grant ('supporter') to a profile. */
+  async grant(owner: string, entitlement: string): Promise<void> {
+    const p = this.profiles.get(owner);
+    if (!p) return;
+    const g = new Set(splitGrants(p.entitlements));
+    g.add(entitlement);
+    p.entitlements = [...g].join(',');
+    this.schedule();
   }
 
   async board(kind: BoardKind, limit: number): Promise<BoardEntry[]> {
@@ -438,6 +479,10 @@ create table if not exists dh_login_codes (
   nonce text not null,
   expires_at timestamptz not null
 );
+alter table dh_profiles add column if not exists xp integer not null default 0;
+alter table dh_profiles add column if not exists entitlements text not null default '';
+alter table dh_profiles add column if not exists builds text not null default '';
+alter table dh_runs add column if not exists xp integer not null default 0;
 `;
 
 interface AccountRow {
@@ -469,6 +514,9 @@ interface ProfileRow {
   time_survived: number;
   best_survived: number;
   best_kills: number;
+  xp: number;
+  entitlements: string;
+  builds: string;
 }
 
 /** Hosted databases want TLS from outside their network; on the inside (and locally) they don't. */
@@ -512,7 +560,8 @@ export class PostgresStore implements Store {
     const ranked = row.runs > 0;
     const r = ranked ? await this.ranks(row.key, row.best_survived, row.best_kills) : { rankSurvival: null, rankKills: null };
     return {
-      name: row.name, appearance: row.appearance, primary: row.primary_weapon, updatedAt: row.updated_at.getTime(),
+      name: row.name, appearance: row.appearance, primary: row.primary_weapon, builds: row.builds ?? '', updatedAt: row.updated_at.getTime(),
+      xp: row.xp ?? 0, level: levelFor(row.xp ?? 0), entitlements: splitGrants(row.entitlements),
       stats: {
         runs: row.runs, kills: row.kills, headshots: row.headshots, limbsSevered: row.limbs_severed,
         timeSurvived: row.time_survived, bestSurvived: row.best_survived, bestKills: row.best_kills,
@@ -528,18 +577,20 @@ export class PostgresStore implements Store {
 
   async saveProfile(owner: string, data: ProfileData): Promise<Profile> {
     const r = await this.pool.query<ProfileRow>(
-      `insert into dh_profiles (key, name, appearance, primary_weapon) values ($1, $2, $3, $4)
+      `insert into dh_profiles (key, name, appearance, primary_weapon, builds) values ($1, $2, $3, $4, coalesce($5, ''))
        on conflict (key) do update set name = excluded.name, appearance = excluded.appearance,
-         primary_weapon = excluded.primary_weapon, updated_at = now()
+         primary_weapon = excluded.primary_weapon, builds = coalesce($5, dh_profiles.builds), updated_at = now()
        returning *`,
-      [owner, data.name, data.appearance, data.primary],
+      [owner, data.name, data.appearance, data.primary, data.builds ?? null],
     );
     return this.view(r.rows[0]);
   }
 
-  async recordRun(run: RunRecord): Promise<Ranks> {
+  async recordRun(run: RunRecord): Promise<RunOutcome> {
     const key = run.owner;
     const k = run.stats.kills;
+    const gained = runXp(run.survived, run.stats).total;
+    let xp = 0;
     const client = await this.pool.connect();
     try {
       await client.query('begin');
@@ -547,7 +598,7 @@ export class PostgresStore implements Store {
         `insert into dh_profiles (key, name, appearance) values ($1, $2, $3) on conflict (key) do nothing`,
         [key, run.name, run.appearance],
       );
-      await client.query(
+      const updated = await client.query<{ xp: number }>(
         `update dh_profiles set
            runs = runs + 1, kills = kills + $2, headshots = headshots + $3, limbs_severed = limbs_severed + $4,
            time_survived = time_survived + $5,
@@ -556,13 +607,16 @@ export class PostgresStore implements Store {
            best_survived = greatest(best_survived, $5),
            best_kills_mode = case when $6 > best_kills then $7 else best_kills_mode end,
            best_kills_at = case when $6 > best_kills then now() else best_kills_at end,
-           best_kills = greatest(best_kills, $6)
-         where key = $1`,
-        [key, k, run.stats.headshots, run.stats.limbsSevered, run.survived, k, run.mode],
+           best_kills = greatest(best_kills, $6),
+           xp = xp + $8
+         where key = $1
+         returning xp`,
+        [key, k, run.stats.headshots, run.stats.limbsSevered, run.survived, k, run.mode, gained],
       );
+      xp = Number(updated.rows[0]?.xp ?? 0);
       await client.query(
-        'insert into dh_runs (key, name, mode, survived, kills, stats) values ($1, $2, $3, $4, $5, $6)',
-        [key, run.name, run.mode, run.survived, k, JSON.stringify(run.stats)],
+        'insert into dh_runs (key, name, mode, survived, kills, stats, xp) values ($1, $2, $3, $4, $5, $6, $7)',
+        [key, run.name, run.mode, run.survived, k, JSON.stringify(run.stats), gained],
       );
       await client.query('commit');
     } catch (e) {
@@ -571,7 +625,19 @@ export class PostgresStore implements Store {
     } finally {
       client.release();
     }
-    return this.placeRun(key, run.survived, k);
+    return { ...(await this.placeRun(key, run.survived, k)), gained, xp };
+  }
+
+  /** Test and admin use: adds a grant ('supporter') to a profile. */
+  async grant(owner: string, entitlement: string): Promise<void> {
+    await this.pool.query(
+      `update dh_profiles set entitlements = case
+         when entitlements = '' then $2
+         when position(',' || $2 || ',' in ',' || entitlements || ',') > 0 then entitlements
+         else entitlements || ',' || $2 end
+       where key = $1`,
+      [owner, entitlement],
+    );
   }
 
   async placeRun(key: string, survived: number, kills: number): Promise<Ranks> {
@@ -619,7 +685,12 @@ export class PostgresStore implements Store {
                best_survived = greatest(d.best_survived, s.best_survived),
                best_kills_mode = case when s.best_kills > d.best_kills then s.best_kills_mode else d.best_kills_mode end,
                best_kills_at = case when s.best_kills > d.best_kills then s.best_kills_at else d.best_kills_at end,
-               best_kills = greatest(d.best_kills, s.best_kills)
+               best_kills = greatest(d.best_kills, s.best_kills),
+               xp = d.xp + s.xp,
+               entitlements = array_to_string(array(
+                 select distinct g from unnest(coalesce(string_to_array(nullif(d.entitlements, ''), ','), '{}'::text[])
+                   || coalesce(string_to_array(nullif(s.entitlements, ''), ','), '{}'::text[])) g order by g), ','),
+               builds = case when s.builds <> '' and s.updated_at > d.updated_at then s.builds else d.builds end
              from dh_profiles s where s.key = $1 and d.key = $2`,
             [from, into],
           );

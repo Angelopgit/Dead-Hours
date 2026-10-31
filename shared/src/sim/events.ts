@@ -51,6 +51,8 @@ export type SimEvent =
   | { type: 'playerHealed'; player: string; amount: number; health: number }
   | { type: 'reload'; player: string; weapon: WeaponId; stage: 'start' | 'shell' | 'end' | 'cancel' }
   | { type: 'draw'; player: string; slot: WeaponSlot; weapon: WeaponId }
+  /** New attachments or finish on a carried gun (encodeBuild). */
+  | { type: 'refit'; player: string; weapon: WeaponId; build: string }
   | { type: 'melee'; player: string; stage: 'swing' | 'hit' | 'miss'; limb?: boolean }
   | { type: 'bandage'; player: string; stage: 'start' | 'end' | 'cancel' }
   | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon' | 'supply' | 'serum'; amount: number; source: number; weapon?: WeaponId }

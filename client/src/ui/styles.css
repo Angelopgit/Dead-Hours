@@ -398,7 +398,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .results-ranks { font-family: var(--font-display); font-size: 0.8em; letter-spacing: 0.22em; color: var(--accent); margin-top: 0.6em; min-height: 1.2em; }
 .results-main.team { width: min(760px, 90vw); }
 .team-table { display: flex; flex-direction: column; margin: 1.6em 0 2.4em; border-top: 1px solid var(--line); }
-.team-row { display: grid; grid-template-columns: 1.7fr repeat(4, 1fr); gap: 1em; align-items: end; padding: 0.9em 0; border-bottom: 1px solid var(--line);
+.team-row { display: grid; grid-template-columns: 1.7fr repeat(5, 1fr); gap: 1em; align-items: end; padding: 0.9em 0; border-bottom: 1px solid var(--line);
   font-family: var(--font-display); font-size: 0.66em; letter-spacing: 0.24em; color: var(--fg-faint); }
 .team-row b { display: block; font-weight: 300; font-size: 2em; letter-spacing: 0.05em; color: var(--fg); font-variant-numeric: tabular-nums; margin-top: 0.15em; }
 .team-row .team-name { font-size: 1.6em; letter-spacing: 0.16em; color: var(--fg); }
@@ -560,3 +560,73 @@ body.touch-play .prompt { top: 40%; }
   .panel { max-height: 92vh; padding: 1em 1.2em; }
   .panel h2 { margin-bottom: 0.6em; }
 }
+
+/* ── Gunsmith (armory, workbench, field) ──────────────── */
+.gunsmith h2 { margin: 0; }
+.gs-head { display: flex; align-items: center; gap: 1.4em; margin-bottom: 1em; flex-wrap: wrap; }
+.xp-bar { display: grid; grid-template-columns: auto minmax(80px, 1fr) auto; align-items: center; gap: 0.8em; flex: 1; min-width: 220px;
+  font-family: var(--font-display); letter-spacing: 0.18em; font-size: 0.75em; color: var(--fg-dim); }
+.xp-bar .xp-level { color: var(--accent); }
+.xp-bar .bar { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+.xp-bar .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.6s; }
+.xp-bar .xp-num { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.gs-weapons { margin-bottom: 0.9em; }
+.gs-slots { display: flex; flex-wrap: wrap; gap: 0.4em; margin-bottom: 0.9em; }
+.gs-slot { flex: 1 1 0; min-width: 6.5em; text-align: left; padding: 0.5em 0.7em; border: 1px solid var(--line); border-radius: 3px; font-size: 0.8em; color: var(--fg); }
+.gs-slot small { display: block; font-family: var(--font-display); letter-spacing: 0.18em; font-size: 0.8em; color: var(--fg-faint); margin-bottom: 0.15em; }
+.gs-slot.on { border-color: var(--accent); background: var(--accent-dim); }
+.gs-slot:hover { border-color: rgba(255,255,255,0.22); }
+.gs-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.45em; }
+.gs-option { text-align: left; padding: 0.6em 0.75em; border: 1px solid var(--line); border-radius: 3px; display: grid; grid-template-columns: auto 1fr; column-gap: 0.6em; align-items: start; }
+.gs-option:hover { border-color: rgba(255,255,255,0.22); }
+.gs-option.on { border-color: var(--accent); background: var(--accent-dim); }
+.gs-option.locked { opacity: 0.55; cursor: not-allowed; }
+.gs-option .gs-name { grid-column: 2; font-family: var(--font-display); letter-spacing: 0.1em; font-size: 0.92em; color: var(--fg); }
+.gs-option .gs-name em { font-style: normal; font-size: 0.72em; letter-spacing: 0.16em; margin-left: 0.7em; color: var(--accent); }
+.gs-option .gs-name em.lock { color: var(--fg-faint); }
+.gs-option .gs-desc { grid-column: 2; font-size: 0.74em; color: var(--fg-dim); margin-top: 0.25em; line-height: 1.4; }
+.gs-option .gs-swatch { grid-row: 1 / span 2; width: 1.8em; height: 1.8em; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
+.gs-effects { margin-top: 0.9em; font-size: 0.78em; letter-spacing: 0.05em; color: var(--fg-dim); display: flex; flex-wrap: wrap; gap: 0.3em 1.2em; min-height: 1.4em; }
+.gs-effects .better { color: var(--ok); }
+.gs-effects .worse { color: #c9806f; }
+.gs-effects .gs-note { width: 100%; color: var(--accent); }
+.gs-labels { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.gs-label { position: absolute; left: 0; top: 0; pointer-events: auto; display: flex; align-items: center; gap: 0.5em; margin: -0.65em 0 0 -0.45em;
+  font-family: var(--font-display); letter-spacing: 0.2em; font-size: 0.68em; color: var(--fg); text-shadow: 0 1px 3px #000; white-space: nowrap; }
+.gs-label i { width: 0.9em; height: 0.9em; border-radius: 50%; border: 1px solid var(--fg); background: rgba(10,13,18,0.6); box-shadow: 0 0 0 3px rgba(0,0,0,0.25); transition: background 0.2s, border-color 0.2s; }
+.gs-label:hover i, .gs-label.on i { background: var(--accent); border-color: var(--accent); }
+.gs-label.on { color: var(--accent); }
+.panel.gunsmith-panel { width: min(560px, 92vw); right: 3vw; padding: 1.5em 1.7em; }
+.gs-hint { font-size: 0.72em; color: var(--fg-faint); margin: 1em 0 0; letter-spacing: 0.06em; }
+.gs-field-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 35% 50%, rgba(0,0,0,0) 30%, rgba(4,6,9,0.55) 85%); pointer-events: none; }
+.gs-drag { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+.gs-drag:active { cursor: grabbing; }
+.armory { position: absolute; inset: 0; z-index: 5; display: grid; grid-template-columns: minmax(0, 1fr) min(560px, 46vw); background: rgba(6, 8, 11, 0.9); }
+.armory-stage { position: relative; min-height: 0; }
+.armory-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.armory-stage canvas:active { cursor: grabbing; }
+.armory-side { overflow-y: auto; padding: 1.6em 2em 2em; border-left: 1px solid var(--line); background: var(--panel-solid); }
+.armory-top { position: absolute; left: 2em; top: 1.5em; right: 2em; display: flex; align-items: center; gap: 1em; z-index: 4; pointer-events: none; }
+.armory-top > * { pointer-events: auto; }
+.armory-top h2 { font-family: var(--font-display); font-weight: 300; letter-spacing: 0.32em; font-size: 1.5em; margin: 0; color: #ece6dc; }
+.armory-carry { position: absolute; left: 2em; bottom: 1.6em; right: 2em; z-index: 4; display: flex; flex-wrap: wrap; gap: 0.5em; align-items: center; }
+.armory-carry .lbl { font-family: var(--font-display); letter-spacing: 0.2em; font-size: 0.72em; color: var(--fg-faint); margin-right: 0.4em; }
+.armory-track { margin-top: 1.6em; }
+.armory-track h3 { margin-top: 0; }
+.armory-track ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25em; font-size: 0.78em; }
+.armory-track li { display: grid; grid-template-columns: 4.5em 6.5em 1fr; color: var(--fg-dim); }
+.armory-track li b { font-family: var(--font-display); font-weight: 500; letter-spacing: 0.12em; color: var(--fg-faint); }
+.armory-track li.got { color: var(--fg); }
+.armory-track li.got b { color: var(--accent); }
+.results-xp { margin-top: 1.2em; min-height: 1.2em; font-family: var(--font-display); letter-spacing: 0.16em; font-size: 0.9em; color: var(--fg-dim); }
+.results-xp .xp-gain { color: var(--accent); font-size: 1.3em; margin-right: 0.8em; }
+.results-xp .xp-parts { font-size: 0.75em; color: var(--fg-faint); letter-spacing: 0.1em; display: block; margin: 0.3em 0 0.7em; }
+.results-xp .xp-bar { max-width: 460px; }
+.results-xp .xp-unlocks { display: block; margin-top: 0.7em; color: var(--ok); letter-spacing: 0.14em; font-size: 0.85em; }
+@media (max-width: 760px) {
+  .armory { grid-template-columns: 1fr; grid-template-rows: 42vh 1fr; }
+  .armory-side { border-left: 0; border-top: 1px solid var(--line); padding: 1.2em 16px; }
+  .gs-options { grid-template-columns: 1fr; }
+}
+.gs-layer { position: absolute; inset: 0; z-index: 4; }
+.gs-layer .gs-drag { pointer-events: auto; }

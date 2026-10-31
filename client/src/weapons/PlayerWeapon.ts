@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LIMBS, MELEE, WEAPONS, isMelee, type HeldLimb, type MeleeId, type MeleeStyle, type WeaponDef, type WeaponId } from '@dead-hours/shared';
+import { LIMBS, MELEE, WEAPONS, defaultBuild, encodeBuild, isMelee, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type WeaponDef, type WeaponId } from '@dead-hours/shared';
 import type { Humanoid } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
@@ -18,6 +18,8 @@ export interface HeldState {
   meleeWith?: 'machete' | 'limb';
   /** The melee weapon quick swings use: the machete, or one found lying around. */
   meleeId?: WeaponId;
+  /** Attachments and finishes on the guns (models are rebuilt when one changes). */
+  builds?: Loadout;
 }
 
 export interface HandsInput {
@@ -226,11 +228,19 @@ export class PlayerWeapon {
     const id = s.meleeId;
     return id && isMelee(id) ? id : 'machete';
   }
+  private builds: Loadout = {};
 
   private ensure(id: WeaponId): WeaponModel {
     let m = this.models.get(id);
+    const build = this.builds[id] ?? defaultBuild(id);
+    if (m && m.code !== encodeBuild(build)) {
+      if (this.held === m) this.held = null;
+      m.dispose();
+      this.models.delete(id);
+      m = undefined;
+    }
     if (!m) {
-      m = createWeaponModel(id);
+      m = createWeaponModel(id, build);
       this.models.set(id, m);
       this.scene.add(m.root);
       this.onMaterials?.(m.materials);
@@ -340,6 +350,11 @@ export class PlayerWeapon {
   update(dt: number, s: HeldState, input: HandsInput): void {
     this.time += dt;
     const body = this.body;
+    if (s.builds && s.builds !== this.builds) {
+      this.builds = s.builds;
+      this.ensure(s.primary.id);
+      this.ensure(s.secondary.id);
+    }
     this.setLoadout(s.primary.id, s.secondary.id);
     const activeId = s.active === 'primary' ? s.primary.id : s.secondary.id;
     const def = WEAPONS[activeId];

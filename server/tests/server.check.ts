@@ -17,6 +17,7 @@ import {
   C2S, DOWNED, Mirror, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
   type BeginMsg, type ChatLine, type IceConfig, type LobbyMsg, type OverMsg, type RtcIn, type SimEvent, type Snapshot,
   type TalkMsg, type Vec3,
+  decodeBuild, defaultBuild, encodeBuild, encodeLoadout, decodeLoadout, runXp,
 } from '@dead-hours/shared';
 import { TURN_TTL, iceConfig } from '../src/net/ice';
 
@@ -439,6 +440,7 @@ try {
   check(ra?.rankKills === 1 && rb?.rankSurvival === 1, 'leaderboard places come back with the results');
   check(ra?.rankSurvival === 2, `places are counted once every run is in (first to fall: #${ra?.rankSurvival} longest survival)`);
   check(rb?.rankKills === null, 'no kills, no place on the kills board');
+  check(!!ra?.xp && ra.xp === runXp(ra.survived, ra.stats).total && rb?.xp === runXp(rb.survived, rb.stats).total, `each run's XP comes back with the results (${ra?.xp}, ${rb?.xp})`);
   check(await until(() => a.lobby?.status === 'lobby'), 'room is back in the lobby');
   const board = (await api('/api/leaderboard')).body;
   check(board?.survival?.[0]?.name === 'Bravo' && board.survival[0].mode === 'online', 'longest survival board has the online run');
@@ -467,6 +469,54 @@ try {
   const board2 = (await api('/api/leaderboard')).body;
   check(board2?.survival?.[0]?.name === 'Charlie' && board2.survival[0].mode === 'solo', 'solo runs are marked solo on the board');
   check(board2?.survival?.[0]?.signedIn === false, 'guest runs are not marked as signed in');
+
+  section('XP, unlocks and weapon builds');
+  const charlie = (await api('/api/profile', { key: c.key })).body;
+  const soloXp = runXp(300, { kills: 40, headshots: 0, limbsSevered: 0, limbKills: 0, suppliesCollected: 1 }).total;
+  check(ok.body?.gained === soloXp && charlie?.xp === soloXp && charlie?.level === 2, `a solo run's XP goes on the profile (${charlie?.xp} XP, level ${charlie?.level})`);
+  const alphaXp = (await api('/api/profile', { key: a.key })).body?.xp;
+  check(alphaXp === ra?.xp, 'an online run\'s XP goes on the profile too');
+  // Level 2: the red dot is open, the suppressor (level 3) and supporter finishes aren't.
+  const wantBuilds = encodeLoadout({
+    smg: { ...defaultBuild('smg'), optic: 'dot', muzzle: 'suppressor' },
+    pistol: { ...defaultBuild('pistol'), skin: 'neon' },
+    lmg: { ...defaultBuild('smg'), skin: 'olive' } as never,
+  });
+  const putBuilds = await api('/api/profile', { method: 'PUT', key: c.key, body: JSON.stringify({ name: 'Charlie', appearance: '', primary: 'smg', builds: wantBuilds }) });
+  const keptBuilds = decodeLoadout(putBuilds.body?.builds);
+  check(keptBuilds.smg?.optic === 'dot' && keptBuilds.smg?.muzzle === 'none', 'saved builds keep what the level has opened and drop the rest');
+  check(!keptBuilds.pistol && !keptBuilds.lmg, 'a supporter finish without the grant, and an exclusive gun, are not saved');
+  const noBuilds = await api('/api/profile', { method: 'PUT', key: c.key, body: JSON.stringify({ name: 'Charlie', appearance: '', primary: 'smg' }) });
+  check(decodeLoadout(noBuilds.body?.builds).smg?.optic === 'dot', 'saving without builds keeps the saved ones');
+  const granted = await api('/api/debug/grant', { method: 'POST', key: c.key, body: JSON.stringify({ entitlement: 'supporter' }) });
+  check(JSON.stringify(granted.body?.entitlements) === '["supporter"]', 'a grant lands on the profile (stands in for the Supporter Pack)');
+  const withPack = await api('/api/profile', { method: 'PUT', key: c.key, body: JSON.stringify({ name: 'Charlie', appearance: '', primary: 'smg', builds: wantBuilds }) });
+  check(decodeLoadout(withPack.body?.builds).pistol?.skin === 'neon', 'with the grant the supporter finish is kept');
+  check((await api('/api/debug/grant', { method: 'POST', key: c.key, body: JSON.stringify({ entitlement: 'BAD grant!' }) })).status === 400, 'malformed grants are refused');
+
+  // In a room: the server fits what the profile owns and checks every refit.
+  const cr = new Player('Charlie', c.key);
+  const askBuilds = encodeLoadout({ smg: { ...defaultBuild('smg'), optic: 'dot', muzzle: 'suppressor', mag: 'extended' } });
+  cr.attach(await client.create('survival', { ...cr.options, primary: 'smg', builds: askBuilds, private: true }));
+  check(await until(() => !!cr.lobby), 'a survivor with builds hosts a room');
+  cr.room.send(C2S.start);
+  check(await until(() => cr.snaps.length > 2), 'their night starts');
+  const ck = cr.snaps.at(-1)!.p.find((p) => p.id === cr.room.sessionId)?.k ?? '';
+  const fitted = decodeBuild('smg', ck.slice(0, 5));
+  check(fitted.optic === 'dot' && fitted.muzzle === 'none' && fitted.mag === 'standard', `the night starts with only the owned options fitted (${ck})`);
+  const cp = cr.snaps.at(-1)!.p.find((p) => p.id === cr.room.sessionId);
+  check(cp?.w[5] === 32, 'the magazine is the stock one (extended is level 5)');
+  cr.room.send(C2S.act, { a: 'refit', weapon: 'smg', build: encodeBuild({ ...defaultBuild('smg'), muzzle: 'suppressor' }) });
+  await sleep(400);
+  check(!cr.events.some((e) => e.type === 'refit'), 'a refit with a locked option is refused');
+  cr.room.send(C2S.act, { a: 'refit', weapon: 'smg', build: encodeBuild({ ...defaultBuild('smg'), skin: 'olive' }) });
+  check(await until(() => cr.events.some((e) => e.type === 'refit' && e.player === cr.room.sessionId)), 'a refit with owned options goes through for everyone');
+  check(await until(() => decodeBuild('smg', (cr.snaps.at(-1)!.p.find((p) => p.id === cr.room.sessionId)?.k ?? '').slice(0, 5)).skin === 'olive'), 'snapshots show the new finish');
+  cr.room.send(C2S.act, { a: 'refit', weapon: 'shotgun', build: encodeBuild(defaultBuild('shotgun')) });
+  cr.room.send(C2S.act, { a: 'refit', weapon: 'smg', build: 12345 });
+  await sleep(300);
+  check(cr.events.filter((e) => e.type === 'refit').length === 1, 'refits of guns not carried, or malformed ones, do nothing');
+  await cr.room.leave();
 
   section('Sign-in accounts');
   const providers = (await api('/api/auth/providers')).body?.providers;
@@ -507,6 +557,7 @@ try {
   check(acctProfile.body?.name === 'Alpha One b' && acctProfile.body?.stats?.runs === got.body?.stats?.runs && acctProfile.body?.stats?.kills === 1,
     'the guest\'s browser survivor and stats became the account\'s');
   check((await api('/api/profile', { key: a.key })).status === 404, 'and are no longer under the old browser key');
+  check(acctProfile.body?.xp === alphaXp && alphaXp > 0, `the guest's XP came with them (${acctProfile.body?.xp})`);
   const charlieBefore = (await api('/api/profile', { key: c.key })).body;
   const nonceB = 'nonceB_0123456789abcdef';
   const d = await signInAs('discord', 'd1', nonceB);
@@ -517,6 +568,8 @@ try {
   const merged = (await api('/api/profile', { session: ex2.body?.session })).body;
   check(merged?.stats?.runs === acctProfile.body.stats.runs + charlieBefore.stats.runs && merged?.stats?.bestSurvived === 300 && merged?.name === 'Alpha One b',
     'a second guest profile is folded in: totals add up, bests keep the better, the account\'s survivor stays');
+  check(merged?.xp === acctProfile.body.xp + charlieBefore.xp && JSON.stringify(merged?.entitlements) === '["supporter"]',
+    `folding sums the XP and keeps the grants (${merged?.xp} XP, ${JSON.stringify(merged?.entitlements)})`);
   const d2 = await signInAs('discord', 'd2', 'nonceC_0123456789abcdef');
   const ex3 = await api('/api/auth/exchange', { method: 'POST', body: JSON.stringify({ code: d2.code, nonce: 'nonceC_0123456789abcdef' }) });
   check(ex3.status === 200 && ex3.body?.account?.id !== ex.body?.account?.id, 'an unverified email does not join an existing account');

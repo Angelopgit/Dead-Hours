@@ -2,10 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { matchMaker } from 'colyseus';
 import { COMBAT, GAME, ROOMS, type PlayerStats, type RoomListing } from '@dead-hours/shared';
 import { services } from '../services';
-import type { BoardKind } from '../store';
+import { unlocksOf, type BoardKind } from '../store';
 import { roomForCode } from './codes';
 import { MAX_ROOMS, forwarded, localGames } from './scale';
-import { cleanAppearance, cleanName, cleanPrimary } from './clean';
+import { cleanAppearance, cleanBuildsWire, cleanName, cleanPrimary } from './clean';
 import { accountView, authProviders, exchange, logout, ownerFor } from './auth';
 
 const VERSION = '0.4.0';
@@ -122,7 +122,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const store = services.store;
   try {
     // Who is asking: only the routes that save something need it.
-    const who = /^\/api\/(profile|runs|me)$/.test(path) ? await ownerFor(req) : null;
+    const who = /^\/api\/(profile|runs|me|debug\/grant)$/.test(path) ? await ownerFor(req) : null;
     const owner = who?.owner ?? null;
     if (path === '/api/rooms' && req.method === 'GET') {
       send(res, 200, await listRooms());
@@ -147,7 +147,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const b = (await readJson(req)) as Record<string, unknown> | null;
       const name = cleanName(b?.name);
       if (!name) return send(res, 400, { error: 'NAME REQUIRED' }), true;
-      send(res, 200, await store.saveProfile(owner, { name, appearance: cleanAppearance(b?.appearance), primary: cleanPrimary(b?.primary) }));
+      // Builds are kept only as far as this profile has unlocked them (left out: the saved ones stay).
+      const builds = typeof b?.builds === 'string' ? cleanBuildsWire(b.builds, unlocksOf(await store.getProfile(owner))) : undefined;
+      send(res, 200, await store.saveProfile(owner, { name, appearance: cleanAppearance(b?.appearance), primary: cleanPrimary(b?.primary), builds }));
     } else if (path === '/api/runs' && req.method === 'POST') {
       if (!owner) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
       if (!store) return send(res, 503, { error: 'LEADERBOARDS UNAVAILABLE' }), true;
@@ -168,6 +170,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     } else if (path === '/api/me' && req.method === 'GET') {
       if (who?.account) send(res, 200, accountView(who.account));
       else send(res, 401, { error: 'NOT SIGNED IN' });
+    } else if (path === '/api/debug/grant' && req.method === 'POST' && process.env.DEAD_HOURS_DEBUG === '1') {
+      // Tests only: stands in for a purchase until the Supporter Pack is sold.
+      if (!owner || !store) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
+      const b = (await readJson(req)) as Record<string, unknown> | null;
+      const g = typeof b?.entitlement === 'string' && /^[a-z0-9-]{1,32}$/.test(b.entitlement) ? b.entitlement : null;
+      if (!g) return send(res, 400, { error: 'BAD GRANT' }), true;
+      await store.grant(owner, g);
+      send(res, 200, await store.getProfile(owner));
     } else {
       send(res, 404, { error: 'NOT FOUND' });
     }

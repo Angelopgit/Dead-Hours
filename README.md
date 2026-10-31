@@ -134,7 +134,17 @@ Solo play runs the same authoritative simulation the game server runs online (`s
 - Every shot that is not your own plays from where it was fired with 3D (HRTF) panning, late by its distance at 343 m/s and with less of its direct sound the farther it is. Walls between you and the gun muffle it by what they are made of (glass a little, wood and plaster a lot, brick and concrete almost entirely; `Physics.crossings` lists every surface on the line). A supersonic round passing within 10 m cracks from the point where it passed you, ahead of the report: loud for the M4A1 and MK14, faint for 9 mm and buckshot, none for the M17. At most 10 shots from others play at once; a nearer one takes over from the farthest. Online, other survivors' shots go through this same path from their positions.
 - To hear or measure the gun sound, run `npm run dev` and open `/dev/gunclips.html`: **Render clips** plays each gun in each space and the distance, wall and fly-by cases through the game's own audio graph, with a save link per clip. `python3 -I client/dev/analyze_gunclips.py CLIPDIR OUTDIR` measures saved clips (C50, ring time, spectral centroid, crack and report timing), draws spectrogram sheets and joins each gun's four spaces into one A/B file.
 - Barricading: from inside a home, hold G at a door or ground-floor window to nail boards across it (4 on a door, 3 on a window, 1.5 s each; the hammering carries to zombie ears). Hold E to pry one off. A boarded door won't open. Zombies beat the boards off one at a time, smash window glass and climb in through empty windows; doors still get pounded until they burst. Bullets shatter panes and fly on into the room, and shots into a closed door splinter its boards, then knock it in. Everything is decided by the simulation and synced to every player online.
-- Aiming looks down the sights in first person: the camera moves into the survivor's eye and the weapon's sights line up with it. The M4A1 has a red dot, the MP5 a peep sight and hooded post, the M870 a fiber-optic bead, the M17 three-dot night sights and the MK14 a scope (zoomed view with a duplex reticle). Settings → Controls → Aim view switches back to the over-the-shoulder zoom.
+- Aiming looks down the sights in first person: the camera moves into the survivor's eye and the weapon's sights line up with it. Out of the box the M4A1 has iron sights, the MP5 a peep sight and hooded post, the M870 a fiber-optic bead, the M17 three-dot night sights and the MK14 a 6× scope (zoomed view with a duplex reticle); fitted optics replace them (see Progression). Settings → Controls → Aim view switches back to the over-the-shoulder zoom.
+
+## Progression
+
+Every night earns XP (`shared/src/config/progression.ts`): time survived, kills, headshots, arms torn off, arm kills and supplies found. Levels run 1 to 50 and each one opens attachments and finishes for the guns you can start with (not the machete or the supply-drop guns).
+
+- Optics (red dot, holographic, 3× prism, 6× scope), muzzle devices (suppressor, compensator, full choke), underbarrel (vertical grip, angled grip, laser), magazines (extended, fast) and eleven finishes. Each attachment changes the gun's numbers both ways, for example a suppressor cuts the noise zombies hear by 60% but costs damage and range. Finishes are cosmetic.
+- Main menu → **Loadout** is the armory: a 3D gun on a turntable with clickable fitting labels, the options for each slot (locked ones say the level they open at), what each change does, and the unlock track.
+- In a night, press **H** anywhere to hold the gun up and change fittings on the fly (you stand still, the night goes on and a hit puts it away), or use **Gunsmith** at the safehouse weapon table. A refit takes 1.2 s with the gun down.
+- Online the server owns XP and unlocks: it scores each night, keeps XP on the saved profile (and on the signed-in account) and refuses any fitting the profile hasn't unlocked. Solo XP is saved through the same profile when the game server is reachable, else kept in the browser.
+- Supporter finishes (carbon, neon, hazard) are tied to a `supporter` entitlement on the profile, ready for the Supporter Pack. Option lists are append-only: their indices are the wire format of a build.
 
 ## Survivors
 
@@ -229,7 +239,7 @@ A busy game (four survivors, two dozen zombies) takes about a tenth of one CPU c
 
 ## Controls
 
-WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact (hold to pry a board off) · G board up (hold) · F melee · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
+WASD move · Mouse look · Shift sprint · Ctrl or C crouch · Space jump · LMB fire · RMB aim down sights · R reload · E interact (hold to pry a board off) · G board up (hold) · F melee · H gunsmith · 1 / 2 / wheel switch weapon · Q bandage · Tab inventory (hold) · V switch shoulder · Esc pause. Online: T push to talk · B team radio · Enter chat. All bindings are editable in Settings → Controls.
 
 ## Roadmap status
 

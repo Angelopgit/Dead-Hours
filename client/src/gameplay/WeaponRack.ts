@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PRIMARY_WEAPONS, type PropSpec, type WeaponId } from '@dead-hours/shared';
+import { PRIMARY_WEAPONS, defaultBuild, encodeBuild, type Loadout, type PropSpec, type WeaponId } from '@dead-hours/shared';
 import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
 import type { LightField } from '../lighting/LightField';
 import { StaticProbe } from '../lighting/Probes';
@@ -17,6 +17,8 @@ export class WeaponRack {
   private readonly models = new Map<WeaponId, WeaponModel>();
   private readonly probe: StaticProbe;
   private highlighted: WeaponId | null = null;
+  private carried: WeaponId | null = null;
+  private readonly lie: THREE.Quaternion;
   /** Camera pose looking down at the bench (world space). */
   readonly view: { position: THREE.Vector3; target: THREE.Vector3 };
 
@@ -31,22 +33,34 @@ export class WeaponRack {
     const center = this.root.localToWorld(new THREE.Vector3(0, 1.1, 0.2));
     const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(this.root.quaternion);
     this.probe = new StaticProbe(field, center, normal, 0.4);
-    PRIMARY_WEAPONS.forEach((id, i) => {
-      const m = createWeaponModel(id);
-      const [x, z] = SLOTS[i];
-      m.root.quaternion.copy(lie);
-      // Model center sits ~0.2 m ahead of the grip.
-      m.root.position.set(x - 0.15, 0.965, z);
-      for (const mat of m.materials) patchProbe(mat, this.probe.uniforms);
-      this.root.add(m.root);
-      this.models.set(id, m);
-    });
+    this.lie = lie;
+    this.setBuilds({});
     // Looking down at ~36° from 2.9 m, aimed right of the layout so the weapons sit in the
     // left half of the screen, clear of the selection panel on the right.
     this.view = {
       position: this.root.localToWorld(new THREE.Vector3(1.0, 2.66, 2.35)),
       target: this.root.localToWorld(new THREE.Vector3(1.0, 0.95, 0.0)),
     };
+  }
+
+  /** Lays out the guns as the survivor has them built (rebuilding only those that changed). */
+  setBuilds(builds: Loadout): void {
+    PRIMARY_WEAPONS.forEach((id, i) => {
+      const b = builds[id] ?? defaultBuild(id);
+      const old = this.models.get(id);
+      if (old && old.code === encodeBuild(b)) return;
+      const y = old?.root.position.y ?? 0.965;
+      old?.dispose();
+      const m = createWeaponModel(id, b);
+      const [x, z] = SLOTS[i];
+      m.root.quaternion.copy(this.lie);
+      // Model center sits ~0.2 m ahead of the grip.
+      m.root.position.set(x - 0.15, y, z);
+      for (const mat of m.materials) patchProbe(mat, this.probe.uniforms);
+      this.root.add(m.root);
+      this.models.set(id, m);
+    });
+    if (this.carried) this.highlight(this.highlighted, this.carried);
   }
 
   /** Which weapon model a screen ray points at (for hover/click on the table). */
@@ -65,10 +79,11 @@ export class WeaponRack {
 
   highlight(id: WeaponId | null, carried: WeaponId): void {
     this.highlighted = id;
+    this.carried = carried;
     for (const [wid, m] of this.models) {
       const on = wid === id;
       for (const mat of m.materials) {
-        mat.emissive.setHex(on ? 0x5a3c18 : wid === carried ? 0x10160c : 0x000000);
+        mat.emissive.setHex(on ? 0x5a3c18 : wid === carried ? 0x10160c : (mat.userData.baseEmissive as number | undefined) ?? 0);
         mat.emissiveIntensity = on ? 0.6 : 1;
       }
     }

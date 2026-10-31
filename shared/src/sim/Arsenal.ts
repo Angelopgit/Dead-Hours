@@ -2,6 +2,7 @@ import { COMBAT, WEAPONS, type WeaponDef, type WeaponId, type WeaponSlot } from 
 import { LIMBS, type ArmZone, type LimbCut } from '../config/limbs';
 import { MELEE, type MeleeId } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
+import { FIT_TIME, defaultBuild, sameBuild, tunedWeapon, type Loadout, type WeaponBuild } from '../config/progression';
 import { clamp } from './math';
 
 export interface WeaponState {
@@ -38,8 +39,8 @@ export interface MotionForSpread {
   aiming: boolean;
 }
 
-function fresh(id: WeaponId): WeaponState {
-  const d = WEAPONS[id];
+function fresh(id: WeaponId, builds: Loadout): WeaponState {
+  const d = tunedWeapon(id, builds[id]);
   return { id, mag: d.magazine, reserve: d.startReserve };
 }
 
@@ -50,9 +51,11 @@ function fresh(id: WeaponId): WeaponState {
 export class Arsenal {
   primary: WeaponState;
   secondary: WeaponState;
-  readonly melee: WeaponState = fresh('machete');
+  readonly melee: WeaponState = fresh('machete', {});
   /** The melee weapon in hand for quick swings: the machete, or one found lying around. */
   meleeId: MeleeId = 'machete';
+  /** Attachments and finishes fitted to each gun (checked against the player's unlocks before they get here). */
+  builds: Loadout;
   active: 'primary' | 'secondary' = 'primary';
   action: ArsenalAction = 'draw';
   actionT: number;
@@ -70,9 +73,10 @@ export class Arsenal {
   /** What the current (or last) melee swing is made with. */
   meleeWith: 'machete' | 'limb' = 'machete';
 
-  constructor(primary: WeaponId, secondary: WeaponId) {
-    this.primary = fresh(WEAPONS[primary]?.slot === 'primary' ? primary : 'ar');
-    this.secondary = fresh(WEAPONS[secondary]?.slot === 'secondary' ? secondary : 'pistol');
+  constructor(primary: WeaponId, secondary: WeaponId, builds: Loadout = {}) {
+    this.builds = { ...builds };
+    this.primary = fresh(WEAPONS[primary]?.slot === 'primary' ? primary : 'ar', this.builds);
+    this.secondary = fresh(WEAPONS[secondary]?.slot === 'secondary' ? secondary : 'pistol', this.builds);
     this.actionTotal = this.actionT = this.def.draw;
   }
 
@@ -81,7 +85,35 @@ export class Arsenal {
   }
 
   get def(): WeaponDef {
-    return WEAPONS[this.weapon.id];
+    return this.defOf(this.weapon.id);
+  }
+
+  /** A weapon's numbers with this survivor's build fitted. */
+  defOf(id: WeaponId): WeaponDef {
+    return tunedWeapon(id, this.builds[id]);
+  }
+
+  /**
+   * Fits a new build to one of the carried guns. The one in hand goes down for FIT_TIME while
+   * it's done; rounds over a smaller magazine go back to the reserve. False when busy or unchanged.
+   */
+  refit(id: WeaponId, b: WeaponBuild): boolean {
+    const w = this.primary.id === id ? this.primary : this.secondary.id === id ? this.secondary : null;
+    if (!w || this.action === 'melee' || this.action === 'bandage') return false;
+    if (sameBuild(this.builds[id] ?? defaultBuild(id), b)) return false;
+    this.builds = { ...this.builds, [id]: { ...b } };
+    const d = this.defOf(id);
+    if (w.mag > d.magazine) {
+      w.reserve += w.mag - d.magazine;
+      w.mag = d.magazine;
+    }
+    if (w === this.weapon && !this.limb) {
+      this.cancelReload();
+      this.action = 'draw';
+      this.actionTotal = this.actionT = FIT_TIME;
+      this.cooldown = Math.max(this.cooldown, 0);
+    }
+    return true;
   }
 
   /** 0..1 progress of the current action (reload bar, draw). */
@@ -225,9 +257,9 @@ export class Arsenal {
   /** Replaces the primary (weapon table). Keeps the same share of ammunition. */
   replacePrimary(id: WeaponId, full = false): void {
     const old = this.primary;
-    const od = WEAPONS[old.id];
+    const od = this.defOf(old.id);
     const share = full ? 1 : clamp((old.mag + old.reserve) / (od.magazine + od.startReserve), 0, 1);
-    const nd = WEAPONS[id];
+    const nd = this.defOf(id);
     const total = Math.round(share * (nd.magazine + nd.startReserve));
     const mag = Math.min(nd.magazine, total);
     this.primary = { id, mag, reserve: total - mag };
@@ -241,7 +273,7 @@ export class Arsenal {
   /** Adds rounds to a weapon's reserve up to its carry limit; returns how many fit. */
   addReserve(slot: 'primary' | 'secondary', rounds: number): number {
     const w = slot === 'primary' ? this.primary : this.secondary;
-    const room = Math.max(0, WEAPONS[w.id].maxReserve - w.reserve);
+    const room = Math.max(0, this.defOf(w.id).maxReserve - w.reserve);
     const take = Math.min(room, rounds);
     w.reserve += take;
     return take;

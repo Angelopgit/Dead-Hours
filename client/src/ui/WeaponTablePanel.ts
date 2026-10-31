@@ -12,7 +12,7 @@ export class WeaponTablePanel {
   private readonly cards = new Map<WeaponId, HTMLElement>();
   private carried: WeaponId;
 
-  constructor(carried: WeaponId, cb: { onHover: (id: WeaponId | null) => void; onPick: (id: WeaponId) => void; onClose: () => void }) {
+  constructor(carried: WeaponId, cb: { onHover: (id: WeaponId | null) => void; onPick: (id: WeaponId) => void; onClose: () => void; onGunsmith?: () => void }) {
     this.carried = carried;
     const grid = h('div', { class: 'weapons table-weapons' });
     for (const id of PRIMARY_WEAPONS) {
@@ -37,6 +37,9 @@ export class WeaponTablePanel {
       h('h2', {}, 'WEAPON TABLE'),
       h('p', {}, 'Swap your primary. Ammunition carries over in proportion. Your M17 pistol and machete stay holstered.'),
       grid,
+      cb.onGunsmith ? h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', onclick: () => cb.onGunsmith?.(), onmouseenter: () => audio.ui('hover') }, 'GUNSMITH · ATTACHMENTS & FINISHES ▸'),
+      ) : null,
       h('p', { class: 'table-hint' }, 'Click a weapon on the bench or a card to equip it. [E] or [Esc] to step away.'),
     );
     this.setCarried(carried);

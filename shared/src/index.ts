@@ -8,6 +8,7 @@ export * from './config/limbs';
 export * from './config/barricades';
 export * from './config/melee';
 export * from './config/appearance';
+export * from './config/progression';
 export * from './map/builder';
 export * from './map/colliders';
 export * from './map/maple-hollow';

@@ -19,14 +19,14 @@ export type Action =
   | 'sprint' | 'crouch' | 'jump' | 'interact' | 'barricade'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2'
   | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
-  | 'talk' | 'radio' | 'chat';
+  | 'talk' | 'radio' | 'chat' | 'gunsmith';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
   sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact', barricade: 'Board up / pry off',
   reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon',
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
-  talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat',
+  talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat', gunsmith: 'Customize weapon',
 };
 
 export interface SettingsData {
@@ -83,7 +83,13 @@ export interface SettingsData {
     reducedFlashing: boolean;
     uiScale: number;
   };
-  profile: { name: string; primary: string; secondary: string; appearance: Appearance };
+  profile: {
+    name: string; primary: string; secondary: string; appearance: Appearance;
+    /** encodeLoadout() of the weapon builds (attachments and finishes). */
+    builds: string;
+    /** XP earned in solo runs while no server could be reached: counts in this browser only. */
+    offlineXp: number;
+  };
 }
 
 export const DEFAULT_BINDINGS: Record<Action, string[]> = {
@@ -109,6 +115,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   talk: ['KeyT'],
   radio: ['KeyB'],
   chat: ['Enter'],
+  gunsmith: ['KeyH'],
 };
 
 export const DEFAULT_SETTINGS: SettingsData = {
@@ -137,7 +144,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     padSensitivity: 1, touchSensitivity: 1, aimAssist: 'standard', vibration: true, touch: 'auto', touchScale: 1,
   },
   accessibility: { reducedShake: false, reducedFlashing: false, uiScale: 1 },
-  profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE } },
+  profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE }, builds: '1', offlineXp: 0 },
 };
 
 /** Graphics settings for each preset. Phone trades shadows, MSAA and bloom for a steady frame rate. */

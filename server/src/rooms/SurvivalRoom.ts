@@ -2,17 +2,18 @@ import { createHash } from 'node:crypto';
 import { Room, type Client } from 'colyseus';
 import {
   C2S, CHAT, GAME, S2C, censor, cleanChat, type BeginMsg, type ChatLine, type CreateOptions, type JoinOptions, type LobbyMsg,
-  type OverMsg, type PlayerStats, type RoomStatus, type RtcIn, type RunResult, type TalkMsg, type WeaponId,
+  type Loadout, type OverMsg, type PlayerStats, type RoomStatus, type RtcIn, type RunResult, type TalkMsg, type UnlockState, type WeaponId,
+  NO_UNLOCKS, levelFor,
 } from '@dead-hours/shared';
 import { Night } from '../game/Night';
 import { claimCode, releaseCode, renewCode } from '../net/codes';
 import { resolveOwner, type Owner } from '../net/auth';
-import { cleanAppearance, cleanName, cleanPrimary } from '../net/clean';
+import { cleanAppearance, cleanBuilds, cleanName, cleanPrimary } from '../net/clean';
 import { iceConfig } from '../net/ice';
 import { Bucket } from '../net/limit';
 import { gameClosed, gameOpened } from '../net/scale';
 import { services } from '../services';
-import type { Ranks } from '../store';
+import { unlocksOf, type Ranks, type RunOutcome } from '../store';
 
 interface Member {
   id: string;
@@ -24,12 +25,16 @@ interface Member {
   /** The profile their runs count for: the signed-in account's, else the browser key's (null: not recorded). */
   owner: string | null;
   signedIn: boolean;
+  /** Weapon builds (checked against `unlocks`, kept up to date with refits made during a night). */
+  builds: Loadout;
+  /** What the player's saved profile has unlocked (none without a profile or a store). */
+  unlocks: UnlockState;
   ready: boolean;
   /** Has the night's scene up: snapshots and events go only to loaded clients (no backlog while it builds). */
   loaded: boolean;
   spawn: BeginMsg['spawn'] | null;
   /** This night's run once it ended for them (died or left), and its leaderboard places. */
-  run: { survived: number; stats: PlayerStats; ranks: Promise<Ranks> } | null;
+  run: { survived: number; stats: PlayerStats; ranks: Promise<Ranks | RunOutcome> } | null;
   /** Player ids this player blocks: no chat, voice or negotiation passes between them either way. */
   blocks: Set<string>;
   limits: { chat: Bucket; talk: Bucket; rtc: Bucket };
@@ -172,9 +177,13 @@ export class SurvivalRoom extends Room {
     return (await resolveOwner(o.session, o.token)) ?? true;
   }
 
-  onJoin(client: Client, o: Partial<JoinOptions>, auth?: Owner | true): void {
+  async onJoin(client: Client, o: Partial<JoinOptions>, auth?: Owner | true): Promise<void> {
     const who = auth && auth !== true ? auth : null;
     const pid = publicId(who?.owner ?? null, client.sessionId);
+    // Unlocks come from the saved profile, never from the client.
+    const store = services.store;
+    const saved = who?.owner && store ? await store.getProfile(who.owner).catch(() => null) : null;
+    const unlocks = saved ? unlocksOf(saved) : NO_UNLOCKS;
     this.members.set(client.sessionId, {
       id: client.sessionId,
       pid,
@@ -183,6 +192,8 @@ export class SurvivalRoom extends Room {
       appearance: cleanAppearance(o.appearance),
       owner: who?.owner ?? null,
       signedIn: !!who?.account,
+      builds: cleanBuilds(o.builds, unlocks),
+      unlocks,
       ready: false,
       loaded: false,
       spawn: null,
@@ -251,6 +262,10 @@ export class SurvivalRoom extends Room {
     const seed = (Math.random() * 2 ** 31) | 1;
     const night = new Night(seed);
     this.night = night;
+    night.onRefit = (id, weapon, build) => {
+      const m = this.members.get(id);
+      if (m) m.builds = { ...m.builds, [weapon]: build };
+    };
     let i = 0;
     for (const m of this.members.values()) {
       m.spawn = night.addSurvivor(m, i++);
@@ -322,10 +337,14 @@ export class SurvivalRoom extends Room {
       if (!m.run) continue;
       const { survived, stats } = m.run;
       const store = services.store;
-      const r = store && m.owner && (await m.run.ranks) !== NO_RANK
+      const outcome = await m.run.ranks;
+      const r = store && m.owner && outcome !== NO_RANK
         ? await store.placeRun(m.owner, survived, stats.kills).catch(() => NO_RANK)
         : NO_RANK;
-      results.push({ id: m.id, name: m.name, survived, stats, ...r });
+      // The XP went onto the profile: what it unlocked is theirs from the next night on.
+      const xp = 'gained' in outcome ? outcome.gained : 0;
+      if ('xp' in outcome) m.unlocks = { ...m.unlocks, level: levelFor(outcome.xp) };
+      results.push({ id: m.id, name: m.name, survived, stats, ...r, xp });
     }
     results.sort((a, b) => b.survived - a.survived || b.stats.kills - a.stats.kills);
     this.log(`night over: ${results.map((r) => `${r.name} ${Math.round(r.survived)} s ${r.stats.kills} kills`).join(', ') || 'nobody'}`);

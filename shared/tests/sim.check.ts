@@ -11,7 +11,9 @@ import {
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
-  BARRICADE, captureSnapshot, Mirror, NAV_INDOOR, type BarricadeSlot,
+  BARRICADE, Mirror, NAV_INDOOR, type BarricadeSlot,
+  BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
+  levelStart, owns, runXp, sameBuild, sanitizeBuild, sanitizeLoadout, tunedWeapon, unlockTrack, type WeaponBuild, type WeaponId,
 } from '../src/index';
 
 let failures = 0;
@@ -1551,6 +1553,97 @@ section('Survivor appearance');
   check(sameLook(decodeAppearance(p2.appearance), cowboy), 'players keep the look they joined with');
   const p3 = sim.addPlayer('p3', 'Hacker', 'ar', 'pistol', { x: 2, y: 0.15, z: 6 }, 0, '1.' + 'zz.'.repeat(26) + '<script>');
   check(p3.appearance === encodeAppearance(decodeAppearance(p3.appearance)) && /^[0-9a-z.]+$/.test(p3.appearance), 'malicious appearance input is cleaned on join');
+  cleanup(sim, body);
+}
+
+section('Progression: XP, unlocks and weapon builds');
+{
+  const xp = runXp(600, { kills: 50, headshots: 10, limbsSevered: 0, limbKills: 0, suppliesCollected: 2 });
+  check(xp.total === 200 + 500 + 50 + 10, `a 10-minute run with 50 kills is worth ${xp.total} XP`);
+  check(runXp(1e6, { kills: 1e6, headshots: 0, limbsSevered: 0, limbKills: 0, suppliesCollected: 0 }).total === 20000, 'one run awards at most 20,000 XP');
+  let levelsOk = true;
+  for (let n = 2; n <= 50; n++) if (levelFor(levelStart(n)) !== n || levelFor(levelStart(n) - 1) !== n - 1 || levelStart(n) <= levelStart(n - 1)) levelsOk = false;
+  check(levelsOk && levelFor(0) === 1 && levelFor(1e9) === 50, 'levels 1-50 start at rising XP and levelFor inverts levelStart');
+
+  let unique = true;
+  for (const slot of BUILD_SLOTS) if (new Set(BUILD_OPTIONS[slot].map((o) => o.id)).size !== BUILD_OPTIONS[slot].length) unique = false;
+  check(unique, 'option ids are unique in every slot');
+  const supporter = SKINS.filter((k) => k.source === 'supporter');
+  check(supporter.length >= 3 && supporter.every((k) => !owns(k, { level: 50, entitlements: [] }) && owns(k, { level: 1, entitlements: ['supporter'] })),
+    'Supporter Pack finishes need the grant, never a level');
+  const track = unlockTrack();
+  check(track.length >= 15 && track.every((t, i) => i === 0 || t.level >= track[i - 1].level), `${track.length} unlocks along the level track`);
+  check(!buildable('machete') && EXCLUSIVE_WEAPONS.every((id) => !buildable(id)) && PRIMARY_WEAPONS.every((id) => buildable(id)),
+    'blades and supply-drop exclusives take no builds; every loadout gun does');
+
+  const l1 = { level: 1, entitlements: [] as string[] };
+  const want: WeaponBuild = { optic: 'holo', muzzle: 'suppressor', grip: 'vertical', mag: 'extended', skin: 'olive' };
+  check(sameBuild(sanitizeBuild('ar', want, l1), defaultBuild('ar')), 'level 1 keeps only the stock build');
+  const l6 = sanitizeBuild('ar', want, { level: 6, entitlements: [] });
+  check(sameBuild(l6, want), 'level 6 has the holo, suppressor, vertical grip, extended mag and olive drab');
+  check(sanitizeBuild('pistol', { ...defaultBuild('pistol'), optic: 'scope' }, { level: 50, entitlements: [] }).optic === 'iron', 'a scope does not fit the pistol');
+  check(sanitizeBuild('ar', { ...defaultBuild('ar'), muzzle: 'choke' }, { level: 50, entitlements: [] }).muzzle === 'none', 'a shotgun choke does not fit the rifle');
+  check(sanitizeBuild('marksman', { ...defaultBuild('marksman') }, l1).optic === 'scope', 'a gun keeps the optic it comes with at level 1 (the MK14 scope)');
+  check(sanitizeBuild('ar', { ...defaultBuild('ar'), skin: 'neon' }, { level: 50, entitlements: [] }).skin === 'factory', 'a supporter finish without the grant falls back');
+
+  const rand = rng(99);
+  let trips = 0;
+  for (let i = 0; i < 200; i++) {
+    const l: Partial<Record<WeaponId, WeaponBuild>> = {};
+    for (const id of PRIMARY_WEAPONS.concat('pistol')) {
+      if (rand() < 0.3) continue;
+      const b = {} as WeaponBuild;
+      for (const slot of BUILD_SLOTS) {
+        const f = fitsOf(id, slot);
+        b[slot] = f[Math.floor(rand() * f.length)].id;
+      }
+      l[id] = b;
+    }
+    const back = decodeLoadout(encodeLoadout(l));
+    if (Object.keys(l).every((id) => sameBuild(back[id as WeaponId]!, l[id as WeaponId]!))) trips++;
+  }
+  check(trips === 200, `200 random loadouts survive the wire format (${trips})`);
+  const junk = decodeLoadout('1.ar:zzzzz.machete:11111.<script>:1.lmg:11111.' + 'x'.repeat(700));
+  check(Object.keys(junk).length === 0, 'oversized loadout strings are refused');
+  const junk2 = sanitizeLoadout(decodeLoadout('1.ar:zzzzz.machete:11111.lmg:11111.pistol:9'), { level: 50, entitlements: [] });
+  check(!junk2.machete && !junk2.lmg && !junk2.ar && !junk2.pistol, 'junk, blades and exclusives in a loadout come back as stock');
+  check(decodeLoadout(42).ar === undefined && decodeLoadout('2.ar:11111').ar === undefined, 'non-strings and unknown versions give no builds');
+
+  check(tunedWeapon('ar', defaultBuild('ar')) === WEAPONS.ar || tunedWeapon('ar', defaultBuild('ar')).magazine === WEAPONS.ar.magazine, 'the stock build has the table numbers');
+  check(tunedWeapon('ar', { ...defaultBuild('ar'), mag: 'extended' }).magazine === 45, 'extended AR magazine holds 45');
+  check(tunedWeapon('shotgun', { ...defaultBuild('shotgun'), mag: 'extended' }).magazine === 8, 'extended shotgun tube holds two more shells');
+  check(tunedWeapon('ar', { ...defaultBuild('ar'), muzzle: 'suppressor' }).noise < WEAPONS.ar.noise * 0.5, 'the suppressor carries less than half as far');
+  check(tunedWeapon('marksman', { ...defaultBuild('marksman'), optic: 'iron' }).aimSpread > WEAPONS.marksman.aimSpread, 'irons on the MK14 aim wider than its scope');
+  check(tunedWeapon('smg', { ...defaultBuild('smg'), grip: 'vertical' }).recoil < WEAPONS.smg.recoil, 'a vertical grip cuts recoil');
+
+  // In a night.
+  const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  const ext = { ...defaultBuild('ar'), mag: 'extended', muzzle: 'suppressor' };
+  const p2 = sim.addPlayer('p2', 'Builder', 'ar', 'pistol', { x: 1, y: 0.15, z: 6 }, 0, '', { ar: ext });
+  check(p2.arsenal.primary.mag === 45 && p2.arsenal.def.noise < WEAPONS.ar.noise, 'a survivor joins with their build fitted (45 rounds, quiet)');
+  run(sim, 1);
+  const ok = sim.refit('p2', 'ar', defaultBuild('ar'));
+  const ev = sim.drain();
+  check(ok && ev.some((e) => e.type === 'refit' && e.player === 'p2' && e.build === encodeBuild(defaultBuild('ar'))), 'a refit goes through and is announced');
+  check(p2.arsenal.primary.mag === 30 && p2.arsenal.primary.reserve === WEAPONS.ar.startReserve + 15, 'rounds over the smaller magazine go back to the reserve');
+  check(p2.arsenal.action === 'draw' && Math.abs(p2.arsenal.actionTotal - FIT_TIME) < 1e-6 && p2.arsenal.fireState() === 'busy', 'the gun in hand is down while it is refitted');
+  check(!sim.refit('p2', 'ar', defaultBuild('ar')), 'refitting the same build again does nothing');
+  check(sim.refit('p2', 'pistol', { ...defaultBuild('pistol'), skin: 'olive' }) && p2.arsenal.action === 'draw' && p2.arsenal.weapon.id === 'ar',
+    'the holstered gun is refitted without touching the one in hand');
+  check(!sim.refit('p2', 'smg', defaultBuild('smg')), 'only carried guns can be refitted');
+  run(sim, 2);
+  p2.arsenal.startMelee();
+  check(!sim.refit('p2', 'ar', ext), 'no refit mid-swing');
+  run(sim, 1);
+
+  const snap = captureSnapshot(sim, new Map());
+  const sp2 = snap.p.find((p) => p.id === 'p2')!;
+  check(sp2.k === encodeBuild(defaultBuild('ar')) + encodeBuild({ ...defaultBuild('pistol'), skin: 'olive' }), 'snapshots carry the primary and secondary builds');
+  const other = new Simulation({ physics, map, nav, doors, seed: 8, preparation: 600 });
+  const mirror = new Mirror(other, 'p1');
+  mirror.apply(snap, 0);
+  check(other.players.get('p2')?.arsenal.builds.pistol?.skin === 'olive', 'clients take the builds from snapshots');
+  other.dispose();
   cleanup(sim, body);
 }
 

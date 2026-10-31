@@ -8,6 +8,7 @@ import type { InteractKind, PlayerMotion, PlayerStats, Simulation } from '../sim
 import { Zombie, type ZombieState } from '../sim/Zombie';
 import type { SimEvent, SimPhase } from '../sim/events';
 import { clamp, type Quat, type Vec3 } from '../sim/math';
+import { decodeBuild, defaultBuild, encodeBuild } from '../config/progression';
 
 // Index tables for the wire format (append only: old clients read new numbers otherwise).
 const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'];
@@ -49,6 +50,8 @@ export interface SnapPlayer {
   dn: number[] | 0;
   /** Who is reviving them ('' for nobody). */
   rv: string;
+  /** Builds of the primary and secondary: encodeBuild() of each, back to back (absent from older servers). */
+  k?: string;
   s: PlayerStats;
 }
 
@@ -100,6 +103,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
       dn: p.downed ? [milli(Math.max(0, p.bleed)), milli(p.revive), p.downs] : 0,
       rv: p.reviver ?? '',
       s: { ...p.stats },
+      k: encodeBuild(a.builds[a.primary.id] ?? defaultBuild(a.primary.id)) + encodeBuild(a.builds[a.secondary.id] ?? defaultBuild(a.secondary.id)),
     });
   }
   const zombies: number[][] = [];
@@ -218,6 +222,8 @@ export class Mirror {
   private readonly doorHold = new Map<number, number>();
   private readonly tracks = new Map<string, Track>();
   private readonly held = new Map<number, HeldLimb>();
+  /** Each survivor's weapons and builds as last applied (snapshots repeat them). */
+  private readonly buildSeen = new Map<string, string>();
   private readonly zmap = new Map<number, Zombie>();
   /** Snapshots applied so far. */
   count = 0;
@@ -231,6 +237,11 @@ export class Mirror {
   /** Estimated server time at local time `now` (seconds). */
   serverTime(now: number): number {
     return Number.isNaN(this.offset) ? this.sim.time : now - this.offset;
+  }
+
+  /** The next snapshot applies this survivor's builds again even if they look unchanged (after a predicted refit). */
+  forgetBuilds(id: string): void {
+    this.buildSeen.delete(id);
   }
 
   /** Keeps the client's own weapon state (a predicted action) from being overwritten until `until`. */
@@ -453,6 +464,12 @@ export class Mirror {
         mo.pos.x = pos.x; mo.pos.y = pos.y; mo.pos.z = pos.z;
       }
       if (!mine || !holdSelf) this.syncArsenal(p.arsenal, sp.w, sp.lb, !mine);
+      const seen = sp.k ? `${p.arsenal.primary.id}:${p.arsenal.secondary.id}:${sp.k}` : '';
+      if (sp.k && this.buildSeen.get(sp.id) !== seen) {
+        this.buildSeen.set(sp.id, seen);
+        const a = p.arsenal;
+        a.builds = { ...a.builds, [a.primary.id]: decodeBuild(a.primary.id, sp.k.slice(0, 5)), [a.secondary.id]: decodeBuild(a.secondary.id, sp.k.slice(5, 10)) };
+      }
     }
     for (const [id, p] of sim.players) {
       if (pSeen.has(id) || id === this.me) continue;

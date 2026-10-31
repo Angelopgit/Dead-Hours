@@ -861,7 +861,8 @@ export class AudioEngine {
    * - far away the direct sound fades faster than the echo, so distant shots are mostly echo;
    * - a supersonic round passing near you cracks before its report arrives.
    */
-  gunshot(weapon: string, position: THREE.Vector3, local: boolean, bullets?: Vec3[]): void {
+  /** `suppressed`: through a suppressor, a dull thump that barely carries and hardly echoes. */
+  gunshot(weapon: string, position: THREE.Vector3, local: boolean, bullets?: Vec3[], suppressed = false): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
@@ -874,11 +875,16 @@ export class AudioEngine {
     src.buffer = this.shotBuffer(id, Math.floor(Math.random() * SHOT_TAKES));
     src.playbackRate.value = 1 + (Math.random() * 2 - 1) * 0.03;
     const level = ctx.createGain();
-    level.gain.value = gun.level;
-    src.connect(level);
+    level.gain.value = gun.level * (suppressed ? 0.3 : 1);
+    if (suppressed) {
+      const can = ctx.createBiquadFilter();
+      can.type = 'lowpass';
+      can.frequency.value = 2400;
+      src.connect(can).connect(level);
+    } else src.connect(level);
     const t = ctx.currentTime + d / SPEED_OF_SOUND;
     if (!local && !this.claimVoice(d, t + src.buffer.duration, level)) return;
-    const echo = gun.echo / (1 + d / 200);
+    const echo = (gun.echo / (1 + d / 200)) * (suppressed ? 0.3 : 1);
     if (local) {
       // The gun is at the shooter's face: no panning, the shot fills both ears.
       level.connect(this.effects);

@@ -1,6 +1,7 @@
 import gsap from 'gsap';
-import { hordeAt, type OverMsg, type PlayerStats } from '@dead-hours/shared';
+import { hordeAt, levelFor, runXp, unlockedBetween, type OverMsg, type PlayerStats } from '@dead-hours/shared';
 import { h } from './dom';
+import { levelBar } from './GunsmithPanel';
 import { clock } from './HUD';
 import { audio } from '../audio/AudioEngine';
 
@@ -48,6 +49,29 @@ function conceal(el: HTMLElement): void {
   el.remove();
 }
 
+/**
+ * What a run earned: the XP and where it came from, the level bar after it, and anything the
+ * new level unlocked.
+ */
+function xpLine(el: HTMLElement, gained: number, before: number, after: number, run: { survived: number; stats: PlayerStats }, offline: boolean): void {
+  if (gained <= 0) {
+    el.textContent = offline ? '' : 'NO XP SAVED FOR THIS RUN';
+    return;
+  }
+  const parts = runXp(run.survived, run.stats).parts.map((p) => `${p.label} +${p.xp}`).join(' · ');
+  const from = levelFor(before), to = levelFor(after);
+  const opened = unlockedBetween(from, to);
+  el.replaceChildren(
+    h('span', { class: 'xp-gain' }, `+${gained.toLocaleString()} XP`),
+    ...(to > from ? [h('span', {}, `LEVEL UP · ${to}`)] : []),
+    ...(offline ? [h('span', {}, ' · SAVED IN THIS BROWSER (OFFLINE)')] : []),
+    h('span', { class: 'xp-parts' }, parts),
+    levelBar(after),
+    ...(opened.length ? [h('span', { class: 'xp-unlocks' }, `UNLOCKED: ${opened.map((o) => o.label.toUpperCase()).join(' · ')} — FIT THEM IN THE LOADOUT OR WITH THE GUNSMITH`)] : []),
+  );
+  gsap.fromTo(el, { opacity: 0 }, { opacity: 1, duration: 0.6 });
+}
+
 const placeText = (r: RunRanks): string => [
   r.rankSurvival ? `#${r.rankSurvival} LONGEST SURVIVAL` : '',
   r.rankKills ? `#${r.rankKills} MOST KILLS` : '',
@@ -63,6 +87,7 @@ function hordeLine(survived: number): string {
 export class ResultsScreen {
   readonly el: HTMLElement;
   private readonly ranks = h('div', { class: 'results-ranks' });
+  private readonly xp = h('div', { class: 'results-xp' });
 
   constructor(r: RunSummary, actions: [string, () => void][], subtitle?: string) {
     const s = r.stats;
@@ -85,6 +110,7 @@ export class ResultsScreen {
           cell('DAMAGE TAKEN', String(Math.round(s.damageTaken))),
           cell('TIME IN SESSION', clock(r.total)),
         ),
+        this.xp,
         actionList(actions),
       ),
     );
@@ -98,6 +124,10 @@ export class ResultsScreen {
     gsap.fromTo(this.ranks, { opacity: 0 }, { opacity: 1, duration: 0.6 });
   }
 
+  setXp(gained: number, before: number, after: number, run: { survived: number; stats: PlayerStats }, offline = false): void {
+    xpLine(this.xp, gained, before, after, run, offline);
+  }
+
   show(parent: HTMLElement): void {
     parent.append(this.el);
     reveal(this.el);
@@ -105,6 +135,7 @@ export class ResultsScreen {
 
   dispose(): void {
     gsap.killTweensOf(this.ranks);
+    gsap.killTweensOf(this.xp);
     conceal(this.el);
   }
 }
@@ -112,6 +143,7 @@ export class ResultsScreen {
 /** End of an online night: every survivor's run side by side, with leaderboard places. */
 export class TeamResults {
   readonly el: HTMLElement;
+  private readonly xp = h('div', { class: 'results-xp' });
 
   constructor(over: OverMsg, me: string, actions: [string, () => void][]) {
     const best = over.results.reduce((a, r) => Math.max(a, r.survived), 0);
@@ -123,6 +155,7 @@ export class TeamResults {
         h('div', {}, 'KILLS', h('b', {}, String(r.stats.kills))),
         h('div', {}, 'HEADSHOTS', h('b', {}, String(r.stats.headshots))),
         h('div', {}, 'ARMS', h('b', {}, String(r.stats.limbsSevered))),
+        h('div', {}, 'XP', h('b', {}, r.xp ? `+${r.xp}` : '—')),
       );
     });
     this.el = h('div', { class: 'results', role: 'dialog', 'aria-label': 'Results' },
@@ -130,9 +163,15 @@ export class TeamResults {
         h('h1', { class: 'title' }, 'NIGHT OVER'),
         h('div', { class: 'subtitle' }, best > 0 ? `The last of you fell after ${clock(best)}. ${hordeLine(best)}.` : 'None of you saw the outbreak through.'),
         h('div', { class: 'team-table' }, ...rows),
+        this.xp,
         actionList(actions),
       ),
     );
+  }
+
+  /** This player's XP and level once the server has the new total. */
+  setXp(gained: number, before: number, after: number, run: { survived: number; stats: PlayerStats }): void {
+    xpLine(this.xp, gained, before, after, run, false);
   }
 
   show(parent: HTMLElement): void {
@@ -141,6 +180,7 @@ export class TeamResults {
   }
 
   dispose(): void {
+    gsap.killTweensOf(this.xp);
     conceal(this.el);
   }
 }
