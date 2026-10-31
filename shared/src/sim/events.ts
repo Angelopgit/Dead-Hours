@@ -45,7 +45,7 @@ export type SimEvent =
   | { type: 'draw'; player: string; slot: WeaponSlot; weapon: WeaponId }
   | { type: 'melee'; player: string; stage: 'swing' | 'hit' | 'miss'; limb?: boolean }
   | { type: 'bandage'; player: string; stage: 'start' | 'end' | 'cancel' }
-  | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon' | 'supply'; amount: number; source: number; weapon?: WeaponId }
+  | { type: 'pickup'; player: string; item: 'ammo' | 'bandage' | 'weapon' | 'supply' | 'serum'; amount: number; source: number; weapon?: WeaponId }
   | { type: 'doorPound'; door: number; pos: Vec3 }
   | { type: 'doorForced'; door: number; pos: Vec3 }
   | { type: 'notice'; player: string | null; text: string; sub?: string }
@@ -54,8 +54,8 @@ export type SimEvent =
    * `over` (outlasted at `at`).
    */
   | { type: 'horde'; wave: number; stage: 'warning' | 'surge' | 'over'; at: number }
-  | { type: 'heli'; drop: number; flight: HeliFlight; weapon?: WeaponId }
-  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'weaponTaken' | 'gone'; pos: Vec3 }
+  | { type: 'heli'; drop: number; flight: HeliFlight; weapon?: WeaponId; serum?: boolean }
+  | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'weaponTaken' | 'serumTaken' | 'gone'; pos: Vec3 }
   /** An arm came off: `pos` is the cut, `dir` the way the blow was going. */
   | { type: 'limbSevered'; zombie: number; limb: number; arm: ArmZone; cut: LimbCut; pos: Vec3; dir: Vec3; by: string; melee: boolean; killed: boolean }
   | { type: 'limbGrabbed'; player: string; limb: number }

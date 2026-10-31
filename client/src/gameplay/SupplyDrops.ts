@@ -431,6 +431,73 @@ class WeaponCase {
   }
 }
 
+/**
+ * A Lazarus serum: a small olive medical case lying open on the far side of the crate, the
+ * autoinjector glowing teal on its foam. The injector goes when someone takes it.
+ */
+class SerumKit {
+  readonly root = new THREE.Group();
+  private readonly pen = new THREE.Group();
+  private readonly glow: THREE.MeshBasicMaterial;
+  private readonly materials: THREE.Material[] = [];
+  private readonly geometries: THREE.BufferGeometry[] = [];
+
+  constructor(flight: HeliFlight) {
+    const shell = this.mat(std(OLIVE, 0.6, 0.1));
+    const foam = this.mat(std(0x2a2b2d, 0.95, 0));
+    const white = this.mat(std(0xd8d6cc, 0.5, 0.1));
+    const cap = this.mat(std(0xc0392b, 0.5, 0.1));
+    this.glow = this.mat(new THREE.MeshBasicMaterial({ color: 0x6fd0bf, toneMapped: false }));
+    const add = (g: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = this.root) => {
+      this.geometries.push(g);
+      const mesh = new THREE.Mesh(g, m);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = mesh.receiveShadow = true;
+      parent.add(mesh);
+      return mesh;
+    };
+    add(new THREE.BoxGeometry(0.3, 0.07, 0.42), shell, 0, 0.035, 0);
+    add(new THREE.BoxGeometry(0.27, 0.015, 0.39), foam, 0, 0.072, 0);
+    const lid = add(new THREE.BoxGeometry(0.3, 0.035, 0.42), shell, -0.15, 0.07, 0);
+    lid.geometry.translate(-0.15, 0, 0);
+    lid.position.set(-0.15, 0.07, 0);
+    lid.rotation.z = 2.0;
+    // The pen: a fat white tube, a red safety cap, a glowing teal window full of the dose.
+    const body = add(new THREE.CylinderGeometry(0.022, 0.022, 0.2, 10), white, 0, 0, 0, this.pen);
+    body.rotation.x = Math.PI / 2;
+    const end = add(new THREE.CylinderGeometry(0.024, 0.024, 0.04, 10), cap, 0, 0, -0.12, this.pen);
+    end.rotation.x = Math.PI / 2;
+    const win = add(new THREE.CylinderGeometry(0.0235, 0.0235, 0.08, 10), this.glow, 0, 0, 0.03, this.pen);
+    win.rotation.x = Math.PI / 2;
+    win.castShadow = false;
+    this.pen.position.set(0.02, 0.1, 0);
+    this.root.add(this.pen);
+    const c = caseSpot(flight, -1);
+    this.root.position.set(c.x, c.y, c.z);
+    this.root.rotation.y = c.yaw;
+  }
+
+  private mat<M extends THREE.Material>(m: M): M {
+    this.materials.push(m);
+    return m;
+  }
+
+  taken(): void {
+    this.pen.visible = false;
+  }
+
+  pose(time: number): void {
+    const k = 0.6 + 0.4 * Math.sin(time * 3.2);
+    this.glow.color.setRGB(0.44 * k, 0.82 * k, 0.75 * k);
+  }
+
+  dispose(): void {
+    this.root.removeFromParent();
+    for (const g of this.geometries) g.dispose();
+    for (const m of this.materials) m.dispose();
+  }
+}
+
 // ---------------------------------------------------------------------------- system
 
 interface Drop {
@@ -441,6 +508,9 @@ interface Drop {
   /** The exclusive weapon's case (rare drops), shown once the crate is down. */
   weapon: WeaponCase | null;
   weaponLeft: boolean;
+  /** A Lazarus serum (rare), shown once the crate is down. */
+  serum: SerumKit | null;
+  serumLeft: boolean;
   landed: boolean;
   empty: boolean;
   emptyAt: number;
@@ -487,7 +557,7 @@ export class SupplyDrops {
   }
 
   /** A helicopter took off for a drop. */
-  flight(id: number, f: HeliFlight, weapon: WeaponId | null = null): void {
+  flight(id: number, f: HeliFlight, weapon: WeaponId | null = null, serum = false): void {
     if (this.drops.has(id)) return;
     const heli = new Helicopter();
     const crate = new CrateModel();
@@ -497,8 +567,13 @@ export class SupplyDrops {
       wcase.root.visible = false;
       this.root.add(wcase.root);
     }
+    const kit = serum ? new SerumKit(f) : null;
+    if (kit) {
+      kit.root.visible = false;
+      this.root.add(kit.root);
+    }
     this.drops.set(id, {
-      id, flight: f, heli, crate, weapon: wcase, weaponLeft: !!wcase, landed: false, empty: false, emptyAt: 0, smokeT: 0, hang: new THREE.Vector3(f.over.x, f.ground.y + f.releaseHeight, f.over.z),
+      id, flight: f, heli, crate, weapon: wcase, weaponLeft: !!wcase, serum: kit, serumLeft: !!kit, landed: false, empty: false, emptyAt: 0, smokeT: 0, hang: new THREE.Vector3(f.over.x, f.ground.y + f.releaseHeight, f.over.z),
       pose: { pos: new THREE.Vector3(), yaw: 0, pitch: 0, roll: 0, speed: 0, hover: 0 },
     });
   }
@@ -518,12 +593,21 @@ export class SupplyDrops {
     d.weapon.taken();
   }
 
+  /** Someone injected the drop's serum. */
+  serumTaken(id: number): void {
+    const d = this.drops.get(id);
+    if (!d || !d.serum) return;
+    d.serumLeft = false;
+    d.serum.taken();
+  }
+
   gone(id: number): void {
     const d = this.drops.get(id);
     if (!d) return;
     d.heli?.dispose();
     d.crate.dispose();
     d.weapon?.dispose();
+    d.serum?.dispose();
     this.drops.delete(id);
   }
 
@@ -536,7 +620,7 @@ export class SupplyDrops {
   /** The drop worth pointing at on the HUD: the newest one that still has ammunition. */
   marker(): DropMarker | null {
     let best: Drop | null = null;
-    for (const d of this.drops.values()) if ((!d.empty || d.weaponLeft) && (!best || d.id > best.id)) best = d;
+    for (const d of this.drops.values()) if ((!d.empty || d.weaponLeft || d.serumLeft) && (!best || d.id > best.id)) best = d;
     if (!best) return null;
     const g = best.flight.ground;
     return { pos: this.tmp.set(g.x, g.y + 0.8, g.z), stage: best.landed ? 'landed' : best.heli && this.timeNow < best.flight.release ? 'inbound' : 'falling' };
@@ -589,6 +673,10 @@ export class SupplyDrops {
       if (d.weapon) {
         d.weapon.root.visible = time >= f.land;
         d.weapon.pose(time);
+      }
+      if (d.serum) {
+        d.serum.root.visible = time >= f.land;
+        d.serum.pose(time);
       }
       if (!d.landed && time >= f.land) {
         d.landed = true;

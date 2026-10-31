@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -659,6 +659,50 @@ section('Exclusive supply drop weapons');
     check(sim.use('p1', crate.id) && sp.arsenal.primary.reserve === WEAPONS.sniper.maxReserve, 'universal ammo fills the .50 cal too');
     sim.setMotion('p1', { pos: { x: c.x + 0.5, y: f.ground.y, z: c.z } });
     check(!sim.selectPrimary('p1', 'lmg'), 'exclusives cannot be picked at a weapon table');
+  }
+  for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
+  cleanup(sim, body);
+}
+section('Lazarus serum');
+{
+  const at = { x: 0, y: 0.15, z: 6 };
+  const { sim, sp, body } = makeSim(at, 0.5);
+  run(sim, 1);
+  const clear = () => {
+    for (const z of [...sim.zombies]) z.removeBody();
+    sim.zombies.splice(0, sim.zombies.length);
+    return false;
+  };
+  clear();
+  // Odds: count over many planned drops by replaying the roll the way runDrops makes it.
+  let with_ = 0;
+  const N = 20000;
+  for (let i = 0; i < N; i++) if ((sim as unknown as { rand(): number }).rand() < SUPPLY_DROPS.serumChance) with_++;
+  check(Math.abs(with_ / N - 0.1) < 0.01, `${(100 * with_ / N).toFixed(1)}% of drops carry a serum`);
+  const drop = sim.callSupplyDrop(undefined, true);
+  let res = run(sim, 0.1, clear);
+  check(!!drop && drop.serum && res.events.some((e) => e.type === 'notice' && e.text === 'RARE SUPPLY DROP INBOUND' && /Lazarus/.test(e.sub ?? '')), 'a drop with a serum is announced as rare');
+  if (drop) {
+    const f = drop.flight;
+    res = run(sim, f.land - sim.time + 0.2, clear);
+    const vial = sim.interactables.find((it) => it.kind === 'serum');
+    const c = caseSpot(f, -1);
+    check(!!vial && vial.supply === 1 && Math.hypot(vial.pos.x - c.x, vial.pos.z - c.z) < 1e-6, 'one serum lands on the far side of the crate from the weapon case');
+    sim.setMotion('p1', { pos: { x: c.x + 0.5, y: f.ground.y, z: c.z } });
+    const took = sim.use('p1', vial!.id);
+    res = run(sim, 0.05, clear);
+    check(took && sp.armor === SERUM.armor && vial!.supply === 0 && !sim.use('p1', vial!.id), `injecting it gives ${SERUM.armor} armor, and there is only one`);
+    check(res.events.some((e) => e.type === 'supplyDrop' && e.stage === 'serumTaken') && res.events.some((e) => e.type === 'pickup' && e.item === 'serum'), 'everyone sees it taken');
+    const snap = captureSnapshot(sim, new Map());
+    check(snap.p.find((p) => p.id === 'p1')?.ar === SERUM.armor * 10, 'snapshots carry the armor to online players');
+    sp.health = 100;
+    sim.damagePlayer(sp, 20, at);
+    check(Math.abs(sp.health - 92) < 1e-6 && Math.abs(sp.armor - (SERUM.armor - 12)) < 1e-6, `a 20-point hit takes ${100 - sp.health} health and ${SERUM.armor - sp.armor} armor`);
+    sp.armor = 5;
+    sim.damagePlayer(sp, 20, at);
+    check(sp.armor === 0 && Math.abs(sp.health - 77) < 1e-6, 'when the armor runs out the rest of the hit goes through');
+    sim.damagePlayer(sp, 20, at);
+    check(Math.abs(sp.health - 57) < 1e-6, 'spent serum gives no more protection');
   }
   for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
   cleanup(sim, body);

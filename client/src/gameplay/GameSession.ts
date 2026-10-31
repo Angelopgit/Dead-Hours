@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
   type ActMsg, type ArmZone, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
@@ -922,6 +922,7 @@ export class GameSession {
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
     else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
+    else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()} · ARMOR AGAINST THE DEAD`);
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'limb') {
       const l = best.limb!;
@@ -1200,6 +1201,7 @@ export class GameSession {
           this.hud.notify('ALL WEAPONS RESUPPLIED', 'Every gun you carry is full', 2.2);
         }
         else if (e.item === 'bandage') this.hud.feedLine(`BANDAGE +${e.amount}`);
+        else if (e.item === 'serum') this.hud.notify(`${SERUM.name.toUpperCase()} INJECTED`, `The dead's hits do ${Math.round((1 - SERUM.absorb) * 100)}% damage until it is used up`, 3, 'rare');
         else if (e.weapon && WEAPONS[e.weapon].exclusive) this.hud.notify(`${WEAPONS[e.weapon].model} EQUIPPED`, WEAPONS[e.weapon].description, 3, 'rare');
         else if (e.weapon) this.hud.feedLine(`${WEAPONS[e.weapon].model} EQUIPPED`);
         break;
@@ -1214,11 +1216,12 @@ export class GameSession {
         this.onHorde(e.wave, e.stage, e.at);
         break;
       case 'heli':
-        this.drops.flight(e.drop, e.flight, e.weapon ?? null);
+        this.drops.flight(e.drop, e.flight, e.weapon ?? null, !!e.serum);
         break;
       case 'supplyDrop':
         if (e.stage === 'empty') this.drops.emptied(e.drop, this.sim.time);
         else if (e.stage === 'weaponTaken') this.drops.weaponTaken(e.drop);
+        else if (e.stage === 'serumTaken') this.drops.serumTaken(e.drop);
         else if (e.stage === 'gone') this.drops.gone(e.drop);
         break;
       case 'phase':
@@ -1501,6 +1504,7 @@ export class GameSession {
     const p = this.player;
 
     hud.setHealth(me.health, PLAYER.maxHealth);
+    hud.setArmor(me.alive ? me.armor : 0, SERUM.armor);
     const limb = a.limb && !a.limb.broken ? a.limb : null;
     hud.weapon({
       model: limb ? (limb.cut === 'shoulder' ? 'SEVERED ARM' : 'SEVERED FOREARM') : def.model,
@@ -1599,7 +1603,7 @@ export class GameSession {
     },
     phase: () => this.phase,
     /** Calls a supply helicopter now (during the outbreak). */
-    supplyDrop: (weapon?: WeaponId) => (this.link ? (this.link.debug({ cmd: 'supplyDrop', weapon }), null) : this.sim.callSupplyDrop(weapon)?.flight ?? null),
+    supplyDrop: (weapon?: WeaponId, serum = false) => (this.link ? (this.link.debug({ cmd: 'supplyDrop', weapon, serum }), null) : this.sim.callSupplyDrop(weapon, serum)?.flight ?? null),
     hurt: (amount: number) => this.link?.debug({ cmd: 'hurt', amount }),
     /** Online: health stays full (the server's test mode only). */
     god: (on = true) => this.link?.debug({ cmd: 'god', on }),

@@ -4,7 +4,7 @@ import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type W
 import { GAME } from '../config/game';
 import { PLAYER } from '../config/player';
 import { HORDES, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
-import { SUPPLY_DROPS, caseSpot } from '../config/drops';
+import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
@@ -50,6 +50,8 @@ export class SimPlayer {
   alive = true;
   readonly arsenal: Arsenal;
   bandages: number = COMBAT.startBandages;
+  /** Lazarus serum armor left: soaks up part of every zombie hit (SERUM). */
+  armor = 0;
   readonly motion: PlayerMotion;
   readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0 };
   /** The crosshair ray the last melee swing was aimed with (decides what it lands on). */
@@ -89,7 +91,7 @@ export interface Noise {
   source: string | null;
 }
 
-export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive';
+export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive' | 'serum';
 
 export interface Interactable {
   id: number;
@@ -115,6 +117,9 @@ export interface SupplyDrop {
   /** Exclusive weapon in a case beside the crate (rare), and that case's interactable (-1 until landed). */
   weapon: WeaponId | null;
   caseItem: number;
+  /** A Lazarus serum on the crate's other side (rare), and its interactable (-1 until landed). */
+  serum: boolean;
+  serumItem: number;
 }
 
 /**
@@ -343,6 +348,11 @@ export class Simulation {
 
   damagePlayer(p: SimPlayer, damage: number, from: Vec3): void {
     if (!p.alive) return;
+    if (p.armor > 0) {
+      const soak = Math.min(p.armor, damage * SERUM.absorb);
+      p.armor = Math.max(0, p.armor - soak);
+      damage = Math.round((damage - soak) * 10) / 10;
+    }
     p.health = Math.max(0, p.health - damage);
     p.stats.damageTaken += damage;
     if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
@@ -711,6 +721,21 @@ export class Simulation {
       this.emit({ type: 'pickup', player: id, item: 'supply', amount: got, source: it.id });
       const drop = this.drops.find((d) => d.interactable === it.id);
       if (drop && it.supply <= 0) this.emit({ type: 'supplyDrop', drop: drop.id, stage: 'empty', pos: { ...drop.flight.ground } });
+      return true;
+    }
+    if (it.kind === 'serum') {
+      if (it.supply <= 0) return false;
+      if (p.armor >= SERUM.armor) {
+        this.emit({ type: 'notice', player: id, text: 'SERUM STILL WORKING' });
+        return false;
+      }
+      it.supply = 0;
+      p.armor = SERUM.armor;
+      p.stats.suppliesCollected++;
+      this.emit({ type: 'pickup', player: id, item: 'serum', amount: SERUM.armor, source: it.id });
+      const drop = this.drops.find((d) => d.serumItem === it.id);
+      if (drop) this.emit({ type: 'supplyDrop', drop: drop.id, stage: 'serumTaken', pos: { ...it.pos } });
+      this.emit({ type: 'notice', player: null, text: `${p.name.toUpperCase()} TOOK THE ${SERUM.name.toUpperCase()}` });
       return true;
     }
     if (it.kind === 'exclusive') {
@@ -1262,9 +1287,12 @@ export class Simulation {
       if (flight) {
         const id = this.drops.length;
         const weapon = this.rollExclusive();
-        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null, weapon, caseItem: -1 });
-        this.emit({ type: 'heli', drop: id, flight, ...(weapon ? { weapon } : {}) });
-        if (weapon) this.emit({ type: 'notice', player: null, text: 'RARE SUPPLY DROP INBOUND', sub: `Universal ammo · ${WEAPONS[weapon].model} aboard` });
+        const serum = this.forceSerum || this.rand() < D.serumChance;
+        this.forceSerum = false;
+        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null, weapon, caseItem: -1, serum, serumItem: -1 });
+        this.emit({ type: 'heli', drop: id, flight, ...(weapon ? { weapon } : {}), ...(serum ? { serum } : {}) });
+        const extras = [weapon ? `${WEAPONS[weapon].model} aboard` : '', serum ? `${SERUM.name} aboard` : ''].filter(Boolean);
+        if (extras.length) this.emit({ type: 'notice', player: null, text: 'RARE SUPPLY DROP INBOUND', sub: `Universal ammo · ${extras.join(' · ')}` });
         else this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: 'Universal ammo · refills every weapon' });
         const [lo, hi] = D.interval;
         this.nextDropAt = this.phaseTime + lo + this.rand() * (hi - lo);
@@ -1299,6 +1327,11 @@ export class Simulation {
           d.caseItem = this.interactables.length;
           this.interactables.push({ id: d.caseItem, kind: 'exclusive', pos: { x: c.x, y: c.y + 0.2, z: c.z }, supply: 1, range: 1.9, weapon: d.weapon });
         }
+        if (d.serum) {
+          const c = caseSpot(f, -1);
+          d.serumItem = this.interactables.length;
+          this.interactables.push({ id: d.serumItem, kind: 'serum', pos: { x: c.x, y: c.y + 0.2, z: c.z }, supply: 1, range: 1.9 });
+        }
         this.noise(g, D.landNoise, null);
         this.emit({ type: 'supplyDrop', drop: d.id, stage: 'landed', pos: { ...g } });
       } else if (d.stage === 'landed' && this.time - f.land > D.lifetime) {
@@ -1331,6 +1364,7 @@ export class Simulation {
     d.stage = 'gone';
     if (d.interactable >= 0) this.interactables[d.interactable].supply = 0;
     if (d.caseItem >= 0) this.interactables[d.caseItem].supply = 0;
+    if (d.serumItem >= 0) this.interactables[d.serumItem].supply = 0;
     if (d.body) this.physics.world.removeRigidBody(d.body);
     d.body = null;
     this.emit({ type: 'supplyDrop', drop: d.id, stage: 'gone', pos: { ...d.flight.ground } });
@@ -1393,9 +1427,13 @@ export class Simulation {
   /** The next drop carries this weapon whatever the roll (debugging and tests). */
   forceExclusive: WeaponId | null = null;
 
-  /** Starts a supply drop now (debugging and tests); `weapon` puts an exclusive in it. */
-  callSupplyDrop(weapon?: WeaponId): SupplyDrop | null {
+  /** The next drop carries a Lazarus serum whatever the roll (debugging and tests). */
+  forceSerum = false;
+
+  /** Starts a supply drop now (debugging and tests); `weapon` puts an exclusive in it, `serum` a serum. */
+  callSupplyDrop(weapon?: WeaponId, serum = false): SupplyDrop | null {
     if (weapon && WEAPONS[weapon]?.exclusive) this.forceExclusive = weapon;
+    if (serum) this.forceSerum = true;
     if (this.phase !== 'survival') return null;
     this.nextDropAt = this.phaseTime;
     this.runDrops();

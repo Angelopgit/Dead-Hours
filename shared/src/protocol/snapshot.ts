@@ -14,7 +14,7 @@ const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'cha
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
 const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage'];
 const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper'];
-const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive'];
+const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum'];
 const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
 const ARMS: ArmZone[] = ['armL', 'armR'];
 const CUTS: LimbCut[] = ['shoulder', 'elbow'];
@@ -38,6 +38,8 @@ export interface SnapPlayer {
   al: number;
   b: number;
   dt: number;
+  /** Lazarus serum armor ×10 (left out when none). */
+  ar?: number;
   /** [active (1 secondary), action, actionT, actionTotal, primary id, mag, reserve, secondary id, mag, reserve, melee with limb, aim ×1000] */
   w: number[];
   /** The arm in hand: [id, arm, cut, kind, look, scale ×1000, wear, maxWear, broken], or 0. */
@@ -81,7 +83,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
     players.push({
       id: p.id, n: p.name, a: p.appearance,
       m: [cm(m.pos.x), cm(m.pos.y), cm(m.pos.z), cm(m.vel.x), cm(m.vel.y), cm(m.vel.z), milli(m.yaw), milli(m.pitch), milli(facing.get(p.id) ?? m.yaw + Math.PI), cm(m.eyeHeight), flagsOf(m)],
-      hp: Math.round(p.health * 10), al: p.alive ? 1 : 0, b: p.bandages, dt: milli(p.diedAt),
+      hp: Math.round(p.health * 10), al: p.alive ? 1 : 0, b: p.bandages, dt: milli(p.diedAt), ...(p.armor > 0 ? { ar: Math.round(p.armor * 10) } : {}),
       w: [
         a.active === 'secondary' ? 1 : 0, idx(ACTIONS, a.action), milli(Math.max(0, a.actionT)), milli(a.actionTotal),
         idx(WEAPON_IDS, a.primary.id), a.primary.mag, a.primary.reserve, idx(WEAPON_IDS, a.secondary.id), a.secondary.mag, a.secondary.reserve,
@@ -398,6 +400,7 @@ export class Mirror {
       p.health = sp.hp / 10;
       p.alive = sp.al === 1;
       p.bandages = sp.b;
+      p.armor = (sp.ar ?? 0) / 10;
       p.diedAt = sp.dt / 1000;
       Object.assign(p.stats, sp.s);
       if (sp.lb) heldSeen.add(sp.lb[0]);
@@ -513,7 +516,7 @@ export class Mirror {
       const i = sim.limbs.findIndex((l) => l.id === e.limb);
       if (i >= 0) sim.limbs.splice(i, 1);
     } else if (e.type === 'heli') {
-      if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null, weapon: e.weapon ?? null, caseItem: -1 });
+      if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null, weapon: e.weapon ?? null, caseItem: -1, serum: !!e.serum, serumItem: -1 });
     } else if (e.type === 'supplyDrop') {
       const d = sim.drops.find((x) => x.id === e.drop);
       if (!d) return;

@@ -41,12 +41,28 @@ export const SUPPLY_DROPS = {
   exclusiveWeights: [['lmg', 0.4], ['battle', 0.4], ['sniper', 0.2]] as [WeaponId, number][],
   /** The case lies this far from the crate's centre, across the helicopter's way in. */
   caseOffset: 1.15,
+  /** Chance that a drop also carries one Lazarus serum (see SERUM), lying on the crate's other side. */
+  serumChance: 0.1,
 } as const;
 
-/** Where a drop's weapon case lies: beside the crate, the same on every machine. */
-export function caseSpot(f: { from: { x: number; z: number }; over: { x: number; z: number }; ground: { x: number; y: number; z: number } }): { x: number; y: number; z: number; yaw: number } {
+/**
+ * Lazarus serum: an experimental immunity shot from the supply drops. Injected, it hardens the
+ * survivor against the dead: `absorb` of every zombie hit (claws, bites, a bloater bursting)
+ * comes off an armor pool of `armor` points instead of their health, until the pool is spent.
+ */
+export const SERUM = {
+  name: 'Lazarus Serum',
+  armor: 100,
+  absorb: 0.6,
+} as const;
+
+/**
+ * Where a drop's weapon case (side 1) or serum (side -1) lies: beside the crate, the same on
+ * every machine.
+ */
+export function caseSpot(f: { from: { x: number; z: number }; over: { x: number; z: number }; ground: { x: number; y: number; z: number } }, side = 1): { x: number; y: number; z: number; yaw: number } {
   const yaw = Math.atan2(f.over.x - f.from.x, f.over.z - f.from.z);
   // Perpendicular to the way in: the crate's long side faces it.
-  const r = SUPPLY_DROPS.caseOffset;
+  const r = SUPPLY_DROPS.caseOffset * side;
   return { x: f.ground.x + Math.cos(yaw) * r, y: f.ground.y, z: f.ground.z - Math.sin(yaw) * r, yaw };
 }

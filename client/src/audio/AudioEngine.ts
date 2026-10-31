@@ -1325,10 +1325,18 @@ export class AudioEngine {
     for (let i = 0; i < 4; i++) this.burst(d, t + i * 0.45, 'highpass', 1800 + Math.random() * 800, 0.8, 0.1, 0.04, 0.3, 1.2);
   }
 
-  pickup(kind: 'ammo' | 'bandage' | 'weapon' | 'supply'): void {
+  pickup(kind: 'ammo' | 'bandage' | 'weapon' | 'supply' | 'serum'): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const d = this.out(null);
+    if (kind === 'serum') {
+      // Autoinjector: cap off, the spring-loaded click, the hiss of the dose, a breath of relief.
+      this.burst(d, t, 'bandpass', 3200, 3, 0.18, 0.001, 0.03);
+      this.burst(d, t + 0.18, 'bandpass', 2600, 4, 0.4, 0.001, 0.025);
+      this.burst(d, t + 0.21, 'highpass', 5000, 0.7, 0.16, 0.01, 0.5);
+      this.tone(d, t + 0.75, 'sine', 180, 120, 0.06, 0.05, 0.5);
+      return;
+    }
     if (kind === 'supply') {
       // Lid, then handfuls of loose rounds and magazines going into pouches.
       this.burst(d, t, 'bandpass', 900, 1.5, 0.35, 0.002, 0.07);

@@ -63,6 +63,11 @@ export class HUD {
   private waypointShown = false;
   private promptKey = '';
   private health = 100;
+  /** Lazarus serum armor: a teal bar under the health bar while it lasts. */
+  private readonly armorRow: HTMLElement;
+  private readonly armorFill: HTMLElement;
+  private readonly armorText: HTMLElement;
+  private armor = -1;
   private timerText = '';
   private warningText = '';
   private lastReadout = '';
@@ -100,6 +105,11 @@ export class HUD {
     this.slot1 = h('div', { class: 'w-slot' });
     this.slot2 = h('div', { class: 'w-slot' });
     this.bandages = h('div', { class: 'w-heal' });
+    this.armorFill = h('i');
+    this.armorText = h('span', {}, '0');
+    this.armorRow = h('div', { class: 'armor', style: 'display:none' },
+      h('div', { class: 'armor-label' }, h('span', {}, 'LAZARUS SERUM'), this.armorText),
+      h('div', { class: 'abar' }, this.armorFill));
     this.el = h('div', { class: 'hud' },
       this.scope,
       this.arcs,
@@ -114,6 +124,7 @@ export class HUD {
       h('div', { class: 'vitals' },
         h('div', { class: 'name' }, h('span', {}, name.toUpperCase()), this.hp),
         h('div', { class: 'hbar' }, this.lag, this.fill),
+        this.armorRow,
         this.stance,
       ),
       h('div', { class: 'weapon-panel' },
@@ -138,6 +149,16 @@ export class HUD {
     this.hp.classList.toggle('low', v / max < 0.3);
     gsap.to(this.fill, { width: `${pct}%`, duration: 0.2 });
     gsap.to(this.lag, { width: `${pct}%`, duration: 0.8, delay: dropped ? 0.35 : 0, ease: 'power2.out' });
+  }
+
+  /** Serum armor left out of `max` (0 hides the bar). */
+  setArmor(v: number, max: number): void {
+    const r = Math.ceil(v);
+    if (r === this.armor) return;
+    this.armor = r;
+    this.armorRow.style.display = r > 0 ? '' : 'none';
+    this.armorText.textContent = String(r);
+    gsap.to(this.armorFill, { width: `${Math.max(0, v / max) * 100}%`, duration: 0.25 });
   }
 
   /** Crosshair gap in pixels (from the weapon's current spread). */
