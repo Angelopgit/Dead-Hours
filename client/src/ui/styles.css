@@ -516,7 +516,8 @@ body.pad-nav #viewport { cursor: none; }
 .tc-btn.melee { --s: 54px; right: calc(204px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(100px * var(--tc-scale)); }
 .tc-btn.swap { --s: 50px; right: calc(104px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(176px * var(--tc-scale)); }
 .tc-btn.use { --s: 60px; right: calc(178px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(168px * var(--tc-scale)); opacity: 0.45; padding: 4px; }
-.tc-btn.use.ready { opacity: 1; border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
+.tc-btn.board { --s: 52px; right: calc(252px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(172px * var(--tc-scale)); opacity: 0.45; }
+.tc-btn.use.ready, .tc-btn.board.ready { opacity: 1; border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
 .tc-btn.heal { --s: 44px; right: calc(28px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.bag { --s: 44px; right: calc(84px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.talk { --s: 44px; right: calc(140px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }

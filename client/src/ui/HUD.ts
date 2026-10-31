@@ -264,14 +264,14 @@ export class HUD {
   }
 
   /** Told whenever the interaction prompt changes (the on-screen USE button follows it). */
-  onPrompt: ((text: string | null) => void) | null = null;
+  onPrompt: ((action: Action | null, text: string) => void) | null = null;
 
   setPrompt(action: Action | null, text = ''): void {
     const label = action ? actionLabel(action) : '';
     const key = action ? `${action}:${text}:${label}` : '';
     if (key === this.promptKey) return;
     this.promptKey = key;
-    this.onPrompt?.(action ? text : null);
+    this.onPrompt?.(action, text);
     if (!action) {
       this.prompt.classList.remove('show');
       return;

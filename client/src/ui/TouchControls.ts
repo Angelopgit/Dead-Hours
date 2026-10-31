@@ -25,7 +25,8 @@ const BUTTONS: ButtonDef[] = [
   { action: 'jump', label: 'JUMP', cls: 'jump', mode: 'tap' },
   { action: 'crouch', label: 'CROUCH', cls: 'crouch', mode: 'latch' },
   { action: 'melee', label: 'MELEE', cls: 'melee', mode: 'tap' },
-  { action: 'interact', label: 'USE', cls: 'use', mode: 'tap' },
+  { action: 'interact', label: 'USE', cls: 'use', mode: 'hold' },
+  { action: 'barricade', label: 'BOARD', cls: 'board', mode: 'hold' },
   { action: 'swap', label: 'SWAP', cls: 'swap', mode: 'tap' },
   { action: 'heal', label: 'HEAL', cls: 'heal', mode: 'tap' },
   { action: 'inventory', label: 'BAG', cls: 'bag', mode: 'hold' },
@@ -202,12 +203,15 @@ export class TouchControls {
     if (!on) this.reset();
   }
 
-  /** Lights the USE button when there is something to use, with what it does. */
-  setUse(text: string | null): void {
-    const b = this.buttons.get('interact');
-    if (!b) return;
-    b.classList.toggle('ready', !!text);
-    b.textContent = text ? shortUse(text) : 'USE';
+  /** Lights the USE or BOARD button when there is something to do, with what it does. */
+  setUse(action: Action | null, text: string): void {
+    const use = this.buttons.get('interact');
+    const board = this.buttons.get('barricade');
+    if (use) {
+      use.classList.toggle('ready', action === 'interact');
+      use.textContent = action === 'interact' ? shortUse(text) : 'USE';
+    }
+    board?.classList.toggle('ready', action === 'barricade' || (action === 'interact' && /BOARD/.test(text)));
   }
 
   private reset(): void {

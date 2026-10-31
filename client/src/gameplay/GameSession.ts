@@ -280,7 +280,7 @@ export class GameSession {
     this.touch = new TouchControls(input, !!online);
     this.touch.setVisible(false);
     ui.append(this.touch.el);
-    this.hud.onPrompt = (text) => this.touch.setUse(text);
+    this.hud.onPrompt = (action, text) => this.touch.setUse(action, text);
     this.assist = new AimAssist(physics);
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
     this.skip = h('div', { class: 'skip' }, 'PRESS ANY KEY TO SKIP');
@@ -972,7 +972,7 @@ export class GameSession {
     // An opening in reach is boarded up from here unless something else is what the crosshair is on.
     const own = slot && (!best || (best.kind === 'door' && slot.kind === 'door' && best.door!.body.index === slot.ref)) ? slot : null;
     if (this.updateWork(own)) return;
-    const key = (a: Action) => codeLabel(settings.value.controls.bindings[a][0] ?? '') || '?';
+    const key = (a: Action) => actionLabel(a) || (a === 'barricade' ? 'BOARD' : 'USE');
     if (own) {
       const what = own.kind === 'door' ? 'DOOR' : 'WINDOW';
       const count = `${own.boards}/${own.max}`;

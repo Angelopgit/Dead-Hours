@@ -10,14 +10,14 @@ const B = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, BACK: 8, START: 
 /** Fixed controller layout for play. Sprint is a click of the left stick (it stays on while moving). */
 const PAD_ACTIONS: [Action, number][] = [
   ['fire', B.RT], ['aim', B.LT], ['jump', B.A], ['crouch', B.B], ['reload', B.X],
-  ['interact', B.RB], ['heal', B.LB], ['melee', B.RS], ['shoulder', B.UP], ['inventory', B.DOWN],
+  ['interact', B.RB], ['heal', B.LB], ['melee', B.RS], ['shoulder', B.UP], ['barricade', B.DOWN], ['inventory', B.BACK],
   ['talk', B.LEFT], ['radio', B.RIGHT],
 ];
 
 /** Button names shown in prompts while a controller is in use. */
 export const PAD_LABELS: Partial<Record<Action, string>> = {
   fire: 'RT', aim: 'LT', jump: 'A', crouch: 'B', reload: 'X', interact: 'RB', heal: 'LB', melee: 'R3',
-  shoulder: '↑', inventory: '↓', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y',
+  shoulder: '↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y',
 };
 
 const STICK_DEAD = 0.14;
@@ -245,7 +245,7 @@ export class Input {
       return;
     }
 
-    if (edge(B.START) || edge(B.BACK)) this.pauseWanted = true;
+    if (edge(B.START)) this.pauseWanted = true;
     for (const [action, i] of PAD_ACTIONS) if (now[i] !== this.down.has(`Pad:${action}`)) this.virtual('Pad', action, now[i]);
     // Y swaps between the two weapons, as the mouse wheel does.
     if (edge(B.Y)) this.swapWeapon();
