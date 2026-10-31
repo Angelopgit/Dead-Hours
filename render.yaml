@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: dead-hours-server
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+  - type: web
+    name: dead-hours-client
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: client/dist
+    envVars:
+      - key: VITE_SERVER_URL
+        sync: false # set to the server's public address, e.g. https://api.yourdomain.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
