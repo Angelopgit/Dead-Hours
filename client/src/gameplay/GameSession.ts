@@ -6,7 +6,7 @@ import {
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
-import { codeLabel, typing, type Input } from '../core/Input';
+import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
 import type { Physics } from '../core/Physics';
 import { settings, type Action } from '../core/Settings';
 import { PlayerController } from './PlayerController';
@@ -32,6 +32,8 @@ import { ChatBox } from '../ui/ChatBox';
 import { Inventory } from '../ui/Inventory';
 import { ResultsScreen, TeamResults } from '../ui/ResultsScreen';
 import { WeaponTablePanel } from '../ui/WeaponTablePanel';
+import { TouchControls } from '../ui/TouchControls';
+import { AimAssist } from './AimAssist';
 import { audio } from '../audio/AudioEngine';
 import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
@@ -132,6 +134,9 @@ export class GameSession {
   private readonly probe: DynamicProbe;
   readonly focus = new THREE.Vector3();
   private readonly abort = new AbortController();
+  /** On-screen thumb controls (shown on touch screens while playing). */
+  private readonly touch: TouchControls;
+  private readonly assist: AimAssist;
   private readonly fill = new THREE.PointLight(0xa8b8d0, 1.6, 9, 1.5);
   private readonly unsubSettings: () => void;
   private readonly doorColliders = new Set<number>();
@@ -272,6 +277,11 @@ export class GameSession {
       ui.append(this.chatBox.el, this.voxList);
       online.link.voice.setInGame(true);
     }
+    this.touch = new TouchControls(input, !!online);
+    this.touch.setVisible(false);
+    ui.append(this.touch.el);
+    this.hud.onPrompt = (text) => this.touch.setUse(text);
+    this.assist = new AimAssist(physics);
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
     this.skip = h('div', { class: 'skip' }, 'PRESS ANY KEY TO SKIP');
     this.clickToPlay = h('div', { class: 'click-to-play' }, 'CLICK TO CONTINUE');
@@ -280,6 +290,18 @@ export class GameSession {
     window.addEventListener('keydown', this.onKeyDown, sig);
     engine.canvas.addEventListener('click', this.onCanvasClick, sig);
     engine.canvas.addEventListener('mousemove', this.onCanvasMove, sig);
+    const offDevice = onDeviceChange((d) => {
+      // Back on the mouse mid-game: it has to be captured again with a click.
+      if (d === 'mouse' && this.phase === 'playing' && !this.input.locked) this.ui.append(this.clickToPlay);
+      else if (d !== 'mouse') this.clickToPlay.remove();
+    });
+    this.abort.signal.addEventListener('abort', offDevice);
+    // Tapping the spectator line brings the results back (as Escape does).
+    this.spectateLine.addEventListener('click', () => {
+      if (this.phase !== 'dead' || !this.watching) return;
+      this.watching = null;
+      this.showResults();
+    }, sig);
     if (opts.skipIntro || online) this.quickStart();
     else this.runIntro(startPose);
   }
@@ -333,15 +355,20 @@ export class GameSession {
 
   private onLockChange = (): void => {
     // Escape while typing closes the chat (the browser lets go of the mouse too): back in with a click.
-    if (this.phase === 'playing' && !this.input.locked && this.chatBox?.isOpen) {
+    if (this.phase === 'playing' && !this.input.engaged && this.chatBox?.isOpen) {
       this.chatBox.close();
       this.ui.append(this.clickToPlay);
-    } else if (this.phase === 'playing' && !this.input.locked) this.openPause();
+    } else if (this.phase === 'playing' && !this.input.engaged) this.openPause();
     if (this.input.locked) this.clickToPlay.remove();
   };
 
   private onCanvasClick = (e: MouseEvent): void => {
-    if (this.phase === 'playing' && !this.input.locked) this.input.requestLock();
+    // A tap skips the opening shot on touch screens (there is no key to press).
+    if (this.phase === 'intro') {
+      this.finishIntro();
+      return;
+    }
+    if (this.phase === 'playing' && this.input.device === 'mouse' && !this.input.locked) this.input.requestLock();
     if (this.phase === 'table' && this.rack) {
       const id = this.pickRack(e);
       if (id) this.choose(id);
@@ -405,14 +432,14 @@ export class GameSession {
     this.hud.setVisible(true);
     this.hud.notify('MAPLE HOLLOW', 'THE SAFEHOUSE · 21:47 · GEAR UP BEFORE THEY ARRIVE', 3.2);
     this.input.enabled = true;
-    this.input.requestLock();
+    if (this.input.device === 'mouse') this.input.requestLock();
     this.promptClick();
   }
 
   /** If the browser refused pointer lock (no gesture), wait for a click. */
   private promptClick(): void {
     setTimeout(() => {
-      if (this.phase === 'playing' && !this.input.locked) this.ui.append(this.clickToPlay);
+      if (this.phase === 'playing' && !this.input.engaged) this.ui.append(this.clickToPlay);
     }, 250);
   }
 
@@ -430,7 +457,7 @@ export class GameSession {
   private resume(): void {
     this.pause.hide();
     this.phase = 'playing';
-    this.input.requestLock();
+    if (this.input.device === 'mouse') this.input.requestLock();
     this.promptClick();
   }
 
@@ -503,7 +530,7 @@ export class GameSession {
     this.hud.setVisible(true);
     this.phase = 'playing';
     this.cam.snapNext();
-    this.input.requestLock();
+    if (this.input.device === 'mouse') this.input.requestLock();
     this.promptClick();
   }
 
@@ -522,7 +549,10 @@ export class GameSession {
       return;
     }
 
-    if (this.phase === 'playing') this.gatherInput();
+    this.input.uiNav = this.phase !== 'playing';
+    const touchMode = settings.value.controls.touch;
+    this.touch.setVisible(this.phase === 'playing' && touchMode !== 'off' && (touchMode === 'on' || this.input.device === 'touch'));
+    if (this.phase === 'playing') this.gatherInput(dt);
 
     // Fixed-step simulation, rendered with interpolation.
     const step = this.physics.fixedDt;
@@ -686,10 +716,26 @@ export class GameSession {
     c.updateProjectionMatrix();
   }
 
-  private gatherInput(): void {
+  private gatherInput(dt: number): void {
     const input = this.input;
     const p = this.player;
-    this.cam.look(input);
+    if (input.pausePressed()) {
+      this.openPause();
+      return;
+    }
+    // Sticks and thumbs get help onto zombies; the mouse never does.
+    let friction = 1;
+    if (input.device !== 'mouse') {
+      if (input.pressed('aim')) this.assist.aimPressed();
+      const moving = input.stickLook || Math.hypot(input.move.x, input.move.y) > 0.2;
+      const a = this.assist.update(dt, this.sim, this.cam.aimOrigin, this.cam.aimDir, this.cam.yaw, this.cam.pitch,
+        p.aiming, moving, settings.value.controls.aimAssist);
+      if (a) {
+        friction = a.friction;
+        this.cam.nudge(a.yaw, a.pitch);
+      }
+    }
+    this.cam.look(input, friction);
     p.sampleInput(input, this.cam.yaw);
     const a = this.me.arsenal;
     if (a.action === 'bandage') p.blockSprint(0.1);
@@ -893,6 +939,7 @@ export class GameSession {
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
     this.cam.addTrauma(0.04 + def.recoil * 0.05);
+    this.input.rumble(0.12 + def.recoil * 0.35, 60 + def.recoil * 60);
     this.player.faceCamera(0.7);
     if (weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
     else this.ejectCasing(false);
@@ -1140,9 +1187,9 @@ export class GameSession {
         this.limbEndValid = false;
         if (!this.gripHinted) {
           this.gripHinted = true;
-          const b = settings.value.controls.bindings;
-          const key = (codes: string[]) => (codes[0] ? codeLabel(codes[0]) : '?');
-          this.hud.notify('BEAT THEM WITH IT', `${key(b.fire)} OR ${key(b.melee)} SWING · ${key(b.weapon1)} / ${key(b.weapon2)} DROP IT FOR A GUN`, 3.2);
+          const k = (a: 'fire' | 'melee' | 'weapon1' | 'weapon2') => actionLabel(a) || (a === 'fire' ? 'FIRE' : a === 'melee' ? 'MELEE' : 'SWAP');
+          const drop = this.input.device === 'mouse' ? `${k('weapon1')} / ${k('weapon2')}` : k('weapon1');
+          this.hud.notify('BEAT THEM WITH IT', `${k('fire')} OR ${k('melee')} SWING · ${drop} DROP IT FOR A GUN`, 3.2);
         }
         break;
       case 'limbDropped':
@@ -1412,6 +1459,7 @@ export class GameSession {
     this.lastHurtDir.set(-dx / len, 0, -dz / len);
     this.player.character.flinch('torso', -dx / len, -dz / len, Math.min(1, damage / 25));
     this.cam.addTrauma(0.22 + Math.min(0.4, damage / 60));
+    this.input.rumble(0.45 + Math.min(0.5, damage / 50), 160);
     this.hurtFlash = Math.min(1, this.hurtFlash + 0.35 + damage / 50);
     audio.playerHurt(Math.min(1, damage / 30));
     if (this.phase === 'table') this.closeTable();
@@ -1558,7 +1606,8 @@ export class GameSession {
     this.watching = next.id;
     this.results?.dispose();
     this.results = null;
-    this.spectateLine.textContent = `WATCHING ${next.name.toUpperCase()} · ESC FOR RESULTS`;
+    const back = this.input.device === 'pad' ? 'B' : this.input.device === 'touch' ? 'TAP HERE' : 'ESC';
+    this.spectateLine.textContent = `WATCHING ${next.name.toUpperCase()} · ${back} FOR RESULTS`;
     this.ui.append(this.spectateLine);
   }
 
@@ -1731,6 +1780,8 @@ export class GameSession {
     this.intro?.kill();
     this.tableTween?.kill();
     for (const el of [...this.letterbox, this.skip, this.clickToPlay]) el.remove();
+    this.touch.dispose();
+    this.input.uiNav = true;
     this.table?.el.remove();
     this.results?.dispose();
     this.teamResults?.dispose();

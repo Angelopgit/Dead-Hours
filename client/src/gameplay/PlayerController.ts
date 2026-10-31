@@ -110,8 +110,9 @@ export class PlayerController {
 
   /** Samples input once per frame (pressed events must not be missed between fixed steps). */
   sampleInput(input: Input, cameraYaw: number): void {
-    const f = (input.held('forward') ? 1 : 0) - (input.held('back') ? 1 : 0);
-    const r = (input.held('right') ? 1 : 0) - (input.held('left') ? 1 : 0);
+    // Keys, the left stick and the thumb stick all arrive as one analog vector.
+    const f = input.move.y;
+    const r = input.move.x;
     // Camera forward is -Z rotated by yaw.
     const fx = -Math.sin(cameraYaw);
     const fz = -Math.cos(cameraYaw);

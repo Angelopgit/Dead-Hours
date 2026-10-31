@@ -1,6 +1,6 @@
 import { h } from './dom';
-import { settings, ACTION_LABELS, type Action, type SettingsData } from '../core/Settings';
-import { codeLabel, type Input } from '../core/Input';
+import { settings, ACTION_LABELS, GRAPHICS_PRESETS, type Action, type GraphicsPreset, type SettingsData } from '../core/Settings';
+import { codeLabel, PAD_LABELS, type Input } from '../core/Input';
 import { audio } from '../audio/AudioEngine';
 import { MicTest } from '../network/Voice';
 import { comms } from '../network/Comms';
@@ -51,6 +51,27 @@ function row(label: string, control: HTMLElement, hint?: string): HTMLElement {
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
+/** The current graphics settings are exactly this preset's. */
+function matchesPreset(p: GraphicsPreset): boolean {
+  const g = settings.value.graphics as unknown as Record<string, unknown>;
+  return Object.entries(GRAPHICS_PRESETS[p]).every(([k, v]) => g[k] === v);
+}
+
+/** The fixed controller layout, as a reference card. */
+function padLayout(): HTMLElement[] {
+  const rows: [string, string][] = [
+    ['Left stick', 'Move · click to sprint'], ['Right stick', 'Look'],
+    [PAD_LABELS.fire!, ACTION_LABELS.fire], [PAD_LABELS.aim!, ACTION_LABELS.aim],
+    [PAD_LABELS.jump!, ACTION_LABELS.jump], [PAD_LABELS.crouch!, ACTION_LABELS.crouch],
+    [PAD_LABELS.reload!, ACTION_LABELS.reload], ['Y', 'Switch weapon'],
+    [PAD_LABELS.interact!, ACTION_LABELS.interact], [PAD_LABELS.heal!, ACTION_LABELS.heal],
+    [PAD_LABELS.melee!, ACTION_LABELS.melee], ['D-pad ↑ / ↓', 'Switch shoulder / Inventory'],
+    ['D-pad ← / →', 'Push to talk / Team radio'], ['Start', 'Pause'],
+    ['Menus', 'D-pad moves · A selects · B back · LB/RB tabs'],
+  ];
+  return rows.map(([k, v]) => h('div', {}, h('span', { class: 'k' }, k), v));
+}
+
 /** Settings screen shared by the main menu and the pause menu. Everything persists locally. */
 export class SettingsPanel {
   readonly el: HTMLElement;
@@ -77,7 +98,12 @@ export class SettingsPanel {
       h('button', { class: `tab ${this.tab === t ? 'active' : ''}`, onclick: () => { this.tab = t; audio.ui('click'); this.render(); } }, label)));
     const content: HTMLElement[] = [];
     if (this.tab === 'graphics') {
+      const presets: [GraphicsPreset, string][] = [['phone', 'Phone'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
       content.push(
+        row('Preset', h('div', { class: 'seg' }, ...presets.map(([p, label]) => h('button', {
+          class: matchesPreset(p) ? 'on' : '',
+          onclick: () => { settings.applyPreset(p); audio.ui('click'); this.render(); },
+        }, label))), 'Phone favors a steady 30 FPS on mobile GPUs'),
         row('Resolution scale', slider(0.5, 1, 0.05, this.g('resolutionScale'), this.setG('resolutionScale'), pct)),
         row('Adaptive resolution', toggle(this.g('adaptiveResolution'), this.setG('adaptiveResolution')), 'Lowers render scale when FPS drops'),
         row('Shadow quality', seg([['off', 'Off'], ['low', 'Low'], ['medium', 'Med'], ['high', 'High']], this.g('shadows'), this.setG('shadows'))),
@@ -104,6 +130,14 @@ export class SettingsPanel {
         row('Invert Y-axis', toggle(() => settings.value.controls.invertY, (v) => settings.update((s) => { s.controls.invertY = v; }))),
         row('Aim behavior', seg([['hold', 'Hold'], ['toggle', 'Toggle']], () => settings.value.controls.aimMode, (v) => settings.update((s) => { s.controls.aimMode = v; }))),
         row('Aim view', seg([['sights', 'Down sights'], ['shoulder', 'Shoulder']], () => settings.value.controls.aimView, (v) => settings.update((s) => { s.controls.aimView = v; })), 'Down sights switches to first person while aiming'),
+        h('h3', {}, 'Controller and touch'),
+        row('Controller look speed', slider(0.3, 2.5, 0.05, () => c.padSensitivity, (v) => settings.update((s) => { s.controls.padSensitivity = v; }), (v) => v.toFixed(2))),
+        row('Touch look speed', slider(0.3, 2.5, 0.05, () => c.touchSensitivity, (v) => settings.update((s) => { s.controls.touchSensitivity = v; }), (v) => v.toFixed(2))),
+        row('Aim assist', seg([['off', 'Off'], ['low', 'Low'], ['standard', 'Standard']], () => settings.value.controls.aimAssist, (v) => settings.update((s) => { s.controls.aimAssist = v; })), 'Controller and touch only, never the mouse'),
+        row('Vibration', toggle(() => settings.value.controls.vibration, (v) => settings.update((s) => { s.controls.vibration = v; }))),
+        row('On-screen controls', seg([['auto', 'Auto'], ['on', 'Always'], ['off', 'Off']], () => settings.value.controls.touch, (v) => settings.update((s) => { s.controls.touch = v; })), 'Auto shows them when you play by touch'),
+        row('Button size', slider(0.75, 1.4, 0.05, () => c.touchScale, (v) => settings.update((s) => { s.controls.touchScale = v; }), pct)),
+        h('div', { class: 'pad-layout' }, ...padLayout()),
         h('h3', {}, 'Key bindings'),
       );
       for (const action of Object.keys(ACTION_LABELS) as Action[]) content.push(row(ACTION_LABELS[action], this.bindingControl(action)));

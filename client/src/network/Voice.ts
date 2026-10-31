@@ -439,6 +439,11 @@ export class Voice {
     window.addEventListener('blur', () => {
       this.held.talk = this.held.radio = false;
     }, opts);
+    // The controller's D-pad and the on-screen TALK button.
+    window.addEventListener('deadhours:voice', (e) => {
+      const d = (e as CustomEvent<{ kind: 'talk' | 'radio'; down: boolean }>).detail;
+      this.press(d.kind, d.down);
+    }, opts);
     this.micKey = this.micSettings();
     this.relayOnly = settings.value.voice.relayOnly;
     this.unsub.push(settings.subscribe(() => this.settingsChanged()), comms.subscribe(() => this.setMembers(this.members)));

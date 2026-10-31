@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { PostFX } from '../rendering/PostFX';
-import { settings, type ShadowQuality } from './Settings';
+import { settings, isPhone, type ShadowQuality } from './Settings';
 
 export type FrameCallback = (dt: number, time: number) => void;
 
 const SHADOW_SIZE: Record<ShadowQuality, number> = { off: 0, low: 1024, medium: 2048, high: 4096 };
+/** Phones have 3x screens and small GPUs: cap the pixel ratio and let adaptive resolution go lower. */
+const PHONE = isPhone();
+const MAX_PIXEL_RATIO = PHONE ? 1.5 : 2;
+const MIN_DYNAMIC_SCALE = PHONE ? 0.45 : 0.55;
 
 /** Owns the WebGL renderer, the main camera, post-processing and the frame loop. */
 export class Engine {
@@ -71,7 +75,7 @@ export class Engine {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const scale = settings.value.graphics.resolutionScale * this.dynamicScale;
-    const pr = Math.min(window.devicePixelRatio, 2) * scale;
+    const pr = Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO) * scale;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.post.setSize(w, h, pr);
@@ -92,11 +96,14 @@ export class Engine {
 
   /** While true the loop keeps time but neither updates nor draws (a full-screen menu covers the view). */
   paused = false;
+  /** Runs every frame while paused (the controller still drives the menu in front). */
+  whilePaused: (() => void) | null = null;
 
   private frame = (now: number): void => {
     if (this.paused) {
       this.timer.update(now);
       this.lastFrame = now;
+      this.whilePaused?.();
       return;
     }
     const limit = settings.value.graphics.fpsLimit;
@@ -135,8 +142,8 @@ export class Engine {
       this.highFpsTime += 0.5;
       this.lowFpsTime = 0;
     }
-    if (this.lowFpsTime >= 2 && this.dynamicScale > 0.55) {
-      this.dynamicScale = Math.max(0.55, this.dynamicScale - 0.1);
+    if (this.lowFpsTime >= 2 && this.dynamicScale > MIN_DYNAMIC_SCALE) {
+      this.dynamicScale = Math.max(MIN_DYNAMIC_SCALE, this.dynamicScale - 0.1);
       this.lowFpsTime = 0;
       this.onResize();
     } else if (this.highFpsTime >= 6 && this.dynamicScale < 1) {

@@ -74,6 +74,10 @@ export class Game {
       onCreator: (open) => { this.engine.paused = open; },
     });
     this.engine.add((dt, t) => this.update(dt, t));
+    this.engine.whilePaused = () => {
+      this.input.poll(1 / 60);
+      this.input.endFrame();
+    };
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);
     this.engine.renderer.compile(this.engine.scene, this.engine.camera);
@@ -206,7 +210,9 @@ export class Game {
 
   private readonly tmpFocus = new THREE.Vector3();
   private update(dt: number, t: number): void {
+    this.input.poll(dt);
     if (this.state === 'menu' || !this.session) {
+      this.input.uiNav = true;
       this.menuCine.update(dt);
       this.doors.update(dt, this.engine.camera);
       this.tmpFocus.copy(this.menuCine.focus);

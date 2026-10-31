@@ -8,6 +8,11 @@ export type AimView = 'sights' | 'shoulder';
 export type GoreLevel = 'off' | 'reduced' | 'full';
 /** Voice goes out while a key is held, or whenever the microphone hears speech. */
 export type VoiceMode = 'ptt' | 'vad';
+/** How strongly a stick or a thumb is helped onto a zombie. */
+export type AimAssist = 'off' | 'low' | 'standard';
+/** On-screen thumb controls: shown on touch screens, or always, or never. */
+export type TouchMode = 'auto' | 'on' | 'off';
+export type GraphicsPreset = 'phone' | 'low' | 'medium' | 'high';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
@@ -62,6 +67,16 @@ export interface SettingsData {
     aimMode: AimMode;
     aimView: AimView;
     bindings: Record<Action, string[]>;
+    /** Right stick turn speed (1 is about 200° a second at full tilt). */
+    padSensitivity: number;
+    /** Thumb drag turn speed on touch screens. */
+    touchSensitivity: number;
+    aimAssist: AimAssist;
+    /** Controller rumble and phone vibration on shots and hits. */
+    vibration: boolean;
+    touch: TouchMode;
+    /** Size of the on-screen buttons. */
+    touchScale: number;
   };
   accessibility: {
     reducedShake: boolean;
@@ -117,10 +132,42 @@ export const DEFAULT_SETTINGS: SettingsData = {
     enabled: true, mode: 'ptt', threshold: -48, device: '',
     echoCancellation: true, noiseSuppression: true, autoGainControl: true, radio: true, relayOnly: false,
   },
-  controls: { sensitivity: 1, invertY: false, aimMode: 'hold', aimView: 'sights', bindings: DEFAULT_BINDINGS },
+  controls: {
+    sensitivity: 1, invertY: false, aimMode: 'hold', aimView: 'sights', bindings: DEFAULT_BINDINGS,
+    padSensitivity: 1, touchSensitivity: 1, aimAssist: 'standard', vibration: true, touch: 'auto', touchScale: 1,
+  },
   accessibility: { reducedShake: false, reducedFlashing: false, uiScale: 1 },
   profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE } },
 };
+
+/** Graphics settings for each preset. Phone trades shadows, MSAA and bloom for a steady frame rate. */
+export const GRAPHICS_PRESETS: Record<GraphicsPreset, Partial<SettingsData['graphics']>> = {
+  phone: {
+    resolutionScale: 0.7, adaptiveResolution: true, shadows: 'off', textureQuality: 'medium', antialias: false,
+    bloom: false, filmGrain: false, fogQuality: 'low', particleQuality: 'low', renderDistance: 120, fpsLimit: 30,
+  },
+  low: {
+    resolutionScale: 0.8, adaptiveResolution: true, shadows: 'low', textureQuality: 'medium', antialias: false,
+    bloom: false, filmGrain: false, fogQuality: 'low', particleQuality: 'low', renderDistance: 150, fpsLimit: 0,
+  },
+  medium: {
+    resolutionScale: 1, adaptiveResolution: true, shadows: 'medium', textureQuality: 'high', antialias: false,
+    bloom: true, filmGrain: true, fogQuality: 'medium', particleQuality: 'medium', renderDistance: 200, fpsLimit: 0,
+  },
+  high: {
+    resolutionScale: 1, adaptiveResolution: true, shadows: 'high', textureQuality: 'high', antialias: true,
+    bloom: true, filmGrain: true, fogQuality: 'high', particleQuality: 'high', renderDistance: 260, fpsLimit: 0,
+  },
+};
+
+/** A phone or small tablet: a touch screen as the main pointer and a small screen or a mobile browser. */
+export function isPhone(): boolean {
+  if (typeof window === 'undefined' || typeof matchMedia === 'undefined') return false;
+  const coarse = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+  const small = Math.min(screen.width, screen.height) <= 820;
+  const ua = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  return coarse && (small || ua);
+}
 
 const STORAGE_KEY = 'deadhours.settings.v1';
 
@@ -148,6 +195,8 @@ export class Settings {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) this.data = deepMerge(this.data, JSON.parse(raw));
+      // First visit on a phone: start from the phone preset (it can be changed in Settings).
+      else if (isPhone()) Object.assign(this.data.graphics, GRAPHICS_PRESETS.phone);
     } catch {
       /* storage unavailable (private mode) — defaults are fine */
     }
@@ -165,6 +214,10 @@ export class Settings {
       /* ignore */
     }
     for (const l of this.listeners) l(this.data);
+  }
+
+  applyPreset(preset: GraphicsPreset): void {
+    this.update((s) => { Object.assign(s.graphics, GRAPHICS_PRESETS[preset]); });
   }
 
   reset(section: keyof SettingsData): void {

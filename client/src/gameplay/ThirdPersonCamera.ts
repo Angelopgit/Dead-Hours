@@ -46,16 +46,25 @@ export class ThirdPersonCamera {
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly physics: Physics) {}
 
-  look(input: Input): void {
+  /** `friction` (0..1] slows stick and thumb turning while the crosshair is over a target (aim assist). */
+  look(input: Input, friction = 1): void {
     const d = input.consumeLook();
+    const t = input.consumeTurn();
     const c = settings.value.controls;
     // Zoomed sights turn slower in proportion to the zoom, so the view keeps the same feel.
     const zoom = this.adsBlend > 0.5 ? this.camera.fov / BASE_FOV : this.aimBlend > 0.5 ? 0.7 : 1;
     const sens = 0.0022 * c.sensitivity * zoom;
-    this.yaw -= d.x * sens;
-    this.pitch -= d.y * sens * (c.invertY ? -1 : 1);
+    const inv = c.invertY ? -1 : 1;
+    this.yaw -= d.x * sens + t.x * zoom * friction;
+    this.pitch -= (d.y * sens + t.y * zoom * friction) * inv;
     this.pitch = THREE.MathUtils.clamp(this.pitch, -1.25, 0.95);
     if (input.pressed('shoulder')) this.shoulder *= -1;
+  }
+
+  /** Aim assist pull: turns the view by this much (radians, toward the target). */
+  nudge(yaw: number, pitch: number): void {
+    this.yaw += yaw;
+    this.pitch = THREE.MathUtils.clamp(this.pitch + pitch, -1.25, 0.95);
   }
 
   /** Muzzle climb: the view kicks up (and a little sideways) and settles most of the way back. */

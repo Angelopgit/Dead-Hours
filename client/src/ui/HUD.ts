@@ -1,6 +1,6 @@
 import gsap from 'gsap';
 import { h } from './dom';
-import { codeLabel } from '../core/Input';
+import { actionLabel, inputDevice } from '../core/Input';
 import { settings, type Action } from '../core/Settings';
 
 export interface WeaponReadout {
@@ -222,14 +222,15 @@ export class HUD {
     this.wBarFill.style.width = `${Math.round((bar ?? 0) * 100)}%`;
     this.wBar.classList.toggle('heal', r.healing !== null);
     this.wBar.classList.toggle('wear', club && r.reload === null && r.healing === null);
-    const key1 = settings.value.controls.bindings.weapon1[0];
-    const key2 = settings.value.controls.bindings.weapon2[0];
-    const keyH = settings.value.controls.bindings.heal[0];
-    this.slot1.textContent = `${key1 ? codeLabel(key1) : '1'}  ${r.primaryModel}`;
-    this.slot2.textContent = `${key2 ? codeLabel(key2) : '2'}  ${r.secondaryModel}`;
+    const keys = inputDevice() !== 'mouse';
+    const key1 = keys ? '' : actionLabel('weapon1');
+    const key2 = keys ? '' : actionLabel('weapon2');
+    const keyH = actionLabel('heal');
+    this.slot1.textContent = key1 ? `${key1}  ${r.primaryModel}` : r.primaryModel;
+    this.slot2.textContent = key2 ? `${key2}  ${r.secondaryModel}` : r.secondaryModel;
     this.slot1.classList.toggle('on', r.slot === 'primary');
     this.slot2.classList.toggle('on', r.slot === 'secondary');
-    this.bandages.textContent = r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? codeLabel(keyH) : 'Q'}  BANDAGE × ${r.bandages}`;
+    this.bandages.textContent = r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? `${keyH}  ` : ''}BANDAGE × ${r.bandages}`;
     this.bandages.classList.toggle('none', r.bandages === 0 && r.healing === null);
   }
 
@@ -262,16 +263,20 @@ export class HUD {
     if (this.stance.textContent !== text) this.stance.textContent = text;
   }
 
+  /** Told whenever the interaction prompt changes (the on-screen USE button follows it). */
+  onPrompt: ((text: string | null) => void) | null = null;
+
   setPrompt(action: Action | null, text = ''): void {
-    const key = action ? `${action}:${text}` : '';
+    const label = action ? actionLabel(action) : '';
+    const key = action ? `${action}:${text}:${label}` : '';
     if (key === this.promptKey) return;
     this.promptKey = key;
+    this.onPrompt?.(action ? text : null);
     if (!action) {
       this.prompt.classList.remove('show');
       return;
     }
-    const code = settings.value.controls.bindings[action][0];
-    this.prompt.replaceChildren(h('span', { class: 'k' }, code ? codeLabel(code) : '?'), text);
+    this.prompt.replaceChildren(label ? h('span', { class: 'k' }, label) : '', text);
     this.prompt.classList.add('show');
   }
 
