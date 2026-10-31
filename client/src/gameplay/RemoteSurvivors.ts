@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER, decodeAppearance, type Mirror, type SimPlayer, type Simulation } from '@dead-hours/shared';
+import { DOWNED, PLAYER, decodeAppearance, type Mirror, type SimPlayer, type Simulation } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
 import { Humanoid, survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
@@ -21,6 +21,7 @@ interface Remote {
   tagHp: HTMLElement;
   /** Direction the last hit came from (the fall goes the other way). */
   hurtDir: THREE.Vector3;
+  downed: boolean;
 }
 
 const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3();
@@ -60,7 +61,7 @@ export class RemoteSurvivors {
     const m = p.motion;
     const r: Remote = {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
-      ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1),
+      ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w) => audio.foley(cue, this.hand(r, _q), w);
@@ -111,6 +112,12 @@ export class RemoteSurvivors {
     const travel = Math.atan2(m.vel.x, m.vel.z) - r.facing;
     const moveAngle = hv > 0.3 ? Math.atan2(Math.sin(travel), Math.cos(travel)) : 0;
     b.lookPitch += ((m.aiming ? m.pitch : m.pitch * 0.35) - b.lookPitch) * (1 - Math.exp(-dt * 12));
+    // Downed: on their back with the gun gone from their hands until someone gets them up.
+    if (r.downed !== p.downed) {
+      r.downed = p.downed;
+      b.downTarget = p.downed ? 1 : 0;
+      r.weapon.setVisible(!p.downed);
+    }
     b.update(dt, {
       speed: hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded, strafe, moveAngle,
       turn: dt > 0 ? turned / dt : 0,
@@ -120,20 +127,26 @@ export class RemoteSurvivors {
     _aim.set(r.pos.x - Math.sin(m.yaw) * cp * 30, r.pos.y + m.eyeHeight + Math.sin(m.pitch) * 30, r.pos.z - Math.cos(m.yaw) * cp * 30);
     r.weapon.update(dt, p.arsenal, { aim: p.arsenal.aim, sprinting: m.sprinting, aimPoint: _aim });
     r.probe.update(dt, r.pos, camera);
-    this.placeTag(r, _q.copy(r.pos).setY(r.pos.y + (m.crouching ? PLAYER.crouchHeight : PLAYER.height) + 0.25), camera, p, false);
+    this.placeTag(r, _q.copy(r.pos).setY(r.pos.y + (p.downed ? 0.8 : m.crouching ? PLAYER.crouchHeight : PLAYER.height) + 0.25), camera, p, false);
   }
 
   /** Name and health over their head (seen through walls: they are on your side). */
   private placeTag(r: Remote, at: THREE.Vector3, camera: THREE.PerspectiveCamera, p: SimPlayer, down: boolean): void {
     const dist = at.distanceTo(camera.position);
     const v = at.project(camera);
-    const show = v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1 && dist < 70;
+    // A downed teammate is shown farther out: they need finding.
+    const show = v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1 && dist < (p.downed ? 160 : 70);
     r.tag.style.display = show ? '' : 'none';
     if (!show) return;
     r.tag.style.transform = `translate(${((v.x + 1) / 2) * window.innerWidth}px, ${((1 - v.y) / 2) * window.innerHeight}px) translate(-50%, -100%)`;
     r.tag.style.opacity = String(THREE.MathUtils.clamp(1.4 - dist / 50, 0.35, 1));
     r.tag.classList.toggle('down', down);
-    r.tagHp.style.width = `${Math.max(0, Math.round((p.health / PLAYER.maxHealth) * 100))}%`;
+    r.tag.classList.toggle('downed', p.downed);
+    r.tag.classList.toggle('reviving', p.downed && !!p.reviver);
+    // Downed, the bar is how long they have left (or how far along the revive is).
+    const k = p.downed ? (p.reviver ? p.revive / DOWNED.reviveTime : p.bleed / DOWNED.bleedOut) : p.health / PLAYER.maxHealth;
+    r.tagHp.style.width = `${Math.max(0, Math.min(100, Math.round(k * 100)))}%`;
+    if (p.downed) r.tag.style.opacity = '1';
   }
 
   private fall(r: Remote, p: SimPlayer): void {

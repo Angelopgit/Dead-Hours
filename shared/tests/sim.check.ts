@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -755,6 +755,80 @@ section('Interactables and death');
   check(sp.health === 90 && sp.bandages === 1, 'bandage heals 40');
   const res = (() => { sim.damagePlayer(sp, 200, { x: 0, y: 0, z: 0 }); return sim.drain(); })();
   check(!sp.alive && res.some((e) => e.type === 'playerDied') && sim.phase === 'over', 'death ends the solo game');
+  cleanup(sim, body);
+}
+
+section('Downed and revives');
+{
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  const mate = sim.addPlayer('p2', 'Mate', 'ar', 'pistol', { x: 1.2, y: 0.15, z: 6 }, 0);
+  const third = sim.addPlayer('p3', 'Far', 'ar', 'pistol', { x: 40, y: 0.15, z: 6 }, 0);
+  run(sim, 0.5);
+  sim.drain();
+  sim.damagePlayer(sp, 500, sp.motion.pos);
+  let ev = sim.drain();
+  check(sp.alive && sp.downed && !sp.up && sp.health === 0 && ev.some((e) => e.type === 'playerDowned') && !ev.some((e) => e.type === 'playerDied'),
+    'with a teammate up, zero health downs instead of killing');
+  check(sim.phase !== 'over', 'a down does not end the night');
+  check(sim.fire('p1', sp.eye, { x: 0, y: 0, z: -1 }, true, 1) === 'busy' && !sim.reload('p1') && !sim.melee('p1') && sim.reachable('p1').length === 0,
+    'the downed cannot shoot, reload, swing or use things');
+  check(!sim.revive('p3', 'p1'), 'cannot revive from across the street');
+  check(sim.downedInReach('p2')[0] === sp && sim.revive('p2', 'p1') && sp.reviver === 'p2', 'a teammate close by starts the revive');
+  check(sim.fire('p2', mate.eye, { x: 0, y: 0, z: -1 }, true, 1) === 'busy', 'the reviver has their hands full');
+  const bleedAt = sp.bleed;
+  run(sim, DOWNED.reviveTime * 0.5);
+  check(sp.downed && Math.abs(sp.bleed - bleedAt) < 1e-6, 'bleeding pauses while being revived');
+  sim.setMotion('p2', { pos: { x: 5, y: 0.15, z: 6 } });
+  ev = run(sim, 0.1).events;
+  check(sp.reviver === null && sp.revive === 0 && ev.some((e) => e.type === 'revive' && e.stage === 'cancel'), 'walking away cancels the revive');
+  sim.setMotion('p2', { pos: { x: 1.2, y: 0.15, z: 6 } });
+  check(sim.revive('p2', 'p1'), 'revive restarts');
+  ev = run(sim, DOWNED.reviveTime + 0.1).events;
+  check(sp.up && sp.health === DOWNED.reviveHealth && mate.stats.revives === 1 && ev.some((e) => e.type === 'playerRevived'), `held long enough, they get up with ${DOWNED.reviveHealth} health`);
+
+  sim.damagePlayer(sp, 500, sp.motion.pos);
+  const t0 = sp.bleed;
+  run(sim, 1);
+  check(sp.downed && sp.bleed < t0 - 0.9, 'left alone, they bleed out');
+  sim.damagePlayer(sp, 20, sp.motion.pos);
+  check(sp.bleed < t0 - 1 - 20 * DOWNED.hitBleed + 0.05, 'hits while down cost bleed-out time');
+  ev = run(sim, DOWNED.bleedOut).events;
+  check(!sp.alive && !sp.downed && ev.some((e) => e.type === 'playerDied' && e.player === 'p1') && sim.phase !== 'over', 'bleeding out is death; the night goes on for the others');
+
+  sim.damagePlayer(mate, 500, mate.motion.pos);
+  check(mate.downed, 'second survivor goes down with the third still up');
+  sim.drain();
+  sim.damagePlayer(third, 500, third.motion.pos);
+  ev = sim.drain();
+  check(!third.alive && !mate.alive && sim.phase === 'over' && ev.filter((e) => e.type === 'playerDied').length === 2,
+    'the last one standing falling ends it: the downed die with them');
+  cleanup(sim, body);
+}
+{
+  // Downs run out, and leaving last strands nobody.
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  sim.addPlayer('p2', 'Mate', 'ar', 'pistol', { x: 1.2, y: 0.15, z: 6 }, 0);
+  run(sim, 0.3);
+  for (let i = 0; i < DOWNED.maxDowns; i++) {
+    sim.damagePlayer(sp, 500, sp.motion.pos);
+    sim.revive('p2', 'p1');
+    run(sim, DOWNED.reviveTime + 0.1);
+  }
+  check(sp.up && sp.downs === DOWNED.maxDowns, `revived ${DOWNED.maxDowns} times`);
+  sim.damagePlayer(sp, 500, sp.motion.pos);
+  check(!sp.alive, 'after the last down, zero health is death');
+  const s2 = makeSim({ x: 0, y: 0.15, z: 6 });
+  cleanup(sim, body);
+  s2.sim.addPlayer('p2', 'Mate', 'ar', 'pistol', { x: 1.2, y: 0.15, z: 6 }, 0);
+  s2.sim.damagePlayer(s2.sp, 500, s2.sp.motion.pos);
+  s2.sim.removePlayer('p2');
+  check(!s2.sp.alive && s2.sim.phase === 'over', 'the only one standing leaving ends it for the downed');
+  cleanup(s2.sim, s2.body);
+}
+{
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  sim.damagePlayer(sp, 500, sp.motion.pos);
+  check(!sp.alive && !sp.downed && sim.phase === 'over', 'solo: zero health is still death');
   cleanup(sim, body);
 }
 

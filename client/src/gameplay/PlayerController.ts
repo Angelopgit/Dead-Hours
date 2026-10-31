@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER, type PlayerMotion } from '@dead-hours/shared';
+import { DOWNED, PLAYER, type PlayerMotion } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
@@ -47,6 +47,8 @@ export class PlayerController {
   private turnRate = 0;
   /** Dead: input and movement stop, a ragdoll owns the body. */
   dead = false;
+  /** Downed: on their back, dragging themselves along; no sprint, jump or aim. */
+  downed = false;
 
   constructor(private readonly physics: Physics, spawn: { x: number; y: number; z: number; yaw: number }, look: HumanoidLook) {
     this.position.set(spawn.x, spawn.y, spawn.z);
@@ -81,7 +83,19 @@ export class PlayerController {
   }
 
   get eyeHeight(): number {
-    return this.height - 0.2;
+    return this.downed ? DOWNED.eyeHeight : this.height - 0.2;
+  }
+
+  /** Goes down (or gets back up: standing again once there is headroom). */
+  setDowned(on: boolean): void {
+    if (on === this.downed) return;
+    this.downed = on;
+    this.character.downTarget = on ? 1 : 0;
+    this.sprinting = false;
+    this.aiming = false;
+    this.aimToggled = false;
+    this.jumpBuffered = 0;
+    if (on && !this.crouching) this.setCrouch(true);
   }
 
   /** Turn the body toward the camera for a moment (hip fire, melee). */
@@ -151,11 +165,14 @@ export class PlayerController {
     this.faceT = Math.max(0, this.faceT - dt);
     this.noSprintT = Math.max(0, this.noSprintT - dt);
     // Hold-to-crouch with Ctrl/C.
-    const wantCrouch = this.crouchHeld;
+    const wantCrouch = this.crouchHeld || this.downed;
     if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
 
-    this.sprinting = this.sprintHeld && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
-    const speed = this.crouching
+    if (this.downed) this.aiming = false;
+    this.sprinting = this.sprintHeld && !this.downed && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
+    const speed = this.downed
+      ? DOWNED.crawlSpeed
+      : this.crouching
       ? PLAYER.crouchSpeed
       : this.aiming
         ? PLAYER.aimSpeed
@@ -170,7 +187,7 @@ export class PlayerController {
 
     this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
-    if (this.jumpBuffered > 0 && this.coyote > 0 && !this.crouching) {
+    if (this.jumpBuffered > 0 && this.coyote > 0 && !this.crouching && !this.downed) {
       this.intent.y = PLAYER.jumpVelocity;
       this.jumpBuffered = 0;
       this.coyote = 0;

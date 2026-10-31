@@ -2,7 +2,7 @@ import { RAPIER, GROUP, groups, type Physics, type RayHit } from '../physics/Phy
 import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
-import { PLAYER } from '../config/player';
+import { DOWNED, PLAYER } from '../config/player';
 import { HORDES, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LIMBS, limbClub, type ArmZone, type LimbCut } from '../config/limbs';
@@ -45,6 +45,8 @@ export interface PlayerStats {
   limbsSevered: number;
   /** Zombies beaten to death with a severed arm. */
   limbKills: number;
+  /** Teammates picked back up. */
+  revives: number;
 }
 
 export class SimPlayer {
@@ -55,11 +57,20 @@ export class SimPlayer {
   /** Lazarus serum armor left: soaks up part of every zombie hit (SERUM). */
   armor = 0;
   readonly motion: PlayerMotion;
-  readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0 };
+  readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0, revives: 0 };
   /** The crosshair ray the last melee swing was aimed with (decides what it lands on). */
   meleeAim: { origin: Vec3; dir: Vec3 } | null = null;
   footstepT = 0;
   diedAt = 0;
+  /** On the ground at zero health, bleeding out until a teammate gets them up (still `alive`). */
+  downed = false;
+  /** Seconds of bleeding left while downed. */
+  bleed = 0;
+  /** Times downed this night. */
+  downs = 0;
+  /** Who is holding interact on them, and for how long so far. */
+  reviver: string | null = null;
+  revive = 0;
   /** Wire form of the survivor's look (encodeAppearance), for the clients that render them. */
   appearance = '';
   /** Nailing boards up or prying them off, while the key is held. */
@@ -85,6 +96,11 @@ export class SimPlayer {
 
   get speed(): number {
     return Math.hypot(this.motion.vel.x, this.motion.vel.z);
+  }
+
+  /** Alive and on their feet: can fight, use things and revive others. */
+  get up(): boolean {
+    return this.alive && !this.downed;
   }
 }
 
@@ -300,6 +316,9 @@ export class Simulation {
     const p = this.players.get(id);
     if (p) this.dropLimb(p, false);
     this.players.delete(id);
+    this.stopRevive(id);
+    // The last one standing left: nobody is coming for the downed.
+    if (p?.up) this.checkWipe();
   }
 
   setMotion(id: string, m: Partial<PlayerMotion>): void {
@@ -398,7 +417,7 @@ export class Simulation {
 
   /** Whether a survivor can work on a slot from where they stand: inside, within reach. */
   canWork(p: SimPlayer, slot: BarricadeSlot): boolean {
-    if (!p.alive) return false;
+    if (!p.up || this.revivingOf(p.id)) return false;
     const e = p.eye, c = slot.center;
     if (Math.hypot(e.x - c.x, (e.y - c.y) * 0.5, e.z - c.z) > BARRICADE.reach) return false;
     return this.barricades.side(slot, p.motion.pos.x, p.motion.pos.z) < 0;
@@ -485,21 +504,154 @@ export class Simulation {
       p.armor = Math.max(0, p.armor - soak);
       damage = Math.round((damage - soak) * 10) / 10;
     }
-    p.health = Math.max(0, p.health - damage);
     p.stats.damageTaken += damage;
+    if (p.downed) {
+      // Mauled on the ground: the blood runs out faster.
+      p.bleed -= damage * DOWNED.hitBleed;
+      this.emit({ type: 'playerHurt', player: p.id, damage, from: { ...from }, health: 0 });
+      if (p.bleed <= 0) this.killPlayer(p);
+      return;
+    }
+    p.health = Math.max(0, p.health - damage);
     if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
     this.emit({ type: 'playerHurt', player: p.id, damage, from: { ...from }, health: p.health });
-    if (p.health <= 0) {
-      p.alive = false;
-      p.diedAt = this.time;
-      p.work = null;
-      p.arsenal.cancelReload();
-      this.dropLimb(p, false);
-      this.emit({ type: 'playerDied', player: p.id });
-      if (![...this.players.values()].some((q) => q.alive)) {
-        this.phase = 'over';
-        this.emit({ type: 'phase', phase: 'over' });
+    if (p.health > 0) return;
+    if (this.canGoDown(p)) this.downPlayer(p);
+    else this.killPlayer(p);
+  }
+
+  /** A teammate still on their feet could come for them, and they have a down left. */
+  private canGoDown(p: SimPlayer): boolean {
+    if (this.phase === 'over' || p.downs >= DOWNED.maxDowns) return false;
+    for (const q of this.players.values()) if (q !== p && q.up) return true;
+    return false;
+  }
+
+  private downPlayer(p: SimPlayer): void {
+    p.downed = true;
+    p.downs++;
+    p.health = 0;
+    p.bleed = DOWNED.bleedOut;
+    p.reviver = null;
+    p.revive = 0;
+    p.work = null;
+    p.arsenal.cancelReload();
+    if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
+    this.dropLimb(p, false);
+    this.stopRevive(p.id);
+    this.emit({ type: 'playerDowned', player: p.id, bleed: p.bleed, last: p.downs >= DOWNED.maxDowns });
+  }
+
+  private killPlayer(p: SimPlayer, wipe = true): void {
+    if (!p.alive) return;
+    p.alive = false;
+    p.downed = false;
+    p.health = 0;
+    p.diedAt = this.time;
+    if (p.reviver) this.emit({ type: 'revive', player: p.reviver, target: p.id, stage: 'cancel' });
+    p.reviver = null;
+    p.revive = 0;
+    p.work = null;
+    p.arsenal.cancelReload();
+    this.dropLimb(p, false);
+    this.stopRevive(p.id);
+    this.emit({ type: 'playerDied', player: p.id });
+    if (wipe) this.checkWipe();
+  }
+
+  /** Nobody is left on their feet: the downed bleed out where they lie and the night is over. */
+  private checkWipe(): void {
+    const ps = [...this.players.values()];
+    if (ps.some((q) => q.up)) return;
+    for (const q of ps) if (q.downed) this.killPlayer(q, false);
+    if (this.phase !== 'over') {
+      this.phase = 'over';
+      this.emit({ type: 'phase', phase: 'over' });
+    }
+  }
+
+  /**
+   * Starts (or keeps up) picking a downed teammate back up; `target` null lets go. The reviver
+   * must stay close: each step counts it down and cancels when they move off or are downed.
+   */
+  revive(id: string, target: string | null): boolean {
+    if (target === null) {
+      this.stopRevive(id);
+      return true;
+    }
+    const p = this.players.get(id);
+    const t = this.players.get(target);
+    if (!p || !t || !p.up || !t.downed || this.phase === 'over' || !this.inReviveReach(p, t)) return false;
+    if (t.reviver === id) return true;
+    if (t.reviver) return false;
+    this.stopRevive(id);
+    // Both hands on them: the reload stops and the arm is put down.
+    if (p.arsenal.cancelReload()) this.emit({ type: 'reload', player: id, weapon: p.arsenal.weapon.id, stage: 'cancel' });
+    if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: id, stage: 'cancel' });
+    this.dropLimb(p, false);
+    t.reviver = id;
+    t.revive = 0;
+    this.emit({ type: 'revive', player: id, target, stage: 'start' });
+    return true;
+  }
+
+  /** Whoever `id` is helping up, let go. */
+  stopRevive(id: string): void {
+    for (const t of this.players.values()) {
+      if (t.reviver !== id) continue;
+      t.reviver = null;
+      t.revive = 0;
+      this.emit({ type: 'revive', player: id, target: t.id, stage: 'cancel' });
+    }
+  }
+
+  /** The downed teammate `id` is helping up, if any. */
+  revivingOf(id: string): SimPlayer | null {
+    for (const t of this.players.values()) if (t.reviver === id) return t;
+    return null;
+  }
+
+  inReviveReach(p: SimPlayer, t: SimPlayer): boolean {
+    return dist2D(p.motion.pos, t.motion.pos) < DOWNED.reviveRange && Math.abs(p.motion.pos.y - t.motion.pos.y) < 1.4;
+  }
+
+  /** Downed teammates within reach of `id`, nearest first. */
+  downedInReach(id: string): SimPlayer[] {
+    const p = this.players.get(id);
+    if (!p || !p.up) return [];
+    const out = [...this.players.values()].filter((t) => t.downed && this.inReviveReach(p, t));
+    return out.sort((a, b) => dist2D(a.motion.pos, p.motion.pos) - dist2D(b.motion.pos, p.motion.pos));
+  }
+
+  private stepDowned(dt: number): void {
+    for (const t of this.players.values()) {
+      if (!t.downed) continue;
+      if (t.reviver) {
+        const r = this.players.get(t.reviver);
+        if (r && (!r.up || !this.inReviveReach(r, t))) this.stopRevive(r.id);
+        else if (!r) {
+          t.reviver = null;
+          t.revive = 0;
+        }
       }
+      if (t.reviver) {
+        // Bleeding pauses while someone works on them.
+        t.revive += dt;
+        if (t.revive < DOWNED.reviveTime) continue;
+        const by = t.reviver;
+        t.downed = false;
+        t.reviver = null;
+        t.revive = 0;
+        t.bleed = 0;
+        t.health = DOWNED.reviveHealth;
+        const r = this.players.get(by);
+        if (r) r.stats.revives++;
+        this.emit({ type: 'revive', player: by, target: t.id, stage: 'end' });
+        this.emit({ type: 'playerRevived', player: t.id, by, health: t.health });
+        continue;
+      }
+      t.bleed -= dt;
+      if (t.bleed <= 0) this.killPlayer(t);
     }
   }
 
@@ -511,7 +663,7 @@ export class Simulation {
    */
   fire(id: string, origin: Vec3, dir: Vec3, pressed: boolean, seed: number): 'fired' | 'dry' | 'busy' {
     const p = this.players.get(id);
-    if (!p || !p.alive || this.phase === 'over') return 'busy';
+    if (!p || !p.up || this.phase === 'over' || this.revivingOf(id)) return 'busy';
     const a = p.arsenal;
     // With an arm in hand the trigger finger swings it instead.
     if (a.limb) return pressed && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
@@ -741,7 +893,7 @@ export class Simulation {
 
   reload(id: string): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive) return false;
+    if (!p || !p.up || this.revivingOf(id)) return false;
     if (!p.arsenal.startReload()) return false;
     this.emit({ type: 'reload', player: id, weapon: p.arsenal.weapon.id, stage: 'start' });
     return true;
@@ -749,7 +901,7 @@ export class Simulation {
 
   switchWeapon(id: string, slot: 'primary' | 'secondary'): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive) return false;
+    if (!p || !p.up) return false;
     // Reaching for a gun means tossing the arm aside.
     if (p.arsenal.limb) {
       if (p.arsenal.action === 'melee') return false;
@@ -769,7 +921,7 @@ export class Simulation {
    */
   melee(id: string, aim?: { origin: Vec3; dir: Vec3 }): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive || this.phase === 'over') return false;
+    if (!p || !p.up || this.phase === 'over' || this.revivingOf(id)) return false;
     const reloading = p.arsenal.action === 'reload';
     if (!p.arsenal.startMelee()) return false;
     p.meleeAim = null;
@@ -786,7 +938,7 @@ export class Simulation {
 
   bandage(id: string): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive || p.bandages <= 0 || p.health >= PLAYER.maxHealth) return false;
+    if (!p || !p.up || p.bandages <= 0 || p.health >= PLAYER.maxHealth || this.revivingOf(id)) return false;
     if (p.arsenal.action === 'melee' || p.arsenal.action === 'bandage') return false;
     // Both hands are needed for the dressing: the arm goes down at your feet.
     this.dropLimb(p, false);
@@ -798,7 +950,7 @@ export class Simulation {
   /** Whether an interactable is within a player's reach. */
   inReach(id: string, it: Interactable): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive) return false;
+    if (!p || !p.up) return false;
     const c = p.chest;
     return Math.hypot(it.pos.x - c.x, (it.pos.y - c.y) * 1.5, it.pos.z - c.z) < it.range;
   }
@@ -806,7 +958,7 @@ export class Simulation {
   /** Interactables in reach of a player, nearest first. */
   reachable(id: string): Interactable[] {
     const p = this.players.get(id);
-    if (!p || !p.alive) return [];
+    if (!p || !p.up) return [];
     const c = p.chest;
     const d = (it: Interactable) => Math.hypot(it.pos.x - c.x, (it.pos.y - c.y) * 1.5, it.pos.z - c.z);
     return this.interactables.filter((it) => this.inReach(id, it)).sort((a, b) => d(a) - d(b));
@@ -821,7 +973,7 @@ export class Simulation {
   use(id: string, target: number): boolean {
     const p = this.players.get(id);
     const it = this.interactables[target];
-    if (!p || !p.alive || !it || !this.inReach(id, it)) return false;
+    if (!p || !p.up || !it || !this.inReach(id, it)) return false;
     if (it.kind === 'ammo') {
       if (it.supply <= 0) return false;
       const a = p.arsenal;
@@ -1029,7 +1181,7 @@ export class Simulation {
   limbInReach(id: string, l: SimLimb): boolean {
     const p = this.players.get(id);
     // (A network client's copy of the world has no body for it: lying loose is enough.)
-    if (!p || !p.alive || l.holder) return false;
+    if (!p || !p.up || l.holder) return false;
     const m = p.motion.pos;
     const dy = l.pos.y - m.y;
     if (dy < -0.6 || dy > LIMBS.reachHeight) return false;
@@ -1044,7 +1196,7 @@ export class Simulation {
   /** Loose arms a player can grab, nearest first. */
   limbsInReach(id: string): SimLimb[] {
     const p = this.players.get(id);
-    if (!p || !p.alive) return [];
+    if (!p || !p.up) return [];
     const m = p.motion.pos;
     return this.limbs.filter((l) => this.limbInReach(id, l)).sort((a, b) => dist2D(a.pos, m) - dist2D(b.pos, m));
   }
@@ -1053,7 +1205,7 @@ export class Simulation {
   grabLimb(id: string, limbId: number): boolean {
     const p = this.players.get(id);
     const l = this.limb(limbId);
-    if (!p || !p.alive || !l || !this.limbInReach(id, l)) return false;
+    if (!p || !p.up || !l || !this.limbInReach(id, l)) return false;
     const a = p.arsenal;
     if (a.action === 'melee' || a.action === 'bandage') return false;
     const reloading = a.action === 'reload';
@@ -1077,7 +1229,7 @@ export class Simulation {
     const l = a.limb as SimLimb | null;
     if (!l) return;
     a.releaseLimb();
-    if (p.alive) this.emit({ type: 'draw', player: p.id, slot: a.active, weapon: a.weapon.id });
+    if (p.up) this.emit({ type: 'draw', player: p.id, slot: a.active, weapon: a.weapon.id });
     const i = this.limbs.indexOf(l);
     if (l.broken || i < 0) return;
     const m = p.motion;
@@ -1085,7 +1237,7 @@ export class Simulation {
     const rx = Math.cos(m.yaw), rz = -Math.sin(m.yaw);
     // From the right hand, kept on this side of any wall.
     const c = p.chest;
-    let to = { x: m.pos.x + fx * 0.45 + rx * 0.25, y: m.pos.y + (p.alive ? 1.05 : 0.6), z: m.pos.z + fz * 0.45 + rz * 0.25 };
+    let to = { x: m.pos.x + fx * 0.45 + rx * 0.25, y: m.pos.y + (p.up ? 1.05 : 0.6), z: m.pos.z + fz * 0.45 + rz * 0.25 };
     const tx = to.x - c.x, ty = to.y - c.y, tz = to.z - c.z;
     const tl = Math.hypot(tx, ty, tz) || 1;
     const hit = this.physics.raycast(c.x, c.y, c.z, tx / tl, ty / tl, tz / tl, tl + l.radius);
@@ -1271,10 +1423,11 @@ export class Simulation {
 
     for (const d of this.doors) d?.update(dt);
     this.updateLimbs();
+    if (this.phase !== 'over') this.stepDowned(dt);
 
     const ticks: ArsenalTick[] = [];
     for (const p of this.players.values()) {
-      if (!p.alive) continue;
+      if (!p.up) continue;
       ticks.length = 0;
       p.arsenal.step(dt, p.motion.aiming, ticks);
       for (const t of ticks) this.onArsenal(p, t);

@@ -112,6 +112,7 @@ export class Inventory {
       cell('DAMAGE TAKEN', String(Math.round(s.damageTaken))),
       cell('ARMS TORN OFF', String(s.limbsSevered)),
       cell('ARM KILLS', String(s.limbKills)),
+      ...(s.revives ? [cell('REVIVES', String(s.revives))] : []),
       cell('SHOTS FIRED', String(s.shotsFired)),
     );
   }

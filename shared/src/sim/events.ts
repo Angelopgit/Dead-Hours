@@ -40,6 +40,11 @@ export type SimEvent =
   | { type: 'zombieBurst'; zombie: number; pos: Vec3; by: string }
   | { type: 'playerHurt'; player: string; damage: number; from: Vec3; health: number }
   | { type: 'playerDied'; player: string }
+  /** At zero health with a teammate still standing: on the ground, `bleed` seconds to be picked up (`last`: no more downs after this). */
+  | { type: 'playerDowned'; player: string; bleed: number; last: boolean }
+  | { type: 'playerRevived'; player: string; by: string; health: number }
+  /** `player` working on downed `target`: started, got them up, or let go. */
+  | { type: 'revive'; player: string; target: string; stage: 'start' | 'end' | 'cancel' }
   | { type: 'playerHealed'; player: string; amount: number; health: number }
   | { type: 'reload'; player: string; weapon: WeaponId; stage: 'start' | 'shell' | 'end' | 'cancel' }
   | { type: 'draw'; player: string; slot: WeaponSlot; weapon: WeaponId }

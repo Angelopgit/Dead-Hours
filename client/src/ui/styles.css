@@ -411,7 +411,21 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .name-tag b i { display: block; height: 100%; background: var(--ok); }
 .name-tag.down { color: var(--danger); }
 .name-tag.down b { display: none; }
-.name-tag.down span::after { content: ' · DOWN'; }
+.name-tag.down span::after { content: ' · DEAD'; }
+.name-tag.downed { color: var(--danger); animation: downed-tag 1.1s ease-in-out infinite; }
+.name-tag.downed span::after { content: ' · DOWN · HELP THEM'; }
+.name-tag.downed b { width: 6em; }
+.name-tag.downed b i { background: var(--danger); }
+.name-tag.reviving { animation: none; color: var(--ok); }
+.name-tag.reviving span::after { content: ' · REVIVING'; }
+.name-tag.reviving b i { background: var(--ok); }
+@keyframes downed-tag { 50% { opacity: 0.55; } }
+.downed-panel { position: absolute; left: 50%; top: 66%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 0.6em;
+  font-family: var(--font-display); letter-spacing: 0.3em; font-size: 0.9em; color: var(--danger); text-shadow: 0 1px 4px rgba(0,0,0,0.9); pointer-events: none !important; }
+.downed-panel .dp-bar { width: 16em; height: 4px; background: rgba(0,0,0,0.55); border-radius: 2px; overflow: hidden; }
+.downed-panel .dp-bar i { display: block; height: 100%; width: 100%; background: var(--danger); }
+.downed-panel.helped { color: var(--ok); }
+.downed-panel.helped .dp-bar i { background: var(--ok); }
 .spectate { position: absolute; left: 50%; bottom: 8vh; transform: translateX(-50%); font-family: var(--font-display); letter-spacing: 0.3em; font-size: 0.85em;
   color: var(--fg-dim); text-shadow: 0 1px 4px rgba(0,0,0,0.9); cursor: pointer; padding: 0.8em 1.2em; }
 .spectate.net-lost { bottom: auto; top: 18vh; color: var(--accent); animation: net-lost 1.4s ease-in-out infinite; }

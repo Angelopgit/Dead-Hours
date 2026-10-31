@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, Simulation, WEAPONS, encodeAppearance, packMotion, sanitizeAppearance,
   type ActMsg, type ArmZone, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type MapDefinition, type NavGrid,
   type OverMsg, type SimEvent, type SimLimb, type SimPlayer, type Vec3, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
@@ -67,11 +67,12 @@ export interface SessionOptions {
 }
 
 interface Candidate {
-  kind: 'door' | 'limb' | Interactable['kind'];
+  kind: 'door' | 'limb' | 'revive' | Interactable['kind'];
   pos: THREE.Vector3;
   door?: Door;
   it?: Interactable;
   limb?: SimLimb;
+  mate?: SimPlayer;
   /** How near it counts as (default: straight-line distance from the chest). */
   near?: number;
 }
@@ -471,6 +472,92 @@ export class GameSession {
     this.fireBuffer = 0;
     this.wantReload = this.wantMelee = this.wantHeal = false;
     this.wantSlot = null;
+    this.stopReviving();
+  }
+
+  // ------------------------------------------------------------------ downed and revives
+
+  /** The downed teammate this survivor is holding interact on, and when that was asked for. */
+  private reviveTarget: string | null = null;
+  private reviveAskedAt = 0;
+  /** This survivor is shown downed (follows the sim: an event or a snapshot can put them there). */
+  private shownDown = false;
+  private readonly downPanel = h('div', { class: 'downed-panel' });
+  private readonly downText = h('div', { class: 'dp-text' });
+  private readonly downFill = h('i');
+
+  private startReviving(mate: SimPlayer): void {
+    if (this.reviveTarget === mate.id) return;
+    this.reviveTarget = mate.id;
+    this.reviveAskedAt = this.netNow;
+    this.player.clearInput();
+    if (this.link) this.act({ a: 'revive', target: mate.id });
+    else this.sim.revive(this.myId, mate.id);
+  }
+
+  private stopReviving(): void {
+    if (!this.reviveTarget) return;
+    this.reviveTarget = null;
+    if (this.link) this.link.act({ a: 'revive', target: null });
+    else this.sim.revive(this.myId, null);
+  }
+
+  /** Holding interact on a downed teammate: stay put and keep holding until they are up. */
+  private keepReviving(): boolean {
+    const id = this.reviveTarget;
+    if (!id) return false;
+    const mate = this.sim.players.get(id);
+    const lost = !mate || !mate.downed || !this.me.up
+      // The server never took it (someone else got there first).
+      || (mate.reviver !== this.myId && this.netNow - this.reviveAskedAt > (this.link ? this.link.rtt + 1.5 : 0.1));
+    if (lost || !this.input.held('interact')) {
+      this.stopReviving();
+      return false;
+    }
+    this.player.clearInput();
+    this.fireHeld = false;
+    this.fireBuffer = 0;
+    const k = mate.reviver === this.myId ? Math.min(1, mate.revive / DOWNED.reviveTime) : 0;
+    this.hud.setPrompt('interact', `REVIVING ${mate.name.toUpperCase()} · ${Math.round(k * 100)}%`);
+    return true;
+  }
+
+  /** Puts this survivor on the ground or back on their feet when the sim says so. */
+  private syncDowned(): void {
+    const down = this.me.alive && this.me.downed;
+    if (down === this.shownDown || this.phase === 'dead') return;
+    this.shownDown = down;
+    this.player.setDowned(down);
+    if (down) {
+      if (this.phase === 'table') this.closeTable();
+      this.clearIntents();
+      this.inventory.hide();
+      this.weapon.setVisible(false);
+      this.hud.setPrompt(null);
+      this.hud.setScope(0);
+      const last = this.me.downs >= DOWNED.maxDowns;
+      this.hud.notify('YOU ARE DOWN', last ? 'ONE MORE AND YOU ARE DEAD · HOLD ON' : 'HOLD ON · A TEAMMATE CAN GET YOU UP', 3, 'danger');
+      this.downPanel.replaceChildren(this.downText, h('div', { class: 'dp-bar' }, this.downFill));
+      this.ui.append(this.downPanel);
+      audio.playerHurt(1);
+    } else {
+      this.weapon.setVisible(true);
+      this.downPanel.remove();
+      this.hud.notify('BACK ON YOUR FEET', '', 1.6);
+    }
+  }
+
+  private updateDownPanel(): void {
+    if (!this.shownDown) return;
+    const me = this.me;
+    const helper = me.reviver ? this.sim.players.get(me.reviver) : null;
+    const text = helper
+      ? `${helper.name.toUpperCase()} IS GETTING YOU UP`
+      : `BLEEDING OUT · ${Math.max(0, Math.ceil(me.bleed))}`;
+    if (this.downText.textContent !== text) this.downText.textContent = text;
+    const k = helper ? me.revive / DOWNED.reviveTime : me.bleed / DOWNED.bleedOut;
+    this.downFill.style.width = `${(THREE.MathUtils.clamp(k, 0, 1) * 100).toFixed(1)}%`;
+    this.downPanel.classList.toggle('helped', !!helper);
   }
 
   // ------------------------------------------------------------------ weapon table
@@ -582,6 +669,7 @@ export class GameSession {
     }
     if (steps === 5) this.accumulator = 0;
     if (running && !this.link) for (const e of this.sim.drain()) this.onEvent(e);
+    this.syncDowned();
     const alpha = this.accumulator / step;
     // Frozen while paused: effects, corpses and timers wait too.
     const live = running ? dt : 0;
@@ -739,6 +827,16 @@ export class GameSession {
     p.sampleInput(input, this.cam.yaw);
     const a = this.me.arsenal;
     if (a.action === 'bandage') p.blockSprint(0.1);
+    if (!this.me.up) {
+      // On the ground: look about, drag yourself along, call for help.
+      if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
+        this.chatBox.open();
+        input.clear();
+      }
+      input.consumeWheel();
+      this.hud.setPrompt(null);
+      return;
+    }
 
     this.fireHeld = input.held('fire');
     if (input.pressed('fire')) this.fireBuffer = 0.18;
@@ -768,6 +866,7 @@ export class GameSession {
   /** Intents for this fixed step (the Phase 4 client sends these as messages). */
   private sendIntents(step: number): void {
     const sim = this.sim;
+    if (!this.me.up) return;
     if (this.wantSlot) {
       sim.switchWeapon(this.myId, this.wantSlot);
       this.wantSlot = null;
@@ -835,7 +934,7 @@ export class GameSession {
   private stepOnline(step: number): void {
     const ticks: ArsenalTick[] = [];
     for (const pl of this.sim.players.values()) {
-      if (!pl.alive) continue;
+      if (!pl.up) continue;
       ticks.length = 0;
       pl.arsenal.step(step, pl.motion.aiming, ticks);
     }
@@ -864,6 +963,7 @@ export class GameSession {
   /** Online intents: shown at once on this survivor's copy of the weapons, confirmed by the server. */
   private sendOnline(step: number): void {
     const a = this.me.arsenal;
+    if (!this.me.up) return;
     const aim = () => {
       const o = this.cam.aimOrigin, d = this.cam.aimDir;
       return { o: { x: o.x, y: o.y, z: o.z }, d: { x: d.x, y: d.y, z: d.z } };
@@ -967,6 +1067,7 @@ export class GameSession {
   }
 
   private handleInteraction(): void {
+    if (this.keepReviving()) return;
     const best = this.pickInteraction();
     const slot = this.workableSlot();
     // An opening in reach is boarded up from here unless something else is what the crosshair is on.
@@ -987,6 +1088,11 @@ export class GameSession {
     }
     if (!best) {
       this.hud.setPrompt(null);
+      return;
+    }
+    if (best.kind === 'revive') {
+      this.hud.setPrompt('interact', `HOLD TO REVIVE ${best.mate!.name.toUpperCase()}`);
+      if (this.input.pressed('interact') || this.input.held('interact')) this.startReviving(best.mate!);
       return;
     }
     if (best.kind === 'door') {
@@ -1074,10 +1180,15 @@ export class GameSession {
 
   /** What [E] acts on: the reachable thing closest to where the camera looks. */
   private pickInteraction(): Candidate | null {
-    if (!this.me.alive) return null;
+    if (!this.me.up) return null;
     const p = this.player.position;
     const eye = this.tmpA.set(p.x, p.y + 1.1, p.z);
     const cands: Candidate[] = [];
+    // A teammate on the ground comes before anything else nearby.
+    for (const mate of this.sim.downedInReach(this.myId)) {
+      const m = mate.motion.pos;
+      cands.push({ kind: 'revive', pos: new THREE.Vector3(m.x, m.y + 0.3, m.z), mate, near: Math.hypot(m.x - p.x, m.z - p.z) - 1 });
+    }
     const door = this.doors.nearest(eye, 1.9);
     if (door) cands.push({ kind: 'door', pos: door.center, door });
     for (const it of this.sim.reachable(this.myId)) {
@@ -1312,9 +1423,26 @@ export class GameSession {
         if (e.player === this.myId) this.onDeath();
         else {
           const who = this.sim.players.get(e.player);
-          if (who) this.hud.feedLine(`${who.name.toUpperCase()} IS DOWN`);
+          if (who) this.hud.feedLine(`${who.name.toUpperCase()} IS DEAD`);
           if (this.watching === e.player) this.watching = null;
         }
+        break;
+      case 'playerDowned':
+        if (e.player !== this.myId) {
+          const who = this.sim.players.get(e.player);
+          if (who && this.me.up) this.hud.notify(`${who.name.toUpperCase()} IS DOWN`, 'GET TO THEM AND HOLD INTERACT TO REVIVE', 2.4, 'danger');
+        }
+        break;
+      case 'playerRevived': {
+        const who = this.sim.players.get(e.player);
+        const by = this.sim.players.get(e.by);
+        if (e.by === this.myId && who) this.hud.feedLine(`REVIVED ${who.name.toUpperCase()}`);
+        else if (e.player !== this.myId && who && by) this.hud.feedLine(`${by.name.toUpperCase()} REVIVED ${who.name.toUpperCase()}`);
+        break;
+      }
+      case 'revive':
+        if (e.player === this.myId && e.stage !== 'start') this.reviveTarget = null;
+        if (e.player === this.myId && e.stage === 'start') audio.bandage();
         break;
       case 'playerHealed':
         if (e.player === this.myId) this.hud.feedLine(`HEALTH +${Math.round(e.amount)}`);
@@ -1471,6 +1599,8 @@ export class GameSession {
     // Online the night goes on behind the pause menu, so death can come while it is open.
     this.pause.hide();
     this.phase = 'dead';
+    this.shownDown = false;
+    this.downPanel.remove();
     this.survivedAtDeath = this.outbreakAnnounced ? this.sim.phaseTime : 0;
     this.deathT = 0;
     this.deathYaw = this.cam.yaw;
@@ -1702,8 +1832,9 @@ export class GameSession {
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
     hud.setSpread(Math.min(70, px));
     // Down the sights, the sights are the crosshair.
-    hud.setCrosshairVisible(this.phase === 'playing' && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
-    hud.setStance(a.action === 'bandage' ? 'BANDAGING' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    this.updateDownPanel();
+    hud.setCrosshairVisible(this.phase === 'playing' && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
+    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
     // Pain: hits flash the screen edges red; low health keeps a pulse there.

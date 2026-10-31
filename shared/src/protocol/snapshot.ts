@@ -44,6 +44,10 @@ export interface SnapPlayer {
   w: number[];
   /** The arm in hand: [id, arm, cut, kind, look, scale ×1000, wear, maxWear, broken], or 0. */
   lb: number[] | 0;
+  /** Downed: [bleed left (ms), revive progress (ms), downs], or 0 when on their feet. */
+  dn: number[] | 0;
+  /** Who is reviving them ('' for nobody). */
+  rv: string;
   s: PlayerStats;
 }
 
@@ -92,6 +96,8 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
         a.meleeWith === 'limb' ? 1 : 0, milli(a.aim),
       ],
       lb: l ? [l.id, idx(ARMS, l.arm), idx(CUTS, l.cut), idx(KINDS, l.kind), l.look, milli(l.scale), l.wear, l.maxWear, l.broken ? 1 : 0] : 0,
+      dn: p.downed ? [milli(Math.max(0, p.bleed)), milli(p.revive), p.downs] : 0,
+      rv: p.reviver ?? '',
       s: { ...p.stats },
     });
   }
@@ -408,6 +414,13 @@ export class Mirror {
       p.bandages = sp.b;
       p.armor = (sp.ar ?? 0) / 10;
       p.diedAt = sp.dt / 1000;
+      p.downed = p.alive && Array.isArray(sp.dn);
+      if (Array.isArray(sp.dn)) {
+        p.bleed = sp.dn[0] / 1000;
+        p.revive = sp.dn[1] / 1000;
+        p.downs = sp.dn[2];
+      } else p.revive = 0;
+      p.reviver = sp.rv || null;
       Object.assign(p.stats, sp.s);
       if (sp.lb) heldSeen.add(sp.lb[0]);
       const mine = sp.id === this.me;

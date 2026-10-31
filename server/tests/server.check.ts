@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, type Room } from 'colyseus.js';
 import {
-  C2S, Mirror, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
+  C2S, DOWNED, Mirror, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
   type BeginMsg, type ChatLine, type IceConfig, type LobbyMsg, type OverMsg, type RtcIn, type SimEvent, type Snapshot,
   type TalkMsg, type Vec3,
 } from '@dead-hours/shared';
@@ -386,9 +386,48 @@ try {
     check(await until(() => b.snaps.length > had), 'snapshots resume after reconnecting');
   }
 
+  section('Downed and revived');
+  a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
+  check(await until(() => b.events.some((e) => e.type === 'playerDowned' && e.player === a.room.sessionId)), 'zero health with a teammate up: down, not dead');
+  await sleep(150);
+  pump();
+  check(me.alive && me.downed && me.bleed > 20, `snapshots show them downed and bleeding (${me.bleed.toFixed(1)} s left)`);
+  a.room.send(C2S.act, { a: 'fire', o: eye, d: { x: 0, y: 0, z: 1 } });
+  const shotsBefore = a.events.filter((e) => e.type === 'shot').length;
+  await sleep(200);
+  check(a.events.filter((e) => e.type === 'shot').length === shotsBefore, 'the downed cannot shoot');
+  // Bravo walks over and holds interact on them.
+  pump();
+  const bp = { ...puppet.players.get(bId)!.motion.pos };
+  const bMotion = (p: Vec3) => packMotion({
+    motion: { pos: p, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, eyeHeight: 1.6, crouching: false, sprinting: false, aiming: false, grounded: true },
+    facing: 0, trigger: false, aimOrigin: { x: p.x, y: p.y + 1.6, z: p.z }, aimDir: { x: 0, y: 0, z: 1 },
+  });
+  b.room.send(C2S.act, { a: 'revive', target: a.room.sessionId });
+  await sleep(150);
+  check(!b.events.some((e) => e.type === 'revive' && e.stage === 'start'), `cannot revive from ${Math.hypot(bp.x - pos.x, bp.z - pos.z).toFixed(1)} m away`);
+  const target = { x: pos.x + 0.9, y: pos.y, z: pos.z };
+  for (let i = 0; i < 200 && Math.hypot(bp.x - target.x, bp.z - target.z) > 0.05; i++) {
+    const dx = target.x - bp.x, dz = target.z - bp.z, d = Math.hypot(dx, dz), st = Math.min(0.12, d);
+    bp.x += (dx / d) * st;
+    bp.z += (dz / d) * st;
+    bp.y = target.y;
+    b.room.send(C2S.motion, bMotion(bp));
+    await sleep(33);
+  }
+  await sleep(150);
+  b.room.send(C2S.act, { a: 'revive', target: a.room.sessionId });
+  check(await until(() => b.events.some((e) => e.type === 'revive' && e.stage === 'start')), `revive starts beside them (${b.corrections.length} corrections on the way)`);
+  check(await until(() => a.events.some((e) => e.type === 'playerRevived' && e.player === a.room.sessionId && e.by === bId), 7000), 'held long enough, they are back up');
+  await sleep(150);
+  pump();
+  check(me.up && Math.abs(me.health - DOWNED.reviveHealth) < 0.2 && puppet.players.get(bId)!.stats.revives === 1, 'up again with some health; the revive is counted');
+
   section('The night ends');
   a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
-  check(await until(() => a.events.some((e) => e.type === 'playerDied' && e.player === a.room.sessionId)), 'first survivor dies');
+  check(await until(() => a.events.filter((e) => e.type === 'playerDowned' && e.player === a.room.sessionId).length === 2), 'down again');
+  a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
+  check(await until(() => a.events.some((e) => e.type === 'playerDied' && e.player === a.room.sessionId)), 'first survivor is finished off on the ground');
   check(!a.over, 'the night goes on while anyone is alive');
   await sleep(1100);
   b.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });

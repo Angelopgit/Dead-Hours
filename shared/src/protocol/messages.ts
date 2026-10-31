@@ -75,7 +75,9 @@ export type ActMsg =
   | { a: 'grab'; limb: number }
   | { a: 'door'; door: number }
   /** Starts nailing boards up or prying them off a door or window (carries on while held); 'stop' lets go. */
-  | { a: 'barricade'; slot: number; k: 'board' | 'pry' | 'stop' };
+  | { a: 'barricade'; slot: number; k: 'board' | 'pry' | 'stop' }
+  /** Hold interact on a downed teammate (null: let go). */
+  | { a: 'revive'; target: string | null };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

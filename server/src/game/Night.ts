@@ -208,10 +208,13 @@ export class Night {
       case 'grab':
         if (Number.isInteger(m.limb)) sim.grabLimb(id, m.limb);
         break;
+      case 'revive':
+        if (m.target === null || typeof m.target === 'string') sim.revive(id, m.target);
+        break;
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;
         const e = p.eye;
-        if (d && p.alive && !sim.doorLocked(d.index) && Math.hypot(d.center.x - e.x, d.center.y - e.y, d.center.z - e.z) < 2.6) d.toggle(p.motion.pos.x, p.motion.pos.z);
+        if (d && p.up && !sim.doorLocked(d.index) && Math.hypot(d.center.x - e.x, d.center.y - e.y, d.center.z - e.z) < 2.6) d.toggle(p.motion.pos.x, p.motion.pos.z);
         break;
       }
       case 'barricade':
@@ -258,7 +261,7 @@ export class Night {
       if (snap) due = true;
       for (const id of this.gods) {
         const p = this.sim.players.get(id);
-        if (p?.alive) p.health = PLAYER.maxHealth;
+        if (p?.up) p.health = PLAYER.maxHealth;
       }
     }
     if (n === 6) this.acc = 0;
