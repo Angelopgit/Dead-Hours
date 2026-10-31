@@ -123,7 +123,9 @@ export class ZombieView {
     // Some arrive already torn up.
     if (this.gore) {
       const r = (look * 2654435761) >>> 0;
-      for (let b = 0; b < h.wounds.length; b++) if (((r >> b) & 3) === 0) h.wounds[b] = 0.15 + ((r >> (b + 3)) & 7) / 20;
+      for (let b = 0; b < h.wounds.length; b++) if (((r >> b) & 3) === 0) h.wounds[b] = 0.08 + ((r >> (b + 3)) & 7) / 40;
+      // Bites and gashes from before it turned, different on every body.
+      h.oldWounds(Math.random() * 1e6, 1 + Math.floor(Math.random() * 3));
     }
     h.mesh.castShadow = true;
     h.setVisible(true);
@@ -148,12 +150,20 @@ export class ZombieView {
     return this.corpses.length;
   }
 
-  hit(id: number, zone: HitZone, dir: THREE.Vector3, damage: number, melee: boolean): void {
+  /**
+   * A hit: the body flinches, a wound opens where it landed (and where a bullet came out) and
+   * its blood soaks into the clothes around it; every hit leaves the limb bloodier overall.
+   */
+  hit(id: number, zone: HitZone, dir: THREE.Vector3, damage: number, melee: boolean, pos?: THREE.Vector3, exit?: THREE.Vector3 | null): void {
     const v = this.views.get(id);
     if (!v) return;
     const amount = Math.min(1, damage / 60) * (melee ? 1.4 : 1);
     v.body.flinch(zone, dir.x, dir.z, amount);
-    if (this.gore) v.body.wound(zone, 0.18 + amount * 0.45);
+    if (!this.gore) return;
+    v.body.wound(zone, 0.1 + amount * 0.25);
+    if (pos) v.body.woundAt(pos, zone, Math.min(1.2, 0.35 + amount * 0.7));
+    // Exit wounds are the bigger mess.
+    if (exit) v.body.woundAt(exit, zone, Math.min(1.5, 0.7 + amount * 0.8));
   }
 
   /**

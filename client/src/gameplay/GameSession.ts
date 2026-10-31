@@ -22,6 +22,7 @@ import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { clearSeveredCache } from '../characters/Severed';
+import { setZombieDetail } from '../characters/Decay';
 import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../weapons/WeaponModels';
 import { Effects } from '../effects/Effects';
 import { Pyro, type BurnPoint } from '../effects/Pyro';
@@ -346,6 +347,8 @@ export class GameSession {
     const g = settings.value.graphics;
     this.effects.setQuality(g.particleQuality, g.gore, settings.value.accessibility.reducedFlashing);
     this.zombies.gore = g.gore !== 'off';
+    // Phone and low presets: zombie flesh without the finest noise and veins.
+    setZombieDetail(g.particleQuality === 'low' ? 'lite' : 'full');
     this.limbs.gore = g.gore !== 'off';
     this.weapon.gore = g.gore !== 'off';
     this.zombies.gibs.setGore(g.gore !== 'off');
@@ -1538,7 +1541,7 @@ export class GameSession {
         v3(e.dir, B);
         const exit = e.exit ? { pos: new THREE.Vector3(e.exit.pos.x, e.exit.pos.y, e.exit.pos.z), normal: new THREE.Vector3(e.exit.normal.x, e.exit.normal.y, e.exit.normal.z) } : null;
         this.effects.blood(A, B, e.damage, { exit, killed: e.killed, head: e.zone === 'head', melee: e.melee });
-        this.zombies.hit(e.zombie, e.zone, B, e.damage, e.melee);
+        this.zombies.hit(e.zombie, e.zone, B, e.damage, e.melee, A, exit?.pos);
         if (e.limb !== undefined) {
           // Clubbed with a severed arm: a wet, heavy thud, blood flung off its torn end.
           audio.clubHit(A, Math.min(1, e.damage / 50));

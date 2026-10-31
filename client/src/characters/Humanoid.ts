@@ -6,6 +6,7 @@ import { rng, randomAppearance, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
 import { EYE_Y, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
+import { DECAY_BLOOD, DECAY_COMMON, DECAY_SURFACE, MAX_HITS, SURF, createDecayUniforms, trackDecayMaterial, untrackDecayMaterial, zombieDetail, type DecayUniforms } from './Decay';
 
 export interface HumanoidLook {
   /** What the character wears and looks like. */
@@ -22,6 +23,8 @@ export interface HumanoidLook {
   eyeGlow?: number;
   /** Special zombies' bodies (see Outfit's Mutation). */
   mutation?: Mutation;
+  /** Zombies: how far gone the flesh is, 0 freshly turned .. 1 rotten through. */
+  decay?: number;
 }
 
 export type ZombieGait = 'walker' | 'runner' | 'brute';
@@ -80,6 +83,23 @@ interface BodyEntry {
   geometry: THREE.BufferGeometry;
   dress: DressResult;
   refs: number;
+  /** Bind-pose vertex positions per bone (built on the first wound). */
+  byBone?: Float32Array[];
+}
+
+/** Bind-pose vertices of each bone, for putting wounds on the body's surface. */
+function verticesByBone(e: BodyEntry): Float32Array[] {
+  if (e.byBone) return e.byBone;
+  const pos = e.geometry.getAttribute('position');
+  const si = e.geometry.getAttribute('skinIndex');
+  const lists: number[][] = Array.from({ length: BONE_COUNT }, () => []);
+  for (let i = 0; i < pos.count; i++) lists[si.getX(i)]?.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+  return (e.byBone = lists.map((l) => new Float32Array(l)));
+}
+
+/** Close enough to the skin color to be skin (ears, nose and swollen guts are shaded from it). */
+function nearHex(a: number, b: number, tol: number): boolean {
+  return Math.abs((a >> 16) - (b >> 16)) <= tol && Math.abs(((a >> 8) & 255) - ((b >> 8) & 255)) <= tol && Math.abs((a & 255) - (b & 255)) <= tol;
 }
 
 const MUD = new THREE.Color(0x4a4236);
@@ -131,7 +151,9 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
     const muddy = grime && hex !== look.skin ? 0.4 : 0;
     color.setHex(hex).lerp(MUD, muddy);
     accent.setHex(surf?.accent ?? hex).lerp(MUD, muddy);
-    const type = surf?.pattern ?? 0;
+    // Zombies: which surface this is (rotting skin, cloth that tears, or hard gear and hair that doesn't).
+    const cls = !grime ? 0 : look.skin !== undefined && nearHex(hex, look.skin, 40) ? SURF.skin : bone === BONE.head ? SURF.hard : SURF.cloth;
+    const type = (surf?.pattern ?? 0) + cls * 8;
     for (let i = 0; i < n; i += 3) {
       // Zombies: per-face grime so clothes and skin read as filthy, not flat.
       const k = grime ? 0.72 + rand() * 0.32 : 0.94 + rand() * 0.08;
@@ -185,9 +207,14 @@ function buildEyes(a: Appearance): THREE.BufferGeometry {
  * Patterns (plaid, stripes, camo, flowers, knit, denim) mix the vertex color with the part's
  * accent. Each bone carries a 0..1 blood amount; splotchy patches spread as it grows.
  */
-export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Array): void {
-  chain(mat, 'wounds', (shader) => {
+export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Array, decay?: DecayUniforms): void {
+  chain(mat, decay ? 'wounds-z' : 'wounds', (shader) => {
     shader.uniforms.uWounds = { value: wounds };
+    let defs = '';
+    if (decay) {
+      Object.assign(shader.uniforms, decay);
+      defs = `#define ZOMBIE_DECAY\n${zombieDetail() === 'lite' ? '#define DECAY_LITE\n' : ''}`;
+    }
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         uniform float uWounds[${BONE_COUNT}];
@@ -203,6 +230,7 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
         vPatN = normal;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
+        ${defs}
         varying float vWound;
         varying vec3 vWoundP;
         varying vec4 vPat;
@@ -212,16 +240,29 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
           vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
           return mix(mix(mix(wHash(i), wHash(i + vec3(1, 0, 0)), f.x), mix(wHash(i + vec3(0, 1, 0)), wHash(i + vec3(1, 1, 0)), f.x), f.y),
                      mix(mix(wHash(i + vec3(0, 0, 1)), wHash(i + vec3(1, 0, 1)), f.x), mix(wHash(i + vec3(0, 1, 1)), wHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
-        }`)
+        }
+        #ifdef ZOMBIE_DECAY
+        ${DECAY_COMMON}
+        // Zombies read their noise from the noise texture (far cheaper with hundreds on screen).
+        #define WN(P_) zN(P_).x
+        #define WN2(P_) zN(P_).y
+        #else
+        #define WN(P_) wNoise(P_)
+        #define WN2(P_) wNoise(P_)
+        #endif`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        if (vPat.w > 0.5) {
+        float zWet = 0.0;
+        // pattern.w = fabric pattern + 8 * surface class (zombies).
+        float vZSurf = floor((vPat.w + 0.5) / 8.0);
+        float pType = vPat.w - vZSurf * 8.0;
+        if (pType > 0.5) {
           vec3 q = vWoundP;
           vec3 an = abs(normalize(vPatN));
           // Horizontal coordinate across whichever way the surface faces.
           float u = an.z > an.x ? q.x : q.z;
           vec3 base = diffuseColor.rgb;
           vec3 acc = vPat.rgb;
-          float t = vPat.w;
+          float t = pType;
           if (t < 1.5) {
             vec2 f = fract(vec2(u, q.y) * 10.0);
             float a = step(f.x, 0.36) + step(f.y, 0.36);
@@ -231,25 +272,46 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
           } else if (t < 2.5) {
             diffuseColor.rgb = mix(base, acc, step(0.5, fract(q.y * 16.0)));
           } else if (t < 3.5) {
-            float n = wNoise(q * 7.0) * 0.65 + wNoise(q * 17.0) * 0.35;
+            float n = WN(q * 7.0) * 0.65 + WN2(q * 17.0) * 0.35;
             diffuseColor.rgb = mix(base, acc, smoothstep(0.45, 0.47, n));
             diffuseColor.rgb = mix(diffuseColor.rgb, base * 0.42, smoothstep(0.62, 0.64, n));
           } else if (t < 4.5) {
-            float n = wNoise(q * 46.0);
+            float n = WN(q * 46.0);
             diffuseColor.rgb = mix(base, acc, smoothstep(0.66, 0.68, n));
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.85, 0.62, 0.12), smoothstep(0.86, 0.88, n));
           } else if (t < 5.5) {
             diffuseColor.rgb *= 0.86 + 0.16 * step(0.5, fract(u * 60.0));
           } else {
-            diffuseColor.rgb *= 0.9 + 0.18 * wNoise(vec3((u + q.y) * 70.0, q.y * 14.0, u * 9.0));
+            diffuseColor.rgb *= 0.9 + 0.18 * WN(vec3((u + q.y) * 70.0, q.y * 14.0, u * 9.0));
           }
         }
+        #ifdef ZOMBIE_DECAY
+        ${DECAY_SURFACE}
+        #endif
         if (vWound > 0.001) {
-          float wn = wNoise(vWoundP * 9.0) * 0.65 + wNoise(vWoundP * 23.0) * 0.35;
+          #ifdef DECAY_LITE
+          vec4 wq = zN(vWoundP * 12.0);
+          float wn = wq.x * 0.65 + wq.y * 0.35;
+#else
+          float wn = WN(vWoundP * 9.0) * 0.65 + WN2(vWoundP * 23.0) * 0.35;
+#endif
           float wc = smoothstep(wn - 0.06, wn + 0.06, vWound * 0.95);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.085, 0.007, 0.005) * (0.6 + 0.6 * wn), wc * 0.94);
-        }`);
+          zWet = max(zWet, wc * 0.4);
+        }
+        #ifdef ZOMBIE_DECAY
+        ${DECAY_BLOOD}
+        #endif`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        // Blood and raw flesh glisten.
+        roughnessFactor = mix(roughnessFactor, 0.3, clamp(zWet, 0.0, 1.0));`);
   });
+  if (decay) {
+    // The detail level is part of the program: switching it recompiles (see setZombieDetail).
+    const key = mat.customProgramCacheKey;
+    mat.customProgramCacheKey = () => `${key.call(mat)}|${zombieDetail()}`;
+    trackDecayMaterial(mat);
+  }
 }
 
 /**
@@ -326,6 +388,12 @@ export class Humanoid {
   private readonly arms: Record<ArmZone, ArmState> = { armL: 'intact', armR: 'intact' };
   private readonly stumps = new Map<string, THREE.Mesh>();
   private readonly gore: THREE.MeshStandardMaterial | null = null;
+  /** Zombies: rot, torn clothes and local wounds (shader uniforms). */
+  readonly decay: DecayUniforms | null = null;
+  /** Soak radius each local wound is spreading toward. */
+  private readonly soakTo = new Float32Array(MAX_HITS);
+  private nextHit = 0;
+  private readonly body: BodyEntry;
 
   constructor(look: HumanoidLook) {
     this.zombie = !!look.zombie;
@@ -361,9 +429,11 @@ export class Humanoid {
     this.root.updateMatrixWorld(true);
 
     this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, flatShading: true });
-    patchWounds(this.material, this.wounds);
     this.bodyKey = JSON.stringify(look);
+    if (this.zombie) this.decay = decayOf(look, (hashString(this.bodyKey) % 97) * 1.37, true);
+    patchWounds(this.material, this.wounds, this.decay ?? undefined);
     const body = acquireBody(this.bodyKey, look, this.bones);
+    this.body = body;
     this.backDepth = body.dress.backDepth;
     this.mesh = new THREE.SkinnedMesh(body.geometry, this.material);
     this.mesh.castShadow = true;
@@ -522,9 +592,10 @@ export class Humanoid {
     }
   }
 
-  /** Gore off: stumps go dark instead of red. */
+  /** Gore off: stumps go dark instead of red, and no wounds or blood show on the body. */
   set goreShown(on: boolean) {
     if (this.gore) tintGore(this.gore, on);
+    if (this.decay) this.decay.uZ.value.w = on ? 1 : 0;
   }
 
   /** Thickness of the body at a joint: how wide the stump left there must be. */
@@ -554,6 +625,94 @@ export class Humanoid {
 
   clearWounds(): void {
     this.wounds.fill(0);
+    if (!this.decay) return;
+    for (const h of this.decay.uHits.value) h.set(0, 0, 0, 0);
+    this.decay.uHitK.value.fill(0);
+    this.soakTo.fill(0);
+    this.nextHit = 0;
+  }
+
+  /**
+   * A local wound where a hit landed (world space): a hole with a raw ring, its blood soaking
+   * outward over the next seconds. `severity` 0..1 (exit wounds and blades go higher). A hit
+   * next to an earlier wound opens that one further instead.
+   */
+  woundAt(world: THREE.Vector3, zone: HitZone, severity: number): void {
+    if (!this.decay) return;
+    const p = this.toBind(world, zone, _a);
+    if (!p) return;
+    this.addHit(p, severity, false);
+  }
+
+  /** Older wounds it turned up with (already soaked through), placed by `seed`. */
+  oldWounds(seed: number, count: number): void {
+    if (!this.decay) return;
+    const lists = verticesByBone(this.body);
+    let r = (seed * 2654435761) >>> 0;
+    const next = () => ((r = Math.imul(r ^ (r >>> 15), 0x2c1b3c6d) + 0x6d2b79f5 >>> 0) / 4294967296);
+    for (let i = 0; i < count; i++) {
+      const bone = [BONE.spine, BONE.spine, BONE.hips, BONE.armLUpper, BONE.armRLower, BONE.legLUpper, BONE.legRLower, BONE.head][Math.floor(next() * 8)];
+      const l = lists[bone];
+      if (!l.length) continue;
+      const v = Math.floor(next() * (l.length / 3)) * 3;
+      this.addHit(_a.set(l[v], l[v + 1], l[v + 2]), 0.3 + next() * 0.7, true);
+    }
+  }
+
+  private addHit(p: THREE.Vector3, severity: number, settled: boolean): void {
+    const d = this.decay!;
+    const hits = d.uHits.value, k = d.uHitK.value;
+    const reach = 0.05 + 0.07 * severity;
+    for (let i = 0; i < MAX_HITS; i++) {
+      if (hits[i].w <= 0 || p.distanceToSquared(_b.set(hits[i].x, hits[i].y, hits[i].z)) > 0.05 * 0.05) continue;
+      k[i] = Math.min(1.6, k[i] + severity * 0.4);
+      this.soakTo[i] = Math.min(0.3, this.soakTo[i] + reach * 0.5);
+      return;
+    }
+    const i = this.nextHit;
+    this.nextHit = (i + 1) % MAX_HITS;
+    k[i] = severity;
+    this.soakTo[i] = reach;
+    hits[i].set(p.x, p.y, p.z, settled ? reach : 0.012 + 0.012 * severity);
+  }
+
+  /** Blood spreads through the cloth around each wound (also on the dead). */
+  private soak(dt: number): void {
+    if (!this.decay) return;
+    const hits = this.decay.uHits.value;
+    const k = 1 - Math.exp(-dt * 0.45);
+    for (let i = 0; i < MAX_HITS; i++) {
+      const h = hits[i];
+      if (h.w > 0 && h.w < this.soakTo[i]) h.w += (this.soakTo[i] - h.w) * k + dt * 0.002;
+    }
+  }
+
+  /**
+   * A world point on this body into bind-pose space: through whichever of the zone's bones
+   * it is nearest, then onto that bone's surface (hit capsules are not the mesh).
+   */
+  private toBind(world: THREE.Vector3, zone: HitZone, out: THREE.Vector3): THREE.Vector3 | null {
+    const lists = verticesByBone(this.body);
+    let best = Infinity;
+    let found = false;
+    for (const b of ZONE_BONES[zone]) {
+      const bone = this.bones[b];
+      bone.updateWorldMatrix(true, false);
+      if (bone.matrixWorld.determinant() < 1e-6) continue; // collapsed (severed)
+      _m.multiplyMatrices(bone.matrixWorld, this.skeleton.boneInverses[b]).invert();
+      _c.copy(world).applyMatrix4(_m);
+      const l = lists[b];
+      for (let i = 0; i < l.length; i += 3) {
+        const dx = l[i] - _c.x, dy = l[i + 1] - _c.y, dz = l[i + 2] - _c.z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < best) {
+          best = d2;
+          out.set(l[i], l[i + 1], l[i + 2]);
+          found = true;
+        }
+      }
+    }
+    return found ? out : null;
   }
 
   /** Hit reaction: `dx/dz` is the bullet direction in world space. */
@@ -584,6 +743,7 @@ export class Humanoid {
   }
 
   update(dt: number, target: LocomotionState): void {
+    this.soak(dt);
     if (!this.zombie && this.eyes) {
       // Blink every few seconds; a ragdoll's eyes stay shut.
       this.blinkT -= dt;
@@ -854,6 +1014,7 @@ export class Humanoid {
 
   dispose(): void {
     this.root.removeFromParent();
+    untrackDecayMaterial(this.material);
     this.material.dispose();
     for (const m of this.stumps.values()) m.geometry.dispose();
     this.stumps.clear();
@@ -870,6 +1031,13 @@ export class Humanoid {
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
 const _e = new THREE.Vector3(), _f = new THREE.Vector3(), _g = new THREE.Vector3(), _h = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion();
+const _m = new THREE.Matrix4();
+
+/** Decay uniforms for a zombie look (`body` false for a severed arm cut from it). */
+export function decayOf(look: HumanoidLook, seed: number, body: boolean): DecayUniforms {
+  const mutation = look.mutation === 'screamer' ? 1 : look.mutation === 'bloater' ? 2 : 0;
+  return createDecayUniforms(look.skin ?? 0x7d8a72, look.decay ?? 0.6, mutation, seed, body);
+}
 
 /** Number of distinct zombie looks per kind (looks repeat beyond this). */
 export const ZOMBIE_LOOK_COUNT = 12;
@@ -904,7 +1072,7 @@ function screamerLook(i: number): HumanoidLook {
   a.headwear = 'none';
   a.facialHair = 'none';
   a.face = a.neck = a.gloves = a.back = a.gear = 'none';
-  return { outfit: a, zombie: true, skin: [0xb4b4a8, 0xa9aca2, 0xbab6aa, 0xa5a59a][k], gait: 'runner', girth: 0.9, eyeGlow: 0xe8f4ff, mutation: 'screamer' };
+  return { outfit: a, zombie: true, skin: [0xb4b4a8, 0xa9aca2, 0xbab6aa, 0xa5a59a][k], gait: 'runner', girth: 0.9, eyeGlow: 0xe8f4ff, mutation: 'screamer', decay: 0.7 };
 }
 
 /** Bloaters: swollen with gas, sallow yellow-green skin, in what still fits, sickly yellow eyes. */
@@ -920,7 +1088,7 @@ function bloaterLook(i: number): HumanoidLook {
   a.hair = k === 2 ? 'buzz' : 'bald';
   a.headwear = k === 3 ? 'cap' : 'none';
   a.face = a.neck = a.gloves = a.back = a.gear = 'none';
-  return { outfit: a, zombie: true, skin: [0x8f9468, 0x9a9a6a, 0x868c62, 0x939060][k], gait: 'brute', girth: 1.32, eyeGlow: 0xd8e040, mutation: 'bloater' };
+  return { outfit: a, zombie: true, skin: [0x8f9468, 0x9a9a6a, 0x868c62, 0x939060][k], gait: 'brute', girth: 1.32, eyeGlow: 0xd8e040, mutation: 'bloater', decay: 0.7 };
 }
 
 const ZOMBIE_SKINS = [0x7d8a72, 0x8b8a76, 0x6f7a6a, 0x948f7e, 0x86806c, 0x6a7466];
@@ -943,7 +1111,7 @@ export function zombieLook(i: number, kind: ZombieGait = 'walker'): HumanoidLook
   a.gear = k === 2 ? 'hivis' : k === 9 ? 'tactical' : 'none';
   a.neck = 'none';
   a.gloves = 'none';
-  return { outfit: a, zombie: true, skin: ZOMBIE_SKINS[k % ZOMBIE_SKINS.length] };
+  return { outfit: a, zombie: true, skin: ZOMBIE_SKINS[k % ZOMBIE_SKINS.length], decay: 0.5 + (k % 4) * 0.12 };
 }
 
 /**
@@ -963,7 +1131,7 @@ function runnerLook(i: number): HumanoidLook {
   if (a.hair === 'afro' || a.hair === 'mohawk') a.hair = 'short';
   a.facialHair = 'none';
   a.face = a.neck = a.gloves = a.back = a.gear = 'none';
-  return { outfit: a, zombie: true, skin: [0x9a9684, 0x8e8a7a, 0xa39d8a][k % 3], gait: 'runner', eyeGlow: 0xff3a22 };
+  return { outfit: a, zombie: true, skin: [0x9a9684, 0x8e8a7a, 0xa39d8a][k % 3], gait: 'runner', eyeGlow: 0xff3a22, decay: 0.3 };
 }
 
 /**
@@ -986,7 +1154,7 @@ function bruteLook(i: number): HumanoidLook {
   } else {
     Object.assign(a, { headwear: 'none', hair: 'bald', facialHair: 'beard', top: 'leather', topColor: 1, topAccent: 3, pants: 'jeans', pantsColor: 4, shoes: 'combat', shoesColor: 11, gear: 'none' });
   }
-  return { outfit: a, zombie: true, skin: [0x6d7563, 0x7a7766, 0x69705f, 0x75705f][k], gait: 'brute', girth: 1.15, eyeGlow: 0xff9a2a };
+  return { outfit: a, zombie: true, skin: [0x6d7563, 0x7a7766, 0x69705f, 0x75705f][k], gait: 'brute', girth: 1.15, eyeGlow: 0xff9a2a, decay: 0.9 };
 }
 
 /** A survivor wearing an appearance. */

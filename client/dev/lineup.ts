@@ -8,7 +8,9 @@ import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, sanitizeAppearance, type Appearan
 import { Humanoid, survivorLook, zombieLook, zombieLookOf } from '../src/characters/Humanoid';
 
 const q = new URLSearchParams(location.search);
-const slot = (q.get('slot') ?? 'top') as AppearanceSlot | 'zombies' | 'specials';
+const slot = (q.get('slot') ?? 'top') as AppearanceSlot | 'zombies' | 'specials' | 'kinds';
+/** `kinds`: how many hits each zombie has taken (0 fresh, more shows wounds and soaked clothes). */
+const hits = Number(q.get('hits') ?? 0);
 const scream = Number(q.get('scream') ?? -1);
 const view = q.get('view') ?? 'body';
 const yaw = Number(q.get('yaw') ?? 0.35);
@@ -33,6 +35,8 @@ scene.add(rim);
 
 const looks = slot === 'zombies'
   ? Array.from({ length: 12 }, (_, i) => ({ label: `zombie ${i}`, look: zombieLook(i) }))
+  : slot === 'kinds'
+  ? (['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'] as const).flatMap((kind) => [0, 1].map((i) => ({ label: `${kind} ${i}`, look: zombieLookOf(kind === 'crawler' ? 'walker' : kind, kind === 'crawler' ? i + 5 : i) })))
   : slot === 'specials'
   ? (['screamer', 'bloater'] as const).flatMap((kind) => Array.from({ length: 4 }, (_, i) => ({ label: `${kind} ${i}`, look: zombieLookOf(kind, i) })))
   : (APPEARANCE_ITEMS[slot] as readonly { id: string; label: string }[]).map((it) => ({ label: it.label, look: survivorLook({ ...base, [slot]: it.id } as Appearance) }));
@@ -44,6 +48,11 @@ looks.forEach(({ label, look }, i) => {
   h.root.rotation.y = yaw;
   h.update(0.016, { speed: 0, crouch: 0, aim: 0, grounded: true, strafe: 0 });
   h.setVisible(false);
+  if (q.get('gore') === '0') h.goreShown = false;
+  if (slot === 'kinds') {
+    h.oldWounds(i * 977 + 5, q.has('old') ? Number(q.get('old')) : 0);
+    shoot(h, i);
+  }
   scene.add(h.root);
   people.push(h);
   const el = document.createElement('div');
@@ -53,6 +62,26 @@ looks.forEach(({ label, look }, i) => {
   el.style.top = `${(Math.floor(i / cols) + 1) * cellH - 16}px`;
   document.body.append(el);
 });
+
+/** Lineup damage: `hits` shots spread over the body, the same way the game applies them. */
+function shoot(h: Humanoid, seed: number): void {
+  const zones = ['torso', 'torso', 'armL', 'legR', 'head', 'torso', 'armR', 'legL'] as const;
+  h.root.updateMatrixWorld(true);
+  const p = new THREE.Vector3();
+  for (let k = 0; k < hits; k++) {
+    const zone = zones[(k + seed) % zones.length];
+    h.wound(zone, 0.1 + 0.25 * 0.6);
+    // Where a shot from the camera's side would land on that zone, a little off centre.
+    const bone = { head: h.head, torso: h.spine, armL: h.armL.upper, armR: h.armR.lower, legL: h.legL.upper, legR: h.legR.lower }[zone];
+    bone.getWorldPosition(p);
+    p.y += zone === 'torso' ? 0.12 + ((k * 37) % 5) * 0.06 : zone === 'head' ? 0.1 : -0.12;
+    p.x += (((k * 53 + seed * 11) % 7) - 3) * 0.025;
+    p.z += 0.3;
+    h.woundAt(p, zone, 0.4 + ((k * 13) % 5) * 0.12);
+  }
+  // Let the blood soak out as it would over the seconds after.
+  for (let t = 0; t < 40; t++) h.update(0.25, { speed: 0, crouch: 0, aim: 0, grounded: true, strafe: 0 });
+}
 
 // One camera framing a single character; each grid cell renders one of them.
 const camera = new THREE.PerspectiveCamera(view === 'head' ? 24 : 30, cellW / cellH, 0.05, 50);
@@ -79,4 +108,4 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 frame();
-Object.assign(window, { __lineupReady: true });
+Object.assign(window, { __lineupReady: true, __people: people });

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { LIMBS, type ArmZone, type LimbCut, type ZombieKind } from '@dead-hours/shared';
-import { Humanoid, kindLooks, patchWounds, zombieLookOf } from './Humanoid';
+import { Humanoid, decayOf, kindLooks, patchWounds, zombieLookOf } from './Humanoid';
+import { untrackDecayMaterial, type DecayUniforms } from './Decay';
 import { BONE, BONE_COUNT } from './rig';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 
@@ -104,6 +105,8 @@ export class SeveredArm {
   private readonly skin: THREE.MeshStandardMaterial;
   private readonly gore: THREE.MeshStandardMaterial;
   private readonly wounds = new Float32Array(BONE_COUNT);
+  /** The same rot and torn sleeve the zombie had. */
+  private readonly decay: DecayUniforms;
   private readonly bloodBase: number;
   private gored = true;
   /** Elbow hinge (held whole arms): angle and its rate. */
@@ -116,7 +119,9 @@ export class SeveredArm {
   constructor(readonly spec: SeveredSpec, readonly mode: 'world' | 'held') {
     const arm = armGeometry(spec);
     this.skin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, flatShading: true });
-    patchWounds(this.skin, this.wounds);
+    const look = zombieLookOf(spec.kind === 'crawler' ? 'walker' : spec.kind, spec.look % kindLooks(spec.kind));
+    this.decay = decayOf(look, spec.look * 1.37, false);
+    patchWounds(this.skin, this.wounds, this.decay);
     this.gore = goreMaterial();
     this.materials = [this.skin, this.gore];
     this.mesh = new THREE.SkinnedMesh(arm.geometry, this.skin);
@@ -176,6 +181,7 @@ export class SeveredArm {
     this.gored = on;
     tintGore(this.gore, on);
     this.wounds.fill(on ? this.bloodBase : 0);
+    this.decay.uZ.value.w = on ? 1 : 0;
   }
 
   /**
@@ -233,6 +239,7 @@ export class SeveredArm {
     this.root.removeFromParent();
     this.mesh.skeleton.dispose();
     this.stump.geometry.dispose();
+    untrackDecayMaterial(this.skin);
     this.skin.dispose();
     this.gore.dispose();
   }
