@@ -151,7 +151,7 @@ The client is a static site (`npm run build`, publish `client/dist`). The server
 | `AUTH_DISCORD_ID`, `AUTH_DISCORD_SECRET` | server | Discord sign-in (an application's OAuth2 client id and secret). Redirect: `<server address>/auth/discord/callback`. |
 | `CLIENT_ORIGINS` | server | Comma-separated addresses the game is played from, e.g. `https://play.example.com,https://deadhours.pages.dev`. Sign-ins return only to these (localhost works when it is unset). |
 | `AUTH_SECRET` | server | A long random string that signs sign-in state. Needed with several instances; one process makes its own on start. |
-| `PUBLIC_URL` | server | The server's public `https://` address for the redirect URIs. Render's `RENDER_EXTERNAL_URL` is used when unset; set it when the server has its own domain. |
+| `PUBLIC_URL` | server | The server's public `https://` address for the redirect URIs. When unset: Railway's `RAILWAY_PUBLIC_DOMAIN`, Render's `RENDER_EXTERNAL_URL`, else the request's forwarded host. Set it when the server has its own domain. |
 | `DEAD_HOURS_DEBUG` | server | `1` enables test commands in rooms (skip preparation, spawn zombies, hurt, full health). Never in production. |
 
 Accounts need a store (Postgres, or the data file on a single server). Sign-in is off until a provider's id and secret are set; the menu then says sign-in isn't available and guests play as before.

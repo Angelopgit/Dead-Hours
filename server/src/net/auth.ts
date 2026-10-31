@@ -21,7 +21,8 @@ import { cleanName, cleanToken } from './clean';
  *
  * Environment: AUTH_GOOGLE_ID + AUTH_GOOGLE_SECRET, AUTH_DISCORD_ID + AUTH_DISCORD_SECRET (either
  * pair or both), CLIENT_ORIGINS, AUTH_SECRET (signs the state; needed with several servers),
- * PUBLIC_URL (this server's https address; Render's RENDER_EXTERNAL_URL is used when unset).
+ * PUBLIC_URL (this server's https address; Railway's RAILWAY_PUBLIC_DOMAIN, then the request's
+ * forwarded host, are used when unset).
  */
 
 interface Provider {
@@ -132,7 +133,8 @@ function readState(state: string): { p: string; r: string; n: string } | null {
 
 /** This server's own address, for the address the services send players back to. */
 function publicUrl(req: IncomingMessage): string {
-  const set = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
+  const domain = process.env.RAILWAY_PUBLIC_DOMAIN;
+  const set = process.env.PUBLIC_URL || (domain ? `https://${domain}` : process.env.RENDER_EXTERNAL_URL);
   if (set) return set.replace(/\/+$/, '');
   const proto = str(req.headers['x-forwarded-proto']).split(',')[0] || 'http';
   return `${proto}://${req.headers.host}`;

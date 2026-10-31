@@ -476,7 +476,8 @@ function sslFor(url: string): pg.PoolConfig['ssl'] {
   if (/sslmode=/i.test(url) || process.env.PGSSLMODE) return undefined;
   try {
     const host = new URL(url).hostname;
-    if (!host.includes('.') || host === '127.0.0.1' || host.endsWith('.local')) return undefined;
+    // Railway's private network (postgres.railway.internal) needs no TLS.
+    if (!host.includes('.') || host === '127.0.0.1' || host.endsWith('.local') || host.endsWith('.railway.internal')) return undefined;
     return { rejectUnauthorized: false };
   } catch {
     return undefined;
