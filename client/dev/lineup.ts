@@ -36,6 +36,10 @@ scene.add(key);
 const rim = new THREE.DirectionalLight(0x9fb8ff, 1.2);
 rim.position.set(-4, 3, -5);
 scene.add(rim);
+// Same floor bounce as the creator preview, so faces read the same here.
+const bounce = new THREE.DirectionalLight(0xffd8bc, 0.7);
+bounce.position.set(0.5, -1.2, 3);
+scene.add(bounce);
 
 const looks = slot === 'zombies'
   ? Array.from({ length: 12 }, (_, i) => ({ label: `zombie ${i}`, look: zombieLook(i) }))

@@ -54,7 +54,10 @@ export class CharacterPreview {
     rim.position.set(-3, 3, -4);
     const fill = new THREE.DirectionalLight(0xc8d4ff, 0.5);
     fill.position.set(-4, 1, 3);
-    this.scene.add(key, rim, fill);
+    // Warm bounce off the floor, so the underside of the jaw doesn't read as stubble.
+    const bounce = new THREE.DirectionalLight(0xffd8bc, 0.7);
+    bounce.position.set(0.5, -1.2, 3);
+    this.scene.add(key, rim, fill, bounce);
 
     // Floor disc with a soft contact shadow under the feet.
     const tex = this.shadowTexture();
