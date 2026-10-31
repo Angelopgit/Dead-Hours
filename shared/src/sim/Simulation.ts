@@ -896,10 +896,19 @@ export class Simulation {
     return null;
   }
 
+  /** How much bigger the horde gets for the survivors alive (1 to 4, see SPAWNING.playerScale). */
+  get playerScale(): number {
+    let alive = 0;
+    for (const p of this.players.values()) if (p.alive) alive++;
+    const s = SPAWNING.playerScale;
+    return s[clamp(alive, 1, s.length) - 1];
+  }
+
   /** Target population for the basic spawner (the Phase 5 director replaces this). */
   get populationTarget(): number {
     if (this.phase !== 'survival') return 0;
-    return Math.min(SPAWNING.maxPopulation, Math.floor(SPAWNING.basePopulation + (SPAWNING.growthPerMinute * this.phaseTime) / 60));
+    const solo = SPAWNING.basePopulation + (SPAWNING.growthPerMinute * this.phaseTime) / 60;
+    return Math.min(SPAWNING.maxPopulation, Math.floor(solo * this.playerScale));
   }
 
   /** Removes every zombie body and the shared zombie controller from the physics world. */
@@ -1017,7 +1026,7 @@ export class Simulation {
     const at = this.findSpawnPoint();
     // The first arrivals come in quickly; afterwards a steady trickle.
     const [lo, hi] = SPAWNING.interval;
-    this.spawnAt = this.time + (alive < target * 0.5 ? 0.35 : lo + this.rand() * (hi - lo));
+    this.spawnAt = this.time + (alive < target * 0.5 ? 0.35 : lo + this.rand() * (hi - lo)) / this.playerScale;
     if (!at) return;
     this.spawnZombie(this.pickKind(), at, this.rand() < 0.78 ? 'approach' : 'wander');
   }
@@ -1032,7 +1041,7 @@ export class Simulation {
     if (r < runner) return 'runner';
     if (r < runner + share(SPAWNING.mix.brute)) {
       const brutes = this.zombies.filter((z) => z.alive && z.kind === 'brute').length;
-      if (brutes < SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) return 'brute';
+      if (brutes < Math.floor((SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) * this.playerScale)) return 'brute';
     }
     return 'walker';
   }

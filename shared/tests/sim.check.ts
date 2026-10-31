@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SUPPLY_DROPS, LIMBS, limbClub, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SUPPLY_DROPS, LIMBS, limbClub, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -403,6 +403,30 @@ section('Zombie kinds and getting unstuck');
   check(r.chaseSpeed[1] < PLAYER.sprintSpeed && r.chaseSpeed[0] > w.chaseSpeed[1] * 1.8, 'runners are much faster than walkers, still slower than a sprinting survivor');
   check(b.health >= w.health * 4 && b.damage[0] > w.damage[1], 'brutes are tanky and hit hard');
   check(b.radius * 2 + 0.04 < 1.0, 'a brute fits through a 1 m back door');
+  cleanup(sim, body);
+}
+section('Horde size by survivors');
+{
+  const { sim, sp, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
+  sim.phase = 'survival';
+  sim.phaseTime = 0;
+  check(sim.populationTarget === 6, `one survivor starts against 6 (${sim.populationTarget})`);
+  const others = [2, 3, 4].map((i) => sim.addPlayer(`p${i}`, `P${i}`, 'ar', 'pistol', { x: 4.8 + i, y: 0.32, z: -22.3 }, 0));
+  check(sim.populationTarget === Math.floor(6 * SPAWNING.playerScale[3]), `four survivors start against ${sim.populationTarget}`);
+  const fifth = sim.addPlayer('p5', 'P5', 'ar', 'pistol', { x: 10.8, y: 0.32, z: -22.3 }, 0);
+  check(sim.playerScale === SPAWNING.playerScale[3], 'a fifth survivor counts as four');
+  fifth.alive = false;
+  others[2].alive = false;
+  check(sim.playerScale === SPAWNING.playerScale[2], 'the dead do not count');
+  sim.phaseTime = 5 * 60;
+  const one = Math.floor(6 + 2.2 * 5);
+  for (const o of others) o.alive = false;
+  check(sim.populationTarget === one, `after five minutes one survivor faces ${one} (${sim.populationTarget})`);
+  sp.alive = false;
+  check(sim.playerScale === 1, 'nobody alive scales like one');
+  sp.alive = true;
+  sim.phaseTime = 3 * 3600;
+  check(sim.populationTarget === 200, `the horde stops at 200 (${sim.populationTarget})`);
   cleanup(sim, body);
 }
 const chaseFrom = (sim: Simulation, kind: 'walker' | 'runner' | 'brute', at: Vec3, target: Vec3) => {

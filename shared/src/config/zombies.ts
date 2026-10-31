@@ -59,11 +59,17 @@ export const ZOMBIES: Record<ZombieKind, ZombieDef> = {
 
 /** Survival tuning that Phase 5's director will replace with a full escalation model. */
 export const SPAWNING = {
-  /** Population when the outbreak starts, and how it grows. */
+  /** Population when the outbreak starts, and how it grows (for one survivor). */
   basePopulation: 6,
   growthPerMinute: 2.2,
-  maxPopulation: 26,
-  /** Seconds between spawns while below target. */
+  /** Hard cap on zombies alive at once, whatever the player count. */
+  maxPopulation: 200,
+  /**
+   * Multiplier on the population target, the spawn rate and the brute cap by survivors alive,
+   * index 0 for one survivor up to index 3 for four (more count as four).
+   */
+  playerScale: [1, 1.6, 2.2, 2.8] as readonly number[],
+  /** Seconds between spawns while below target (divided by the player scale). */
   interval: [1.6, 3.4] as [number, number],
   minDistance: 42,
   maxDistance: 85,
