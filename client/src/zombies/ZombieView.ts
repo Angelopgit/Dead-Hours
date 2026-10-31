@@ -424,7 +424,7 @@ export class ZombieView {
       const b = v.body;
       const s = b.root.scale.x;
       const d = b.root.position.distanceTo(cam);
-      const bones = d > 45 ? [b.spine] : d > 22 ? [b.spine, b.head, b.legL.lower] : [b.spine, b.head, b.armL.lower, b.armR.lower, b.legL.lower, b.legR.lower, b.hips];
+      const bones = d > 45 ? [b.spine] : d > 22 ? [b.spine, b.head, b.legL.lower] : [b.spine, b.head, b.armL.lower, b.armR.lower, b.hips];
       for (let i = 0; i < bones.length; i++) {
         const bone = bones[i];
         if (bone.scale.x < 0.01) continue;

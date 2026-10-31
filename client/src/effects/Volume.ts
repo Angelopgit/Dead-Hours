@@ -39,6 +39,8 @@ const VERT = /* glsl */ `
   #include <fog_pars_vertex>
   void main() {
     vec4 mvPosition = viewMatrix * vec4(a0.xyz, 1.0);
+    // A billow the camera is inside would cover the whole screen: it thins out as the camera nears it.
+    float near = smoothstep(0.25 * a0.w + 0.3, 0.6 * a0.w + 1.5, -mvPosition.z);
     float c = cos(a1.x), s = sin(a1.x);
     vec2 corner = position.xy * 2.0;
     vec2 rc = vec2(corner.x * c - corner.y * s, corner.x * s + corner.y * c);
@@ -50,7 +52,7 @@ const VERT = /* glsl */ `
     vHeat = a1.z;
     vErode = a1.w;
     vColor = a2.rgb;
-    vAlpha = a2.a;
+    vAlpha = a2.a * near;
     vFloor = a3.x;
     vGlow = a3.y;
     vSize = a0.w;

@@ -20,7 +20,8 @@ const FLAME_VERT = /* glsl */ `
     vUv = vec2(position.x + 0.5, position.y + 0.5);
     vSeed = a1.y;
     vHeat = a1.z;
-    vAlpha = a1.w;
+    // Flames right in front of the camera would fill the screen with glare: they thin out.
+    vAlpha = a1.w * mix(0.35, 1.0, smoothstep(1.2, 4.5, length(toCam)));
     #include <fog_vertex>
   }
 `;
@@ -51,16 +52,18 @@ const FLAME_FRAG = /* glsl */ `
     if (flame < 0.004) discard;
     // White-yellow at the root, orange through the body, dull red at the tips.
     float temp = clamp(flame * (1.25 - uv.y * 0.85) * vHeat, 0.0, 1.0);
-    // Many tongues overlap (additive): each is kept dim enough that a field of them blooms, not whites out.
-    vec3 col = fireRamp(temp) * flame * vAlpha * 0.38;
+    // Blended over (not added): a field of overlapping tongues stays fire-coloured instead of
+    // summing to white; the hot cores are HDR (>1) so the bloom still makes them glare.
+    vec3 col = fireRamp(temp * 0.92) * 0.4;
+    float alpha = clamp(flame * vAlpha * 1.4, 0.0, 1.0);
     #ifdef USE_FOG
       #ifdef FOG_EXP2
-        col *= exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
+        alpha *= exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
       #else
-        col *= 1.0 - smoothstep(fogNear, fogFar, vFogDepth);
+        alpha *= 1.0 - smoothstep(fogNear, fogFar, vFogDepth);
       #endif
     #endif
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(col, alpha);
   }
 `;
 
@@ -96,7 +99,7 @@ const GLOW_FRAG = /* glsl */ `
     vec4 m = texture2D(tNoise, vUv * 0.9 + vec2(-uTime * 0.11, vSeed * 2.0));
     float edge = 1.0 - smoothstep(0.35, 1.0, r + (n.r - 0.5) * 0.5);
     float heat = edge * (0.45 + m.b * 0.75) * vStrength;
-    vec3 col = fireRamp(heat * 0.8) * edge * 0.35;
+    vec3 col = fireRamp(heat * 0.8) * edge * 0.26;
     #ifdef USE_FOG
       #ifdef FOG_EXP2
         col *= exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
@@ -108,7 +111,7 @@ const GLOW_FRAG = /* glsl */ `
   }
 `;
 
-function batch(capacity: number, vert: string, frag: string, quad: number[]): { mesh: THREE.Mesh; a0: Float32Array; a1: Float32Array; geo: THREE.InstancedBufferGeometry; mat: THREE.ShaderMaterial } {
+function batch(capacity: number, vert: string, frag: string, quad: number[], blending: THREE.Blending = THREE.AdditiveBlending): { mesh: THREE.Mesh; a0: Float32Array; a1: Float32Array; geo: THREE.InstancedBufferGeometry; mat: THREE.ShaderMaterial } {
   const geo = new THREE.InstancedBufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quad), 3));
   geo.setIndex([0, 1, 2, 0, 2, 3]);
@@ -127,7 +130,7 @@ function batch(capacity: number, vert: string, frag: string, quad: number[]): { 
     fog: true,
     transparent: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    blending,
     side: THREE.DoubleSide,
   });
   const mesh = new THREE.Mesh(geo, mat);
@@ -153,7 +156,7 @@ export class Flames {
   constructor(private readonly maxFlames = 700, private readonly maxGlows = 64) {
     this.cap = maxFlames;
     this.glowCap = maxGlows;
-    this.flames = batch(maxFlames, FLAME_VERT, FLAME_FRAG, [-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]);
+    this.flames = batch(maxFlames, FLAME_VERT, FLAME_FRAG, [-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], THREE.NormalBlending);
     this.glows = batch(maxGlows, GLOW_VERT, GLOW_FRAG, [-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]);
     this.flames.mesh.renderOrder = 5;
     this.glows.mesh.renderOrder = 2;

@@ -21,7 +21,7 @@ interface Flying {
 
 const ARC_POINTS = 90;
 const ARC_DT = 1 / 30;
-const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _w = new THREE.Vector3();
+const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _w = new THREE.Vector3(), _m = new THREE.Matrix4();
 
 /**
  * Grenades and Molotovs on the client: the aiming arc while the key is held (the same launch and
@@ -30,7 +30,9 @@ const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _w = new THREE.Vect
  */
 export class Throwables {
   private readonly flying = new Map<number, Flying>();
-  private readonly arc: THREE.Line;
+  /** Glowing beads along the path (an instanced mesh: lines and points are 1 px or unsupported on some GPUs). */
+  private readonly arc: THREE.InstancedMesh;
+  private readonly arcMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.2, 0.6), transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false, fog: false });
   private readonly arcPos = new Float32Array(ARC_POINTS * 3);
   private readonly marker: THREE.Mesh;
   private readonly markerMat: THREE.ShaderMaterial;
@@ -39,28 +41,8 @@ export class Throwables {
   priming: ThrowKind | null = null;
 
   constructor(private readonly scene: THREE.Scene, private readonly physics: Physics, private readonly pyro: Pyro) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(this.arcPos, 3).setUsage(THREE.DynamicDrawUsage));
-    const along = new Float32Array(ARC_POINTS);
-    for (let i = 0; i < ARC_POINTS; i++) along[i] = i;
-    g.setAttribute('along', new THREE.BufferAttribute(along, 1));
-    this.arc = new THREE.Line(g, new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uColor: { value: new THREE.Color(1.6, 1.2, 0.6) } },
-      vertexShader: /* glsl */ `attribute float along; varying float vA; void main() { vA = along; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: /* glsl */ `
-        uniform float uT; uniform vec3 uColor; varying float vA;
-        void main() {
-          // Dashes running along the arc, fading in from the hand.
-          float dash = step(0.45, fract(vA * 0.5 - uT * 2.0));
-          float a = dash * smoothstep(0.0, 4.0, vA) * 0.85;
-          if (a < 0.01) discard;
-          gl_FragColor = vec4(uColor * a, a);
-        }`,
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      blending: THREE.AdditiveBlending,
-    }));
+    this.arc = new THREE.InstancedMesh(new THREE.SphereGeometry(0.045, 8, 6), this.arcMat, ARC_POINTS);
+    this.arc.count = 0;
     this.arc.frustumCulled = false;
     this.arc.renderOrder = 20;
     this.arc.visible = false;
@@ -124,12 +106,19 @@ export class Throwables {
     for (let i = n; i < ARC_POINTS; i++) {
       out[i * 3] = f.pos.x; out[i * 3 + 1] = f.pos.y; out[i * 3 + 2] = f.pos.z;
     }
-    const geo = this.arc.geometry;
-    geo.attributes.position.needsUpdate = true;
-    geo.setDrawRange(0, n);
+    // Beads, every other step, swelling and dimming in a wave that runs out along the arc.
+    const m = _m;
+    let count = 0;
+    for (let i = 2; i < n; i += 2) {
+      const pulse = 0.75 + 0.25 * Math.sin(i * 0.45 - this.time * 9);
+      m.makeScale(pulse, pulse, pulse).setPosition(out[i * 3], out[i * 3 + 1], out[i * 3 + 2]);
+      this.arc.setMatrixAt(count++, m);
+    }
+    this.arc.count = count;
+    this.arc.instanceMatrix.needsUpdate = true;
     this.arc.visible = true;
     const color = kind === 'frag' ? [1.3, 1.25, 0.9] : [2.2, 0.9, 0.25];
-    (this.arc.material as THREE.ShaderMaterial).uniforms.uColor.value.setRGB(color[0], color[1], color[2]);
+    this.arcMat.color.setRGB(color[0], color[1], color[2]);
     this.markerMat.uniforms.uColor.value.setRGB(color[0], color[1], color[2]);
     if (landed) {
       this.marker.visible = true;
@@ -200,7 +189,6 @@ export class Throwables {
 
   update(dt: number): void {
     this.time += dt;
-    (this.arc.material as THREE.ShaderMaterial).uniforms.uT.value = this.time;
     this.markerMat.uniforms.uT.value = this.time;
     if (dt <= 0) return;
     for (const fl of this.flying.values()) {
@@ -247,7 +235,7 @@ export class Throwables {
     this.clear();
     this.arc.removeFromParent();
     this.arc.geometry.dispose();
-    (this.arc.material as THREE.Material).dispose();
+    this.arcMat.dispose();
     this.marker.removeFromParent();
     this.marker.geometry.dispose();
     this.markerMat.dispose();

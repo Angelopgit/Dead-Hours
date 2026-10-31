@@ -272,14 +272,14 @@ export class Pyro {
 
   /** A Molotov in flight: its rag burning. */
   rag(pos: THREE.Vector3, vel: THREE.Vector3): void {
-    this.flames.flame(pos.x - vel.x * 0.01, pos.y, pos.z - vel.z * 0.01, 0.14, 0.3, 0.37, 0.85, 0.9);
+    this.flames.flame(pos.x - vel.x * 0.01, pos.y, pos.z - vel.z * 0.01, 0.12, 0.26, 0.37, 0.8, 0.75);
     if (Math.random() < 0.5 * this.quality) {
       this.sparks.emit({ x: pos.x, y: pos.y + 0.05, z: pos.z, vx: rand(-0.4, 0.4), vy: rand(0.4, 1.2), vz: rand(-0.4, 0.4), life: rand(0.2, 0.5), size: 0.015, r: 5, g: 1.8, b: 0.4, alpha: 1, gravity: -0.05, drag: 1, stretch: 0.01, shape: SHAPE.spark });
     }
     if (Math.random() < 0.25 * this.quality) {
       this.smoke.emit({ x: pos.x, y: pos.y + 0.15, z: pos.z, vx: 0, vy: 0.5, vz: 0, life: rand(0.8, 1.4), size: 0.12, size1: 0.5, r: 0.12, g: 0.11, b: 0.1, alpha: 0.45, erode1: 0.8, drag: 1.5, lift: 0.4, glow: 0.5 });
     }
-    this.ask(pos.x, pos.y, pos.z, 1, 0.55, 0.2, 22, 7, 2);
+    this.ask(pos.x, pos.y, pos.z, 1, 0.55, 0.2, 6, 6, 2);
   }
 
   private randDir(minUp: number): THREE.Vector3 {
@@ -364,7 +364,7 @@ export class Pyro {
       }
       if (s > 0) {
         const fl = 0.8 + 0.14 * Math.sin(t * 11 + id) + 0.08 * Math.sin(t * 23.7 + id * 3);
-        this.ask(v.centre.x, v.centre.y + 1, v.centre.z, 1, 0.5, 0.16, 70 * s * fl, 14, 20);
+        this.ask(v.centre.x, v.centre.y + 1, v.centre.z, 1, 0.5, 0.16, 45 * s * fl, 13, 20);
       }
     }
 
@@ -374,12 +374,13 @@ export class Pyro {
       const d = Math.hypot(b.x - this.cam.x, b.z - this.cam.z);
       const s = b.strength;
       const flick = 0.8 + 0.2 * Math.sin(t * 9 + b.seed * 30);
-      f.flame(b.x, b.y - 0.2 * b.size, b.z, 0.55 * b.size, 0.9 * b.size * flick * (0.6 + 0.4 * s), b.seed, 0.85, s);
-      if (d < 35 && Math.random() < dt * 6 * s * this.quality) {
+      f.flame(b.x, b.y - 0.2 * b.size, b.z, 0.55 * b.size, 0.9 * b.size * flick * (0.6 + 0.4 * s), b.seed, 0.75, s * 0.55);
+      if (d < 35 && Math.random() < dt * 1.5 * s * this.quality) {
         this.sparks.emit({ x: b.x, y: b.y + 0.2, z: b.z, vx: rand(-0.5, 0.5), vy: rand(1, 2.5), vz: rand(-0.5, 0.5), life: rand(0.5, 1.4), size: 0.018, r: 6, g: 2, b: 0.4, alpha: 1, gravity: -0.03, drag: 1, stretch: 0.012, shape: SHAPE.spark });
       }
-      if (d < 50 && Math.random() < dt * 1.6 * s * this.quality) {
-        this.smoke.emit({ x: b.x, y: b.y + 0.6 * b.size, z: b.z, vx: rand(-0.2, 0.2), vy: rand(0.8, 1.5), vz: rand(-0.2, 0.2), life: rand(2.5, 4), size: 0.35, size1: rand(1.6, 2.6), r: 0.09, g: 0.085, b: 0.08, alpha: 0.5, glow: 0.6 * s, erode1: 0.8, drag: 0.8, lift: 0.3 });
+      // (Several points per body: a little smoke from each adds up.)
+      if (d < 50 && Math.random() < dt * 0.35 * s * this.quality) {
+        this.smoke.emit({ x: b.x, y: b.y + 0.6 * b.size, z: b.z, vx: rand(-0.2, 0.2), vy: rand(0.8, 1.5), vz: rand(-0.2, 0.2), life: rand(2.5, 4), size: 0.3, size1: rand(1.2, 2), r: 0.09, g: 0.085, b: 0.08, alpha: 0.45, glow: 0.35 * s, erode1: 0.8, drag: 0.8, lift: 0.3 });
       }
       const w = s / (1 + d * 0.15);
       bx += b.x * w; by += b.y * w; bz += b.z * w; bw += w;
