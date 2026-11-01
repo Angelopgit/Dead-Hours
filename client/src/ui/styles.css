@@ -393,6 +393,16 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .creator-tab.on { padding-left: 0.3em; border-bottom-color: var(--accent); }
   .creator-options { padding: 1em 16px 2em; background: rgba(10, 13, 18, 0.6); }
 }
+/* Phones held sideways: stacked, the options got a strip about 100 px tall under the stage. The survivor
+   stands on the left instead, with the category strip and the options beside them at full height. */
+@media (max-width: 860px) and (max-height: 500px) {
+  .creator { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); grid-template-rows: auto auto minmax(0, 1fr); }
+  .creator-head { padding: 0.7em 16px 0.6em; }
+  .creator-stage { grid-column: 1; grid-row: 2 / 4; }
+  .creator-tabs { grid-column: 2; grid-row: 2; padding: 0.35em 16px 0.35em 0.6em; }
+  .creator-options { grid-column: 2; grid-row: 3; padding: 0.8em 16px 1.6em 0.6em; }
+  .creator-turn { bottom: 0.8em; }
+}
 
 /* ── Online ───────────────────────────────────────────── */
 .menu-notice { position: absolute; left: 7vw; bottom: 9vh; font-family: var(--font-display); letter-spacing: 0.24em; font-size: 0.85em; color: var(--danger); pointer-events: none; }
