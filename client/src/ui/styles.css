@@ -606,7 +606,10 @@ body.touch-play .prompt { top: calc(50% + 36px); width: max-content; white-space
    bar and over each other). */
 body.touch-play .phase-timer { top: calc(62px + env(safe-area-inset-top)); font-size: 0.75em; letter-spacing: 0.26em; }
 body.touch-play .warning { top: calc(80px + env(safe-area-inset-top)); font-size: 0.7em; letter-spacing: 0.32em; }
-body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size: 1em; }
+body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size: 1em; line-height: 1.15; }
+/* Set tight, so a long grey line clears the tops of BOARD / USE / SWAP on a 360 px tall phone, and a little
+   narrower, so on a 667 px wide one it stays clear of the ammo panel's fire-mode row on the left. */
+body.touch-play .notice small { margin-top: 0.35em; line-height: 1.25; letter-spacing: 0.15em; }
 
 /* Phones held upright: the game is played sideways. */
 @media (orientation: portrait) and (pointer: coarse) {
