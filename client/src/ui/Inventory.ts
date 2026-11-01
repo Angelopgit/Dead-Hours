@@ -67,36 +67,38 @@ export class Inventory {
     if (key === this.last) return;
     this.last = key;
     this.title.textContent = survived;
-    const card = (slot: string, id: WeaponId, ammo: { mag: number; reserve: number } | null, active: boolean) => {
+    const k = (action: Action) => {
+      const code = settings.value.controls.bindings[action][0];
+      return code ? codeLabel(code) : '—';
+    };
+    // The key after a slot name is its own span: phones and pads have no keyboard, so they hide it.
+    const slot = (name: string, action: Action) => h('div', { class: 'slot' }, name, h('span', { class: 'inv-k' }, ` · ${k(action)}`));
+    const card = (slotEl: HTMLElement, id: WeaponId, ammo: { mag: number; reserve: number } | null, active: boolean) => {
       const w = WEAPONS[id];
       const stat = (label: string, v: number) => h('div', { class: 'stat' }, label, h('div', { class: 'bar' }, h('i', { style: `width:${Math.round(v * 100)}%` })));
       return h('div', { class: `inv-card ${active ? 'active' : ''}` },
-        h('div', { class: 'slot' }, slot),
+        slotEl,
         h('span', { class: 'wname' }, w.name.toUpperCase()),
         h('span', { class: 'wmodel' }, `${w.model} · ${w.mode}`),
         h('div', { class: 'ammo' }, ammo ? `${ammo.mag} / ${ammo.reserve}` : '—', h('small', {}, ammo ? `MAX ${w.maxReserve}` : isMelee(id) && MELEE[id].sever > 0 ? 'BLADE' : 'BLUNT')),
         stat('Damage', w.stats.damage), stat('Fire rate', w.stats.fireRate), stat('Handling', w.stats.handling), stat('Range', w.stats.range),
       );
     };
-    const k = (action: Action) => {
-      const code = settings.value.controls.bindings[action][0];
-      return code ? codeLabel(code) : '—';
-    };
     this.cards.replaceChildren(
-      card(`PRIMARY · ${k('weapon1')}`, a.primary.id, a.primary, a.active === 'primary'),
-      card(`SECONDARY · ${k('weapon2')}`, a.secondary.id, a.secondary, a.active === 'secondary'),
+      card(slot('PRIMARY', 'weapon1'), a.primary.id, a.primary, a.active === 'primary'),
+      card(slot('SECONDARY', 'weapon2'), a.secondary.id, a.secondary, a.active === 'secondary'),
       limb
         ? h('div', { class: 'inv-card active' },
-          h('div', { class: 'slot' }, `MELEE · ${k('melee')}`),
+          slot('MELEE', 'melee'),
           h('span', { class: 'wname' }, LIMB_NAME[limb.cut]),
           h('span', { class: 'wmodel' }, `TORN OFF A ${limb.kind.toUpperCase()} · CLUB`),
           h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
           h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
         )
-        : card(`MELEE · ${k('melee')}`, a.meleeId, null, false),
+        : card(slot('MELEE', 'melee'), a.meleeId, null, false),
     );
     this.supplies.replaceChildren(
-      h('div', { class: 'slot' }, `MEDICAL · ${k('heal')}`),
+      slot('MEDICAL', 'heal'),
       h('span', { class: 'wname' }, 'BANDAGES'),
       h('div', { class: 'ammo' }, `${p.bandages} / ${COMBAT.maxBandages}`, h('small', {}, `+${COMBAT.bandageHeal} HP EACH`)),
       h('span', { class: 'wmodel' }, `HEALTH ${Math.ceil(p.health)}`),

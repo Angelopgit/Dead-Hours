@@ -318,6 +318,23 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .inv-keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em 1em; margin-top: 1.2em; font-family: var(--font-body); font-size: 0.72em; color: var(--fg-dim); }
 .inv-keys span { display: inline-block; min-width: 3.6em; margin-right: 0.6em; padding: 0.1em 0.4em; border: 1px solid rgba(255,255,255,0.2); border-radius: 3px;
   text-align: center; color: var(--fg); font-size: 0.9em; }
+/* Phones and pads have no keyboard: no key list, no key after each slot name. */
+body.touch-play .inv-keys, body.touch-play .inv-k, body.pad-nav .inv-keys, body.pad-nav .inv-k { display: none; }
+/* A phone on its side: the inventory ran 95-165 px off the window (770 px at 667 wide, where it fell to one
+   column). Set compact under the top buttons, darker so the HUD (moved to the top on phones) stays behind. */
+@media (max-height: 500px) {
+  body.touch-play .inventory { padding: calc(60px + env(safe-area-inset-top)) 0 8px; background: rgba(5,7,10,0.86); }
+  body.touch-play .inv-box { font-size: 0.85em; }
+  body.touch-play .inv-box h2 { margin-bottom: 0.5em; }
+  body.touch-play .inv-grid { grid-template-columns: repeat(3, 1fr); gap: 0.5em; }
+  body.touch-play .inv-row { grid-template-columns: 1fr 2fr; gap: 0.5em; margin-top: 0.5em; }
+  body.touch-play .inv-card { padding: 0.55em 0.8em; }
+  body.touch-play .inv-card .ammo { margin-top: 0.2em; font-size: 1.3em; }
+  body.touch-play .inv-card .stat { margin-top: 0.1em; }
+  body.touch-play .inv-stats { grid-template-columns: repeat(5, 1fr); gap: 0.4em 0.8em; }
+  body.touch-play .inv-stats div { letter-spacing: 0.14em; white-space: nowrap; }
+  body.touch-play .inv-stats b { font-size: 1.5em; }
+}
 
 /* Results */
 /* Scrolls when the window is too short; auto margins centre it otherwise (flex centring would cut the top off). */
