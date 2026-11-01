@@ -6,6 +6,7 @@
  * (or just pressed aim), never through a wall, never onto one outside its cone, and never
  * when switched off.
  */
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import type { Simulation } from '@dead-hours/shared';
 import type { Physics } from '../src/core/Physics';
@@ -99,6 +100,21 @@ check(none === null, 'nothing near: full speed');
   check(hold(0.12) === 'flashlight', 'controller: a tap of D-pad up switches the flashlight');
   check(hold(0.8) === 'shoulder', 'controller: holding D-pad up switches shoulders (and leaves the light alone)');
   check(hold(0.3) === 'flashlight', 'controller: a slow tap still switches the flashlight');
+}
+
+// Online on a phone the chat and the speaking list sit over the move stick's zone. `#ui-root > *` hands
+// every overlay pointer events, so the column has to give them back, or touches on a chat line (a third
+// of the zone once a few lines came in) never reach the stick. Only the open chat box takes them.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  const pointer = (sel: string) => {
+    const esc = sel.replace(/[.*+?^${}()|[\]\\>]/g, '\\$&');
+    const rule = css.match(new RegExp(`(?:^|[\\n}])\\s*${esc}\\s*\\{([^}]*)\\}`));
+    return rule?.[1].match(/pointer-events:\s*([a-z]+)/)?.[1] ?? null;
+  };
+  check(pointer('#ui-root > .comms-hud') === 'none', 'touch: the in-game chat column lets touches through to the move stick');
+  check(pointer('.chat-game') === 'none', 'touch: closed chat lines let touches through');
+  check(pointer('.chat-game.open') === 'auto', 'the open chat box still takes clicks');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');

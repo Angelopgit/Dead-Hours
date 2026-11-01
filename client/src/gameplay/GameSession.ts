@@ -229,6 +229,8 @@ export class GameSession {
   /** Online: the room's chat over the game, and who is talking. */
   private chatBox: ChatBox | null = null;
   private voxList: HTMLElement | null = null;
+  /** The speaking list over the chat lines, in one column (they printed over each other). */
+  private commsHud: HTMLElement | null = null;
   private voxKey = '';
 
   constructor(
@@ -332,7 +334,8 @@ export class GameSession {
     if (online) {
       this.chatBox = new ChatBox(online.link, 'game', () => this.input.clear());
       this.voxList = h('div', { class: 'vox-list' });
-      ui.append(this.chatBox.el, this.voxList);
+      this.commsHud = h('div', { class: 'comms-hud' }, this.voxList, this.chatBox.el);
+      ui.append(this.commsHud);
       online.link.voice.setInGame(true);
     }
     this.touch = new TouchControls(input, !!online);
@@ -2460,7 +2463,7 @@ export class GameSession {
     audio.setAcoustics(null);
     this.link?.voice.setInGame(false);
     this.chatBox?.dispose();
-    this.voxList?.remove();
+    this.commsHud?.remove();
     this.unsubSettings();
     this.intro?.kill();
     this.tableTween?.kill();

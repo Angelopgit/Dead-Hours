@@ -538,15 +538,22 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
 .chat-row { display: flex; gap: 0.5em; }
 .chat-input { flex: 1; min-width: 0; font: inherit; font-size: 0.9em; padding: 0.5em 0.7em; color: var(--fg); background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 3px; outline: none; user-select: text; }
 .chat-input:focus { border-color: var(--accent); }
-.chat-game { position: absolute; left: 3vw; bottom: calc(4vh + 7.5em); width: min(30em, 40vw); z-index: 30; pointer-events: none; }
+/* Online in play: who is talking, then the chat lines, in one column over the bottom-left corner (the names
+   printed over the chat's top lines). It never takes a click or a touch, only the open chat box does: on a
+   phone the move stick sits under it, and a third of the stick's zone went dead once a few lines came in. */
+.comms-hud { position: absolute; left: 3vw; bottom: calc(4vh + 7.5em); width: min(30em, 40vw); z-index: 30; display: flex; flex-direction: column; gap: 0.6em; }
+#ui-root > .comms-hud { pointer-events: none; }
+.chat-game { pointer-events: none; }
 .chat-game .chat-log { max-height: 10em; overflow: hidden; background: transparent; border-color: transparent; transition: background 0.2s; }
+/* The oldest line still on screen fades out at the top instead of being cut in half. */
+.chat-game:not(.open) .chat-log { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 1.4em); mask-image: linear-gradient(to bottom, transparent, #000 1.4em); }
 .chat-game .chat-line { text-shadow: 0 1px 3px #000, 0 0 2px #000; transition: opacity 0.8s; }
 .chat-game .chat-line.old { opacity: 0; }
 .chat-game .chat-input { display: none; width: 100%; margin-top: 0.4em; background: rgba(0,0,0,0.55); }
 .chat-game.open { pointer-events: auto; }
 .chat-game.open .chat-log { overflow-y: auto; background: rgba(0,0,0,0.45); border-color: var(--line); }
 .chat-game.open .chat-input { display: block; }
-.vox-list { position: absolute; left: 3vw; bottom: calc(4vh + 19.5em); display: flex; flex-direction: column; gap: 0.3em; z-index: 30; pointer-events: none;
+.vox-list { display: flex; flex-direction: column; gap: 0.3em; pointer-events: none;
   font-family: var(--font-display); font-size: 0.78em; letter-spacing: 0.2em; color: var(--fg); text-shadow: 0 1px 3px #000; }
 .vox { display: flex; align-items: center; gap: 0.6em; }
 .vox i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
@@ -611,6 +618,12 @@ body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top
 body.touch-play .weapon-panel { bottom: auto; top: calc(52px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); right: auto; text-align: left; font-size: 0.75em; }
 body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
 body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right)); }
+/* Talking and chat take the bottom-left corner (the ammo panel is up top; they printed over it): three
+   lines and the names in a row, so on a 360 px tall phone they stay under the longest prompt, which slides
+   left of the buttons there. */
+body.touch-play .comms-hud { left: calc(16px + env(safe-area-inset-left)); bottom: calc(12px + env(safe-area-inset-bottom)); width: min(24em, 40vw); }
+body.touch-play .chat-game .chat-log { max-height: 5em; }
+body.touch-play .vox-list { flex-direction: row; flex-wrap: wrap; gap: 0.3em 1.4em; }
 /* The interaction prompt sits under the crosshair (the rows above it are the timer, warnings and notices),
    centred while it clears the BOARD / USE / MELEE buttons (their left edge is 304 px x button size in from the
    right), slid left of them when it would not, and wrapped to fit (it ran under BOARD and USE on most phones). */
