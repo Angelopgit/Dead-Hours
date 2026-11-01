@@ -824,6 +824,9 @@ export class GameSession {
     this.input.uiNav = this.phase !== 'playing';
     const touchMode = settings.value.controls.touch;
     this.touch.setVisible(this.phase === 'playing' && touchMode !== 'off' && (touchMode === 'on' || this.input.device === 'touch'));
+    // "CLICK TO CONTINUE" asks for a click back into play: it goes once the survivor is dead (it sat over the
+    // YOU DIED stats), paused or at a bench, and the way back into play puts it up again if it is still needed.
+    if (this.phase !== 'playing' && this.clickToPlay.isConnected) this.clickToPlay.remove();
     if (this.phase === 'playing') this.gatherInput(dt);
 
     // Fixed-step simulation, rendered with interpolation.
