@@ -221,8 +221,27 @@ export class MainMenu {
     this.panelDispose = dispose ?? null;
     this.panel = el;
     this.el.append(el);
+    // Dimmed menu words beside a panel read fine; words the panel slices through (phones, narrow windows) don't.
+    const covered = this.coveredBy(el);
     gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out' });
-    gsap.to(this.main, { opacity: 0.35, duration: 0.4 });
+    gsap.to(this.main, { opacity: covered ? 0 : 0.35, duration: 0.4 });
+    this.main.style.pointerEvents = covered ? 'none' : '';
+  }
+
+  /** Does the panel overlap any visible menu text (title, subtitle, items)? */
+  private coveredBy(panel: HTMLElement): boolean {
+    const p = panel.getBoundingClientRect();
+    const m = this.main.getBoundingClientRect();
+    const range = document.createRange();
+    for (const e of this.main.querySelectorAll('.title, .subtitle, .menu-item')) {
+      if (!this.playOpen && e.closest('.menu-sub')) continue;
+      range.selectNodeContents(e);
+      for (const r of range.getClientRects()) {
+        if (!r.width || r.bottom < m.top || r.top > m.bottom) continue;
+        if (r.right > p.left && r.left < p.right && r.bottom > p.top && r.top < p.bottom) return true;
+      }
+    }
+    return false;
   }
 
   private closePanel(): void {
@@ -233,6 +252,7 @@ export class MainMenu {
     this.panelDispose = null;
     gsap.to(p, { opacity: 0, x: 16, duration: 0.25, ease: 'power2.in', onComplete: () => p.remove() });
     gsap.to(this.main, { opacity: 1, duration: 0.4 });
+    this.main.style.pointerEvents = '';
   }
 
   show(parent: HTMLElement): void {
