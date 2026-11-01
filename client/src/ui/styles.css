@@ -716,3 +716,6 @@ body.touch-play .notice small { margin-top: 0.35em; line-height: 1.25; letter-sp
 }
 .gs-layer { position: absolute; inset: 0; z-index: 4; }
 .gs-layer .gs-drag { pointer-events: auto; }
+/* In the field and at the bench the gun sits behind the panel's left part (all of it on a phone): a label whose
+   fitting is behind the panel stays behind it too, instead of printing over the cards (MUZZLE over "Red dot"). */
+.gs-layer > .gunsmith-panel { z-index: 4; }
