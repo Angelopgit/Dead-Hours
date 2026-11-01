@@ -1,5 +1,5 @@
 import gsap from 'gsap';
-import { h } from './dom';
+import { h, panelCoversMenu } from './dom';
 import { SettingsPanel } from './SettingsPanel';
 import { audio } from '../audio/AudioEngine';
 import type { Input } from '../core/Input';
@@ -52,15 +52,27 @@ export class PauseMenu {
       list,
       h('p', { class: 'lobby-hint' }, 'Blocking keeps a player\'s chat and voice away from you, and yours from them, in every game. Unblock in Settings → Voice.'),
     );
-    this.el.append(this.panel);
-    gsap.fromTo(this.panel, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, ease: 'power3.out' });
+    this.showPanel();
   }
 
   private openSettings(): void {
     this.closeSettings();
-    this.panel = new SettingsPanel(this.input, () => { this.panel?.remove(); this.panel = null; }).el;
-    this.el.append(this.panel);
-    gsap.fromTo(this.panel, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, ease: 'power3.out' });
+    this.panel = new SettingsPanel(this.input, () => this.closeSettings()).el;
+    this.showPanel();
+  }
+
+  /** On a phone the panel lands on top of PAUSED and the items: the menu goes while it is open, instead of being sliced. */
+  private showPanel(): void {
+    const panel = this.panel;
+    if (!panel) return;
+    this.el.append(panel);
+    const covered = panelCoversMenu(panel, this.main);
+    gsap.fromTo(panel, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, ease: 'power3.out' });
+    if (covered) {
+      gsap.killTweensOf(this.main); // the fade back from a panel just closed
+      gsap.to(this.main, { opacity: 0, duration: 0.3 });
+      this.main.style.pointerEvents = 'none';
+    }
   }
 
   get settingsOpen(): boolean {
@@ -72,6 +84,9 @@ export class PauseMenu {
     this.refresh = null;
     this.panel?.remove();
     this.panel = null;
+    gsap.killTweensOf(this.main);
+    gsap.to(this.main, { opacity: 1, duration: 0.3 });
+    this.main.style.pointerEvents = '';
   }
 
   show(parent: HTMLElement): void {
