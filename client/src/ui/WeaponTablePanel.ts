@@ -1,6 +1,16 @@
 import { h } from './dom';
 import { WEAPONS, PRIMARY_WEAPONS, type WeaponId } from '@dead-hours/shared';
 import { audio } from '../audio/AudioEngine';
+import { actionLabel, inputDevice } from '../core/Input';
+
+/** How to pick a gun and step away, in the words of the device in hand (a phone or a pad has no [E] or [Esc]). */
+function tableHint(): string {
+  const d = inputDevice();
+  if (d === 'touch') return 'Tap a card to equip it. CLOSE to step away.';
+  if (d === 'pad') return 'A on a card equips it. B to step away.';
+  const use = actionLabel('interact');
+  return `Click a weapon on the bench or a card to equip it. ${use ? `[${use}] or ` : ''}[Esc] to step away.`;
+}
 
 /**
  * Side panel of the in-world weapon table: the four primaries with their stats. Hovering a
@@ -40,7 +50,7 @@ export class WeaponTablePanel {
       cb.onGunsmith ? h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: () => cb.onGunsmith?.(), onmouseenter: () => audio.ui('hover') }, 'GUNSMITH · ATTACHMENTS & FINISHES ▸'),
       ) : null,
-      h('p', { class: 'table-hint' }, 'Click a weapon on the bench or a card to equip it. [E] or [Esc] to step away.'),
+      h('p', { class: 'table-hint' }, tableHint()),
     );
     this.setCarried(carried);
   }

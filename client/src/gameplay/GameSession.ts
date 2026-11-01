@@ -679,15 +679,25 @@ export class GameSession {
       h('div', { class: 'panel gunsmith-panel', role: 'dialog', 'aria-label': 'Gunsmith' },
         h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closeGunsmith(); } }, bench ? '◂ WEAPONS' : 'CLOSE ✕'),
         panel.el,
-        h('p', { class: 'gs-hint' }, bench
-          ? 'Drag the gun to turn it. Click a label on it or pick below. [Esc] back to the weapon table.'
-          : `The night goes on: you stand still, and a hit closes this. Drag the gun to turn it. ${actionLabel('gunsmith') ? `[${actionLabel('gunsmith')}] or ` : ''}[Esc] to put it away.`),
+        h('p', { class: 'gs-hint' }, this.gunsmithHint(bench)),
       ),
     );
     this.smith = { stage, panel, el, bench };
     this.ui.append(el);
     gsap.fromTo(el.querySelector('.gunsmith-panel'), { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.35, ease: 'power3.out' });
     audio.ui('click');
+  }
+
+  /** How to turn the gun and leave, in the words of the device in hand (a phone or a pad has no [Esc]). */
+  private gunsmithHint(bench: boolean): string {
+    const d = this.input.device;
+    const field = 'The night goes on: you stand still, and a hit closes this.';
+    if (d === 'pad') return bench ? 'A on an option fits it. B back to the weapon table.' : `${field} B to put it away.`;
+    if (d === 'touch') return bench ? 'Drag the gun to turn it. Tap a label on it or pick below. ◂ WEAPONS goes back to the weapon table.' : `${field} Drag the gun to turn it. CLOSE puts it away.`;
+    const key = actionLabel('gunsmith');
+    return bench
+      ? 'Drag the gun to turn it. Click a label on it or pick below. [Esc] back to the weapon table.'
+      : `${field} Drag the gun to turn it. ${key ? `[${key}] or ` : ''}[Esc] to put it away.`;
   }
 
   /** Puts the gun away (`keepTable`: the weapon table is closing too, don't bring its panel back). */
