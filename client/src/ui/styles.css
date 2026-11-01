@@ -647,7 +647,8 @@ body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size
 .gs-option.on { border-color: var(--accent); background: var(--accent-dim); }
 .gs-option.locked { opacity: 0.55; cursor: not-allowed; }
 .gs-option .gs-name { grid-column: 2; font-family: var(--font-display); letter-spacing: 0.1em; font-size: 0.92em; color: var(--fg); }
-.gs-option .gs-name em { font-style: normal; font-size: 0.72em; letter-spacing: 0.16em; margin-left: 0.7em; color: var(--accent); }
+/* "FITTED" and "🔒 LEVEL 14" stay in one piece: beside the name, or whole on the next line (LEVEL / 14 split). */
+.gs-option .gs-name em { font-style: normal; font-size: 0.72em; letter-spacing: 0.16em; margin-left: 0.7em; color: var(--accent); display: inline-block; white-space: nowrap; }
 .gs-option .gs-name em.lock { color: var(--fg-faint); }
 .gs-option .gs-desc { grid-column: 2; font-size: 0.74em; color: var(--fg-dim); margin-top: 0.25em; line-height: 1.4; }
 .gs-option .gs-swatch { grid-row: 1 / span 2; width: 1.8em; height: 1.8em; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
