@@ -140,7 +140,8 @@ export class CharacterCreator {
       this.preview.canvas,
       h('div', { class: 'creator-turn' },
         h('button', { class: 'creator-btn round', 'aria-label': 'Turn left', onclick: () => this.preview.turn(-Math.PI / 4) }, '⟲'),
-        h('span', {}, 'DRAG TO TURN · SCROLL TO ZOOM'),
+        // Touch has no zoom and a controller can only use the two buttons, so they see less of the hint.
+        h('span', { class: 'creator-hint' }, 'DRAG TO TURN', h('span', { class: 'creator-zoom' }, ' · SCROLL TO ZOOM')),
         h('button', { class: 'creator-btn round', 'aria-label': 'Turn right', onclick: () => this.preview.turn(Math.PI / 4) }, '⟳'),
       ),
     );
