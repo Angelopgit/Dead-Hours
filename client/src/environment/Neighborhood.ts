@@ -12,7 +12,7 @@ import { Clutter } from './Clutter';
 import { Lighting } from '../lighting/Lighting';
 import { LightField } from '../lighting/LightField';
 import { LightBaker, type BakeProgress } from '../lighting/LightBaker';
-import { bakeUniforms, patchBaked, patchPuddle, PUDDLE_LAMPS, type ReflectedLamp } from '../lighting/BakeShader';
+import { bakeUniforms, patchBaked } from '../lighting/BakeShader';
 import { settings, type Quality } from '../core/Settings';
 import { patchWet, setWetLamps, setWetLampBudget, setWetTier, updateWetLamps, weatherUniforms } from '../lighting/WetShader';
 import { FogLights } from '../lighting/FogLights';
@@ -24,9 +24,22 @@ import { updateWeather, weather } from './Weather';
 import { updateWind } from './Wind';
 import { Grass } from './Grass';
 import { groundNoise, woodsAt } from './Lawn';
+import { Puddles, PUDDLE_Y } from './Puddles';
+import { PlanarMirror } from '../rendering/PlanarMirror';
 
 const FOG_DENSITY: Record<Quality, number> = { low: 0.017, medium: 0.02, high: 0.022 };
+
+/**
+ * Puddle reflections per quality: the share of the screen's resolution the mirror draws at, the
+ * most pixels it may use, and how far away a puddle still gets one (past it, the sky gradient).
+ */
+const MIRROR: Record<'low' | 'high', { scale: number; maxPixels: number; far: number }> = {
+  low: { scale: 0.33, maxPixels: 400 * 225, far: 40 },
+  high: { scale: 0.5, maxPixels: 800 * 450, far: 60 },
+};
 export const FOG_COLOR = 0x252e3c;
+/** Indoor surfaces the puddles' mirror leaves out (see the constructor). */
+const NOT_MIRRORED = new Set(['interiorWall', 'interiorWallBlue', 'carpet', 'woodFloor', 'tile']);
 
 /** Builds and owns everything visual about the map: static batches, props, sky, fog, lights. */
 export class Neighborhood {
@@ -41,6 +54,10 @@ export class Neighborhood {
   readonly grass: Grass;
   /** Every tree and shrub (instanced, levels of detail, wind). */
   readonly trees: Trees;
+  /** The ground-level mirror puddles reflect (drawn only while one is near and in view). */
+  readonly mirror = new PlanarMirror(PUDDLE_Y);
+  readonly puddles: Puddles;
+  private readonly mirrorRect = new THREE.Vector4();
   /** Lights for the volumetric fog (set up with the bake). */
   fogLights: FogLights | null = null;
   readonly lighting: Lighting;
@@ -92,6 +109,22 @@ export class Neighborhood {
     this.root.add(this.atmosphere.group);
     this.root.add(this.rain.mesh);
     if (this.snow) this.root.add(this.snow.mesh);
+    this.puddles = new Puddles(map, this.mirror);
+    if (this.puddles.mesh) this.root.add(this.puddles.mesh);
+    // Left out of the reflection: the water itself, streaks and motes around the camera, flat
+    // ground-level batches (roads, lawns, paint), which lie under the water anyway, and the grass
+    // (the lawns stop short of every puddle, and its many blades would cost more than they show).
+    const hidden = this.mirror.hidden;
+    hidden.push(this.rain.mesh, this.atmosphere.group, this.grass.root);
+    if (this.snow) hidden.push(this.snow.mesh);
+    if (this.puddles.mesh) hidden.push(this.puddles.mesh);
+    // Rooms (glimpsed through windows at best) and litter are left out too: each batch spans the
+    // whole map, so whatever the mirror draws, it draws all of.
+    for (const m of this.staticMeshes) {
+      m.geometry.computeBoundingBox();
+      const name = (m.material as THREE.Material).name;
+      if (m.geometry.boundingBox!.max.y < PUDDLE_Y + 0.02 || NOT_MIRRORED.has(name) || name.startsWith('clutter-')) hidden.push(m);
+    }
     weatherUniforms.uCover.value = buildCoverMap(map);
   }
 
@@ -107,41 +140,13 @@ export class Neighborhood {
     await this.trees.light(field, () => new Promise((r) => setTimeout(r, 0)));
     this.fogLights = new FogLights(this.map, field.tracer);
     setWetLamps(this.fogLights.outdoor);
-    const lamps = this.puddleLamps(field);
-    for (const m of this.staticMeshes) {
-      const mat = m.material as THREE.Material;
-      if (mat.name === 'puddle') patchPuddle(mat, lamps);
-    }
+    // Realtime map lights (flickering lamps, police strobes) glow in the puddles too.
+    const live: THREE.Light[] = [];
+    this.root.updateMatrixWorld(true);
+    this.root.traverse((o) => { if ((o as THREE.Light).isLight) live.push(o as THREE.Light); });
+    this.puddles.setLamps(this.map, field.tracer, live);
     this.field = field;
     return field;
-  }
-
-  /** The static lamps puddles can see (unoccluded, in range), nearest first. */
-  private puddleLamps(field: LightField): ReflectedLamp[] {
-    const puddles = this.map.props.filter((p) => p.kind === 'puddle');
-    const found: { lamp: ReflectedLamp; dist: number }[] = [];
-    for (const l of this.map.lights) {
-      if (l.flicker) continue;
-      let best = Infinity;
-      for (const p of puddles) {
-        const dx = l.x - p.x, dy = l.y - 0.1, dz = l.z - p.z;
-        const d = Math.hypot(dx, dy, dz);
-        if (d >= l.range || d >= best) continue;
-        if (field.tracer.occluded(p.x, 0.1, p.z, dx / d, dy / d, dz / d, d - 0.6)) continue;
-        best = d;
-      }
-      if (best === Infinity) continue;
-      const dir = new THREE.Vector3(0, -1, 0);
-      let cone = new THREE.Vector2(-2, -2);
-      if (l.kind === 'spot') {
-        dir.set((l.tx ?? l.x) - l.x, (l.ty ?? 0) - l.y, (l.tz ?? l.z) - l.z).normalize();
-        const angle = l.angle ?? Math.PI / 3;
-        cone = new THREE.Vector2(Math.cos(angle), Math.cos(angle * (1 - (l.penumbra ?? 0))));
-      }
-      const color = new THREE.Color(l.color).multiplyScalar(l.intensity);
-      found.push({ lamp: { pos: new THREE.Vector3(l.x, l.y, l.z), color, decay: l.decay ?? 2, range: l.range, dir, cone }, dist: best });
-    }
-    return found.sort((a, b) => a.dist - b.dist).slice(0, PUDDLE_LAMPS).map((f) => f.lamp);
   }
 
   /** A small night-sky environment for reflective materials (glass, car paint, puddles). */
@@ -160,7 +165,7 @@ export class Neighborhood {
     }
     skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     env.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
-    // Only the moon: lamps reflect where they really are (see patchPuddle), so the sky holds no
+    // Only the moon: lamps reflect where they really are (see Puddles), so the sky holds no
     // stand-in lamp glints that would light up every puddle and windshield from nowhere.
     const glint = (x: number, y: number, z: number, r: number, color: number, k: number) => {
       const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k) }));
@@ -347,11 +352,27 @@ export class Neighborhood {
     setWetTier(!g.rain ? 'off' : g.fogQuality === 'low' ? 'cheap' : 'full');
     setLightConesVisible(g.fogQuality === 'low');
     this.grass.setQuality(g.grass);
+    const r = g.reflections === 'off' ? null : MIRROR[g.reflections];
+    this.mirror.scale = r?.scale ?? 0;
+    this.mirror.maxPixels = r?.maxPixels ?? 0;
+    this.puddles.setMirror(r !== null, r?.far ?? 0);
+    if (!r) this.mirror.release();
     this.lib.setAnisotropy(g.textureQuality === 'low' ? 1 : g.textureQuality === 'medium' ? 4 : 8);
     this.trees.setTier(treeTier(g), false, renderer);
     this.trees.prepare(renderer);
     this.trees.setShadows(shadowSize > 0);
     void this.lib.loadPbr(renderer, g.textureQuality);
+  }
+
+  /**
+   * Draws the puddles' reflection for this frame's camera (just before the scene), cropped to the
+   * part of the screen the puddles in view cover; nothing when none is.
+   */
+  renderMirror(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, screen: THREE.Vector2): void {
+    const rect = this.mirror.scale > 0
+      ? this.puddles.screenRect(camera, this.puddles.uniforms.uMirrorFar.value, this.mirrorRect, this.field?.tracer ?? null)
+      : null;
+    this.mirror.render(renderer, this.scene, camera, rect, screen);
   }
 
   update(dt: number, t: number, camera: THREE.Camera, focus: THREE.Vector3): void {
@@ -374,6 +395,7 @@ export class Neighborhood {
     this.grass.update(camera as THREE.PerspectiveCamera, 1 + weather.rain * 0.35);
     this.trees.update(camera);
     for (const d of this.dynamic) d.update(dt, t);
+    this.puddles.update();
   }
 
   dispose(): void {
@@ -387,6 +409,8 @@ export class Neighborhood {
     this.rain.dispose();
     this.snow?.dispose();
     this.grass.dispose();
+    this.puddles.dispose();
+    this.mirror.dispose();
     this.atmosphere.dispose();
     this.lib.dispose();
     this.envMap?.dispose();

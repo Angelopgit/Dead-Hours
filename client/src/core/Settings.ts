@@ -15,6 +15,8 @@ export type TouchMode = 'auto' | 'on' | 'off';
 export type GraphicsPreset = 'phone' | 'low' | 'medium' | 'high';
 /** Wind-swayed grass on the lawns: how dense and how far it reaches. */
 export type GrassQuality = 'off' | 'low' | 'medium' | 'high';
+/** Puddles mirror the street (Low: a coarser, shorter-range image), or reflect only the sky and lamps. */
+export type ReflectionQuality = 'off' | 'low' | 'high';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
@@ -51,6 +53,7 @@ export interface SettingsData {
     /** Low fog is flat; medium and high add volumetric light shafts. */
     fogQuality: Quality;
     grass: GrassQuality;
+    reflections: ReflectionQuality;
     particleQuality: Quality;
     gore: GoreLevel;
     renderDistance: number;
@@ -149,6 +152,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     rain: true,
     fogQuality: 'high',
     grass: 'high',
+    reflections: 'high',
     particleQuality: 'high',
     gore: 'full',
     renderDistance: 220,
@@ -172,22 +176,22 @@ export const DEFAULT_SETTINGS: SettingsData = {
 export const GRAPHICS_PRESETS: Record<GraphicsPreset, Partial<SettingsData['graphics']>> = {
   phone: {
     resolutionScale: 0.7, adaptiveResolution: true, shadows: 'off', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: false, fogQuality: 'low', grass: 'low',
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: false, fogQuality: 'low', grass: 'low', reflections: 'off',
     particleQuality: 'low', renderDistance: 120, fpsLimit: 30,
   },
   low: {
     resolutionScale: 0.8, adaptiveResolution: true, shadows: 'low', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', grass: 'low',
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', grass: 'low', reflections: 'off',
     particleQuality: 'low', renderDistance: 150, fpsLimit: 0,
   },
   medium: {
     resolutionScale: 1, adaptiveResolution: true, shadows: 'medium', textureQuality: 'high', antialias: false,
-    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: false, rain: true, fogQuality: 'medium', grass: 'medium',
+    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: false, rain: true, fogQuality: 'medium', grass: 'medium', reflections: 'low',
     particleQuality: 'medium', renderDistance: 200, fpsLimit: 0,
   },
   high: {
     resolutionScale: 1, adaptiveResolution: true, shadows: 'high', textureQuality: 'high', antialias: true,
-    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: true, rain: true, fogQuality: 'high', grass: 'high',
+    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: true, rain: true, fogQuality: 'high', grass: 'high', reflections: 'high',
     particleQuality: 'high', renderDistance: 260, fpsLimit: 0,
   },
 };
@@ -233,6 +237,11 @@ export class Settings {
         if (saved?.graphics && !('grass' in saved.graphics)) {
           const p = this.data.graphics.particleQuality;
           this.data.graphics.grass = isPhone() || p === 'low' ? 'low' : p;
+        }
+        // Saved before reflections had a setting: follow the fog quality the player picked
+        // (it tracks the preset), so a Low or Phone setup doesn't start drawing a mirror.
+        if (saved?.graphics && !('reflections' in saved.graphics)) {
+          this.data.graphics.reflections = ({ low: 'off', medium: 'low', high: 'high' } as const)[this.data.graphics.fogQuality];
         }
       }
       // First visit on a phone: start from the phone preset (it can be changed in Settings).

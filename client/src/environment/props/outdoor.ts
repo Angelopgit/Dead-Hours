@@ -10,9 +10,9 @@ function lines(text: string | undefined, fallback: string): string[] {
   return (text ?? fallback).split('|');
 }
 
-/** Reflective water for puddles; picks up the environment map assigned later. */
+/** Still water in a kiddie pool; picks up the environment map assigned later. */
 function water(k: Kit): THREE.MeshStandardMaterial {
-  const m = k.lib.custom('puddle', () => new THREE.MeshStandardMaterial({
+  const m = k.lib.custom('pool-water', () => new THREE.MeshStandardMaterial({
     color: 0x111418, roughness: 0.05, metalness: 0.2, envMapIntensity: 1, polygonOffset: true, polygonOffsetFactor: -3,
   }));
   m.userData.envMap = true;
@@ -37,20 +37,8 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
     k.add(oct, k.mat(0x8c1c18, 0.6), 0, 2.3, 0.02);
     k.box(0.5, 0.18, 0.005, k.text(['STOP'], { w: 256, h: 96, bg: '#8c1c18', fg: '#f2ece4', border: null }), 0, 2.3, 0.036, { cast: false });
   },
-  puddle(k) {
-    const r = k.p.length ?? 1.8;
-    const g = new THREE.CircleGeometry(r, 40);
-    const pos = g.getAttribute('position') as THREE.BufferAttribute;
-    const v = k.p.variant ?? 0;
-    for (let i = 1; i < pos.count; i++) {
-      // A soft, lopsided outline (low harmonics only, so no spikes).
-      const a = Math.atan2(pos.getY(i), pos.getX(i));
-      const f = 0.8 + 0.12 * Math.sin(a * 2 + v) + 0.07 * Math.sin(a * 3 - v * 1.7);
-      pos.setXY(i, pos.getX(i) * f, pos.getY(i) * f * 0.7);
-    }
-    g.rotateX(-Math.PI / 2);
-    k.add(g, water(k), 0, 0.026, 0, { cast: false });
-  },
+  // Puddles are one blended draw of their own, outside the static batch (see Puddles).
+  puddle() {},
   leafPile(k) {
     const colors = [0x4a3418, 0x5a3a14, 0x3a2c18, 0x6a4a1c];
     for (let i = 0; i < 9; i++) {

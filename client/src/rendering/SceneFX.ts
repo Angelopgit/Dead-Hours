@@ -395,6 +395,9 @@ export class ScenePass extends Pass {
   readonly wind = new THREE.Vector3(1.2, 0, 0.5);
   /** Motion blur strength (1 = a 1/60 s shutter at the current frame rate). */
   blurAmount = 1;
+  /** Runs just before the scene is drawn, with its camera and size (the puddles' mirror). */
+  beforeScene: ((renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, screen: THREE.Vector2) => void) | null = null;
+  private readonly screen = new THREE.Vector2();
   private dt = 1 / 60;
 
   constructor(private readonly scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
@@ -475,6 +478,7 @@ export class ScenePass extends Pass {
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget): void {
     const cam = this.camera;
+    if (this.beforeScene) this.beforeScene(renderer, cam, this.screen.set(this.width, this.height));
     if (!this.sceneRT) {
       renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
       renderer.clear();

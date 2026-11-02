@@ -158,10 +158,10 @@ export class LampGlare {
     mesh.frustumCulled = false;
     mesh.renderOrder = 3;
     mesh.castShadow = mesh.receiveShadow = false;
-    const size = new THREE.Vector2();
+    const viewport = new THREE.Vector4();
     mesh.onBeforeRender = (renderer, _scene, camera) => {
-      const target = renderer.getRenderTarget();
-      const h = target ? target.height : renderer.getDrawingBufferSize(size).y;
+      // The viewport, not the whole target: the puddles' mirror draws into part of its own.
+      const h = renderer.getCurrentViewport(viewport).w;
       // projectionMatrix[5] = zoom / tan(fov / 2): this follows aim-down-sights zoom too.
       const p5 = camera.projectionMatrix.elements[5];
       if (h > 0 && p5 > 0) glareUniforms.uPxAngle.value = 2 / (p5 * h);

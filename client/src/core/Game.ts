@@ -74,6 +74,8 @@ export class Game {
     // The vehicles' own meshes and probes (before the environment map is handed out: their paint reflects it).
     this.vehicles = new VehicleView(this.engine.scene, this.world.props.vehicles, this.field);
     this.world.buildEnvironment(this.engine.renderer);
+    // Puddles' reflection, drawn just before the scene with the camera the scene uses.
+    this.engine.post.scene.beforeScene = (r, camera, screen) => this.world.renderMirror(r, camera, screen);
     this.exposure = new AutoExposure(this.field);
     this.doors = new DoorSystem(NEIGHBORHOOD, this.physics, this.world.root);
     this.doors.applyProbes(this.field);
@@ -141,7 +143,7 @@ export class Game {
   private applyRenderSettings(): void {
     const g = settings.value.graphics;
     const focus = this.session?.focus ?? this.menuCine.focus;
-    const key = `${g.particleQuality}|${g.rain}`;
+    const key = `${g.particleQuality}|${g.rain}|${g.reflections}`;
     if (this.engine.shadowMapSize !== this.lastShadowSize || key !== this.lastParticle || g.fogQuality !== this.lastFog || g.textureQuality !== this.lastTex) {
       this.lastShadowSize = this.engine.shadowMapSize;
       this.lastParticle = key;

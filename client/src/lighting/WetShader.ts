@@ -193,7 +193,7 @@ export function setWetTier(t: WetTier): void {
 
 export function patchWet(mat: THREE.Material): void {
   if (mat.userData.wet || !mat.userData.baked || !(mat instanceof THREE.MeshStandardMaterial)) return;
-  if (mat.name === 'puddle' || mat.transparent) return;
+  if (mat.name === 'puddle' || mat.name === 'pool-water' || mat.transparent) return;
   mat.userData.wet = true;
   wetMaterials.add(mat);
   // Standing water collects on hard flat ground, less on lawns and dirt, never on floors.
