@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, isMelee, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
@@ -31,7 +31,7 @@ import { Pyro, type BurnPoint } from '../effects/Pyro';
 import { Throwables } from './Throwables';
 import { createThrowableModel } from '../weapons/ThrowableModels';
 import { clearGibCache } from '../characters/Gibs';
-import { ZombieView } from '../zombies/ZombieView';
+import { ZombieView, type CorpseHit } from '../zombies/ZombieView';
 import { RaidView } from './RaidView';
 import { LimbView } from '../zombies/LimbView';
 import { BarricadeView } from './BarricadeView';
@@ -335,7 +335,17 @@ export class GameSession {
     // horde doesn't stutter (each new look costs a frame 10-80 ms otherwise).
     this.zombies.warm(engine.renderer, engine.camera, engine.scene);
     this.raid = new RaidView(engine.scene, physics, field);
-    this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
+    // The blood spreads out under a body for a few seconds once it lies still.
+    this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 1.15 + Math.random() * 0.7, 140, 8);
+    this.zombies.onBodyFall = (pos, strength) => audio.bodyFall(pos, strength);
+    this.zombies.onHeadPop = (pos) => {
+      audio.headPop(pos);
+      const me = this.me.motion.pos;
+      const d = Math.hypot(me.x - pos.x, me.y - pos.y, me.z - pos.z);
+      // Right in front of you, you feel it.
+      if (d < 4) this.cam.addTrauma(0.08 * (1 - d / 4));
+    };
+    this.effects.onChunkLand = (pos, strength, kind) => audio.chunkLand(pos, strength, kind);
     this.zombies.onStep = (pos, gait, loudness) => audio.zombieStep(pos, gait, loudness);
     this.zombies.gibs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     // Grenades and Molotovs: the blasts, the fires and the throws.
@@ -442,6 +452,8 @@ export class GameSession {
       const gib = this.zombies.gibs.sample();
       place(gib.root, -2, 1);
       undo.push(gib.dispose);
+      // Pieces of meat and bone thrown off bodies (one instanced material of their own).
+      undo.push(this.effects.chunks.sample(new THREE.Vector3(at.x - 2.5, at.y + 0.3, at.z + 1)));
       // A severed arm lying in the street and one in hand, each lit by its own probe as in play.
       for (const mode of ['world', 'held'] as const) {
         const arm = new SeveredArm({ kind: 'walker', look: 0, arm: mode === 'world' ? 'armL' : 'legR', cut: mode === 'world' ? 'elbow' : 'hip', scale: 1 }, mode);
@@ -496,6 +508,8 @@ export class GameSession {
     const g = settings.value.graphics;
     this.effects.setQuality(g.particleQuality, g.gore, settings.value.accessibility.reducedFlashing);
     this.zombies.gore = g.gore !== 'off';
+    // Bodies landing on bodies costs about a third more ragdoll time in a massacre: not on phones.
+    this.zombies.piles = g.particleQuality !== 'low';
     // Phone and low presets: zombie flesh without the finest noise and veins.
     setZombieDetail(g.particleQuality === 'low' ? 'lite' : 'full');
     this.limbs.gore = g.gore !== 'off';
@@ -1068,6 +1082,8 @@ export class GameSession {
     const m = this.mirror;
     const renderTime = m ? this.sim.time : this.sim.time - step + alpha * step;
     this.zombies.update(live, this.sim, renderTime, this.engine.camera);
+    // Walking through the dead kicks their limbs aside.
+    if (!this.ragdoll && live > 0) this.zombies.nudge(this.player.renderPosition, this.player.velocity);
     this.raid.update(live, this.sim, renderTime, this.engine.camera, !!m);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
     this.pickups.update(live, this.sim, this.engine.camera);
@@ -1983,6 +1999,8 @@ export class GameSession {
 
   private onEvent(e: SimEvent): void {
     const A = this.tmpA, B = this.tmpB, C = this.tmpC;
+    if (e.type === 'shot' && !e.player.startsWith('raider:')) this.shootCorpses(e);
+    else if (e.type === 'explosion') this.zombies.blastCorpses(v3(e.pos, A), 7, 1);
     switch (e.type) {
       case 'shot': {
         if (e.player.startsWith('raider:')) {
@@ -2021,8 +2039,10 @@ export class GameSession {
         v3(e.pos, A);
         v3(e.dir, B);
         const exit = e.exit ? { pos: new THREE.Vector3(e.exit.pos.x, e.exit.pos.y, e.exit.pos.z), normal: new THREE.Vector3(e.exit.normal.x, e.exit.normal.y, e.exit.normal.z) } : null;
-        this.effects.blood(A, B, e.damage, { exit, killed: e.killed, head: e.zone === 'head', melee: e.melee });
-        this.zombies.hit(e.zombie, e.zone, B, e.damage, e.melee, A, exit?.pos);
+        // How heavy the round was: big guns blow more blood and meat out of the back.
+        const power = e.gun && isGoreGun(e.gun) ? GORE.power[e.gun] : undefined;
+        this.effects.blood(A, B, e.damage, { exit, killed: e.killed, head: e.zone === 'head', melee: e.melee, power });
+        this.zombies.hit(e.zombie, e.zone, B, e.damage, e.melee, A, exit?.pos, power ?? 0);
         if (e.limb !== undefined) {
           // Clubbed with a severed arm: a wet, heavy thud, blood flung off its torn end.
           audio.clubHit(A, Math.min(1, e.damage / 50));
@@ -2034,7 +2054,7 @@ export class GameSession {
           // A melee weapon: the blade's slice or the blunt weapon's crack and crunch.
           audio.meleeHit(e.weapon, A, { kill: e.killed, head: e.zone === 'head', damage: e.damage });
         } else {
-          audio.flesh(A, { damage: e.damage, head: e.zone === 'head', own: e.by === this.myId, melee: e.melee });
+          audio.flesh(A, { damage: e.damage, head: e.zone === 'head', own: e.by === this.myId, melee: e.melee, power });
         }
         if (e.by === this.myId) {
           const kind = e.killed ? (e.zone === 'head' ? 'head' : 'kill') : 'hit';
@@ -2126,7 +2146,7 @@ export class GameSession {
       case 'zombieDied': {
         const head = this.zombies.headOf(e.zombie, C);
         if (head) audio.zombieDeath(head, this.zombies.pitchOf(e.zombie));
-        this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force, { cause: e.cause, gibs: e.gibs, shred: e.shred, blast: e.blast });
+        this.zombies.died(e.zombie, e.zone, v3(e.dir, B), e.force, { cause: e.cause, gibs: e.gibs, shred: e.shred, blast: e.blast, gun: e.gun, pop: e.pop });
         break;
       }
       case 'raiderHit': {
@@ -2178,6 +2198,7 @@ export class GameSession {
         this.burstAt = performance.now();
         const at = this.zombies.burst(e.zombie, A) ?? v3(e.pos, A);
         this.effects.bloaterBurst(at);
+        this.zombies.blastCorpses(at, 5, 0.8);
         audio.bloaterBurst(at);
         const me = this.me.motion.pos;
         const d = Math.hypot(me.x - at.x, me.y - at.y, me.z - at.z);
@@ -2378,6 +2399,27 @@ export class GameSession {
         this.throws.onEvent(e, this.sim, (id, out) => this.handOf(id, out));
         break;
     }
+  }
+
+  private readonly corpseEnds: THREE.Vector3[] = [];
+  private readonly corpseHits: CorpseHit[] = [];
+
+  /**
+   * Any survivor's rounds going through bodies already on the ground (every screen gets every
+   * shot, so all of them see the dead jerk under it): the body is shoved along the shot, bleeds,
+   * and makes the sound of it.
+   */
+  private shootCorpses(e: Extract<SimEvent, { type: 'shot' }>): void {
+    if (!this.zombies.corpseCount || !isGoreGun(e.weapon)) return;
+    const ends = this.corpseEnds;
+    while (ends.length < e.pellets.length) ends.push(new THREE.Vector3());
+    ends.length = e.pellets.length;
+    e.pellets.forEach((p, i) => ends[i].set(p.end.x, p.end.y, p.end.z));
+    const power = GORE.power[e.weapon];
+    // A shotgun's pellets share the push between them.
+    const push = GORE.throw[e.weapon] * (e.pellets.length > 1 ? 1.6 / e.pellets.length : 0.55);
+    const hits = this.zombies.shootCorpses(v3(e.origin, this.tmpE), ends, power, push, this.corpseHits);
+    for (const h of hits) audio.flesh(h.pos, { damage: 18 + power * 20, head: false, own: e.player === this.myId, melee: false, power: power * 0.6 });
   }
 
   /**

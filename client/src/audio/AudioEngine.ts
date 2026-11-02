@@ -1524,14 +1524,16 @@ export class AudioEngine {
    * wet layer, a skull hit on headshots and a heavy punch under big or melee hits. Your own hits
    * carry further than other people's. Pellets landing together play as one.
    */
-  flesh(position: THREE.Vector3, hit: { damage: number; head: boolean; own: boolean; melee: boolean }): void {
+  flesh(position: THREE.Vector3, hit: { damage: number; head: boolean; own: boolean; melee: boolean; power?: number }): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     this.fleshes = this.fleshes.filter((f) => now - f.t < FLESH_GAP);
     if (this.fleshes.some((f) => f.at.distanceToSquared(position) < 1)) return;
     this.fleshes.push({ t: now, at: position.clone() });
-    const heavy = Math.min(1, hit.damage / 60);
+    // Heavy rounds (GORE.power) land like heavy blows whatever damage is left to do.
+    const power = hit.power ?? 0;
+    const heavy = Math.max(Math.min(1, hit.damage / 60), Math.min(1, power * 0.8));
     const t = now + position.distanceTo(this.listenerPos) / SPEED_OF_SOUND;
     const g = ctx.createGain();
     const p = this.place(position, this.effects);
@@ -1548,21 +1550,124 @@ export class AudioEngine {
       this.burst(g, t + 0.01, 'bandpass', 1200, 3, 0.1, 0.005, 0.08, 0.7);
       return;
     }
-    const layer = (buf: AudioBuffer | null, gain: number, rate: number, at = t): void => {
-      if (!buf) return;
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.playbackRate.value = rate * (1 + (Math.random() * 2 - 1) * 0.06);
-      const lg = ctx.createGain();
-      lg.gain.value = gain;
-      src.connect(lg).connect(g);
-      this.free(src, lg);
-      src.start(at);
-    };
+    const layer = (buf: AudioBuffer | null, gain: number, rate: number, at = t): void => this.take(buf, g, gain, rate, at);
     layer(impact, 0.65 + heavy * 0.3, hit.melee ? 0.85 : 1);
-    layer(this.recording('wet'), 0.22 + heavy * 0.2, 1.05, t + 0.012);
-    if (hit.head) layer(this.recording('head'), 0.5, 1.1);
-    if (hit.melee || heavy > 0.6) layer(this.recording('punch'), hit.melee ? 0.6 : 0.35 * heavy, 0.9);
+    // The wet slap of meat under every hit, thicker under heavy rounds.
+    layer(this.recording('wet'), 0.26 + heavy * 0.24 + Math.min(0.25, power * 0.2), 1.05 - Math.min(0.15, power * 0.1), t + 0.012);
+    if (hit.head) layer(this.recording('head'), 0.5 + Math.min(0.3, power * 0.25), 1.1 - Math.min(0.15, power * 0.1));
+    if (hit.melee || heavy > 0.6) layer(this.recording('punch'), hit.melee ? 0.6 : 0.35 * heavy + Math.min(0.25, power * 0.15), 0.9 - Math.min(0.2, power * 0.12));
+    // A big round thumps through the whole body.
+    if (power >= 0.8) {
+      this.tone(g, t, 'sine', 95, 38, 0.28 * Math.min(1.4, power), 0.002, 0.14);
+      this.burst(g, t + 0.004, 'lowpass', 520, 0.8, 0.22 * Math.min(1.4, power), 0.002, 0.09);
+    }
+  }
+
+  /** One recorded take into `dest` at `at`, a little detuned each time. */
+  private take(buf: AudioBuffer | null, dest: AudioNode, gain: number, rate: number, at: number): void {
+    if (!buf || !this.ctx) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate * (1 + (Math.random() * 2 - 1) * 0.06);
+    const lg = this.ctx.createGain();
+    lg.gain.value = gain;
+    src.connect(lg).connect(dest);
+    this.free(src, lg);
+    src.start(at);
+  }
+
+  /**
+   * A head blown apart: the skull cracking open, a heavy wet burst, and the pieces pattering down
+   * around it a moment later.
+   */
+  headPop(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime + position.distanceTo(this.listenerPos) / SPEED_OF_SOUND;
+    const d = this.bodyOut(position, 0.14, 4.5);
+    // The skull: a sharp crack and splintering.
+    this.burst(d, t, 'highpass', 2200, 0.8, 0.6, 0.001, 0.03);
+    this.tone(d, t, 'square', 720, 170, 0.09, 0.001, 0.04);
+    for (let i = 0; i < 3; i++) this.burst(d, t + 0.01 + Math.random() * 0.04, 'bandpass', 2800 + Math.random() * 2400, 2, 0.12, 0.001, 0.015);
+    // The burst of it.
+    this.take(this.recording('head'), d, 0.95, 0.88, t);
+    this.take(this.recording('flesh'), d, 0.7, 0.8, t + 0.004);
+    this.take(this.recording('wet'), d, 0.75, 0.78, t + 0.01);
+    this.take(this.recording('wet'), d, 0.5, 1.18, t + 0.045);
+    this.take(this.recording('punch'), d, 0.45, 0.7, t);
+    this.tone(d, t, 'sine', 120, 42, 0.4, 0.002, 0.16);
+    // Spatter: a run of short wet rips as it sprays out.
+    for (let i = 0; i < 8; i++) this.burst(d, t + 0.02 + i * 0.02 + Math.random() * 0.012, 'bandpass', 650 + Math.random() * 1100, 3.5, 0.13 + Math.random() * 0.08, 0.002, 0.03, 0.7);
+    // Pieces coming down around it.
+    for (let i = 0; i < 7; i++) this.burst(d, t + 0.28 + Math.random() * 0.5, 'bandpass', 700 + Math.random() * 900, 3, 0.05 + Math.random() * 0.05, 0.003, 0.04, 0.7);
+  }
+
+  /** Output for a body's sounds at `position`, muffled through walls (looked for from `lift` m up). */
+  private bodyOut(position: THREE.Vector3, reverb: number, ref: number, lift = 0): GainNode {
+    const ctx = this.ctx!;
+    const g = ctx.createGain();
+    const p = this.place(position, this.effects);
+    p.refDistance = ref;
+    this.muffled(g, this.muffle(lift ? { x: position.x, y: position.y + lift, z: position.z } : position)).connect(p);
+    if (reverb > 0) {
+      const r = ctx.createGain();
+      r.gain.value = reverb;
+      g.connect(r).connect(this.sends.effects);
+    }
+    return g;
+  }
+
+  /** When body falls may next play, and how many have this moment (a horde dropping isn't a drum roll). */
+  private fallTokens = 6;
+  private fallAt = 0;
+  private chunkTokens = 10;
+  private chunkAt = 0;
+
+  /**
+   * A body coming down hard on the ground (or a wall): a dull, heavy thud with a wet slap in it;
+   * `strength` 0..1 is how hard it landed.
+   */
+  bodyFall(position: THREE.Vector3, strength: number): void {
+    if (!this.ctx || strength < 0.05) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    this.fallTokens = Math.min(6, this.fallTokens + (now - this.fallAt) * 6);
+    this.fallAt = now;
+    if (this.fallTokens < 1 || position.distanceToSquared(this.listenerPos) > 50 * 50) return;
+    this.fallTokens--;
+    const t = now + position.distanceTo(this.listenerPos) / SPEED_OF_SOUND;
+    const d = this.bodyOut(position, 0.08, 4, 0.4);
+    const s = 0.45 + strength * 0.55;
+    const floor = position.y < -0.5 ? 1.25 : position.y > 0.25 ? 0.8 : 1;
+    this.tone(d, t, 'sine', 78 * floor, 32, 0.62 * s, 0.003, 0.24);
+    this.burst(d, t, 'lowpass', 380 * floor, 0.8, 0.6 * s, 0.002, 0.15);
+    this.take(this.recording('punch'), d, 0.5 * s, 0.6, t);
+    this.take(this.recording('wet'), d, 0.18 * s, 0.85, t + 0.006);
+    // Clothes and limbs slapping down a beat after the trunk.
+    this.burst(d, t + 0.004, 'bandpass', 1100, 2, 0.14 * s, 0.002, 0.05);
+    if (strength > 0.45) this.burst(d, t + 0.07 + Math.random() * 0.04, 'lowpass', 520, 0.8, 0.22 * s, 0.002, 0.08);
+  }
+
+  /** A piece of a body landing: a small wet slap (meat, brain) or a dry click (bone). */
+  chunkLand(position: THREE.Vector3, strength: number, kind: string): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    this.chunkTokens = Math.min(10, this.chunkTokens + (now - this.chunkAt) * 14);
+    this.chunkAt = now;
+    if (this.chunkTokens < 1 || position.distanceToSquared(this.listenerPos) > 22 * 22) return;
+    this.chunkTokens--;
+    const t = now;
+    const d = this.out(position, 0.03, 1.6);
+    const s = 0.3 + strength * 0.7;
+    if (kind === 'bone' || kind === 'skull') {
+      this.burst(d, t, 'highpass', 2600, 0.8, 0.12 * s, 0.001, 0.012);
+      this.tone(d, t, 'square', 1300 + Math.random() * 500, 700, 0.025 * s, 0.001, 0.02);
+      if (kind === 'skull') this.burst(d, t + 0.003, 'bandpass', 900, 2.5, 0.08 * s, 0.002, 0.04, 0.7);
+    } else {
+      this.burst(d, t, 'bandpass', 700 + Math.random() * 600, 3, 0.16 * s, 0.002, 0.045, 0.7);
+      this.tone(d, t, 'sine', 170 + Math.random() * 40, 80, 0.1 * s, 0.002, 0.06);
+    }
   }
 
   meleeSwing(position: THREE.Vector3): void {

@@ -436,8 +436,11 @@ export class Zombie {
 
   // ---------------------------------------------------------------- damage
 
-  /** Applies a hit. Returns true when it kills. `knock` overrides how far a melee blow shoves it. */
-  takeHit(damage: number, zone: HitZone, dir: Vec3, by: SimPlayer, melee: boolean, knock: number = COMBAT.meleeKnockback): boolean {
+  /**
+   * Applies a hit. Returns true when it kills. `knock` overrides how far a melee blow shoves it;
+   * `shove` is a round's (how hard, and whether it staggers whatever the damage).
+   */
+  takeHit(damage: number, zone: HitZone, dir: Vec3, by: SimPlayer, melee: boolean, knock: number = COMBAT.meleeKnockback, shove?: { speed: number; force: boolean }): boolean {
     if (!this.alive) return false;
     const sim = this.sim;
     this.health -= damage;
@@ -469,10 +472,10 @@ export class Zombie {
       this.downT = 2.2 + this.rand() * 0.8;
       return false;
     }
-    if (melee || zone === 'head' || this.recentDamage >= this.def.staggerAt) {
+    if (melee || zone === 'head' || this.recentDamage >= this.def.staggerAt || shove?.force) {
       this.setState('stagger');
       this.staggerT = melee ? 0.75 : 0.4 + this.rand() * 0.25;
-      const k = (melee ? knock : Math.min(1.6, damage * 0.03)) * (this.crawling ? 0.35 : 1);
+      const k = (melee ? knock : shove ? shove.speed * (shove.force ? 1 : Math.min(1, 0.45 + damage / 60)) : Math.min(1.6, damage * 0.03)) * (this.crawling ? 0.35 : 1);
       this.push.x = (dir.x / hl) * k;
       this.push.z = (dir.z / hl) * k;
       this.recentDamage = 0;

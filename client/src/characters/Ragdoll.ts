@@ -11,6 +11,17 @@ const STEP = 1 / 60;
 
 interface Link { a: number; b: number; rest: number; k: number; min: boolean }
 
+/**
+ * Extra spheres for hit tests along the long bones (particle pairs): rounds landing in a belly or
+ * a thigh between two joints still find the body.
+ */
+const SPANS: [number, number, number][] = [
+  [J.hips, J.neck, 0.15], [J.shL, J.elL, 0.07], [J.shR, J.elR, 0.07], [J.elL, J.haL, 0.06], [J.elR, J.haR, 0.06],
+  [J.hpL, J.knL, 0.1], [J.hpR, J.knR, 0.1], [J.knL, J.ftL, 0.075], [J.knR, J.ftR, 0.075],
+];
+/** Particles a hard landing is felt through (the body's weight). */
+const HEAVY: readonly number[] = [J.hips, J.neck, J.shL, J.shR];
+
 /** Which particles take the push of a killing hit, by zone. */
 export const ZONE_PARTICLES: Record<string, number[]> = {
   head: [J.head, J.neck],
@@ -37,6 +48,14 @@ export class Ragdoll {
   private age = 0;
   asleep = false;
   private readonly ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+  /** Other bodies nearby (set each frame): this one lands on them and rolls off instead of passing through. */
+  obstacles: Ragdoll[] = [];
+  /** It hit the ground or a wall hard: where, and how hard 0..1 (a few times per body at most). */
+  onImpact: ((pos: THREE.Vector3, strength: number) => void) | null = null;
+  private impacts = 0;
+  private lastImpact = -1;
+  private impactSpeed = 0;
+  private readonly impactAt = new THREE.Vector3();
 
   constructor(private readonly physics: Physics, private readonly body: Humanoid) {}
 
@@ -102,7 +121,77 @@ export class Ragdoll {
     this.age = 0;
     this.stillT = 0;
     this.asleep = false;
+    this.impacts = 0;
+    this.lastImpact = -1;
+    this.obstacles = [];
     b.ragdoll = true;
+  }
+
+  /**
+   * Adds velocity `v` (m/s) to `joints` (all of them when null) and wakes the body: shot, kicked
+   * or thrown by a blast where it lies.
+   */
+  impulse(joints: readonly number[] | null, v: THREE.Vector3): void {
+    const add = (i: number) => {
+      this.prev[i * 3] -= v.x * STEP;
+      this.prev[i * 3 + 1] -= v.y * STEP;
+      this.prev[i * 3 + 2] -= v.z * STEP;
+    };
+    if (joints) for (const i of joints) add(i);
+    else for (let i = 0; i < COUNT; i++) add(i);
+    if (this.asleep || this.age > 5) {
+      // Gets a few more seconds to come to rest again, and may thud down again.
+      this.age = Math.min(this.age, 4);
+      this.impacts = Math.min(this.impacts, 1);
+    }
+    this.asleep = false;
+    this.stillT = 0;
+  }
+
+  /**
+   * The nearest place a ray from `o` along unit `d` meets the body within `maxT`: the distance
+   * and the particle nearest it (for the push), or null.
+   */
+  hitTest(o: THREE.Vector3, d: THREE.Vector3, maxT: number): { t: number; joint: number } | null {
+    const p = this.pos;
+    // Cheap reject on the whole body (it is never more than ~1.2 m from its hips).
+    if (sphereT(o, d, p[0], p[1], p[2], 1.25) === null) return null;
+    let best = maxT, joint = -1;
+    for (let i = 0; i < COUNT; i++) {
+      const t = sphereT(o, d, p[i * 3], p[i * 3 + 1], p[i * 3 + 2], Math.max(0.09, RADIUS[i] * 1.35));
+      if (t !== null && t < best) {
+        best = t;
+        joint = i;
+      }
+    }
+    for (const [a, b, r] of SPANS) {
+      const t = sphereT(o, d, (p[a * 3] + p[b * 3]) / 2, (p[a * 3 + 1] + p[b * 3 + 1]) / 2, (p[a * 3 + 2] + p[b * 3 + 2]) / 2, r);
+      if (t !== null && t < best) {
+        best = t;
+        joint = a;
+      }
+    }
+    return joint < 0 ? null : { t: best, joint };
+  }
+
+  /** Index of the particle nearest `at` (and its world position in `out`). */
+  nearest(at: THREE.Vector3, out?: THREE.Vector3): number {
+    const p = this.pos;
+    let best = Infinity, k = 0;
+    for (let i = 0; i < COUNT; i++) {
+      const d = (p[i * 3] - at.x) ** 2 + (p[i * 3 + 1] - at.y) ** 2 + (p[i * 3 + 2] - at.z) ** 2;
+      if (d < best) {
+        best = d;
+        k = i;
+      }
+    }
+    out?.set(p[k * 3], p[k * 3 + 1], p[k * 3 + 2]);
+    return k;
+  }
+
+  /** World position of particle `i`. */
+  joint(i: number, out: THREE.Vector3): THREE.Vector3 {
+    return this.P(i, out);
   }
 
   private dist(a: number, b: number): number {
@@ -146,6 +235,10 @@ export class Ragdoll {
           nz = q[o + 2] + (dz / len) * t + n.z * 0.002;
           // Kill the normal velocity, keep some slide.
           const vn = vx * n.x + vy * n.y + vz * n.z;
+          if (-vn > this.impactSpeed * STEP && HEAVY.includes(i)) {
+            this.impactSpeed = -vn / STEP;
+            this.impactAt.set(nx, ny, nz);
+          }
           const tx = vx - vn * n.x, ty = vy - vn * n.y, tz = vz - vn * n.z;
           q[o] = nx - tx * 0.5 + vn * n.x * 0.1;
           q[o + 1] = ny - ty * 0.5 + vn * n.y * 0.1;
@@ -164,9 +257,18 @@ export class Ragdoll {
         p[a] += dx * k; p[a + 1] += dy * k; p[a + 2] += dz * k;
         p[b] -= dx * k; p[b + 1] -= dy * k; p[b + 2] -= dz * k;
       }
+      // Every other pass is enough to keep piled bodies apart (and halves the cost).
+      if (it & 1) for (const o of this.obstacles) this.collide(o);
       for (let i = 0; i < COUNT; i++) {
         const y = this.floor + RADIUS[i];
         if (p[i * 3 + 1] < y) {
+          if (it === 0 && HEAVY.includes(i)) {
+            const fall = (q[i * 3 + 1] - p[i * 3 + 1]) / STEP;
+            if (fall > this.impactSpeed) {
+              this.impactSpeed = fall;
+              this.impactAt.set(p[i * 3], y, p[i * 3 + 2]);
+            }
+          }
           p[i * 3 + 1] = y;
           // Ground friction.
           q[i * 3] += (p[i * 3] - q[i * 3]) * 0.4;
@@ -174,6 +276,13 @@ export class Ragdoll {
         }
       }
     }
+    // A hard landing is heard (the first one loudest; rattling about on the ground is not).
+    if (this.impactSpeed > 1.6 && this.impacts < 3 && this.age - this.lastImpact > 0.3) {
+      this.impacts++;
+      this.lastImpact = this.age;
+      this.onImpact?.(this.impactAt, Math.min(1, (this.impactSpeed - 1) / 5));
+    }
+    this.impactSpeed = 0;
     // Contacts jitter a little every step: judge stillness over a window instead.
     this.stillT += STEP;
     if (this.stillT >= 0.25) {
@@ -183,6 +292,33 @@ export class Ragdoll {
         this.snapshot[i] = p[i];
       }
       if ((this.age > 0.8 && maxMove < 0.015) || this.age > 7) this.asleep = true;
+    }
+  }
+
+  /**
+   * Keeps this body's particles out of another body's: it lands on a corpse already lying there
+   * and rolls off it (only this one moves, so a pile settles instead of jittering).
+   */
+  private collide(o: Ragdoll): void {
+    if (o === this) return;
+    const p = this.pos, q = o.pos;
+    const hx = p[0] - q[0], hz = p[2] - q[2];
+    if (hx * hx + hz * hz > 2.4 * 2.4) return;
+    for (let i = 0; i < COUNT; i++) {
+      const ri = RADIUS[i];
+      for (let j = 0; j < COUNT; j++) {
+        const dx = p[i * 3] - q[j * 3], dy = p[i * 3 + 1] - q[j * 3 + 1], dz = p[i * 3 + 2] - q[j * 3 + 2];
+        const min = ri + RADIUS[j];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 >= min * min) continue;
+        const d = Math.sqrt(d2) || 1e-4;
+        // Out along the line between them, favouring up when on top (bodies pile, they don't
+        // shove sideways); a limb caught underneath goes down and the floor holds it.
+        const k = (min - d) / d;
+        p[i * 3] += dx * k * 0.8;
+        p[i * 3 + 1] += dy >= 0 ? Math.max(dy * k, (min - d) * 0.5) : dy * k;
+        p[i * 3 + 2] += dz * k * 0.8;
+      }
     }
   }
 
@@ -240,6 +376,16 @@ export class Ragdoll {
   get floorY(): number {
     return this.floor;
   }
+}
+
+/** Distance along unit `d` from `o` to a sphere, or null when the ray misses it (or starts past it). */
+function sphereT(o: THREE.Vector3, d: THREE.Vector3, x: number, y: number, z: number, r: number): number | null {
+  const lx = x - o.x, ly = y - o.y, lz = z - o.z;
+  const tc = lx * d.x + ly * d.y + lz * d.z;
+  if (tc < 0) return null;
+  const d2 = lx * lx + ly * ly + lz * lz - tc * tc;
+  if (d2 > r * r) return null;
+  return Math.max(0, tc - Math.sqrt(r * r - d2));
 }
 
 /** Rotation from an X axis and a Y hint (Y is orthogonalized). */

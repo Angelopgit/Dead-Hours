@@ -6,6 +6,7 @@ import { ParticleBatch, SHAPE, type ParticleSpec } from './Particles';
 import { DECAL, DecalBatch } from './Decals';
 import { Casings } from './Casings';
 import { SmokeWisps } from './Smoke';
+import { FleshChunks, type ChunkKind } from './Chunks';
 
 export type Gore = 'off' | 'reduced' | 'full';
 
@@ -59,6 +60,12 @@ export class Effects {
   readonly casings: Casings;
   /** Survivors' cigarette, joint and blunt smoke (see Smoking). */
   readonly smoke: SmokeWisps;
+  /** Lumps of meat, bone and skull thrown off bodies. */
+  readonly chunks: FleshChunks;
+  /** A piece of a body hit the ground (for its sound). */
+  onChunkLand: ((pos: THREE.Vector3, strength: number, kind: ChunkKind) => void) | null = null;
+  private readonly tmp2 = new THREE.Vector3();
+  private readonly tmp3 = new THREE.Vector3();
   private readonly light = new THREE.PointLight(0xffb066, 0, 10, 2);
   private lightT = 0;
   private lightPower = 0;
@@ -75,11 +82,20 @@ export class Effects {
   constructor(scene: THREE.Scene, private readonly physics: Physics) {
     this.soft = new ParticleBatch(1800, false);
     this.glow = new ParticleBatch(700, true);
-    this.decals = new DecalBatch(380);
+    // Blood marks share the ring with bullet holes: room for a street fight's worth of both.
+    this.decals = new DecalBatch(520);
     this.casings = new Casings(56);
     // A little brighter than the explosions' smoke ambient, so a thin wisp still reads at night.
     this.smoke = new SmokeWisps(220, new THREE.Color(0.2, 0.21, 0.24));
-    this.root.add(this.decals.mesh, this.soft.mesh, this.glow.mesh, this.casings.mesh, this.smoke.mesh);
+    this.chunks = new FleshChunks(physics);
+    this.root.add(this.decals.mesh, this.soft.mesh, this.glow.mesh, this.casings.mesh, this.smoke.mesh, this.chunks.mesh);
+    this.chunks.onLand = (pos, strength, kind, normal) => {
+      // Wet pieces leave a mark where they first come down; bone just clatters.
+      if (this.gore !== 'off' && kind !== 'bone' && (strength > 0.15 || Math.random() < 0.5) && !this.isMoving?.(pos, normal)) {
+        this.decals.add(DECAL.splat, this.tmp3.copy(pos), normal, rand(0.09, 0.16) + strength * 0.14, BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.88, 50);
+      }
+      this.onChunkLand?.(pos, strength, kind);
+    };
     this.light.castShadow = false;
     // The flash light stays in the scene at zero intensity: adding and removing lights would
     // recompile every lit material.
@@ -94,6 +110,8 @@ export class Effects {
     this.glow.setCapacity(this.quality);
     this.smoke.setQuality(this.quality);
     this.decals.setCapacity(q === 'low' ? 0.45 : q === 'medium' ? 0.75 : 1);
+    this.chunks.setQuality(q);
+    this.chunks.enabled = gore !== 'off';
     this.gore = gore;
     this.reducedFlashing = reducedFlashing;
   }
@@ -162,29 +180,33 @@ export class Effects {
     }
   }
 
-  /** A round or blade hit a zombie (or a player). */
-  blood(pos: THREE.Vector3, dir: THREE.Vector3, damage: number, opts: { exit: { pos: THREE.Vector3; normal: THREE.Vector3 } | null; killed: boolean; head: boolean; melee: boolean }): void {
+  /**
+   * A round or blade hit a zombie (or a player). `power` (GORE.power, 0..1.5) is how heavy the
+   * round was: big ones blow a jet of blood, a red mist and pieces of meat and bone out the back.
+   */
+  blood(pos: THREE.Vector3, dir: THREE.Vector3, damage: number, opts: { exit: { pos: THREE.Vector3; normal: THREE.Vector3 } | null; killed: boolean; head: boolean; melee: boolean; power?: number }): void {
     const k = this.scale(pos);
     if (this.gore === 'off') {
       this.emitSoft({ x: pos.x, y: pos.y, z: pos.z, vx: -dir.x * 0.4, vy: 0.2, vz: -dir.z * 0.4, life: 0.4, size: 0.08, size1: 0.3, r: 0.22, g: 0.2, b: 0.18, alpha: 0.35, drag: 3 });
       return;
     }
-    const gore = this.gore === 'full' ? 1 : 0.4;
+    const full = this.gore === 'full';
+    const gore = full ? 1 : 0.4;
+    const pw = opts.power ?? (opts.melee ? Math.min(1, damage / 60) : 0.4);
     // Mist where it went in, kicked slightly back toward the shooter.
-    for (let i = 0; i < (this.gore === 'full' ? 2 : 1); i++) {
+    for (let i = 0; i < (full ? 2 + (pw > 0.7 ? 1 : 0) : 1); i++) {
       this.emitSoft({
         x: pos.x, y: pos.y, z: pos.z,
         vx: -dir.x * rand(0.2, 0.8) + rand(-0.2, 0.2), vy: rand(0, 0.4), vz: -dir.z * rand(0.2, 0.8) + rand(-0.2, 0.2),
-        life: rand(0.3, 0.5), size: 0.1, size1: rand(0.35, 0.55) * (opts.head ? 1.4 : 1),
+        life: rand(0.3, 0.5), size: 0.1, size1: rand(0.35, 0.55) * (opts.head ? 1.4 : 1) * (1 + pw * 0.5),
         r: BLOOD[0] * 1.3, g: BLOOD[1], b: BLOOD[2], alpha: 0.55, drag: 4,
       });
     }
     // Droplets out the far side.
-    const floorD = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 4);
-    const floor = floorD === null ? pos.y - 4 : pos.y - floorD + 0.01;
-    const count = this.n((6 + Math.min(20, damage / 4)) * (opts.head && opts.killed ? 2.2 : 1) * gore, k);
+    const floor = this.floorBelow(pos);
+    const count = this.n((6 + Math.min(20, damage / 4)) * (1 + pw * 0.8) * (opts.head && opts.killed ? 2.2 : 1) * gore, k);
     for (let i = 0; i < count; i++) {
-      const s = rand(1.5, 4.5) * (opts.melee ? 0.7 : 1);
+      const s = rand(1.5, 4.5) * (opts.melee ? 0.7 : 1) * (1 + pw * 0.35);
       this.emitSoft({
         x: pos.x, y: pos.y, z: pos.z,
         vx: dir.x * s + rand(-1, 1), vy: dir.y * s + rand(-0.2, 1.4), vz: dir.z * s + rand(-1, 1),
@@ -193,7 +215,23 @@ export class Effects {
         floor, onLand: 1,
       });
     }
-    if (opts.head && opts.killed && this.gore === 'full') {
+    // Spatter flung back toward the shooter.
+    this.droplets(pos, this.tmp2.copy(dir).negate().setY(0.25), this.n((3 + pw * 5) * gore, k), [0.8, 2.2], 0.5, floor);
+    // Blown out the back: a jet of blood and a red mist hanging behind the body.
+    const out = this.tmp3.copy(pos).addScaledVector(dir, opts.melee ? 0.05 : 0.22);
+    if (!opts.melee && pw >= 0.3) {
+      this.droplets(out, dir, this.n((8 + 24 * pw) * gore, k), [2.5 + 2 * pw, 5 + 4 * pw], 0.2, floor, [0.014, 0.04]);
+      this.emitSoft({
+        x: out.x, y: out.y, z: out.z, vx: dir.x * (0.8 + pw), vy: dir.y * (0.8 + pw) + 0.1, vz: dir.z * (0.8 + pw),
+        life: rand(0.5, 0.8), size: 0.14, size1: (0.45 + pw * 0.5) * (full ? 1 : 0.7), r: BLOOD[0] * 1.35, g: BLOOD[1], b: BLOOD[2], alpha: 0.5, drag: 3.2,
+      });
+    }
+    // Pieces of it: torn meat out the back (heavy rounds take bone with them, blades less of either).
+    const meat = (opts.melee ? 0.45 : 0.3 + pw * 1.5) * (opts.killed ? 1.6 : 1) * (opts.head ? 1.25 : 1) * (full ? 1 : 0.4);
+    const sp = opts.melee ? [1.2, 3] as [number, number] : [1.8 + pw * 2, 3.8 + pw * 4] as [number, number];
+    this.chunks.burst(out, dir, this.n(meat, k), 'meat', sp, 0.45, 0.9, [0.035, 0.06 + pw * 0.04]);
+    if (pw >= 0.8) this.chunks.burst(out, dir, this.n(pw * 0.9 * (full ? 1 : 0.4), k), 'bone', [sp[0] + 1, sp[1] + 2], 0.5, 1, [0.024, 0.05]);
+    if (opts.head && opts.killed && full) {
       for (let i = 0; i < this.n(8, k); i++) {
         const s = rand(1, 3.5);
         this.emitSoft({
@@ -205,10 +243,86 @@ export class Effects {
       }
     }
     // Splatter on the wall or floor behind.
-    if (opts.exit && (this.gore === 'full' || opts.killed) && !this.isMoving?.(opts.exit.pos, opts.exit.normal)) {
-      const size = (0.45 + Math.min(0.6, damage / 90)) * (opts.head && opts.killed ? 1.4 : 1) * (this.gore === 'full' ? 1 : 0.6);
+    if (opts.exit && (full || opts.killed) && !this.isMoving?.(opts.exit.pos, opts.exit.normal)) {
+      const size = (0.45 + Math.min(0.6, damage / 90)) * (opts.head && opts.killed ? 1.4 : 1) * (full ? 1 : 0.6) * (1 + Math.min(0.6, pw * 0.4));
       this.decals.add(DECAL.splat, opts.exit.pos, opts.exit.normal, size, BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 60, 0, dir);
+      // A heavy round paints a second, longer run of it.
+      if (pw >= 0.8 && full) {
+        const at = this.tmp2.copy(opts.exit.pos).addScaledVector(dir, 0.25).addScaledVector(opts.exit.normal, 0.02);
+        this.decals.add(DECAL.splat, at, opts.exit.normal, size * rand(0.6, 0.85), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.85, 60, 0, dir);
+      }
     }
+    // A kill lets a gout of it fall straight onto the ground underneath.
+    if (opts.killed && floor > pos.y - 3) {
+      this.tmp2.set(pos.x + dir.x * 0.3, floor, pos.z + dir.z * 0.3);
+      this.decals.add(DECAL.splat, this.tmp2, this.up, (0.3 + pw * 0.25) * (full ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.9, 70, 0.4, dir);
+    }
+  }
+
+  /**
+   * A head blown apart (a heavy round or a shotgun close up): a burst of red mist, blood thrown
+   * everywhere along the shot, pieces of skull with scalp on them, brain and meat flying, and
+   * splatter painted on whatever is behind.
+   */
+  headPop(pos: THREE.Vector3, dir: THREE.Vector3): void {
+    if (this.gore === 'off') {
+      this.emitSoft({ x: pos.x, y: pos.y, z: pos.z, vx: dir.x * 0.6, vy: 0.3, vz: dir.z * 0.6, life: 0.6, size: 0.12, size1: 0.5, r: 0.22, g: 0.2, b: 0.18, alpha: 0.35, drag: 3 });
+      return;
+    }
+    const full = this.gore === 'full' ? 1 : 0.45;
+    const k = this.scale(pos) * full;
+    const floor = this.floorBelow(pos, 5);
+    for (let i = 0; i < (full === 1 ? 4 : 2); i++) {
+      this.emitSoft({
+        x: pos.x + rand(-0.06, 0.06), y: pos.y + rand(-0.04, 0.08), z: pos.z + rand(-0.06, 0.06),
+        vx: dir.x * rand(0.5, 2.2) + rand(-0.4, 0.4), vy: rand(0.05, 0.6), vz: dir.z * rand(0.5, 2.2) + rand(-0.4, 0.4),
+        life: rand(0.6, 1.1), size: 0.16, size1: rand(0.65, 1.1), r: BLOOD[0] * 1.35, g: BLOOD[1], b: BLOOD[2], alpha: 0.62, drag: 3,
+      });
+    }
+    this.droplets(pos, dir, this.n(46, k), [2.5, 8], 0.45, floor, [0.016, 0.05]);
+    this.droplets(pos, this.up, this.n(18, k), [1.5, 4], 0.9, floor);
+    this.chunks.burst(pos, dir, this.n(9, k), 'meat', [2, 7], 0.55, 1.2, [0.035, 0.075]);
+    this.chunks.burst(pos, dir, this.n(6, k), 'skull', [2.5, 7.5], 0.6, 1.4, [0.045, 0.085]);
+    this.chunks.burst(pos, dir, this.n(4, k), 'brain', [1.5, 5], 0.5, 1, [0.03, 0.06]);
+    this.chunks.burst(pos, dir, this.n(3, k), 'bone', [3, 8], 0.6, 1.2, [0.02, 0.04]);
+    // Painted along the shot onto whatever is behind, and around.
+    const ray = this.tmp2, at = this.tmp3;
+    for (let i = 0; i < 5; i++) {
+      ray.set(dir.x + rand(-0.45, 0.45), dir.y + rand(-0.45, 0.2), dir.z + rand(-0.45, 0.45)).normalize();
+      const hit = this.physics.raycastHit(pos.x, pos.y, pos.z, ray.x, ray.y, ray.z, 6);
+      if (!hit) continue;
+      at.copy(pos).addScaledVector(ray, hit.distance);
+      const n = new THREE.Vector3(hit.nx, hit.ny, hit.nz);
+      if (!this.isMoving?.(at, n)) this.decals.add(DECAL.splat, at, n, rand(0.5, 1.1) * (full === 1 ? 1 : 0.6) * (1 - hit.distance / 12), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 80, 0, ray);
+    }
+  }
+
+  /** A round into a body already lying dead: a spurt, a scrap of meat, a mark on the ground under it. */
+  corpseHit(pos: THREE.Vector3, dir: THREE.Vector3, power: number): void {
+    if (this.gore === 'off') {
+      this.emitSoft({ x: pos.x, y: pos.y, z: pos.z, vx: 0, vy: 0.3, vz: 0, life: 0.4, size: 0.08, size1: 0.3, r: 0.22, g: 0.2, b: 0.18, alpha: 0.35, drag: 3 });
+      return;
+    }
+    const full = this.gore === 'full' ? 1 : 0.4;
+    const k = this.scale(pos) * full;
+    const floor = this.floorBelow(this.tmp2.set(pos.x, pos.y + 0.3, pos.z), 1.6);
+    this.emitSoft({
+      x: pos.x, y: pos.y, z: pos.z, vx: -dir.x * 0.4, vy: 0.35, vz: -dir.z * 0.4,
+      life: rand(0.3, 0.5), size: 0.08, size1: rand(0.3, 0.45) * (1 + power * 0.4), r: BLOOD[0] * 1.3, g: BLOOD[1], b: BLOOD[2], alpha: 0.5, drag: 4,
+    });
+    const up = this.tmp3.set(-dir.x * 0.35, 1, -dir.z * 0.35).normalize();
+    this.droplets(pos, up, this.n(8 + power * 10, k), [1, 2.6 + power], 0.55, floor);
+    this.chunks.burst(pos, up, this.n(0.35 + power * 0.9, k), 'meat', [1, 2.5 + power], 0.6, 0.4, [0.03, 0.055]);
+    this.tmp2.set(pos.x, floor, pos.z);
+    this.decals.add(DECAL.splat, this.tmp2, this.up, (0.22 + power * 0.18) * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.88, 60, 0, dir);
+  }
+
+  /** Scraps of meat (3D pieces) thrown off something torn apart, for callers outside the effects. */
+  meat(pos: THREE.Vector3, dir: THREE.Vector3, count: number, bone = 0): void {
+    if (this.gore === 'off') return;
+    const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.45);
+    this.chunks.burst(pos, dir, this.n(count, k), 'meat', [1.5, 4.5], 0.6, 1, [0.035, 0.07]);
+    if (bone > 0) this.chunks.burst(pos, dir, this.n(bone, k), 'bone', [2, 5], 0.6, 1, [0.022, 0.045]);
   }
 
   /** Height of whatever is below a point (where falling blood lands). */
@@ -232,7 +346,7 @@ export class Effects {
   }
 
   /** Lumps of meat (they land as big splats) and pale splinters of bone. */
-  private chunks(pos: THREE.Vector3, dir: THREE.Vector3, meat: number, bone: number, floor: number): void {
+  private scraps(pos: THREE.Vector3, dir: THREE.Vector3, meat: number, bone: number, floor: number): void {
     for (let i = 0; i < meat; i++) {
       const s = rand(1.2, 3.6);
       const dark = rand(0.55, 1);
@@ -277,7 +391,9 @@ export class Effects {
     this.droplets(pos, dir, this.n(34, k), [2, 5.5], 0.45, floor);
     const back = this.tmp.copy(dir).negate();
     this.droplets(pos, back, this.n(12, k), [1, 2.5], 0.6, floor);
-    this.chunks(pos, dir, this.n(melee ? 7 : 5, k), this.n(melee ? 2 : 4, k), floor);
+    this.scraps(pos, dir, this.n(melee ? 7 : 5, k), this.n(melee ? 2 : 4, k), floor);
+    this.chunks.burst(pos, dir, this.n(melee ? 3 : 4, k), 'meat', [1.5, 4.5], 0.55, 1, [0.035, 0.07]);
+    this.chunks.burst(pos, dir, this.n(melee ? 0.5 : 1.5, k), 'bone', [2, 5], 0.55, 1, [0.022, 0.045]);
     // Splashes: along the blow onto a wall, and down onto the floor.
     const ray = new THREE.Vector3(dir.x, dir.y * 0.3 - 0.25, dir.z).normalize();
     const hit = this.physics.raycastHit(pos.x, pos.y, pos.z, ray.x, ray.y, ray.z, 2.8);
@@ -316,7 +432,9 @@ export class Effects {
       const a = (i / 10) * Math.PI * 2 + rand(-0.2, 0.2);
       dir.set(Math.cos(a), rand(0.05, 0.45), Math.sin(a));
       this.droplets(pos, dir, this.n(9, k), [3, 7.5], 0.3, floor, [0.02, 0.05]);
-      this.chunks(pos, dir.multiplyScalar(1.6), this.n(3, k), this.n(1, k), floor);
+      this.scraps(pos, dir.multiplyScalar(1.6), this.n(3, k), this.n(1, k), floor);
+      this.chunks.burst(pos, dir.normalize(), this.n(1.6, k), 'meat', [3, 8], 0.35, 1.4, [0.04, 0.09]);
+      if (i % 3 === 0) this.chunks.burst(pos, dir, this.n(1, k), i % 2 ? 'fat' : 'bone', [3, 7], 0.35, 1.2, [0.03, 0.06]);
     }
     // Splatter on whatever is around, and a spray on the ground.
     const at = new THREE.Vector3(), n = new THREE.Vector3(), ray = new THREE.Vector3();
@@ -389,7 +507,7 @@ export class Effects {
     const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.4);
     const floor = this.floorBelow(pos);
     this.droplets(pos, dir, this.n(16, k), [1.5, 4], 0.55, floor);
-    this.chunks(pos, dir, this.n(2, k), 0, floor);
+    this.scraps(pos, dir, this.n(2, k), 0, floor);
     this.emitSoft({
       x: pos.x, y: pos.y, z: pos.z, vx: dir.x, vy: 0.2, vz: dir.z,
       life: 0.45, size: 0.1, size1: 0.5, r: BLOOD[0] * 1.3, g: BLOOD[1], b: BLOOD[2], alpha: 0.5, drag: 4,
@@ -404,7 +522,9 @@ export class Effects {
     }
     const k = this.scale(pos) * (this.gore === 'full' ? 1 : 0.45);
     const floor = this.floorBelow(pos);
-    this.chunks(pos, dir, this.n(14, k), this.n(7, k), floor);
+    this.scraps(pos, dir, this.n(14, k), this.n(7, k), floor);
+    this.chunks.burst(pos, dir, this.n(5, k), 'meat', [1.2, 4], 0.8, 1, [0.035, 0.07]);
+    this.chunks.burst(pos, dir, this.n(2, k), 'bone', [1.5, 4.5], 0.8, 1, [0.022, 0.045]);
     this.droplets(pos, dir, this.n(30, k), [1.2, 4.5], 0.8, floor);
     for (let i = 0; i < 3; i++) {
       this.emitSoft({
@@ -426,10 +546,10 @@ export class Effects {
   }
 
   /** Spreading pool under a body. */
-  pool(pos: THREE.Vector3, size: number, life: number): void {
+  pool(pos: THREE.Vector3, size: number, life: number, grow = 5): void {
     if (this.gore === 'off') return;
     const s = size * (this.gore === 'full' ? 1 : 0.6);
-    this.decals.add(DECAL.pool, pos, this.up, s, BLOOD_DECAL[0] * 0.9, BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, life, 5);
+    this.decals.add(DECAL.pool, pos, this.up, s, BLOOD_DECAL[0] * 0.9, BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, life, grow);
   }
 
   muzzle(pos: THREE.Vector3, dir: THREE.Vector3, weapon: WeaponId): void {
@@ -525,6 +645,7 @@ export class Effects {
     this.decals.clear();
     this.casings.clear();
     this.smoke.clear();
+    this.chunks.clear();
     this.light.intensity = 0;
   }
 
@@ -535,6 +656,7 @@ export class Effects {
     this.decals.update(dt);
     this.casings.update(dt);
     this.smoke.update(dt, camera);
+    this.chunks.update(dt);
     this.lightT -= dt;
     this.light.intensity = this.lightT > 0 ? this.lightPower * 9 * (this.lightT / 0.06) : 0;
   }
@@ -545,6 +667,7 @@ export class Effects {
     this.decals.dispose();
     this.casings.dispose();
     this.smoke.dispose();
+    this.chunks.dispose();
     this.light.removeFromParent();
     this.light.dispose();
     this.root.removeFromParent();

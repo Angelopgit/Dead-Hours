@@ -16,6 +16,7 @@ import {
   BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
   levelStart, owns, runXp, sameBuild, sanitizeBuild, sanitizeLoadout, tunedWeapon, unlockTrack, type WeaponBuild, type WeaponId,
   SECONDARY_WEAPONS, isHandgun,
+  GORE, shotgunReach, type ZombieKind,
 } from '../src/index';
 
 let failures = 0;
@@ -2642,6 +2643,94 @@ section('Akimbo pistols');
   check(copy?.arsenal.secondary.id === 'akimbo' && sameBuild(copy.arsenal.builds.akimbo!, kit), 'clients see the pair and its build from snapshots');
   other.dispose();
   cleanup(sim, body);
+}
+
+section('Gore: kill throws, shoves and head pops by gun');
+{
+  type Died = Extract<SimEvent, { type: 'zombieDied' }>;
+  type Hit = Extract<SimEvent, { type: 'zombieHit' }>;
+  /** Shoots one zombie `dist` m away with `gun` (in the chest, or the head) until it dies. */
+  const killWith = (gun: WeaponId, dist: number, opts: { kind?: ZombieKind; head?: boolean; seed?: number; shots?: number } = {}) => {
+    const at = { x: 0, y: 0.15, z: 6 };
+    for (const d of doors) d?.reset();
+    physics.world.step();
+    const sim = new Simulation({ physics, map, nav, doors, seed: 7, preparation: 600 });
+    const secondary = gun === 'pistol';
+    const sp = sim.addPlayer('p1', 'Tester', secondary ? 'ar' : gun, 'pistol', at, 0);
+    const body = new TestPlayer(at);
+    if (secondary) sim.switchWeapon('p1', 'secondary');
+    run(sim, 1.4);
+    const z = sim.spawnZombie(opts.kind ?? 'walker', { x: 0, y: 0.02, z: at.z - dist }, 'idle');
+    z.facing = Math.PI;
+    run(sim, 0.2);
+    sp.arsenal.aim = 1;
+    sp.motion.aiming = true;
+    const hits: Hit[] = [];
+    let died: Died | null = null;
+    let shots = 0;
+    const start = { ...z.pos };
+    let staggered = false;
+    while (z.alive && shots < (opts.shots ?? 12)) {
+      const eye = sp.eye;
+      // Head shots aim at the middle of the head as the hit zones have it.
+      const head = opts.head ? z.zones([]).find((s) => s.zone === 'head') : undefined;
+      const aim = head ? { x: (head.a.x + head.b.x) / 2, y: (head.a.y + head.b.y) / 2, z: (head.a.z + head.b.z) / 2 } : { x: z.pos.x, y: z.pos.y + 1.15, z: z.pos.z };
+      const tx = aim.x - eye.x, ty = aim.y - eye.y, tz = aim.z - eye.z;
+      const l = Math.hypot(tx, ty, tz);
+      if (sim.fire('p1', eye, { x: tx / l, y: ty / l, z: tz / l }, true, (opts.seed ?? 11) + shots * 7) === 'fired') shots++;
+      const ev = [...sim.drain(), ...run(sim, 0.05).events];
+      if (z.state === 'stagger') staggered = true;
+      ev.push(...run(sim, 60 / WEAPONS[gun].fireRate + 0.05).events);
+      for (const e of ev) {
+        if (e.type === 'zombieHit' && e.zombie === z.id) hits.push(e);
+        if (e.type === 'zombieDied' && e.zombie === z.id) died = e;
+      }
+    }
+    const moved = Math.hypot(z.pos.x - start.x, z.pos.z - start.z);
+    body.remove();
+    sim.dispose();
+    return { died: died as Died | null, hits, shots, alive: z.alive, staggered, moved };
+  };
+  const throwOf = (gun: WeaponId, dist: number, kind?: ZombieKind) => {
+    const r = killWith(gun, dist, { kind });
+    return r.died ? r.died.force * GORE.forceSpeed : -1;
+  };
+  const pistol = throwOf('pistol', 8), smg = throwOf('smg', 8), ar = throwOf('ar', 8), marksman = throwOf('marksman', 8);
+  const sniper = throwOf('sniper', 8), shotgunNear = throwOf('shotgun', 3), shotgunFar = throwOf('shotgun', 14);
+  check(pistol > 0 && smg > 0 && ar > 0 && marksman > 0 && sniper > 0 && shotgunNear > 0 && shotgunFar > 0, 'every gun kills a walker and throws the body');
+  check(Math.abs(pistol - GORE.throw.pistol) < 0.01 && Math.abs(sniper - GORE.throw.sniper) < 0.01, `a kill throws the body at the gun's speed (pistol ${pistol.toFixed(2)}, .50 ${sniper.toFixed(2)} m/s)`);
+  check(sniper > shotgunNear && shotgunNear > marksman && marksman > ar && ar > pistol && pistol > smg,
+    `heavier guns throw harder: .50 ${sniper.toFixed(1)} > shotgun up close ${shotgunNear.toFixed(1)} > marksman ${marksman.toFixed(1)} > AR ${ar.toFixed(1)} > pistol ${pistol.toFixed(1)} > SMG ${smg.toFixed(1)}`);
+  check(shotgunNear > pistol * 2.5, 'a shotgun kill up close throws over twice as hard as a pistol kill');
+  check(shotgunFar < shotgunNear * 0.6 && Math.abs(shotgunReach(2) - 1) < 1e-9, `a shotgun throws far less at 14 m (${shotgunFar.toFixed(1)} vs ${shotgunNear.toFixed(1)} m/s)`);
+  const bruteThrow = throwOf('sniper', 8, 'brute');
+  check(bruteThrow > 0 && bruteThrow < sniper * 0.6, `a brute is thrown less than a walker by the same gun (${bruteThrow.toFixed(1)} vs ${sniper.toFixed(1)} m/s)`);
+
+  const ar1 = killWith('ar', 8);
+  check(ar1.hits.length > 0 && ar1.hits.every((h) => h.gun === 'ar') && ar1.died?.gun === 'ar', 'hits and the kill say which gun it was');
+
+  const mHead = killWith('marksman', 8, { head: true });
+  check(mHead.died?.zone === 'head' && mHead.died.pop === true, 'a marksman head shot kill blows the head apart');
+  const sHead = killWith('sniper', 10, { head: true });
+  check(sHead.died?.zone === 'head' && sHead.died.pop === true, 'a .50 head shot kill blows the head apart');
+  const pHead = killWith('pistol', 4, { head: true });
+  check(!!pHead.died && pHead.hits.some((h) => h.zone === 'head') && !pHead.died.pop, 'pistol head shots leave the head on');
+  const aHead = killWith('ar', 4, { head: true });
+  check(aHead.died?.zone === 'head' && !aHead.died.pop, 'an assault rifle head shot kill leaves the head on');
+  const body = killWith('sniper', 8);
+  check(body.died !== null && !body.died.pop, 'a body shot never pops the head');
+  let pops = 0;
+  for (let seed = 1; seed <= 6; seed++) if (killWith('shotgun', 1.6, { head: true, seed: seed * 13 }).died?.pop) pops++;
+  check(pops >= 4, `a shotgun to the face up close blows the head apart (${pops} of 6 volleys)`);
+  let farPops = 0;
+  for (let seed = 1; seed <= 4; seed++) if (killWith('shotgun', 12, { head: true, seed: seed * 13 }).died?.pop) farPops++;
+  check(farPops === 0, 'a shotgun head shot from 12 m does not');
+
+  // Living zombies: a shotgun volley up close shoves anything short of a brute back.
+  const bloater = killWith('shotgun', 4, { kind: 'bloater', shots: 1 });
+  check(bloater.alive && bloater.staggered && bloater.moved > 0.3, `a close shotgun volley staggers a bloater and shoves it back (${bloater.moved.toFixed(2)} m)`);
+  const brute = killWith('shotgun', 4, { kind: 'brute', shots: 1 });
+  check(brute.alive && brute.moved < bloater.moved, `a brute takes the same volley better (${brute.moved.toFixed(2)} m)`);
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

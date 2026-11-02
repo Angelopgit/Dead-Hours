@@ -7,6 +7,7 @@ import { HORDES, LULLS, SPAWNING, SPECIALS, type ZombieKind } from '../config/zo
 import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, type LegZone } from '../config/limbs';
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
+import { GORE, isGoreGun, shotgunReach } from '../config/gore';
 import { findPickupRooms, pickFoundWeapon, type PickupRoom } from './MeleePickups';
 import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
 import { propOccluders } from '../map/colliders';
@@ -288,6 +289,8 @@ export class Simulation {
   /** Bloaters killed and waiting to burst (a blast can set off another: they go in turn). */
   private readonly bursts: { z: Zombie; by: SimPlayer }[] = [];
   private bursting = false;
+  /** Damage each zombie has taken from the shot being fired (a shotgun's pellets add up): all of it, and to the head. */
+  private readonly volley = new Map<number, { all: number; head: number }>();
   /** Boards on the doors and windows of the homes. */
   readonly barricades: Barricades;
   private readonly doorByCollider = new Map<number, DoorBody>();
@@ -817,6 +820,7 @@ export class Simulation {
     const rand = rng(seed >>> 0 || 1);
     const pellets: PelletTrace[] = [];
     let anyHit = false;
+    this.volley.clear();
     for (let i = 0; i < def.pellets; i++) {
       const pd = cone(d, spread, rand);
       const res = this.traceRound(p, o, pd, def);
@@ -824,6 +828,7 @@ export class Simulation {
       pellets.push(res);
     }
     if (anyHit) p.stats.shotsHit++;
+    this.volley.clear();
     this.emit({ type: 'shot', player: id, weapon: a.weapon.id, origin: { ...o }, pellets });
     // A rocket bursts where it struck (or at the end of its flight), a little short of the surface.
     if (def.explosive) {
@@ -876,7 +881,7 @@ export class Simulation {
       if (raider && raider.t < h.t) break;
       const pos = { x: o.x + d.x * h.t, y: o.y + d.y * h.t, z: o.z + d.z * h.t };
       const dmg = def.damage * ZONE_MULTIPLIER[h.zone] * FALLOFF(def, h.t) * Math.pow(0.6, pierced);
-      this.hitZombie(p, h.z, dmg, h.zone, pos, d, false, def.pellets > 1 ? 0.5 : 1, { along: h.along, armTally: dmg });
+      this.hitZombie(p, h.z, dmg, h.zone, pos, d, false, def.pellets > 1 ? 0.5 : 1, { along: h.along, armTally: dmg, gun: def.id, dist: h.t });
       pierced++;
       if (pierced > def.penetration) return { end: pos, hit: 'zombie' };
     }
@@ -907,10 +912,26 @@ export class Simulation {
       death?: { cause: 'blast' | 'fire'; gibs?: GibPart[]; shred?: boolean; blast?: Vec3 };
       /** Overrides how hard a kill throws the body. */
       force?: number;
+      /** A round from this gun, fired from `dist` metres (throws, shoves and head pops by GORE). */
+      gun?: WeaponId;
+      dist?: number;
     } = {},
   ): void {
     if (!z.alive) return;
     const before = z.health;
+    const gun = opts.gun && !melee && isGoreGun(opts.gun) ? opts.gun : null;
+    // A shotgun hits hardest up close; heavy kinds are thrown and shoved less.
+    const reach = gun === 'shotgun' ? shotgunReach(opts.dist ?? 0) : 1;
+    const heft = Math.sqrt(100 / Math.max(100, z.def.health));
+    let volley = { all: damage, head: zone === 'head' ? damage : 0 };
+    if (gun) {
+      const v = this.volley.get(z.id);
+      if (v) {
+        v.all += damage;
+        if (zone === 'head') v.head += damage;
+        volley = v;
+      } else this.volley.set(z.id, volley);
+    }
     // Enough punishment and the leg comes off: high up at the hip, lower down at the knee. Some
     // that would have died of it live on, dragging themselves after you on their arms.
     let legCut: LegCut | null = null;
@@ -924,14 +945,19 @@ export class Simulation {
         }
       }
     }
-    const killed = z.takeHit(damage, zone, dir, p, melee, opts.knock);
+    const shove = gun ? {
+      speed: GORE.knock[gun] * reach * heft,
+      // Most of a shotgun volley up close knocks anything short of a brute back.
+      force: gun === 'shotgun' && reach >= 1 && volley.all >= GORE.shotgunStagger && z.kind !== 'brute',
+    } : undefined;
+    const killed = z.takeHit(damage, zone, dir, p, melee, opts.knock, shove);
     const dealt = Math.min(before, damage);
     p.stats.damageDealt += dealt;
     // Blood sprays out the far side onto whatever is behind.
     let exit: { pos: Vec3; normal: Vec3 } | null = null;
     const back = this.physics.raycastHit(pos.x, pos.y, pos.z, dir.x, dir.y, dir.z, 2.6);
     if (back) exit = { pos: { x: pos.x + dir.x * back.distance, y: pos.y + dir.y * back.distance, z: pos.z + dir.z * back.distance }, normal: { x: back.nx, y: back.ny, z: back.nz } };
-    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}), ...(opts.weapon ? { weapon: opts.weapon } : {}) });
+    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}), ...(opts.weapon ? { weapon: opts.weapon } : {}), ...(gun ? { gun } : {}) });
     // Enough punishment and the arm comes off: near the shoulder the whole arm, lower down the forearm.
     if ((zone === 'armL' || zone === 'armR') && z.canLose(zone)) {
       z.armDamage[zone] += opts.armTally ?? damage;
@@ -944,9 +970,14 @@ export class Simulation {
       p.stats.kills++;
       if (zone === 'head') p.stats.headshots++;
       if (opts.limb !== undefined) p.stats.limbKills++;
+      // Heavy rounds throw the body off its feet; a big enough head shot blows the head apart.
+      const thrown = gun ? (GORE.throw[gun] * reach * heft) / GORE.forceSpeed : (melee ? 1.2 : 0.6 + Math.min(1.4, damage / 60)) * force;
+      const pop = !!gun && !opts.death && ((zone === 'head' && damage >= GORE.popDamage) || (gun === 'shotgun' && reach >= 1 && volley.head >= GORE.popDamage * GORE.shotgunPop));
       this.emit({
-        type: 'zombieDied', zombie: z.id, zone, dir: { ...dir }, force: opts.force ?? (melee ? 1.2 : 0.6 + Math.min(1.4, damage / 60)) * force, by: p.id,
+        type: 'zombieDied', zombie: z.id, zone, dir: { ...dir }, force: opts.force ?? thrown, by: p.id,
         ...(opts.death ?? {}),
+        ...(gun ? { gun } : {}),
+        ...(pop ? { pop: true } : {}),
       });
       if (z.kind === 'bloater') this.burst(z, p);
     }

@@ -32,6 +32,8 @@ export type SimEvent =
     limb?: number;
     /** The melee weapon it was struck with (not set for arms or bullets). */
     weapon?: MeleeId;
+    /** The gun the round came from (sizes the blood, meat and sound). */
+    gun?: WeaponId;
   }
   | {
     type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string;
@@ -42,6 +44,10 @@ export type SimEvent =
     shred?: boolean;
     /** Where the blast was (bodies are thrown away from it). */
     blast?: Vec3;
+    /** Shot dead with a gun: which one (how high the body is thrown). */
+    gun?: WeaponId;
+    /** A head shot heavy enough to blow the head apart. */
+    pop?: boolean;
   }
   | { type: 'zombieSpawned'; zombie: number; kind: ZombieKind }
   | { type: 'zombieRemoved'; zombie: number }

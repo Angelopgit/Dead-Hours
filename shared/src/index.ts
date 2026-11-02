@@ -5,6 +5,7 @@ export * from './config/game';
 export * from './config/zombies';
 export * from './config/drops';
 export * from './config/limbs';
+export * from './config/gore';
 export * from './config/barricades';
 export * from './config/melee';
 export * from './config/raid';

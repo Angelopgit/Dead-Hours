@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SPAWNING, isLeg, type ArmCut, type GibPart, type HitZone, type LegCut, type LimbCut, type LimbZone, type Simulation, type Vec3, type Zombie, type ZombieKind } from '@dead-hours/shared';
+import { GORE, SPAWNING, isGoreGun, isLeg, type ArmCut, type GibPart, type HitZone, type LegCut, type LimbCut, type LimbZone, type Simulation, type Vec3, type WeaponId, type Zombie, type ZombieKind } from '@dead-hours/shared';
 import { Humanoid, kindLooks, zombieLookOf, type ZombieGait } from '../characters/Humanoid';
 import { Gibs } from '../characters/Gibs';
 import type { BurnPoint } from '../effects/Pyro';
@@ -33,6 +33,11 @@ interface View {
   burnLeft: number;
   /** Crawling: ground covered since the last smear of blood it dragged behind it. */
   trail: number;
+  /** How shot up it is 0..1 (it drips blood as it walks), and seconds to its next drop. */
+  hurt: number;
+  dripT: number;
+  /** Corpses: when it was last shot or kicked (a pellet volley pushes once). */
+  pokedAt: number;
 }
 
 /** How a zombie died, when it was more than a bullet. */
@@ -41,7 +46,21 @@ export interface DeathDetail {
   gibs?: GibPart[];
   shred?: boolean;
   blast?: Vec3;
+  /** Shot dead with this gun (how high the body is thrown). */
+  gun?: WeaponId;
+  /** The head was blown apart. */
+  pop?: boolean;
 }
+
+/** A round going into a body already on the ground. */
+export interface CorpseHit {
+  pos: THREE.Vector3;
+  dir: THREE.Vector3;
+  zombie: number;
+}
+
+/** Fastest a body is ever thrown (m/s): any more and a frame hitch would fling it across the street. */
+const MAX_THROW = 11;
 
 /** A fresh stump: pumping blood for a few seconds, then dripping, slowing to nothing. */
 interface Bleed {
@@ -87,8 +106,14 @@ export class ZombieView {
   private readonly root = new THREE.Group();
   private readonly tmp = new THREE.Vector3();
   gore = true;
+  /** Bodies land on (and roll off) the bodies already lying there. */
+  piles = true;
   /** A body came to rest (blood pool under it). */
   onCorpseSettled: ((pos: THREE.Vector3) => void) | null = null;
+  /** A body hit the ground or a wall hard (how hard 0..1). */
+  onBodyFall: ((pos: THREE.Vector3, strength: number) => void) | null = null;
+  /** A head was blown apart (where it was). */
+  onHeadPop: ((pos: THREE.Vector3) => void) | null = null;
   /** A zombie's foot came down (gait, how hard 0..1). */
   onStep: ((pos: THREE.Vector3, gait: ZombieGait, loudness: number) => void) | null = null;
   /** Far footfalls left to play this moment (a horde would otherwise be hundreds a second). */
@@ -178,6 +203,10 @@ export class ZombieView {
     v.body.root.removeFromParent();
     v.body.ragdoll = false;
     v.bleeds.length = 0;
+    if (v.ragdoll) {
+      v.ragdoll.onImpact = null;
+      v.ragdoll.obstacles = [];
+    }
     v.body.root.scale.setScalar(1);
     this.poolOf(v.kind, v.look).push({ body: v.body, probe: v.probe });
   }
@@ -218,12 +247,14 @@ export class ZombieView {
    * A hit: the body flinches, a wound opens where it landed (and where a bullet came out) and
    * its blood soaks into the clothes around it; every hit leaves the limb bloodier overall.
    */
-  hit(id: number, zone: HitZone, dir: THREE.Vector3, damage: number, melee: boolean, pos?: THREE.Vector3, exit?: THREE.Vector3 | null): void {
+  hit(id: number, zone: HitZone, dir: THREE.Vector3, damage: number, melee: boolean, pos?: THREE.Vector3, exit?: THREE.Vector3 | null, power = 0): void {
     const v = this.views.get(id);
     if (!v) return;
-    const amount = Math.min(1, damage / 60) * (melee ? 1.4 : 1);
+    // A heavy round jerks the body round harder than its damage alone says.
+    const amount = Math.max(Math.min(1, damage / 60) * (melee ? 1.4 : 1), Math.min(1.3, power * 0.9));
     v.body.flinch(zone, dir.x, dir.z, amount);
     if (!this.gore) return;
+    v.hurt = Math.min(1, v.hurt + 0.12 + amount * 0.25);
     v.body.wound(zone, 0.1 + amount * 0.25);
     if (pos) v.body.woundAt(pos, zone, Math.min(1.2, 0.35 + amount * 0.7));
     // Exit wounds are the bigger mess.
@@ -254,18 +285,43 @@ export class ZombieView {
     this.views.delete(id);
     if (this.gore) v.body.wound(zone, 0.5);
     const r = new Ragdoll(this.physics, v.body);
-    // A blast throws a body a few metres (up and away), not across the street.
-    const push = detail.cause === 'blast'
-      ? dir.clone().setY(Math.max(dir.y, 0) + 0.45).normalize().multiplyScalar(force * 1.35)
-      : dir.clone().setY(Math.max(dir.y, 0) + 0.25).multiplyScalar(force * 2.6);
-    const pushes = [{ joints: ZONE_PARTICLES[zone] ?? ZONE_PARTICLES.torso, impulse: push }];
+    const pushes: { joints: number[]; impulse: THREE.Vector3 }[] = [];
+    const parts = ZONE_PARTICLES[zone] ?? ZONE_PARTICLES.torso;
     if (detail.cause === 'blast') {
-      // Thrown bodily, the parts nearest the blast hardest.
+      // A blast throws a body a few metres (up and away), not across the street: bodily, the
+      // parts nearest the blast hardest.
+      const push = dir.clone().setY(Math.max(dir.y, 0) + 0.45).normalize().multiplyScalar(force * 1.35);
+      pushes.push({ joints: parts, impulse: push });
       for (const j of Object.values(ZONE_PARTICLES)) pushes.push({ joints: j, impulse: push.clone().multiplyScalar(0.6) });
-    } else if (zone === 'legL' || zone === 'legR') pushes.push({ joints: ZONE_PARTICLES.torso, impulse: dir.clone().multiplyScalar(-force * 0.8) });
+    } else {
+      // The round (or blow) throws the whole body back along the shot, the part it hit hardest,
+      // and heavy guns lift it off its feet: a pistol drops it, a shotgun or a .50 knocks it flat.
+      const speed = Math.min(MAX_THROW, force * GORE.forceSpeed);
+      const gun = detail.gun && isGoreGun(detail.gun) ? detail.gun : null;
+      const lift = gun ? GORE.lift[gun] : 0.2;
+      const share = gun ? 0.55 : 0.3;
+      const h = _sd.set(dir.x, 0, dir.z);
+      if (h.lengthSq() < 1e-6) h.set(0, 0, 1);
+      h.normalize();
+      pushes.push({ joints: ALL, impulse: h.clone().multiplyScalar(speed * share).setY(speed * lift) });
+      pushes.push({ joints: parts, impulse: h.clone().multiplyScalar(speed * (1 - share) * 1.3).setY(speed * lift * 0.5 + Math.max(0, dir.y) * speed * 0.3) });
+      // Head shots snap the head back; leg shots take the legs out from under it.
+      if (zone === 'head') pushes.push({ joints: ZONE_PARTICLES.head, impulse: h.clone().multiplyScalar(speed * 0.5) });
+      else if (zone === 'legL' || zone === 'legR') pushes.push({ joints: ZONE_PARTICLES.torso, impulse: h.clone().multiplyScalar(-speed * 0.3) });
+    }
     // The ragdoll reads joints from the bones: a missing arm still has its (hidden) joints.
     v.body.withWholeArms(() => r.start(v.vel, pushes));
+    r.onImpact = (pos, strength) => this.fell(v, pos, strength);
     v.ragdoll = r;
+    if (detail.pop && this.gore && !v.body.isTorn('head')) {
+      // The head comes apart: pieces of it everywhere and a torn neck pumping blood.
+      v.body.root.updateMatrixWorld(true);
+      v.body.head.getWorldPosition(_hp).addScaledVector(_up, 0.1 * v.body.root.scale.x);
+      this.effects.headPop(_hp, dir);
+      v.body.tearOff('head');
+      v.bleeds.push({ arm: 'head' as unknown as LimbZone, t: 0, next: 0.03, strength: 1.4 });
+      this.onHeadPop?.(_hp);
+    }
     if (detail.cause === 'fire') {
       v.burn = 1;
       v.char = Math.max(v.char, 0.85);
@@ -283,6 +339,92 @@ export class ZombieView {
       // Oldest corpse starts sinking right away.
       const old = this.corpses.find((c) => c.deadT < SPAWNING.corpseTime);
       if (old) old.deadT = SPAWNING.corpseTime;
+    }
+  }
+
+  /** A body landed hard: a thud, and blood splashed where it came down. */
+  private fell(v: View, pos: THREE.Vector3, strength: number): void {
+    this.onBodyFall?.(pos, strength);
+    if (this.gore && strength > 0.25 && v.deadT < 3) this.effects.splat(pos, 0.25 + strength * 0.35);
+  }
+
+  /**
+   * Rounds going into bodies on the ground: each pellet that passes through one jerks it the way
+   * the round went, splashes blood and tears a scrap off. `power` is the gun's (GORE.power) and
+   * `push` how hard it shoves (m/s). Returns where they went in, for the sounds.
+   */
+  shootCorpses(origin: THREE.Vector3, ends: THREE.Vector3[], power: number, push: number, out: CorpseHit[]): CorpseHit[] {
+    out.length = 0;
+    if (!this.corpses.length) return out;
+    _struck.clear();
+    for (const end of ends) {
+      _sd.subVectors(end, origin);
+      const len = _sd.length();
+      if (len < 0.1) continue;
+      _sd.divideScalar(len);
+      let best: { v: View; t: number; joint: number } | null = null;
+      for (const c of this.corpses) {
+        // The body just killed by this very shot is still where it stood.
+        if (!c.ragdoll || c.deadT < 0.15 || c.deadT > SPAWNING.corpseTime) continue;
+        const h = c.ragdoll.hitTest(origin, _sd, len);
+        if (h && (!best || h.t < best.t)) best = { v: c, t: h.t, joint: h.joint };
+      }
+      if (!best) continue;
+      const pos = origin.clone().addScaledVector(_sd, best.t);
+      const c = best.v;
+      // The floor's friction eats a sideways shove at once: the jerk that shows is the limb
+      // jumping off the ground (less for each more pellet into the same body).
+      const n = _struck.get(c) ?? 0;
+      _struck.set(c, n + 1);
+      c.ragdoll!.impulse([best.joint], _hp.copy(_sd).multiplyScalar(push).setY(Math.max(1.5, push * 0.9) / (1 + n)));
+      c.ragdoll!.impulse(null, _hp.copy(_sd).multiplyScalar(push * 0.15).setY((push * 0.18) / (1 + n)));
+      if (this.gore) {
+        c.body.woundAt(pos, 'torso', 0.8);
+        c.body.wound('torso', 0.2);
+      }
+      this.effects.corpseHit(pos, _sd, power);
+      out.push({ pos, dir: _sd.clone(), zombie: c.id });
+    }
+    return out;
+  }
+
+  /** A blast nearby throws the bodies already lying about (and the pieces of them). */
+  blastCorpses(at: THREE.Vector3, radius: number, power: number): void {
+    for (const c of this.corpses) {
+      if (!c.ragdoll || c.deadT < 0.05 || c.deadT > SPAWNING.corpseTime) continue;
+      c.ragdoll.center(_sp);
+      const d = _sp.distanceTo(at);
+      if (d > radius) continue;
+      const k = (1 - d / radius) * power;
+      _sd.subVectors(_sp, at).setY(0);
+      if (_sd.lengthSq() < 1e-6) _sd.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+      _sd.normalize();
+      c.ragdoll.impulse(null, _hp.copy(_sd).multiplyScalar(2 + 6 * k).setY(1.5 + 4 * k));
+      // The near side harder: it turns over as it goes.
+      const j = c.ragdoll.nearest(at);
+      c.ragdoll.impulse([j], _hp.copy(_sd).multiplyScalar(3 * k).setY(2 * k));
+    }
+    this.effects.chunks.blast(at, radius * 0.8, power);
+  }
+
+  /**
+   * Someone walking through bodies on the ground: the limbs in the way are kicked aside. `feet`
+   * is where they stand, `vel` how fast they are moving.
+   */
+  nudge(feet: THREE.Vector3, vel: THREE.Vector3): void {
+    const sp = Math.hypot(vel.x, vel.z);
+    if (sp < 1.2 || !this.corpses.length) return;
+    const now = performance.now();
+    for (const c of this.corpses) {
+      if (!c.ragdoll || c.deadT < 0.5 || c.deadT > SPAWNING.corpseTime || now - c.pokedAt < 280) continue;
+      c.ragdoll.center(_sp);
+      if (Math.abs(_sp.x - feet.x) > 1.3 || Math.abs(_sp.z - feet.z) > 1.3) continue;
+      _hp.set(feet.x + vel.x * 0.08, feet.y + 0.15, feet.z + vel.z * 0.08);
+      const j = c.ragdoll.nearest(_hp, _sp);
+      const dx = _sp.x - _hp.x, dz = _sp.z - _hp.z;
+      if (dx * dx + dz * dz > 0.4 * 0.4 || _sp.y - feet.y > 0.5) continue;
+      c.pokedAt = now;
+      c.ragdoll.impulse([j], _hp.set(vel.x * 0.75, 0.9 + sp * 0.12, vel.z * 0.75));
     }
   }
 
@@ -364,7 +506,7 @@ export class ZombieView {
       let v = this.views.get(z.id);
       if (!v) {
         const { body, probe } = this.acquire(z.kind, z.look);
-        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [], burn: 0, char: 0, burnLeft: 0, trail: 0 };
+        const view: View = v = { id: z.id, look: z.look, kind: z.kind, body, probe, facing: z.facing, ragdoll: null, deadT: -1, baseY: 0, pos: new THREE.Vector3(z.pos.x, z.pos.y, z.pos.z), vel: new THREE.Vector3(), pooledBlood: false, bleeds: [], burn: 0, char: 0, burnLeft: 0, trail: 0, hurt: 0, dripT: 1, pokedAt: -1 };
         body.onFootstep = (l) => this.stepped(view, l);
         this.views.set(z.id, v);
       }
@@ -387,7 +529,21 @@ export class ZombieView {
         this.shadeBurn(c, dt);
       }
       const r = c.ragdoll!;
-      if (!r.asleep) r.update(dt);
+      if (!r.asleep) {
+        // Lands on the bodies already lying there instead of sinking through them.
+        r.obstacles.length = 0;
+        if (this.piles && c.deadT < SPAWNING.corpseTime) {
+          r.center(_sp);
+          for (const o of this.corpses) {
+            if (o === c || !o.ragdoll || o.deadT > SPAWNING.corpseTime) continue;
+            o.ragdoll.center(_hp);
+            if (Math.abs(_hp.x - _sp.x) < 2.4 && Math.abs(_hp.z - _sp.z) < 2.4) r.obstacles.push(o.ragdoll);
+            // A heap of bodies: the nearest few are what it lands on.
+            if (r.obstacles.length >= 3) break;
+          }
+        }
+        r.update(dt);
+      }
       else if (!c.pooledBlood) {
         c.pooledBlood = true;
         this.onCorpseSettled?.(r.center(this.tmp).setY(r.floorY + 0.01));
@@ -461,6 +617,23 @@ export class ZombieView {
     b.update(dt, { speed: state === 'stagger' ? Math.min(sp, 1.2) : z.moveSpeed, crouch: state === 'vault' && !z.crawling ? 0.6 : 0, aim: 0, grounded: z.grounded, strafe: 0, moveAngle, turn: z.turnRate });
     v.probe.update(dt, this.tmp.set(x, y, zz), camera);
     if (v.bleeds.length) this.bleed(v, dt, cam);
+    // Shot up, it leaves drops of blood behind wherever it goes.
+    if (v.hurt > 0.05 && this.gore) {
+      v.hurt = Math.max(0, v.hurt - dt * 0.004);
+      v.dripT -= dt * (0.5 + v.hurt * 3.5);
+      if (v.dripT <= 0) {
+        v.dripT = 0.6 + Math.random() * 0.8;
+        if (dist < 32) {
+          const bone = Math.random() < 0.6 ? b.spine : Math.random() < 0.5 ? b.armL.lower : b.armR.lower;
+          if (bone.scale.x > 0.01) {
+            bone.getWorldPosition(_sp);
+            _sp.x += (Math.random() - 0.5) * 0.2;
+            _sp.z += (Math.random() - 0.5) * 0.2;
+            this.effects.drip(_sp, v.vel);
+          }
+        }
+      }
+    }
     // On fire: flames all over, the skin charring black.
     if (z.burning) v.burn = Math.min(1, v.burn + dt * 3);
     else v.burn = Math.max(0, v.burn - dt * 1.5);
@@ -558,4 +731,8 @@ export class ZombieView {
   }
 }
 
-const _sp = new THREE.Vector3(), _sd = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _q = new THREE.Quaternion();
+const _sp = new THREE.Vector3(), _sd = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _q = new THREE.Quaternion(), _hp = new THREE.Vector3();
+/** Pellets of the current shot that went into each body on the ground. */
+const _struck = new Map<View, number>();
+/** Every particle of a ragdoll. */
+const ALL = Array.from({ length: 15 }, (_, i) => i);
