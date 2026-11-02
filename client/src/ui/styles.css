@@ -258,7 +258,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .warning.show { opacity: 1; animation: blink 1.4s steps(1) infinite; }
 @keyframes pulse { 50% { opacity: 0.55; } }
 @keyframes blink { 0%, 70% { opacity: 1; } 71%, 100% { opacity: 0.35; } }
-.feed { position: absolute; right: 3vw; bottom: calc(4vh + 15.5em); display: flex; flex-direction: column; align-items: flex-end; gap: 0.35em;
+/* Above the ammo panel with every row up (slots to FLASHLIGHT, 13em of the HUD's size, 16.7em of the feed's)
+   and a gap: the last feed line printed over the weapon slots once the throwable and flashlight rows came. */
+.feed { position: absolute; right: 3vw; bottom: calc(4vh + 17.8em); display: flex; flex-direction: column; align-items: flex-end; gap: 0.35em;
   font-size: 0.78em; letter-spacing: 0.24em; color: var(--fg); text-shadow: 0 1px 6px rgba(0,0,0,0.9); }
 
 /* Weapon panel (bottom right) */
