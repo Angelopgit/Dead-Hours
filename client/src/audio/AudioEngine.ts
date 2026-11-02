@@ -5,8 +5,9 @@ import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMec
 import { RELOAD_STEPS } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
-import type { MeleeId } from '@dead-hours/shared';
+import { WEAPONS, type MeleeId } from '@dead-hours/shared';
 import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
+import { ShotVoices } from './ShotVoices';
 import { RECORDED_FILES } from './recordedFiles';
 import { weather } from '../environment/Weather';
 
@@ -20,8 +21,28 @@ const STREET_INDOORS = 0.18;
 /** Sound escaping a building through its openings, and coming into one from the street. */
 const LEAK_OUT: Muffle = { gain: 0.6, cutoff: 2500, walls: 1 };
 const LEAK_IN: Muffle = { gain: 0.5, cutoff: 1500, walls: 1 };
-/** Other people's shots playing at once; past this the farthest gives way. */
-const MAX_REMOTE_SHOTS = 10;
+/** Someone else's report at the listener: full level to this distance, then inverse distance (its panner). */
+const REMOTE_REF = 8;
+const REMOTE_ROLLOFF = 1.2;
+/** A report let go to make room (an older one of the same gun's, or the quietest) fades over this (s). */
+const SHOT_RELEASE = 0.025;
+/** Cases hitting the ground farther off than this (m) are lost under everything else: not played. */
+const CASING_RANGE = 15;
+/**
+ * HRTF panning (true 3D on headphones) for one-shots this close (m), at most HRTF_RATE new ones a
+ * second (bursts of HRTF_BURST); the rest pan left-right. Chrome works out each new HRTF panner's
+ * filters on the audio thread: dozens a second in a firefight made the output drop out in bursts
+ * (measured in dev/firefight: ~110 underruns in 20 s with HRTF on everything, ~5 with this).
+ */
+const HRTF_RANGE = 10;
+const HRTF_RATE = 12;
+const HRTF_BURST = 6;
+/**
+ * Left-right panning brought up to HRTF's level: HRTF plays the engine's sounds louder (measured
+ * 2-4 dB for zombie voices, steps and impacts, 2 dB for flesh hits, most in front), so a sound
+ * keeps its loudness whichever it gets.
+ */
+const EQUAL_MAKEUP = 1.4;
 const CRACK_TAKES = 2;
 const CRACK_LEVEL = 0.55;
 /** Slower than this and a round makes no crack worth hearing (m/s). */
@@ -134,7 +155,13 @@ export class AudioEngine {
   /** The kind of space the listener is in. */
   private here: Space = 'street';
   private nextSpace = 0;
-  private readonly voices: { end: number; dist: number; level: GainNode }[] = [];
+  /** Every report sounding now, yours and everyone else's: who is heard when many guns fire at once. */
+  private readonly shotVoices = new ShotVoices();
+  /** Where the Web Audio listener was last put, so it is only moved when the camera moves. */
+  private readonly heard = new Float32Array(9).fill(NaN);
+  /** HRTF panners that may start now (refilled at HRTF_RATE a second), and when it was last refilled. */
+  private hrtfTokens = HRTF_BURST;
+  private hrtfAt = 0;
   private readonly bank = new Map<string, AudioBuffer>();
   private bankTimer = 0;
   private readonly listenerPos = new THREE.Vector3();
@@ -256,6 +283,21 @@ export class AudioEngine {
   }
 
   /**
+   * Once a one-shot's source has stopped, cuts it and the nodes only it feeds (`chain`) out of the
+   * mix. Chrome keeps rendering a node fed by two or more finished sources until garbage collection
+   * gets round to them: every case hitting the road, every zombie step and flesh hit left its panner
+   * running, so the audio thread's load climbed through a firefight until the output broke up
+   * (measured: two tones into one panner, four a frame, took it from 10 % to over 500 % of real time
+   * in 12 s). Disconnected, the shared node they fed is released as soon as its last source ends.
+   */
+  private free(src: AudioScheduledSourceNode, ...chain: AudioNode[]): void {
+    src.addEventListener('ended', () => {
+      src.disconnect();
+      for (const n of chain) n.disconnect();
+    }, { once: true });
+  }
+
+  /**
    * Rain: a bright hiss of drops on the street and a low drum on the roof. Outside the hiss is
    * open; inside it dulls behind the walls and the roof drum takes over; a basement hears little.
    */
@@ -366,6 +408,7 @@ export class AudioEngine {
       const og = ctx.createGain();
       og.gain.value = g;
       o.connect(og).connect(out);
+      this.free(o, og);
       o.start(t);
       o.stop(t + 6);
     }
@@ -422,7 +465,7 @@ export class AudioEngine {
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(0.22 * loudness, t + 0.008);
     g.gain.exponentialRampToValueAtTime(0.001, t + (indoor ? 0.12 : 0.09));
-    if (position) src.connect(bp).connect(g).connect(this.makePanner(position)).connect(this.effects);
+    if (position) src.connect(bp).connect(g).connect(this.place(position, this.effects));
     else src.connect(bp).connect(g).connect(this.effects);
     src.start(t, Math.random() * 2);
     src.stop(t + 0.2);
@@ -506,15 +549,18 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(0.5 * volume * ZOMBIE_LEVEL, t + 0.25);
     g.gain.setTargetAtTime(0, t + dur * 0.7, 0.2);
     o.connect(f1).connect(g).connect(this.zombieOut(position, 1));
+    this.free(o, f1, g);
+    this.free(vib, vg);
     o.start(t);
     vib.start(t);
     o.stop(t + dur + 1);
     vib.stop(t + dur + 1);
   }
 
-  private makePanner(position: THREE.Vector3): PannerNode {
+  /** A panner, HRTF unless `hrtf` is false; lasting sounds (rotors, fires, explosions) use it as is. */
+  private makePanner(position: THREE.Vector3, hrtf = true): PannerNode {
     const p = this.ctx!.createPanner();
-    p.panningModel = 'HRTF';
+    p.panningModel = hrtf ? 'HRTF' : 'equalpower';
     p.distanceModel = 'inverse';
     p.refDistance = 3;
     p.rolloffFactor = 1.2;
@@ -523,6 +569,34 @@ export class AudioEngine {
     p.positionY.value = position.y;
     p.positionZ.value = position.z;
     return p;
+  }
+
+  /**
+   * A one-shot's panner, feeding `outs`: HRTF when near and within the rate the audio thread keeps up
+   * with (hrtf()), else left-right panning raised by EQUAL_MAKEUP.
+   */
+  private place(position: THREE.Vector3, ...outs: AudioNode[]): PannerNode {
+    const hrtf = this.hrtf(position);
+    const p = this.makePanner(position, hrtf);
+    let from: AudioNode = p;
+    if (!hrtf) {
+      const up = this.ctx!.createGain();
+      up.gain.value = EQUAL_MAKEUP;
+      from = p.connect(up);
+    }
+    for (const o of outs) from.connect(o);
+    return p;
+  }
+
+  /** Whether a one-shot here gets HRTF panning (near, and within the rate the audio thread keeps up with). */
+  private hrtf(position: THREE.Vector3): boolean {
+    if (position.distanceToSquared(this.listenerPos) > HRTF_RANGE * HRTF_RANGE) return false;
+    const now = this.ctx!.currentTime;
+    this.hrtfTokens = Math.min(HRTF_BURST, this.hrtfTokens + (now - this.hrtfAt) * HRTF_RATE);
+    this.hrtfAt = now;
+    if (this.hrtfTokens < 1) return false;
+    this.hrtfTokens--;
+    return true;
   }
 
   /**
@@ -773,17 +847,22 @@ export class AudioEngine {
     this.listenerPos.copy(p);
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-    if (L.positionX) {
-      const t = ctx.currentTime;
-      L.positionX.setTargetAtTime(p.x, t, 0.02);
-      L.positionY.setTargetAtTime(p.y, t, 0.02);
-      L.positionZ.setTargetAtTime(p.z, t, 0.02);
-      L.forwardX.setTargetAtTime(fwd.x, t, 0.02);
-      L.forwardY.setTargetAtTime(fwd.y, t, 0.02);
-      L.forwardZ.setTargetAtTime(fwd.z, t, 0.02);
-      L.upX.setTargetAtTime(up.x, t, 0.02);
-      L.upY.setTargetAtTime(up.y, t, 0.02);
-      L.upZ.setTargetAtTime(up.z, t, 0.02);
+    // Set straight, and only when the camera moved: an automated listener (setTargetAtTime every
+    // frame, as this was) makes every panner in the mix work out its direction sample by sample,
+    // which tripled their cost and left the audio thread behind in a firefight (dropouts).
+    const at = [p.x, p.y, p.z, fwd.x, fwd.y, fwd.z, up.x, up.y, up.z];
+    let moved = false;
+    for (let i = 0; i < 9; i++) if (!(Math.abs(at[i] - this.heard[i]) < 1e-4)) moved = true;
+    if (moved) {
+      this.heard.set(at);
+      if (L.positionX) {
+        const params = [L.positionX, L.positionY, L.positionZ, L.forwardX, L.forwardY, L.forwardZ, L.upX, L.upY, L.upZ];
+        for (let i = 0; i < 9; i++) params[i].value = at[i];
+      } else {
+        // Firefox: only the old setters.
+        L.setPosition(p.x, p.y, p.z);
+        L.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);
+      }
     }
     for (const s of this.spatial) s.gain.gain.setTargetAtTime(s.level(), ctx.currentTime, 0.015);
     if (this.time > this.nextSpace) {
@@ -830,9 +909,9 @@ export class AudioEngine {
     const t = ctx.currentTime;
     const angle = Math.random() * Math.PI * 2;
     const far = around.clone().add(new THREE.Vector3(Math.cos(angle) * 60, 2, Math.sin(angle) * 60));
-    const panner = this.makePanner(far);
-    panner.refDistance = 20;
     const kind = Math.random();
+    const panner = kind < 0.45 ? this.place(far, this.ambient, this.sends.ambient) : this.place(far, this.ambient);
+    panner.refDistance = 20;
     if (kind < 0.45) {
       // Dog bark: two short tonal-noise barks.
       for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
@@ -850,11 +929,10 @@ export class AudioEngine {
         g.gain.linearRampToValueAtTime(0.12, bt + 0.015);
         g.gain.exponentialRampToValueAtTime(0.001, bt + 0.16);
         o.connect(bp).connect(g).connect(panner);
+        this.free(o, bp, g);
         o.start(bt);
         o.stop(bt + 0.2);
       }
-      panner.connect(this.ambient);
-      panner.connect(this.sends.ambient);
     } else {
       // Wooden creak.
       const o = ctx.createOscillator();
@@ -870,7 +948,6 @@ export class AudioEngine {
       g.gain.linearRampToValueAtTime(0.06, t + 0.4);
       g.gain.linearRampToValueAtTime(0, t + 1.5);
       o.connect(bp).connect(g).connect(panner);
-      panner.connect(this.ambient);
       o.start(t);
       o.stop(t + 1.6);
     }
@@ -883,9 +960,9 @@ export class AudioEngine {
     const ctx = this.ctx!;
     const g = ctx.createGain();
     if (position) {
-      const p = this.makePanner(position);
+      const p = this.place(position, this.effects);
       p.refDistance = ref;
-      g.connect(p).connect(this.effects);
+      g.connect(p);
     } else {
       g.connect(this.effects);
     }
@@ -914,6 +991,7 @@ export class AudioEngine {
     // The noise buffer is 3 s long: start early enough that long tails don't run out.
     src.start(t, Math.random() * Math.max(0, 2.9 - (attack + decay) * rate));
     src.stop(t + attack + decay + 0.05);
+    this.free(src, f, g);
   }
 
   /** Oscillator with a pitch glide and a percussive envelope. */
@@ -928,6 +1006,7 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(peak, t + attack);
     g.gain.exponentialRampToValueAtTime(0.0008, t + attack + decay);
     o.connect(g).connect(dest);
+    this.free(o, g);
     o.start(t);
     o.stop(t + attack + decay + 0.05);
   }
@@ -1092,26 +1171,6 @@ export class AudioEngine {
   }
 
   /**
-   * Someone else's shot takes a voice: when too many fire at once the farthest gives way
-   * (false: this one is the farthest and is dropped).
-   */
-  private claimVoice(dist: number, end: number, level: GainNode): boolean {
-    const now = this.ctx!.currentTime;
-    for (let i = this.voices.length - 1; i >= 0; i--) if (this.voices[i].end < now) this.voices.splice(i, 1);
-    if (this.voices.length >= MAX_REMOTE_SHOTS) {
-      let far = 0;
-      for (let i = 1; i < this.voices.length; i++) if (this.voices[i].dist > this.voices[far].dist) far = i;
-      if (this.voices[far].dist <= dist) return false;
-      const g = this.voices[far].level.gain;
-      g.cancelScheduledValues(now);
-      g.setTargetAtTime(0, now, 0.008);
-      this.voices.splice(far, 1);
-    }
-    this.voices.push({ end, dist, level });
-    return true;
-  }
-
-  /**
    * Gunshot, built the way it reaches the ear:
    * - the report, at the shooter's face for your own gun; for anyone else's, late by the speed of
    *   sound, dulled by the air and panned from where they stand, and darker and quieter through
@@ -1122,8 +1181,11 @@ export class AudioEngine {
    * - far away the direct sound fades faster than the echo, so distant shots are mostly echo;
    * - a supersonic round passing near you cracks before its report arrives.
    */
-  /** `suppressed`: through a suppressor, a dull thump that barely carries and hardly echoes. */
-  gunshot(weapon: string, position: THREE.Vector3, local: boolean, bullets?: Vec3[], suppressed = false): void {
+  /**
+   * `suppressed`: through a suppressor, a dull thump that barely carries and hardly echoes.
+   * `owner`: who fired (a player or raider id), so one gun's reports share their voices (ShotVoices).
+   */
+  gunshot(weapon: string, position: THREE.Vector3, local: boolean, bullets?: Vec3[], suppressed = false, owner?: string): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
@@ -1145,10 +1207,32 @@ export class AudioEngine {
       can.frequency.value = 2400;
       src.connect(can).connect(level);
     } else src.connect(level);
-    const t = ctx.currentTime + d / SPEED_OF_SOUND;
-    if (!local && !this.claimVoice(d, t + src.buffer.duration, level)) return;
+    const now = ctx.currentTime;
+    const who = owner ?? (local ? 'self' : `at:${Math.round(position.x / 2)},${Math.round(position.z / 2)}`);
+    // Someone else's shots can arrive bunched up (a network hitch): spread back out at the gun's rate.
+    const fire = local ? now : this.shotVoices.fireAt(who, now, 60 / (WEAPONS[weapon as keyof typeof WEAPONS]?.fireRate || 600));
+    const t = fire + d / SPEED_OF_SOUND;
+    const wall = local || !this.acoustics ? CLEAR : this.acoustics.occlusion(position.x, position.y, position.z, L.x, L.y, L.z);
+    const cracks = !local && !!bullets && gun.velocity >= CRACK_SPEED;
     // Recorded outdoors: fired inside, the recording's own tail is cut short and the room answers.
-    if (shot.recorded && there !== 'street') {
+    const indoor = shot.recorded && there !== 'street';
+    const end = t + (indoor ? INDOOR_TAIL + 0.5 : src.buffer.duration / src.playbackRate.value);
+    const reach = local ? 1 : REMOTE_REF / (REMOTE_REF + REMOTE_ROLLOFF * Math.max(0, d - REMOTE_REF));
+    const played = this.shotVoices.claim({
+      owner: who,
+      start: t, end, loud: lv * reach * wall.gain, own: local,
+      release: (from) => {
+        level.gain.cancelScheduledValues(from);
+        level.gain.setTargetAtTime(0, from, SHOT_RELEASE);
+        src.stop(Math.min(end, from + SHOT_RELEASE * 7));
+      },
+    }, now);
+    if (!played) {
+      // Too quiet under everything else to be heard; a round passing close still cracks.
+      if (cracks) this.flyby(id, position, bullets!, fire);
+      return;
+    }
+    if (indoor) {
       level.gain.setValueAtTime(lv, t + INDOOR_TAIL);
       level.gain.setTargetAtTime(0, t + INDOOR_TAIL, 0.07);
     }
@@ -1160,14 +1244,14 @@ export class AudioEngine {
       this.sendTo(level, here, echo * SEND[here]);
       if (here !== 'street') this.sendTo(level, 'street', echo * SEND.street * STREET_INDOORS, LEAK_OUT);
     } else {
-      const wall = this.acoustics ? this.acoustics.occlusion(position.x, position.y, position.z, L.x, L.y, L.z) : CLEAR;
       const air = ctx.createBiquadFilter();
       air.type = 'lowpass';
       air.frequency.value = Math.max(1200, 16000 / (1 + d / 30));
-      const p = this.makePanner(position);
-      p.refDistance = 8;
+      const p = this.place(position, this.guns);
+      p.refDistance = REMOTE_REF;
+      p.rolloffFactor = REMOTE_ROLLOFF;
       level.connect(air);
-      this.muffled(air, wall).connect(p).connect(this.guns);
+      this.muffled(air, wall).connect(p);
       // Echo finds its way round through doors and windows: less muffled than the straight line.
       const apart = there !== here || wall.walls > 0;
       const leak: Muffle = !apart ? CLEAR : wall.walls
@@ -1176,9 +1260,10 @@ export class AudioEngine {
       this.sendTo(level, there, echo * SEND[there], leak);
       if (there !== 'street') this.sendTo(level, 'street', echo * SEND.street * STREET_INDOORS, here === 'street' ? LEAK_OUT : leak);
       else if (here !== 'street') this.sendTo(level, here, echo * SEND[here] * 0.15, LEAK_IN);
-      if (bullets && gun.velocity >= CRACK_SPEED) this.flyby(id, position, bullets, ctx.currentTime);
+      if (cracks) this.flyby(id, position, bullets!, fire);
     }
     src.start(t);
+    if (indoor) src.stop(end);
     const mech = local ? this.mechBuffer(id) : null;
     if (mech) {
       const m = ctx.createBufferSource();
@@ -1221,9 +1306,9 @@ export class AudioEngine {
     src.buffer = this.crackBuffer(id, Math.floor(Math.random() * CRACK_TAKES));
     const g = ctx.createGain();
     g.gain.value = CRACK_LEVEL * Math.min(1, (1.2 / Math.max(0.4, miss)) ** 0.75);
-    const p = this.makePanner(this.flyAt);
+    const p = this.place(this.flyAt, this.guns);
     p.rolloffFactor = 0;
-    src.connect(g).connect(p).connect(this.guns);
+    src.connect(g).connect(p);
     src.start(now + along / gun.velocity + miss / SPEED_OF_SOUND);
   }
 
@@ -1285,10 +1370,10 @@ export class AudioEngine {
     const g = ctx.createGain();
     g.gain.value = (take ? voice!.level : FOLEY_LEVEL[kind]) * (0.92 + Math.random() * 0.16);
     src.connect(g);
-    const p = this.makePanner(at);
+    const p = this.place(at, this.effects);
     p.refDistance = own ? 2 : 1.5;
     const m = own ? CLEAR : this.muffle(at);
-    this.muffled(g, m).connect(p).connect(this.effects);
+    this.muffled(g, m).connect(p);
     const space = own ? this.here : this.spaceOf(at);
     this.sendTo(g, space, FOLEY_ECHO[space], m);
     src.start(ctx.currentTime + Math.max(0, inS - this.hitOf(buffer) / rate));
@@ -1308,7 +1393,7 @@ export class AudioEngine {
   }
 
   casing(position: THREE.Vector3, shell: boolean, strength: number): void {
-    if (!this.ctx) return;
+    if (!this.ctx || position.distanceToSquared(this.listenerPos) > CASING_RANGE * CASING_RANGE) return;
     const t = this.ctx.currentTime;
     const d = this.out(position, 0.05, 1.5);
     if (shell) {
@@ -1370,9 +1455,9 @@ export class AudioEngine {
     const heavy = Math.min(1, hit.damage / 60);
     const t = now + position.distanceTo(this.listenerPos) / SPEED_OF_SOUND;
     const g = ctx.createGain();
-    const p = this.makePanner(position);
+    const p = this.place(position, this.effects);
     p.refDistance = hit.own ? 10 : 4;
-    this.muffled(g, this.muffle(position)).connect(p).connect(this.effects);
+    this.muffled(g, this.muffle(position)).connect(p);
     const verb = ctx.createGain();
     verb.gain.value = 0.06;
     g.connect(verb).connect(this.sends.effects);
@@ -1392,6 +1477,7 @@ export class AudioEngine {
       const lg = ctx.createGain();
       lg.gain.value = gain;
       src.connect(lg).connect(g);
+      this.free(src, lg);
       src.start(at);
     };
     layer(impact, 0.65 + heavy * 0.3, hit.melee ? 0.85 : 1);
@@ -1439,6 +1525,7 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(0.42, t + 0.2);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
     src.connect(f).connect(g).connect(d);
+    this.free(src, f, g);
     src.start(t);
     src.stop(t + 0.47);
     // The dangling end slapping about.
@@ -1521,11 +1608,11 @@ export class AudioEngine {
   private zombieOut(position: THREE.Vector3, reverb: number, lift = 0): GainNode {
     const ctx = this.ctx!;
     const g = ctx.createGain();
-    const p = this.makePanner(position);
+    const p = this.place(position, this.effects);
     p.refDistance = ZOMBIE_REF;
     p.rolloffFactor = ZOMBIE_ROLLOFF;
     const m = this.muffle(lift ? { x: position.x, y: position.y + lift, z: position.z } : position);
-    this.muffled(g, m).connect(p).connect(this.effects);
+    this.muffled(g, m).connect(p);
     if (reverb > 0) {
       const s = ctx.createGain();
       s.gain.value = reverb;
@@ -1597,6 +1684,8 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(peak, t + Math.min(0.06, dur * 0.2));
     g.gain.setTargetAtTime(0, t + dur * 0.75, dur * 0.15);
     o.connect(bp).connect(g).connect(d);
+    this.free(o, bp, g);
+    this.free(vib, vg);
     o.start(t);
     vib.start(t);
     o.stop(t + dur + 0.5);
@@ -1667,6 +1756,8 @@ export class AudioEngine {
       g.gain.linearRampToValueAtTime(peak, at + 0.12);
       g.gain.setTargetAtTime(0, at + dur * 0.8, dur * 0.12);
       o.connect(bp).connect(g).connect(d);
+      this.free(o, bp, g);
+      this.free(vib, vg);
       o.start(at);
       vib.start(at);
       o.stop(at + dur + 0.6);
@@ -1786,6 +1877,7 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(0.16, t + 0.05);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
     o.connect(bp).connect(g).connect(d);
+    this.free(o, bp, g);
     o.start(t + 0.02);
     o.stop(t + 0.3);
   }
@@ -1850,6 +1942,7 @@ export class AudioEngine {
       o.type = 'sawtooth';
       o.frequency.value = f;
       o.connect(lp);
+      this.free(o);
       o.start(t);
       o.stop(t + 6.6);
     }
@@ -1922,6 +2015,7 @@ export class AudioEngine {
       o.type = 'sawtooth';
       o.frequency.value = f;
       o.connect(lp);
+      this.free(o);
       o.start(t);
       o.stop(t + 5.2);
     }
@@ -1960,6 +2054,7 @@ export class AudioEngine {
       o.frequency.setValueAtTime(f * 0.94, t);
       o.frequency.exponentialRampToValueAtTime(f, t + 0.5);
       o.connect(g);
+      this.free(o);
       o.start(t);
       o.stop(t + 3.3);
     }

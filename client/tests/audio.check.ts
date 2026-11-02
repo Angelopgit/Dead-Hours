@@ -10,6 +10,8 @@
  * Reloads: every gun's script sits on its hand animation, sends the bolt home only from empty, and
  * its cues, played out frame by frame the way PlayerWeapon does, land every hit once and on time;
  * every handling recording set exists, each take with its main hit early in it.
+ * Online gunfire: teammates on full auto, played frame by frame through ShotVoices, never lose a
+ * shot, one gun's tails give way only to its own later reports, and the pool stays bounded.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -18,6 +20,7 @@ import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMec
 import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
 import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings } from '../src/audio/Recordings';
 import { RELOAD_STEPS, dueCues, reloadTimeline } from '../src/weapons/reloadScript';
+import { MAX_SHOTS, PER_GUN, RESPACE, RESPACE_MAX, ShotVoices, type ShotVoice } from '../src/audio/ShotVoices';
 
 const SR = 44100;
 let failures = 0;
@@ -280,6 +283,83 @@ const library = /LIBRARY_URL = '[^']*FreeFirearmsSFXLibrary\/([0-9a-f]{40})\//.e
 if (!library) fail('make_recorded_sounds.py: no pinned Free Firearm Sound Library source');
 else if (!readme.includes('Free Firearm Sound Library') || !readme.includes(library[1].slice(0, 7))) fail(`README doesn't credit the Free Firearm Sound Library at ${library[1].slice(0, 7)}`);
 else ok('the Free Firearm Sound Library (reloads) credited in the README');
+
+// ---------------------------------------------------------------- online gunfire (ShotVoices)
+{
+  const before = failures;
+  /** Fires everyone at their gun's rate, a frame at a time, as remote shot events arrive. */
+  const fight = (shooters: { id: string; gun: string; dist: number; own?: boolean; from?: number; to?: number }[], seconds: number) => {
+    const pool = new ShotVoices();
+    const shots: { id: string; t: number; start: number; loud: number; played: boolean; cutAt: number | null }[] = [];
+    let maxPlaying = 0, maxPerGun = 0;
+    const next = new Map(shooters.map((s) => [s.id, s.from ?? 0]));
+    for (let f = 0; f * (1 / 60) < seconds; f++) {
+      const now = f / 60;
+      for (const s of shooters) {
+        const gap = 60 / WEAPONS[s.gun as keyof typeof WEAPONS].fireRate;
+        while (next.get(s.id)! <= now && now < (s.to ?? seconds)) {
+          next.set(s.id, next.get(s.id)! + gap);
+          const start = now + s.dist / 343;
+          const loud = s.own ? 0.9 : 0.9 * 8 / (8 + 1.2 * Math.max(0, s.dist - 8));
+          const shot = { id: s.id, t: now, start, loud, played: false, cutAt: null as number | null };
+          shots.push(shot);
+          const v: ShotVoice = { owner: s.id, start, end: start + 0.9, loud, own: s.own, release: (at) => { shot.cutAt = at; } };
+          shot.played = pool.claim(v, now);
+        }
+      }
+      maxPlaying = Math.max(maxPlaying, pool.playing.length);
+      for (const s of shooters) maxPerGun = Math.max(maxPerGun, pool.playing.filter((v) => v.owner === s.id).length);
+    }
+    return { shots, maxPlaying, maxPerGun };
+  };
+  // One teammate on an M249 at a steady 14 m: the old pool (10 voices, farthest-or-newest dropped)
+  // lost every shot past the tenth until the first ended, so long bursts came and went.
+  const lmg = fight([{ id: 'lmg', gun: 'lmg', dist: 14 }], 6);
+  const lost = lmg.shots.filter((s) => !s.played).length;
+  const gap = 60 / WEAPONS.lmg.fireRate;
+  const early = lmg.shots.filter((s) => s.cutAt !== null && s.cutAt - s.start < (PER_GUN - 1) * gap - 1e-6);
+  const beforeNext = lmg.shots.filter((s, i) => s.cutAt !== null && i + 1 < lmg.shots.length && s.cutAt < lmg.shots[i + 1].start - 1e-6);
+  if (lost) fail(`M249 at 14 m: ${lost} of ${lmg.shots.length} shots never played`);
+  else if (lmg.maxPerGun > PER_GUN) fail(`M249: ${lmg.maxPerGun} reports at once, expected at most ${PER_GUN}`);
+  else if (early.length) fail(`M249: ${early.length} reports cut after less than ${PER_GUN - 1} of its own later shots`);
+  else if (beforeNext.length) fail(`M249: ${beforeNext.length} tails cut before the next report landed`);
+  else ok(`M249 at 14 m, 6 s on the trigger: all ${lmg.shots.length} shots play, at most ${PER_GUN} at once, a tail lets go only as a later report lands`);
+  // A four-player lobby: you and three teammates firing together.
+  const squad = fight([
+    { id: 'you', gun: 'ar', dist: 0, own: true },
+    { id: 'ar', gun: 'ar', dist: 6 }, { id: 'lmg', gun: 'lmg', dist: 14 }, { id: 'smg', gun: 'smg', dist: 23 },
+  ], 6);
+  const squadLost = squad.shots.filter((s) => !s.played);
+  if (squadLost.length) fail(`four players: ${squadLost.length} shots never played (${[...new Set(squadLost.map((s) => s.id))].join(', ')})`);
+  else if (squad.maxPlaying > MAX_SHOTS) fail(`four players: ${squad.maxPlaying} reports at once, cap ${MAX_SHOTS}`);
+  else ok(`four players on full auto: all ${squad.shots.length} shots play, ${squad.maxPlaying} reports at most at once (cap ${MAX_SHOTS})`);
+  // A crowd of raiders far down the street over the cap, a teammate firing close: only far shots
+  // quieter than everything already sounding are left out, never the near one or yours.
+  const crowd = fight([
+    { id: 'you', gun: 'pistol', dist: 0, own: true }, { id: 'near', gun: 'smg', dist: 5 },
+    ...Array.from({ length: 8 }, (_, k) => ({ id: `raider${k}`, gun: 'ar', dist: 60 + k * 8 })),
+  ], 4);
+  const nearLost = crowd.shots.filter((s) => !s.played && (s.id === 'near' || s.id === 'you')).length;
+  const farLost = crowd.shots.filter((s) => !s.played).length;
+  if (nearLost) fail(`crowd: ${nearLost} of your or the near teammate's shots left out`);
+  else if (crowd.maxPlaying > MAX_SHOTS) fail(`crowd: ${crowd.maxPlaying} reports at once, cap ${MAX_SHOTS}`);
+  else ok(`ten guns at once: yours and the near one all play, ${farLost} far raider shots left out, never over ${MAX_SHOTS} at once`);
+  // Three of a teammate's AR shots in one network message spread back out; one after a pause plays at once.
+  const spacer = new ShotVoices();
+  const iv = 60 / WEAPONS.ar.fireRate;
+  const bunched = [spacer.fireAt('ar', 1, iv), spacer.fireAt('ar', 1, iv), spacer.fireAt('ar', 1, iv)];
+  const afterPause = spacer.fireAt('ar', 3, iv);
+  const steps = [bunched[1] - bunched[0], bunched[2] - bunched[1]];
+  if (Math.abs(steps[0] - iv * RESPACE) > 1e-9 || steps[1] < 0) fail(`bunched shots spaced ${steps.map((d) => (d * 1000).toFixed(0)).join(', ')} ms`);
+  else if (bunched[2] - 1 > RESPACE_MAX + 1e-9) fail(`bunched shots put off ${((bunched[2] - 1) * 1000).toFixed(0)} ms, max ${RESPACE_MAX * 1000}`);
+  else if (afterPause !== 3) fail('a shot after a pause was delayed');
+  else ok(`three AR shots arriving together play ${steps.map((d) => (d * 1000).toFixed(0)).join(' and ')} ms apart (fired ${(iv * 1000).toFixed(0)} ms apart), never more than ${RESPACE_MAX * 1000} ms late`);
+  // The listener must be set, not automated: an automated listener makes every panner compute its
+  // direction per sample (3x the cost; the firefight's audio fell behind).
+  const engine = readFileSync(new URL('../src/audio/AudioEngine.ts', import.meta.url), 'utf8');
+  if (/L\.(position|forward|up)[XYZ]\.(setTargetAtTime|linearRampToValueAtTime|exponentialRampToValueAtTime)/.test(engine)) fail('AudioEngine automates the listener: set its values directly');
+  else if (failures === before) ok('the listener is set directly, never automated');
+}
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL AUDIO CHECKS PASSED');
 process.exit(failures ? 1 : 0);

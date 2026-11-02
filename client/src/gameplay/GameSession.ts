@@ -1343,7 +1343,7 @@ export class GameSession {
       if (e.pellets.length > 1 && i % 3 !== 0) continue;
       this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
     }
-    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end));
+    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), false, e.player);
     this.raid.weaponOf(e.player)?.fired(WEAPONS[e.weapon]);
   }
 
@@ -1357,7 +1357,7 @@ export class GameSession {
       this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
     }
     const shooter = this.sim.players.get(e.player)?.arsenal;
-    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor');
+    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor', e.player);
     const w = r.weaponOf(e.player);
     if (w) {
       w.fired(shooter ? shooter.defOf(e.weapon) : WEAPONS[e.weapon]);

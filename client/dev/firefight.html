@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Firefight audio stress (dev)</title>
+    <style>
+      html, body { margin: 0; background: #1a1d22; font: 13px system-ui, sans-serif; color: #ddd; }
+      main { padding: 16px; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Firefight</h1>
+      <p>Four players firing into a horde through the game's audio engine; reports dropped and cut teammate shots and audio underruns (see firefight.ts).</p>
+      <button id="run">Play it live</button>
+      <pre id="out"></pre>
+    </main>
+    <script type="module" src="./firefight.ts"></script>
+  </body>
+</html>
