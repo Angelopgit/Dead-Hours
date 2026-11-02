@@ -736,12 +736,12 @@ export class Raid {
     const o = r.eye;
     const tm = target.motion;
     // Mostly centre of mass, now and then the head.
-    const h = this.rand() < 0.18 ? tm.eyeHeight - 0.05 : tm.eyeHeight * 0.68;
+    const h = tm.prone ? 0.25 : this.rand() < 0.18 ? tm.eyeHeight - 0.05 : tm.eyeHeight * 0.68;
     const aim = { x: tm.pos.x - o.x, y: tm.pos.y + h - o.y, z: tm.pos.z - o.z };
     const al = Math.hypot(aim.x, aim.y, aim.z) || 1;
     let dir = { x: aim.x / al, y: aim.y / al, z: aim.z / al };
     const speed = Math.hypot(tm.vel.x, tm.vel.z);
-    const chance = Math.max(0.1, (RAID.hitChance - RAID.movingPenalty * speed) * (tm.crouching ? RAID.crouchFactor : 1));
+    const chance = Math.max(0.1, (RAID.hitChance - RAID.movingPenalty * speed) * (tm.prone ? RAID.proneFactor : tm.crouching ? RAID.crouchFactor : 1));
     if (this.rand() >= chance) {
       // A near miss: past the head or the shoulder, close enough to hear it go by.
       const ux = Math.abs(dir.y) < 0.95 ? 0 : 1, uy = Math.abs(dir.y) < 0.95 ? 1 : 0;
@@ -773,6 +773,19 @@ export class Raid {
     for (const p of sim.players.values()) {
       if (!p.alive) continue;
       const m = p.motion;
+      if (m.prone) {
+        // Lying along the view: feet behind, head ahead, all of it low.
+        const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
+        const feet = { x: m.pos.x - fx * 0.75, y: m.pos.y + 0.18, z: m.pos.z - fz * 0.75 };
+        const top = { x: m.pos.x + fx * 0.7, y: m.pos.y + 0.32, z: m.pos.z + fz * 0.7 };
+        const t = rayCapsule(o, d, feet, top, 0.26);
+        if (t >= 0 && t < bestT) {
+          bestT = t;
+          best = p;
+          head = (o.x + d.x * t - m.pos.x) * fx + (o.z + d.z * t - m.pos.z) * fz > 0.45;
+        }
+        continue;
+      }
       const top = { x: m.pos.x, y: m.pos.y + m.eyeHeight - 0.1, z: m.pos.z };
       const t = rayCapsule(o, d, { x: m.pos.x, y: m.pos.y + 0.35, z: m.pos.z }, top, 0.33);
       if (t >= 0 && t < bestT) {

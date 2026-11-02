@@ -18,14 +18,14 @@ export type GrassQuality = 'off' | 'low' | 'medium' | 'high';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
-  | 'sprint' | 'crouch' | 'jump' | 'interact' | 'barricade'
+  | 'sprint' | 'crouch' | 'prone' | 'jump' | 'interact' | 'barricade'
   | 'reload' | 'melee' | 'weapon1' | 'weapon2' | 'weapon3'
   | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
   | 'talk' | 'radio' | 'chat' | 'gunsmith' | 'grenade' | 'molotov' | 'flashlight';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
-  sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact', barricade: 'Board up / pry off',
+  sprint: 'Sprint', crouch: 'Crouch (dive when sprinting)', prone: 'Go prone (dive when sprinting)', jump: 'Jump / Vault', interact: 'Interact', barricade: 'Board up / pry off',
   reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon', weapon3: 'Melee weapon in hand',
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
   talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat', gunsmith: 'Customize weapon',
@@ -112,6 +112,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   sprint: ['ShiftLeft'],
   // Ctrl+W closes browser tabs outside fullscreen, so C is offered alongside Ctrl.
   crouch: ['ControlLeft', 'KeyC'],
+  prone: ['KeyZ'],
   jump: ['Space'],
   interact: ['KeyE'],
   barricade: ['KeyG'],

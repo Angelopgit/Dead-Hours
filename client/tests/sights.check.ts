@@ -10,7 +10,8 @@
  * What must stay clear: the sight window in the middle of the screen, everything above the bore
  * line, and the whole lens while looking through a rifle scope (the gun is hidden then, so the
  * hands would be all there is to see). Desktop (16:9) and phone (844x390) screens alike, for men
- * and women, bare hands and bulky gloves and sleeves, looking level, down and up.
+ * and women, bare hands and bulky gloves and sleeves, looking level, down and up, standing and
+ * lying prone (`--prone` runs only the prone cases).
  */
 import * as THREE from 'three';
 import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, WEAPONS, buildable, defaultBuild, fitsOf, isHandgun, type Appearance, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
@@ -26,6 +27,7 @@ const mapFilter = args.includes('--map') ? args[args.indexOf('--map') + 1] ?? ''
 /** Maps letter the body by bone instead of '#': l/L left upper/lower arm (hand included), r/R right, s spine, t hips. */
 const bones = args.includes('--bones');
 const mapPitch = args.includes('--pitch') ? Number(args[args.indexOf('--pitch') + 1]) : 0;
+const proneOnly = args.includes('--prone');
 let failures = 0;
 let checks = 0;
 const check = (cond: boolean, msg: string) => {
@@ -64,6 +66,8 @@ const BODIES: { name: string; look: Appearance }[] = [
   { name: 'broad, work gloves, puffer', look: { ...DEFAULT_APPEARANCE, build: 'broad', gloves: 'work', top: 'puffer' } },
 ];
 const PITCHES = [0, -0.6, 0.5];
+/** Lying prone the view reaches less far up and down (PRONE.pitchUp/pitchDown). */
+const PRONE_PITCHES = [0, -0.55, 0.6];
 
 type Case = { id: WeaponId; build: WeaponBuild; label: string };
 const CASES: Case[] = [];
@@ -200,7 +204,7 @@ interface Pose { body: Float32Array; tags: Uint8Array; gun: Float32Array[]; offh
 interface Seen { window: number; above: number; nearest: number; gunAtEye: number; map: string }
 
 /** Aims for a second and a half at 60 fps (everything settles) and takes the final pose. */
-function aim(c: Case, look: Appearance, pitch: number): Pose {
+function aim(c: Case, look: Appearance, pitch: number, prone: boolean): Pose {
   const scene = new THREE.Scene();
   const h = new Humanoid(survivorLook(look));
   scene.add(h.root);
@@ -219,8 +223,15 @@ function aim(c: Case, look: Appearance, pitch: number): Pose {
     h.root.position.copy(feet);
     h.root.rotation.y = cam.yaw + Math.PI;
     h.lookPitch = cam.pitch;
+    h.prone = prone ? 1 : 0;
     h.update(dt, { speed: 0, crouch: 0, aim: 1, grounded: true, strafe: 0 });
-    cam.update(dt, feet, 1.6, true, false, model().sight);
+    // Prone the sights line up with the eyes of the body on the ground (as GameSession does).
+    cam.prone = h.proneWeight;
+    if (prone) {
+      h.root.updateMatrixWorld(true);
+      h.eyeWorld(cam.proneEye);
+    }
+    cam.update(dt, feet, prone ? 0.42 : 1.6, true, false, model().sight);
     // The game hides the gun (not the hands) once a rifle scope is up to the eye.
     weapon.hideHeld = model().sight?.optic === 'scope' && cam.ads > 0.9;
     weapon.update(dt, s, { aim: 1, sprinting: false, aimPoint: cam.aimPoint, ads: cam.ads, eye: cam.eye, view: cam.view });
@@ -282,12 +293,13 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
 console.log('Sight pictures (aiming down the sights, first person)');
 for (const c of CASES) {
   for (const b of BODIES) {
-    for (const pitch of PITCHES) {
-      const pose = aim(c, b.look, pitch);
+    const stances = [...(proneOnly ? [] : PITCHES.map((pitch) => ({ pitch, prone: false }))), ...PRONE_PITCHES.map((pitch) => ({ pitch, prone: true }))];
+    for (const { pitch, prone } of stances) {
+      const pose = aim(c, b.look, pitch, prone);
       for (const [screen, aspect] of Object.entries(SCREENS)) {
-        const drawMap = mapFilter !== null && c.label.includes(mapFilter) && b === BODIES[0] && pitch === mapPitch && screen === 'desktop';
+        const drawMap = mapFilter !== null && c.label.includes(mapFilter) && b === BODIES[0] && pitch === mapPitch && screen === 'desktop' && prone === proneOnly;
         const s = see(pose, aspect, drawMap);
-        const where = `${c.label}, ${b.name}, ${screen}, pitch ${pitch}`;
+        const where = `${c.label}, ${b.name}, ${screen}, ${prone ? 'prone, ' : ''}pitch ${pitch}`;
         if (drawMap) console.log(`\n${where}\n${s.map}\n`);
         check(s.window === 0, `${where}: ${pose.scoped ? 'scope lens' : 'sight window'} clear of hands and arms${s.window ? ` (${s.window} cells show the body, nearest ${s.nearest.toFixed(2)} from the middle)` : ''}`);
         check(s.above === 0, `${where}: nothing of the body above the gun${s.above ? ` (${s.above} cells)` : ''}`);

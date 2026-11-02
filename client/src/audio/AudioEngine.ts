@@ -2057,6 +2057,87 @@ export class AudioEngine {
     this.burst(d, t + 0.3, 'bandpass', 2400, 0.9, 0.12, 0.01, 0.1);
   }
 
+  /**
+   * Getting down and up, and the dolphin dive (another survivor's when `position` is given):
+   * `leap` is clothes and gear whipping through the air with a grunt of effort; `land` the body
+   * slapping down on its front, the kit on it clattering, and the belly slide scraping along;
+   * `down` the knees then the elbows going down; `up` a push up off the ground, clothes rustling.
+   */
+  stance(kind: 'leap' | 'land' | 'down' | 'up', position: THREE.Vector3 | null = null): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const d = this.out(position, kind === 'land' ? 0.25 : 0.1, kind === 'land' ? 5 : 3);
+    if (kind === 'leap') {
+      const src = this.noiseSource(false);
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 1.4;
+      f.frequency.setValueAtTime(320, t);
+      f.frequency.exponentialRampToValueAtTime(1500, t + 0.16);
+      f.frequency.exponentialRampToValueAtTime(420, t + 0.36);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.32, t + 0.12);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+      src.connect(f).connect(g).connect(d);
+      src.start(t, Math.random() * 2);
+      src.stop(t + 0.42);
+      this.free(src, f, g);
+      // The push off, and a grunt with it.
+      this.burst(d, t, 'bandpass', 520 + Math.random() * 80, 1.3, 0.22, 0.002, 0.06);
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(175 + Math.random() * 25, t + 0.01);
+      o.frequency.exponentialRampToValueAtTime(120, t + 0.22);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 680;
+      bp.Q.value = 3;
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0, t + 0.01);
+      og.gain.linearRampToValueAtTime(0.07, t + 0.04);
+      og.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+      o.connect(bp).connect(og).connect(d);
+      o.start(t + 0.01);
+      o.stop(t + 0.26);
+      this.free(o, bp, og);
+      for (let i = 0; i < 3; i++) this.tone(d, t + 0.03 + Math.random() * 0.15, 'triangle', 2400 + Math.random() * 1800, 2200, 0.025, 0.001, 0.05);
+    } else if (kind === 'land') {
+      // The body hits the ground front first: chest and thighs, then the arms and the gun.
+      this.burst(d, t, 'lowpass', 340, 0.8, 0.75, 0.002, 0.13);
+      this.tone(d, t, 'sine', 92, 42, 0.5, 0.002, 0.16);
+      this.burst(d, t + 0.035, 'bandpass', 230, 1.2, 0.4, 0.002, 0.09);
+      this.burst(d, t + 0.05, 'bandpass', 1900 + Math.random() * 600, 1.2, 0.2, 0.002, 0.07);
+      this.burst(d, t + 0.09, 'bandpass', 2800, 1.6, 0.14, 0.002, 0.05);
+      for (let i = 0; i < 4; i++) this.tone(d, t + 0.04 + Math.random() * 0.12, 'triangle', 1800 + Math.random() * 2400, 1600, 0.03, 0.001, 0.06);
+      // Sliding on along the ground.
+      const src = this.noiseSource(false);
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 0.8;
+      f.frequency.setValueAtTime(1300, t + 0.06);
+      f.frequency.exponentialRampToValueAtTime(700, t + 0.5);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t + 0.06);
+      g.gain.linearRampToValueAtTime(0.22, t + 0.1);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.52);
+      src.connect(f).connect(g).connect(d);
+      src.start(t + 0.06, Math.random() * 2);
+      src.stop(t + 0.56);
+      this.free(src, f, g);
+    } else if (kind === 'down') {
+      this.burst(d, t, 'bandpass', 240 + Math.random() * 40, 1.2, 0.32, 0.002, 0.07);
+      this.burst(d, t + 0.05, 'bandpass', 1500, 0.8, 0.12, 0.03, 0.18);
+      this.burst(d, t + 0.17, 'bandpass', 300, 1.2, 0.26, 0.002, 0.07);
+      this.burst(d, t + 0.19, 'bandpass', 2300, 1.4, 0.08, 0.002, 0.05);
+    } else {
+      this.burst(d, t, 'bandpass', 1300, 0.8, 0.13, 0.04, 0.2);
+      this.burst(d, t + 0.12, 'bandpass', 420, 1.2, 0.22, 0.002, 0.07);
+      this.burst(d, t + 0.25, 'bandpass', 900 + Math.random() * 300, 1.0, 0.12, 0.002, 0.06);
+    }
+  }
+
   /** A window pane smashing in. */
   glassBreak(position: THREE.Vector3): void {
     if (!this.ctx) return;

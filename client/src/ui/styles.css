@@ -683,6 +683,8 @@ body.pad-nav #viewport { cursor: none; }
 .tc-btn.bag { --s: 44px; right: calc(84px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.light { --s: 44px; right: calc(140px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); font-size: calc(10px * var(--tc-scale)); }
 .tc-btn.light.lit { border-color: rgba(255,226,170,0.85); color: #fff3d8; box-shadow: 0 0 14px rgba(255,214,150,0.35); }
+/* Crouched or lying prone (the label says which). */
+.tc-btn.crouch.lit { border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
 .tc-btn.talk { --s: 44px; right: calc(196px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.pause { --s: 44px; left: calc(12px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); font-size: 12px; }
 /* Thumbs cover the bottom corners: health, ammo and the feed move to the top. */

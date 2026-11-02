@@ -2,7 +2,7 @@ import { RAPIER, GROUP, groups, type Physics, type RayHit } from '../physics/Phy
 import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
-import { DOWNED, PLAYER } from '../config/player';
+import { DIVE, DOWNED, PLAYER, PRONE } from '../config/player';
 import { HORDES, LULLS, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, type LegZone } from '../config/limbs';
@@ -57,6 +57,10 @@ export interface PlayerMotion {
   vaulting?: boolean;
   /** Riding a bicycle (in the saddle): which way its front wheel points (radians, like a facing). */
   bike?: number;
+  /** Lying flat on the belly (low, slow, hard to see). */
+  prone?: boolean;
+  /** In a dolphin dive: flying forward, then sliding on the belly (ends prone). */
+  diving?: boolean;
 }
 
 export interface PlayerStats {
@@ -91,6 +95,8 @@ export class SimPlayer {
   /** Where the throw in progress goes (the crosshair ray when it was started). */
   throwAim: { origin: Vec3; dir: Vec3 } | null = null;
   footstepT = 0;
+  /** The thud of the current dolphin dive's landing was made (noise for zombies). */
+  diveHeard = false;
   diedAt = 0;
   /** Seconds spent dead earlier this night, before a lull brought them back (not counted as survived). */
   deadTime = 0;
@@ -128,6 +134,23 @@ export class SimPlayer {
 
   get speed(): number {
     return Math.hypot(this.motion.vel.x, this.motion.vel.z);
+  }
+
+  /**
+   * The point of their body nearest `from` (on the ground plane): lying prone the body runs from
+   * the feet behind where they are to the head ahead (along their view), else it is where they stand.
+   */
+  reachPoint(from: Vec3, out: Vec3): Vec3 {
+    const m = this.motion;
+    out.x = m.pos.x;
+    out.y = m.pos.y;
+    out.z = m.pos.z;
+    if (!m.prone) return out;
+    const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
+    const t = clamp((from.x - m.pos.x) * fx + (from.z - m.pos.z) * fz, -PRONE.reachBehind, PRONE.reachAhead);
+    out.x += fx * t;
+    out.z += fz * t;
+    return out;
   }
 
   /** Alive and on their feet: can fight, use things and revive others. */
@@ -869,7 +892,7 @@ export class Simulation {
     const seat = this.vehicles.seatOf(id);
     const speed = seat ? Math.abs(seat[0].speed) * VEHICLE.spreadSpeed : this.skateboards.ridden(id) ? p.speed * SKATEBOARD.spreadSpeed
       : this.bicycles.carrying(id) ? p.speed * BICYCLE.spreadSpeed : p.speed;
-    const spread = a.spread({ speed, crouching: p.motion.crouching, grounded: p.motion.grounded, aiming: p.motion.aiming });
+    const spread = a.spread({ speed, crouching: p.motion.crouching, grounded: p.motion.grounded, aiming: p.motion.aiming, prone: p.motion.prone });
     a.consume();
     p.stats.shotsFired++;
     this.noise(p.motion.pos, def.noise, id);
@@ -2326,14 +2349,24 @@ export class Simulation {
       p.arsenal.step(dt, p.motion.aiming, ticks);
       for (const t of ticks) this.onArsenal(p, t);
       this.updateWork(p, dt);
-      // Footsteps carry: sprinting is heard much farther than walking; crouching is silent.
-      // On a skateboard the wheels make the noise instead (Skateboards.step).
+      // Footsteps carry: sprinting is heard much farther than walking; crouching is silent and
+      // crawling quieter still. On a skateboard the wheels make the noise instead (Skateboards.step).
       const speed = p.speed;
+      const m = p.motion;
       p.footstepT -= dt;
-      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded && !this.skateboards.ridden(p.id) && !this.vehicles.seatOf(p.id) && !this.bicycles.onBike(p.id)) {
-        const radius = p.motion.crouching ? 1.2 : speed > 4.5 ? 11 : 4.5;
-        this.noise(p.motion.pos, radius, p.id);
-        p.footstepT = speed > 4.5 ? 0.35 : 0.55;
+      if (m.diving) {
+        // A dolphin dive comes down with a thud heard well beyond footsteps.
+        if (m.grounded && !p.diveHeard) {
+          p.diveHeard = true;
+          this.noise(m.pos, DIVE.noise, p.id);
+        }
+      } else {
+        p.diveHeard = false;
+        if (p.footstepT <= 0 && speed > (m.prone ? 0.3 : 0.8) && m.grounded && !this.skateboards.ridden(p.id) && !this.vehicles.seatOf(p.id) && !this.bicycles.onBike(p.id)) {
+          const radius = m.prone ? PRONE.noise : m.crouching ? 1.2 : speed > 4.5 ? 11 : 4.5;
+          this.noise(m.pos, radius, p.id);
+          p.footstepT = speed > 4.5 ? 0.35 : m.prone ? 0.7 : 0.55;
+        }
       }
     }
 
@@ -2572,7 +2605,7 @@ export class Simulation {
     m.yaw = yaw;
     m.pitch = 0;
     m.eyeHeight = PLAYER.eyeHeight;
-    m.crouching = m.sprinting = m.aiming = false;
+    m.crouching = m.sprinting = m.aiming = m.prone = m.diving = false;
     m.grounded = true;
     this.emit({ type: 'playerRespawned', player: p.id, pos: { ...at }, yaw });
     return true;

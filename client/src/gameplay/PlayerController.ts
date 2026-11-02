@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BICYCLE, BODY_FILTER, DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
+import { BICYCLE, BODY_FILTER, DIVE, DOWNED, PLAYER, PRONE, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
@@ -9,11 +9,26 @@ import { barAngle } from './Bicycles';
 /** What a survivor on foot bumps into: the world, doors, vehicles (and their cabins), the dead. */
 const FEET = groups(GROUP.player, BODY_FILTER | GROUP.zombie);
 
-const capsuleHalf = (height: number) => (height - PLAYER.radius * 2) / 2;
+const capsuleHalf = (height: number) => Math.max(0.01, (height - PLAYER.radius * 2) / 2);
 const _vp: Vec3 = { x: 0, y: 0, z: 0 };
 /** Eye height above the feet while tucked over a sill (the head ducks under the top of the window). */
 const VAULT_EYE = 0.95;
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** A dolphin dive: flying forward off a sprint, then sliding along on the belly. */
+export interface Dive {
+  /** Seconds since the leap. */
+  t: number;
+  /** Still in the air (false: down and sliding). */
+  air: boolean;
+  /** Which way it goes (unit, flat). */
+  x: number;
+  z: number;
+  /** Sliding speed once down (m/s). */
+  slide: number;
+  /** Seconds since touching down. */
+  down: number;
+}
 
 /** Riding a skateboard: where the deck points, how fast it rolls, the kick and the carve. */
 export interface Ride {
@@ -153,6 +168,35 @@ export class PlayerController {
   private moveYRaw = 0;
   private moveX = 0;
   private moveY = 0;
+  /** Lying flat on the belly (the capsule is PRONE.height). */
+  prone = false;
+  /** In a dolphin dive (ends prone). */
+  dive: Dive | null = null;
+  /** Seconds left getting down onto the belly or back up (crawling is slow meanwhile). */
+  private shiftT = 0;
+  /** Events for the session (sounds, shake), set here and cleared there. */
+  dived = false;
+  diveLanded = false;
+  wentProne = false;
+  gotUp = false;
+  /** Tried to get up with no room overhead. */
+  cramped = false;
+  /**
+   * On a controller or touch screen crouch is a toggle (a tap crouches, another stands) and a
+   * hold goes prone; on the keyboard it is held, and prone has its own key.
+   */
+  private toggleCrouch = false;
+  private crouchLatch = false;
+  /** A tap while crouched stands up when the button is let go (unless the hold went prone). */
+  private pendingUncrouch = false;
+  /** The crouch press now held dived or got up from prone: its hold must not go (back) prone. */
+  private pressUsed = false;
+  private wantDive = false;
+  private wantProne = false;
+  private wantUp: 'stand' | 'crouch' | null = null;
+  /** Lying on a slope or stairs: the body tilts along it (radians, head up positive). */
+  tilt = 0;
+  private tiltTo = 0;
 
   constructor(private readonly physics: Physics, spawn: { x: number; y: number; z: number; yaw: number }, look: HumanoidLook) {
     this.position.set(spawn.x, spawn.y, spawn.z);
@@ -189,13 +233,20 @@ export class PlayerController {
   get eyeHeight(): number {
     if (this.seated) return VEHICLE.seatEye;
     if (this.downed) return DOWNED.eyeHeight;
+    if (this.prone || (this.dive && !this.dive.air)) return PRONE.eyeHeight;
     const eye = this.height - 0.2;
     return this.vault ? eye - (eye - VAULT_EYE) * this.vault.tuck : eye;
   }
 
+  /** Where the body's eyes are now (world, between the eyes at the front of the face): prone sights line up with them. */
+  eyeWorld(out: THREE.Vector3): THREE.Vector3 {
+    this.character.root.updateMatrixWorld(true);
+    return this.character.eyeWorld(out);
+  }
+
   /** Starts vaulting through a window along a plan from findVault (the session has checked it can). */
   startVault(plan: VaultPlan): void {
-    if (this.dead || this.downed || this.ride || this.cycle || this.pillion || this.vault || this.seated) return;
+    if (this.dead || this.downed || this.ride || this.cycle || this.pillion || this.vault || this.seated || this.prone || this.dive) return;
     this.vault = { plan, t: 0, tuck: 0 };
     this.jumpBuffered = 0;
     this.coyote = 0;
@@ -249,7 +300,12 @@ export class PlayerController {
     this.vault = null;
     this.sprinting = false;
     this.jumpBuffered = 0;
-    if (this.crouching) {
+    this.crouchLatch = this.pendingUncrouch = false;
+    this.wantDive = this.wantProne = false;
+    this.wantUp = null;
+    if (this.crouching || this.prone || this.dive) {
+      this.prone = false;
+      this.dive = null;
       const t = this.body.translation();
       const feet = t.y - this.height / 2;
       this.physics.world.removeCollider(this.collider, false);
@@ -313,9 +369,14 @@ export class PlayerController {
     this.aiming = false;
     this.aimToggled = false;
     this.jumpBuffered = 0;
-    if (on) this.ride = null;
-    if (on) this.cycle = null;
-    if (on) this.pillion = null;
+    this.crouchLatch = this.pendingUncrouch = false;
+    if (on) {
+      this.ride = null;
+      this.cycle = null;
+      this.pillion = null;
+      this.dive = null;
+      this.prone = false;
+    }
     if (on && !this.crouching) this.setCrouch(true);
   }
 
@@ -324,7 +385,7 @@ export class PlayerController {
    * the pace; from a standstill it points where the camera looks. `cameraYaw` is the camera's.
    */
   mount(board: number, cameraYaw: number): void {
-    if (this.dead || this.downed || this.ride || this.vault) return;
+    if (this.dead || this.downed || this.ride || this.vault || this.prone || this.dive) return;
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     const running = hv > 1.5;
     const heading = running ? Math.atan2(this.velocity.x, this.velocity.z) : cameraYaw + Math.PI;
@@ -482,7 +543,20 @@ export class PlayerController {
       bike: this.cycle ? wrap(this.cycle.heading) : undefined,
       pushing: (!!this.ride && this.ride.push >= 0) || (!!this.cycle && this.cycle.pedalling),
       vaulting: !!this.vault,
+      prone: this.prone,
+      diving: !!this.dive,
     };
+  }
+
+  /** How the survivor stands now (HUD, the touch CROUCH button). */
+  get stance(): 'stand' | 'crouch' | 'prone' {
+    return this.prone || this.dive ? 'prone' : this.crouching ? 'crouch' : 'stand';
+  }
+
+  /** Sprinting fast enough on the ground to throw themselves into a dive. */
+  private canDive(): boolean {
+    return this.sprinting && this.grounded && !this.dive && !this.prone && !this.dead && !this.downed && !this.ride && !this.vault
+      && !this.cycle && !this.pillion && !this.seated && Math.hypot(this.velocity.x, this.velocity.z) >= DIVE.minSpeed;
   }
 
   /** Samples input once per frame (pressed events must not be missed between fixed steps). */
@@ -498,8 +572,60 @@ export class PlayerController {
     this.wish.set(fx * f + rx * r, 0, fz * f + rz * r);
     if (this.wish.lengthSq() > 1) this.wish.normalize();
 
-    if (input.pressed('jump')) this.jumpBuffered = 0.15;
+    // Crouch and prone: a dive off a sprint, down onto the belly and back up, crouch on and off.
+    const toggle = input.device !== 'mouse';
+    if (toggle !== this.toggleCrouch) {
+      this.toggleCrouch = toggle;
+      this.crouchLatch = toggle && this.crouching;
+      this.pendingUncrouch = false;
+    }
+    const able = !this.dead && !this.downed && !this.ride && !this.vault && !this.cycle && !this.pillion && !this.seated;
+    if (input.pressed('crouch')) {
+      this.pressUsed = false;
+      if (!able) { /* the board, the sill or the ground has them */ }
+      else if (this.canDive()) {
+        this.wantDive = true;
+        this.pressUsed = true;
+      } else if (this.dive) this.pressUsed = true;
+      else if (this.prone) {
+        this.wantUp = 'crouch';
+        this.crouchLatch = toggle;
+        this.pressUsed = true;
+      } else if (toggle) {
+        if (this.crouchLatch) this.pendingUncrouch = true;
+        else this.crouchLatch = true;
+      }
+    }
     this.crouchHeld = input.held('crouch');
+    if (this.pendingUncrouch && !this.crouchHeld) {
+      this.pendingUncrouch = false;
+      this.crouchLatch = false;
+    }
+    // (On a controller or touch screen prone comes from holding crouch: not the hold of a press
+    // that already dived or got up.)
+    if (input.pressed('prone') && able && !(toggle && this.pressUsed && this.crouchHeld)) {
+      if (this.canDive()) this.wantDive = true;
+      else if (this.dive) { /* already going down */ }
+      else if (this.prone) this.wantUp = !toggle && this.crouchHeld ? 'crouch' : 'stand';
+      else {
+        this.wantProne = true;
+        this.crouchLatch = this.pendingUncrouch = false;
+      }
+    }
+    if (input.pressed('jump')) {
+      // Lying down, jump gets up; crouched on a controller it stands (as most shooters do).
+      if (able && (this.prone || this.dive)) {
+        if (this.prone) this.wantUp = 'stand';
+      } else if (able && toggle && this.crouchLatch) {
+        this.crouchLatch = this.pendingUncrouch = false;
+      } else this.jumpBuffered = 0.15;
+    }
+    // A deliberate sprint (Shift, the stick click) gets up off the ground or out of a crouch.
+    // On a touch screen sprint is the stick pushed to its edge, which crawling does all the time.
+    if (input.pressed('sprint') && able && input.device !== 'touch') {
+      if (this.prone) this.wantUp = 'stand';
+      if (toggle) this.crouchLatch = this.pendingUncrouch = false;
+    }
     const aimMode = settings.value.controls.aimMode;
     if (aimMode === 'toggle') {
       if (input.pressed('aim')) this.aimToggled = !this.aimToggled;
@@ -524,6 +650,9 @@ export class PlayerController {
     this.moveX = this.moveY = 0;
     this.sprintHeld = false;
     this.crouchHeld = false;
+    this.pendingUncrouch = false;
+    this.wantDive = this.wantProne = false;
+    this.wantUp = null;
     this.aiming = false;
     this.aimToggled = false;
   }
@@ -545,11 +674,10 @@ export class PlayerController {
       this.vaultStep(dt);
       return;
     }
-    // Hold-to-crouch with Ctrl/C (not in the saddle).
-    const wantCrouch = (this.crouchHeld && !this.cycle) || this.downed;
-    if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
+    this.shiftT = Math.max(0, this.shiftT - dt);
+    this.stanceStep();
 
-    if (this.downed) this.aiming = false;
+    if (this.downed || this.dive) this.aiming = false;
     const ride = this.ride;
     const cycle = this.cycle;
     if (cycle) {
@@ -559,17 +687,22 @@ export class PlayerController {
     } else if (ride) {
       this.sprinting = false;
       this.rideStep(dt);
+    } else if (this.dive) {
+      this.sprinting = false;
+      this.diveStep(dt);
     } else {
-      this.sprinting = this.sprintHeld && !this.downed && !this.crouching && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
+      this.sprinting = this.sprintHeld && !this.downed && !this.crouching && !this.prone && !this.aiming && this.forwardAmount > 0 && this.grounded && this.noSprintT <= 0;
       const speed = this.downed
         ? DOWNED.crawlSpeed
+        : this.prone
+        ? (this.aiming ? PRONE.aimSpeed : PRONE.crawlSpeed) * (this.shiftT > 0 ? 0.3 : 1)
         : this.crouching
         ? PLAYER.crouchSpeed
         : this.aiming
           ? PLAYER.aimSpeed
           : this.sprinting
             ? PLAYER.sprintSpeed * this.sprintBoost
-            : PLAYER.walkSpeed * this.walkBoost;
+            : PLAYER.walkSpeed * this.walkBoost * (this.shiftT > 0 ? 0.5 : 1);
       const target = this.wish.clone().multiplyScalar(speed);
       const accel = this.grounded ? PLAYER.acceleration : PLAYER.acceleration * PLAYER.airControl;
       const k = 1 - Math.exp(-accel * dt);
@@ -582,7 +715,7 @@ export class PlayerController {
     // On the board the jump is an ollie (crouched too: that's how it's done), and with the stick
     // held to a side or back a flip trick off it; on a bike a hop (not with someone on the pegs).
     if (cycle?.loaded) this.jumpBuffered = 0;
-    if (this.jumpBuffered > 0 && this.coyote > 0 && (!this.crouching || ride) && !this.downed) {
+    if (this.jumpBuffered > 0 && this.coyote > 0 && (!this.crouching || ride) && !this.downed && !this.prone && !this.dive) {
       this.intent.y = ride ? SKATEBOARD.ollie : cycle ? BICYCLE.hop : PLAYER.jumpVelocity;
       this.jumpBuffered = 0;
       this.coyote = 0;
@@ -605,6 +738,10 @@ export class PlayerController {
     if (cycle) this.frontWheel(dt);
     const desired = { x: this.intent.x * dt + this.sideStep.x, y: this.intent.y * dt, z: this.intent.z * dt + this.sideStep.z };
     this.sideStep.set(0, 0, 0);
+    if (this.prone) {
+      this.bodyRoom(desired);
+      this.slope();
+    }
     this.controller.computeColliderMovement(this.collider, desired, undefined, FEET);
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
@@ -634,18 +771,35 @@ export class PlayerController {
       this.landed = true;
       this.landAir = air;
     }
+    const dv = this.dive;
+    if (dv && dv.air && this.grounded && dv.t > 0.08) {
+      // Down on the belly: the slide carries on along the ground, already prone.
+      dv.air = false;
+      dv.slide = Math.hypot(this.intent.x, this.intent.z) * DIVE.slideKeep;
+      this.resize(PRONE.height);
+      this.prone = true;
+      this.landed = false;
+      this.diveLanded = true;
+      this.landAir = air;
+    }
 
     // Facing: aim locks body to camera, otherwise turn toward travel direction. On a skateboard
     // the shoulders sit side-on to the deck, opened a little toward the nose.
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
+    // A dive faces the way it flies; lying down, the body swings round after the view.
     let desiredFacing = this.facing;
-    const toCamera = this.aiming || this.faceT > 0;
+    const toCamera = this.aiming || this.faceT > 0 || this.prone;
     if (cycle) desiredFacing = cycle.heading;
+    else if (this.dive) desiredFacing = Math.atan2(this.dive.x, this.dive.z);
     else if (toCamera) desiredFacing = cameraYaw + Math.PI;
     else if (this.ride) desiredFacing = this.ride.heading - Math.PI / 2 + 0.55;
     else if (hv > 0.4) desiredFacing = Math.atan2(this.velocity.x, this.velocity.z);
     const diff = Math.atan2(Math.sin(desiredFacing - this.facing), Math.cos(desiredFacing - this.facing));
-    const turned = cycle ? diff : diff * (1 - Math.exp(-dt * (toCamera ? 20 : this.ride ? 9 : 11)));
+    let turned = cycle ? diff : diff * (1 - Math.exp(-dt * (this.dive ? 18 : toCamera ? 20 : this.ride ? 9 : 11)));
+    if (this.prone && !this.dive) {
+      const max = PRONE.turnRate * dt * (this.shiftT > 0 ? 0.5 : 1);
+      turned = THREE.MathUtils.clamp(turned, -max, max);
+    }
     this.facing += turned;
     this.turnRate = dt > 0 ? turned / dt : 0;
   }
@@ -898,29 +1052,154 @@ export class PlayerController {
   }
 
   private setCrouch(on: boolean): void {
-    const newHeight = on ? PLAYER.crouchHeight : PLAYER.height;
-    if (!on) {
-      // Only stand up if there is headroom.
-      const t = this.body.translation();
-      const feet = t.y - this.height / 2;
-      const shape = new RAPIER.Capsule(capsuleHalf(PLAYER.height), PLAYER.radius - 0.02);
+    if (this.resize(on ? PLAYER.crouchHeight : PLAYER.height)) this.crouching = on;
+  }
+
+  /**
+   * Changes the capsule's height with the feet where they are. Growing needs headroom (a ceiling,
+   * a table top or a zombie overhead refuses it); shrinking always works.
+   */
+  private resize(height: number): boolean {
+    if (Math.abs(height - this.height) < 1e-4) return true;
+    const t = this.body.translation();
+    const feet = t.y - this.height / 2;
+    if (height > this.height) {
+      const shape = new RAPIER.Capsule(capsuleHalf(height), PLAYER.radius - 0.02);
       let blocked = false;
       this.physics.world.intersectionsWithShape(
-        { x: t.x, y: feet + PLAYER.height / 2 + 0.02, z: t.z }, { x: 0, y: 0, z: 0, w: 1 }, shape,
+        { x: t.x, y: feet + height / 2 + 0.02, z: t.z }, { x: 0, y: 0, z: 0, w: 1 }, shape,
         () => { blocked = true; return false; },
         undefined, FEET, this.collider,
       );
-      if (blocked) return;
+      if (blocked) return false;
     }
-    const t = this.body.translation();
-    const feet = t.y - this.height / 2;
     this.physics.world.removeCollider(this.collider, false);
-    this.height = newHeight;
-    this.collider = this.physics.world.createCollider(this.capsuleDesc(newHeight), this.body);
-    const p = { x: t.x, y: feet + newHeight / 2, z: t.z };
+    this.height = height;
+    this.collider = this.physics.world.createCollider(this.capsuleDesc(height), this.body);
+    const p = { x: t.x, y: feet + height / 2, z: t.z };
     this.body.setTranslation(p, true);
     this.body.setNextKinematicTranslation(p);
-    this.crouching = on;
+    return true;
+  }
+
+  /** Dives, goes prone and gets up as asked (in the fixed step: the capsule changes here), else crouches as held. */
+  private stanceStep(): void {
+    if (this.wantDive) {
+      this.wantDive = false;
+      if (this.canDive()) this.startDive();
+    }
+    if (this.wantProne) {
+      this.wantProne = false;
+      if (!this.prone && !this.dive && !this.downed && !this.ride && !this.cycle) this.goProne();
+    }
+    // Getting up waits for a dive's slide to finish.
+    if (this.wantUp && !this.dive) {
+      const to = this.wantUp;
+      this.wantUp = null;
+      if (this.prone) this.getUp(to);
+    }
+    if (this.prone || this.dive) return;
+    // Held on the keyboard; toggled on a controller or touch screen (not in the saddle).
+    const wantCrouch = this.downed || (!this.cycle && (this.toggleCrouch ? this.crouchLatch : this.crouchHeld));
+    if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
+  }
+
+  private goProne(): void {
+    this.resize(PRONE.height);
+    this.prone = true;
+    this.crouching = false;
+    this.sprinting = false;
+    this.jumpBuffered = 0;
+    this.shiftT = PRONE.downTime;
+    this.wentProne = true;
+  }
+
+  /** Up off the belly to a crouch or onto their feet; with no room to stand, a crouch; with none for that, stays down. */
+  private getUp(to: 'stand' | 'crouch'): void {
+    const crouch = to === 'crouch' || !this.resize(PLAYER.height);
+    if (crouch && !this.resize(PLAYER.crouchHeight)) {
+      this.cramped = true;
+      return;
+    }
+    this.prone = false;
+    this.crouching = crouch;
+    // A toggle stays on after getting up into a crouch; a held key decides for itself next step.
+    if (this.toggleCrouch) this.crouchLatch = crouch;
+    this.shiftT = PRONE.upTime;
+    this.gotUp = true;
+  }
+
+  /** Throws the survivor forward off a sprint: through the air, then down on the belly. */
+  private startDive(): void {
+    const hv = Math.hypot(this.velocity.x, this.velocity.z);
+    const x = hv > 0.5 ? this.velocity.x / hv : Math.sin(this.facing);
+    const z = hv > 0.5 ? this.velocity.z / hv : Math.cos(this.facing);
+    const speed = THREE.MathUtils.clamp(hv * 1.1, DIVE.speed, DIVE.speed + 0.4);
+    // In the air the capsule is a crouch's (low enough to go through a doorway head first).
+    this.resize(PLAYER.crouchHeight);
+    this.crouching = false;
+    this.dive = { t: 0, air: true, x, z, slide: 0, down: 0 };
+    this.intent.set(x * speed, DIVE.lift, z * speed);
+    this.grounded = false;
+    this.coyote = 0;
+    this.jumpBuffered = 0;
+    this.airTime = 0;
+    this.sprinting = false;
+    this.aiming = this.aimToggled = false;
+    this.crouchLatch = this.pendingUncrouch = false;
+    this.dived = true;
+  }
+
+  /** One fixed step of a dive: no steering in the air; once down, the belly slide runs out. */
+  private diveStep(dt: number): void {
+    const d = this.dive!;
+    d.t += dt;
+    if (d.air) {
+      const k = 1 - 0.25 * dt;
+      this.intent.x *= k;
+      this.intent.z *= k;
+      return;
+    }
+    d.down += dt;
+    d.slide = Math.max(0, d.slide - DIVE.slideDecel * dt);
+    this.intent.x = d.x * d.slide;
+    this.intent.z = d.z * d.slide;
+    if (d.slide < 0.3 || d.down > DIVE.slideMax) this.dive = null;
+  }
+
+  /**
+   * Lying prone the body runs past the capsule (head ahead, feet behind): a ball swept from the
+   * middle along the body (tilted with the ground, so stairs don't count) at head and at shin
+   * height finds a wall, a coffee table or a car in the way, and the body slides back off it.
+   * A curb or a low step passes under the sweep.
+   */
+  private bodyRoom(desired: { x: number; y: number; z: number }): void {
+    const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
+    const t = this.body.translation();
+    const feet = t.y - this.height / 2;
+    const c = Math.cos(this.tiltTo), sy = Math.sin(this.tiltTo);
+    const into = (sign: number, len: number, h: number, r: number) => {
+      const hit = this.physics.sphereCast(t.x, feet + h, t.z, fx * c * sign, sy * sign, fz * c * sign, r, len - r);
+      return hit === null ? 0 : len - r - hit;
+    };
+    const push = into(-1, PRONE.reachBehind, 0.2, 0.1) - into(1, PRONE.reachAhead, 0.36, 0.13);
+    if (Math.abs(push) > 0.005) {
+      const k = THREE.MathUtils.clamp(push, -0.05, 0.05);
+      desired.x += fx * k;
+      desired.z += fz * k;
+    }
+  }
+
+  /** The ground under the head and under the feet: lying on a slope or stairs tilts the body along it. */
+  private slope(): void {
+    const fx = Math.sin(this.facing), fz = Math.cos(this.facing);
+    const p = this.position;
+    const ground = (d: number) => {
+      const h = this.physics.raycast(p.x + fx * d, p.y + 0.6, p.z + fz * d, 0, -1, 0, 1.4);
+      return h === null ? null : p.y + 0.6 - h;
+    };
+    const a = ground(0.6), b = ground(-0.6);
+    this.tiltTo = a !== null && b !== null ? THREE.MathUtils.clamp(Math.atan2(a - b, 1.2), -0.45, 0.45) : 0;
   }
 
   /** Interpolates the render transform between fixed steps and animates the rig. */
@@ -931,7 +1210,10 @@ export class PlayerController {
     if (this.dead) return;
     this.character.root.position.copy(this.renderPosition);
     if (this.seated) this.character.root.position.y -= 0.88;
+    // Lying on a slope the body tilts along it (head up the slope).
+    this.tilt += ((this.prone ? this.tiltTo : 0) - this.tilt) * (1 - Math.exp(-dt * 8));
     this.character.root.rotation.order = 'YXZ';
+    this.character.root.rotation.x = -this.tilt;
     this.character.root.rotation.y = this.facing;
     // On a bike the whole body leans with it (about the tyres' line on the street).
     const cyc = this.cycle;
@@ -965,6 +1247,9 @@ export class PlayerController {
     }
     c.skate = r ? this.skatePose : null;
     c.vault = this.vault ? 1 : 0;
+    // Down on the belly, or flying there in a dive (the body held up off the ground in the air).
+    c.prone = this.prone || this.dive ? 1 : 0;
+    c.dive = this.dive?.air ? 1 : 0;
     if (this.seated) {
       this.seatPose.yaw = wrap(this.seatYaw + Math.PI / 2 - this.facing);
       c.seat = this.seatPose;
@@ -1013,6 +1298,14 @@ export class PlayerController {
     this.vault = null;
     if (this.ride) this.ride.speed = 0;
     if (this.cycle) this.cycle.speed = 0;
+    if (this.dive) {
+      // Put back mid-dive: down where they were put.
+      this.dive = null;
+      if (!this.prone) {
+        this.resize(PRONE.height);
+        this.prone = true;
+      }
+    }
   }
 
   /** Back on their feet at `pos` (a lull brought them back), the body facing camera yaw `yaw`. */
@@ -1020,6 +1313,15 @@ export class PlayerController {
     this.dead = false;
     this.setDowned(false);
     this.ride = null;
+    if (this.prone || this.dive) {
+      // Up off the ground (onto their feet as soon as there is room).
+      this.prone = false;
+      this.dive = null;
+      this.resize(PLAYER.crouchHeight);
+      this.crouching = true;
+    }
+    this.crouchLatch = this.pendingUncrouch = false;
+    this.tilt = this.tiltTo = 0;
     this.collider.setEnabled(true);
     this.teleport(pos);
     this.facing = yaw + Math.PI;
@@ -1037,6 +1339,7 @@ export class PlayerController {
     this.cycle = null;
     this.pillion = null;
     this.character.root.rotation.z = 0;
+    this.dive = null;
     this.clearInput();
     this.sprinting = false;
     this.velocity.set(0, 0, 0);

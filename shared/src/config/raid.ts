@@ -21,11 +21,12 @@ export const RAID = {
   damageScale: 0.26,
   /**
    * Odds a round is on target (else it is a near miss that cracks past), less against a survivor
-   * on the move or crouched; and the small aiming error either way (degrees).
+   * on the move, crouched or lying prone; and the small aiming error either way (degrees).
    */
   hitChance: 0.26,
   movingPenalty: 0.06,
   crouchFactor: 0.75,
+  proneFactor: 0.5,
   aimError: 0.5,
   /** The first round after spotting someone waits this long (seconds, low..high). */
   reaction: [0.55, 0.95] as [number, number],

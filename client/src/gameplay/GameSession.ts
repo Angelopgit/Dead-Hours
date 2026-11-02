@@ -1103,7 +1103,11 @@ export class GameSession {
     // Vehicles where they are drawn this frame; a survivor in a seat sits where theirs is.
     this.vehicleView.update(live, this.engine.camera, this.sim.vehicles.list, this.drawAt);
     this.placeSeated();
+    // Lying prone, swinging, throwing or bandaging props the chest up on one elbow.
+    const hands = this.me.arsenal.action;
+    p.character.rise = hands === 'melee' || hands === 'throw' || hands === 'bandage' || hands === 'inject' || this.throws.priming ? 1 : 0;
     p.render(dt, alpha);
+    this.stanceFeedback();
     if (p.landed) {
       p.landed = false;
       // On a board or a bike the wheels take the landing (its own clack or thump plays). A drop out
@@ -1129,6 +1133,9 @@ export class GameSession {
     } else if (this.phase === 'dead') {
       this.deathCamera(dt);
     } else {
+      // Lying prone the sights line up with the eyes of the body on the ground.
+      this.cam.prone = p.character.proneWeight;
+      if (this.cam.prone > 0) p.eyeWorld(this.cam.proneEye);
       this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming && this.canAim, p.sprinting, this.adsSight());
     }
     this.focus.copy(p.renderPosition);
@@ -1285,6 +1292,35 @@ export class GameSession {
       this.sights.set(key, s);
     }
     return s;
+  }
+
+  /** Sounds, shake and rumble for diving, landing, getting down and back up. */
+  private stanceFeedback(): void {
+    const p = this.player;
+    if (p.dived) {
+      p.dived = false;
+      audio.stance('leap');
+      this.input.rumble(0.2, 80);
+    }
+    if (p.diveLanded) {
+      p.diveLanded = false;
+      audio.stance('land');
+      this.cam.addTrauma(0.22 + Math.min(0.2, Math.max(0, p.landAir - 0.4) * 0.5));
+      this.input.rumble(0.55, 160);
+    }
+    if (p.wentProne) {
+      p.wentProne = false;
+      audio.stance('down');
+      this.cam.addTrauma(0.05);
+    }
+    if (p.gotUp) {
+      p.gotUp = false;
+      audio.stance('up');
+    }
+    if (p.cramped) {
+      p.cramped = false;
+      this.hud.feedLine('NO ROOM TO GET UP');
+    }
   }
 
   /** The active weapon's sights when aiming should look down them (first person). */
@@ -1694,7 +1730,7 @@ export class GameSession {
     this.effects.muzzle(muzzle, dir, weapon);
     audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor' || weapon === 'wraith');
     const steady = this.sim.boosted(this.me, 'focus') ? BOOSTS.focus.recoil : 1;
-    const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1) * steady;
+    const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.prone ? 0.6 : this.player.crouching ? 0.8 : 1) * steady;
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008 * steady);
     this.cam.addTrauma((0.04 + def.recoil * 0.05) * steady);
     this.input.rumble(0.12 + def.recoil * 0.35, 60 + def.recoil * 60);
@@ -1894,7 +1930,7 @@ export class GameSession {
     if (!jump && this.vaultLookT > 0) return this.vaultChoice;
     this.vaultLookT = 0.1;
     this.vaultChoice = null;
-    if (!this.me.up || p.ride || p.vault || p.seated || p.downed || this.work || (!p.grounded && !jump)) return null;
+    if (!this.me.up || p.ride || p.vault || p.seated || p.downed || p.prone || p.dive || this.work || (!p.grounded && !jump)) return null;
     const mv = this.input.move;
     const yaw = this.cam.yaw;
     let fx = -Math.sin(yaw), fz = -Math.cos(yaw);
@@ -1939,7 +1975,7 @@ export class GameSession {
   /** Hops onto a board in reach: at once here; online the server may give it to someone quicker. */
   private rideBoard(b: Skateboard): void {
     const p = this.player;
-    if (p.ride || !this.me.up) return;
+    if (p.ride || p.prone || p.dive || !this.me.up) return;
     if (this.link) {
       p.mount(b.id, this.cam.yaw);
       this.rideAskedAt = this.netNow;
@@ -2352,7 +2388,7 @@ export class GameSession {
    */
   private rideBike(b: Bicycle, seat: BikeSeat): void {
     const p = this.player;
-    if (p.ride || p.cycle || p.pillion || !this.me.up) return;
+    if (p.ride || p.cycle || p.pillion || p.prone || p.dive || !this.me.up) return;
     const under = seat === 'peg' ? this.drawnBike(b, this.underPegs) : null;
     if (seat === 'peg' && !under) return;
     if (this.link) {
@@ -2683,17 +2719,19 @@ export class GameSession {
     }
     const door = this.doors.nearest(eye, 1.9);
     if (door) cands.push({ kind: 'door', pos: door.center, door });
+    // Boards, vehicles and bikes are not for someone lying on the ground: get up first.
+    const lying = this.player.prone || !!this.player.dive;
     // Skateboards lying in reach count by how near they are underfoot, like things on the floor.
-    for (const b of this.sim.skateboards.inReach(this.me)) {
+    for (const b of lying ? [] : this.sim.skateboards.inReach(this.me)) {
       cands.push({ kind: 'board', pos: new THREE.Vector3(b.pos.x, b.pos.y + 0.1, b.pos.z), board: b, near: Math.hypot(b.pos.x - p.x, b.pos.z - p.z) });
     }
     // Vehicles with a seat free: by how near their bodywork is.
-    for (const v of this.sim.vehicles.inReach(this.me)) {
+    for (const v of lying ? [] : this.sim.vehicles.inReach(this.me)) {
       const at = this.vehicleView.drawnPose(v.id, this.tmpC) !== null ? this.tmpC : this.tmpC.set(v.pos.x, v.pos.y, v.pos.z);
       cands.push({ kind: 'vehicle', pos: new THREE.Vector3(at.x, at.y + v.def.low, at.z), vehicle: v, near: outsideBy(v, p.x, p.z) + 0.2 });
     }
     // Bicycles the same (one lying about to pick up, or the pegs of one a teammate rides, by where it is drawn).
-    for (const { bike, seat } of this.sim.bicycles.inReach(this.me)) {
+    for (const { bike, seat } of lying ? [] : this.sim.bicycles.inReach(this.me)) {
       const at = seat === 'peg' ? this.drawnBike(bike, this.underPegs)?.pos ?? v3(bike.pos, new THREE.Vector3()) : v3(bike.pos, new THREE.Vector3());
       cands.push({ kind: 'bike', pos: new THREE.Vector3(at.x, at.y + (seat === 'peg' ? 0.6 : 0.35), at.z), bike, seat, near: Math.hypot(at.x - p.x, at.z - p.z) - 0.2 });
     }
@@ -3750,7 +3788,7 @@ export class GameSession {
 
     // Dynamic crosshair: gap follows the real spread cone (rolling on a skateboard is smooth).
     const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : p.seated ? VEHICLE.spreadSpeed : p.pillion ? BICYCLE.spreadSpeed : 1);
-    const spread = a.spread({ speed: hv, crouching: p.crouching, grounded: p.grounded, aiming: p.aiming });
+    const spread = a.spread({ speed: hv, crouching: p.crouching, grounded: p.grounded, aiming: p.aiming, prone: p.prone });
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
     hud.setSpread(Math.min(70, px));
@@ -3758,7 +3796,8 @@ export class GameSession {
     // CONTINUE" stands in the middle of the screen then, and the crosshair would strike through it.
     this.updateDownPanel();
     hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && a.action !== 'inject' && this.cam.ads < 0.4 && !p.seated?.driver);
-    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : a.action === 'inject' ? 'INJECTING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : a.action === 'inject' ? 'INJECTING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.dive ? 'DIVING' : p.prone ? 'PRONE' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    this.touch.setStance(p.stance);
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
     // Pain: hits flash the screen edges red; low health keeps a pulse there.

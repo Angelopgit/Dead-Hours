@@ -110,12 +110,13 @@ export interface Snapshot {
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
-export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64, vaulting: 128, cycling: 256 } as const;
+export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64, vaulting: 128, cycling: 256, prone: 512, diving: 1024 } as const;
 
 function flagsOf(m: PlayerMotion, trigger = false): number {
   return (m.crouching ? MOTION_FLAG.crouching : 0) | (m.sprinting ? MOTION_FLAG.sprinting : 0) | (m.aiming ? MOTION_FLAG.aiming : 0)
     | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0) | (m.light ? MOTION_FLAG.light : 0)
-    | (m.pushing ? MOTION_FLAG.pushing : 0) | (m.vaulting ? MOTION_FLAG.vaulting : 0) | (m.bike !== undefined && Number.isFinite(m.bike) ? MOTION_FLAG.cycling : 0);
+    | (m.pushing ? MOTION_FLAG.pushing : 0) | (m.vaulting ? MOTION_FLAG.vaulting : 0) | (m.bike !== undefined && Number.isFinite(m.bike) ? MOTION_FLAG.cycling : 0)
+    | (m.prone ? MOTION_FLAG.prone : 0) | (m.diving ? MOTION_FLAG.diving : 0);
 }
 
 /** Smashed panes as a hex bit string (see Snapshot.g). */
@@ -287,12 +288,14 @@ export function unpackMotion(a: unknown): MotionFrame | null {
     motion: {
       pos: { x: n[0] / 1000, y: n[1] / 1000, z: n[2] / 1000 },
       vel: { x: n[3] / 100, y: n[4] / 100, z: n[5] / 100 },
-      yaw: n[6] / 1000, pitch: clamp(n[7] / 1000, -1.6, 1.6), eyeHeight: clamp(n[9] / 1000, 0.5, 2),
+      yaw: n[6] / 1000, pitch: clamp(n[7] / 1000, -1.6, 1.6), eyeHeight: clamp(n[9] / 1000, 0.3, 2),
       crouching: !!(flags & MOTION_FLAG.crouching), sprinting: !!(flags & MOTION_FLAG.sprinting),
       aiming: !!(flags & MOTION_FLAG.aiming), grounded: !!(flags & MOTION_FLAG.grounded),
       light: !!(flags & MOTION_FLAG.light),
       pushing: !!(flags & MOTION_FLAG.pushing),
       vaulting: !!(flags & MOTION_FLAG.vaulting),
+      prone: !!(flags & MOTION_FLAG.prone),
+      diving: !!(flags & MOTION_FLAG.diving),
       board: n.length === 18 && !(flags & MOTION_FLAG.cycling) ? clamp(n[17] / 1000, -4, 4) : undefined,
       bike: n.length === 18 && flags & MOTION_FLAG.cycling ? clamp(n[17] / 1000, -4, 4) : undefined,
     },
@@ -665,6 +668,8 @@ export class Mirror {
         mo.light = !!(f & MOTION_FLAG.light);
         mo.pushing = !!(f & MOTION_FLAG.pushing);
         mo.vaulting = !!(f & MOTION_FLAG.vaulting);
+        mo.prone = !!(f & MOTION_FLAG.prone);
+        mo.diving = !!(f & MOTION_FLAG.diving);
         let tr = this.tracks.get(sp.id);
         if (!tr) {
           tr = { prev: { ...pos }, pos: { ...pos }, at: T, span, facing: m[8] / 1000 };

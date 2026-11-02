@@ -40,6 +40,10 @@ interface Remote {
    * snapshots, the lean, bars and cranks worked out here from how they move), else null.
    */
   cycle: Cycling | null;
+  /** Lying prone and diving as last drawn (their sounds play on the changes), and whether the dive has come down. */
+  prone: boolean;
+  diving: boolean;
+  diveDown: boolean;
 }
 
 interface RemoteRide {
@@ -125,6 +129,7 @@ export class RemoteSurvivors {
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0, dim: 1 },
       ride: null, trickWait: null, seat: { yaw: 0 },
       cycle: null,
+      prone: !!m.prone, diving: !!m.diving, diveDown: false,
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w, inS) => audio.foley(cue, this.hand(r, _q), w, inS);
@@ -305,6 +310,7 @@ export class RemoteSurvivors {
       b.root.position.z -= Math.sin(cyc.yaw) * k;
     }
     const still = !!ride || !!cyc;
+    this.stance(r, p);
     b.update(dt, {
       speed: still ? 0 : hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded || !!pegs,
       strafe: still ? 0 : strafe, moveAngle: still ? 0 : moveAngle, turn: still || dt <= 0 ? 0 : turned / dt,
@@ -315,7 +321,36 @@ export class RemoteSurvivors {
     r.weapon.update(dt, p.arsenal, { aim: p.arsenal.aim, sprinting: m.sprinting, aimPoint: _aim });
     this.light(r, p, dt, _aim, camera);
     r.probe.update(dt, r.pos, camera);
-    this.placeTag(r, _q.copy(r.pos).setY(r.pos.y + (p.downed ? 0.8 : m.crouching ? PLAYER.crouchHeight : PLAYER.height) + 0.25), camera, p, false);
+    this.placeTag(r, _q.copy(r.pos).setY(r.pos.y + (p.downed || m.prone ? 0.8 : m.crouching ? PLAYER.crouchHeight : PLAYER.height) + 0.25), camera, p, false);
+  }
+
+  /**
+   * Lying prone or diving, as they report it: the body goes down (held up off the ground while a
+   * dive is in the air), and the dive, the landing, getting down and up are heard where they are.
+   */
+  private stance(r: Remote, p: SimPlayer): void {
+    const b = r.body;
+    const m = p.motion;
+    const prone = !!m.prone && !p.downed;
+    const diving = !!m.diving && !p.downed;
+    b.prone = prone || diving ? 1 : 0;
+    b.dive = diving && !m.grounded && !m.prone ? 1 : 0;
+    const a = p.arsenal.action;
+    b.rise = a === 'melee' || a === 'throw' || a === 'bandage' || a === 'inject' ? 1 : 0;
+    if (diving && !r.diving) {
+      r.diveDown = false;
+      audio.stance('leap', r.pos);
+    }
+    if (diving && !r.diveDown && (m.grounded || m.prone)) {
+      r.diveDown = true;
+      audio.stance('land', r.pos);
+    }
+    if (!diving && !r.diving) {
+      if (prone && !r.prone) audio.stance('down', r.pos);
+      else if (!prone && r.prone && !p.downed) audio.stance('up', r.pos);
+    }
+    r.prone = prone;
+    r.diving = diving;
   }
 
   /**

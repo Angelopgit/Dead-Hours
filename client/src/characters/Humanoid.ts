@@ -418,6 +418,8 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
 
 /** How much of the look pitch bends the spine (at the waist): looking down leans the survivor forward. */
 export const LOOK_BEND = 0.45;
+/** A diving body flies this far (m) above where it lies prone. */
+const DIVE_LIFT = 0.48;
 
 /**
  * Low-poly character: one skinned mesh (a single draw call) on an 11-bone rig, animated
@@ -509,7 +511,44 @@ export class Humanoid {
   /** Vaulting through a window (1) or not (0): the body tucks low over the sill, knees up. */
   vault = 0;
   private vaultW = 0;
+  /**
+   * Survivors lying flat on the belly (1) or up (0), propped on the elbows with the legs out
+   * behind; moving, they belly-crawl. Getting down goes through the knees.
+   */
+  prone = 0;
+  private proneW = 0;
+  /** In the air in a dolphin dive (1): stretched out flat a body's depth off the ground, reaching ahead. */
+  dive = 0;
+  private diveW = 0;
+  /** Lying prone but busy with the hands (a swing, a throw, a bandage): up on one elbow, chest raised (0..1). */
+  rise = 0;
+  private riseW = 0;
+  /** The belly crawl's cycle (radians; one turn is a pull with each arm). */
+  private crawlP = 0;
+  /** Zombies: what it swipes at is down on the ground (1), so it stoops and claws low. */
+  attackLow = 0;
+  private lowW = 0;
   private skateW = 0;
+  /** How far down onto the belly the body is now (0..1, eased): the weapon hold and the camera follow it. */
+  get proneWeight(): number {
+    return this.proneW;
+  }
+
+  /** How far a diving body is held up off the ground (m): what it holds is lifted with it. */
+  get proneLift(): number {
+    return this.diveW * DIVE_LIFT;
+  }
+
+  /**
+   * Where the eyes are now (world, between them at the front of the face; the caller has updated
+   * the root's matrices). Lying prone the sights line up with them. Not head.localToWorld: down
+   * the sights the head is scaled away (headHidden).
+   */
+  eyeWorld(out: THREE.Vector3): THREE.Vector3 {
+    this.head.getWorldQuaternion(_eyeQ);
+    return this.head.getWorldPosition(out).add(_eyeV.set(0, EYE_Y * HEAD_K, 0.1 * HEAD_K).applyQuaternion(_eyeQ));
+  }
+
   private readonly lastSkate: SkatePose = { yaw: Math.PI / 2, deck: 0.11, push: -1, lean: 0, air: false, low: false, trickU: -1, flip: 0, spin: 0 };
   /** Which side of the deck the toes are on while skating: +1 its left (looking at the nose), -1 its right. */
   skateToe = 1;
@@ -1051,13 +1090,16 @@ export class Humanoid {
     }
     const fh = this.flinchHead, ft = this.flinchTorso, fl = this.flinchLimb;
 
+    // Swiping at someone lying on the ground: it stoops right over to claw down at them.
+    this.lowW += ((z && this.attack >= 0 ? this.attackLow : 0) - this.lowW) * (1 - Math.exp(-dt * 8));
+    const low = this.lowW;
     // Hips bob and crouch.
     const bob = Math.abs(cos) * 0.045 * moving * (1 + run);
     const lean = run * (runner ? 0.5 : z ? 0.3 : 0.22) + moving * 0.05 + crouch * 0.35;
     // Walkers stoop, runners hunt low, brutes hunch over their own bulk.
     const zLean = z ? (runner ? 0.24 : brute ? 0.46 : 0.34) + Math.sin(p * 0.5 + this.seed) * 0.03 : 0;
     const sv = this.stagger;
-    this.hips.position.set(0, 0.95 - crouch * 0.33 + bob - (z ? 0.05 : 0), 0);
+    this.hips.position.set(0, 0.95 - crouch * 0.33 + bob - (z ? 0.05 : 0) - low * 0.16, 0);
     // A brute rolls its weight from foot to foot.
     this.hips.rotation.set(0, -sin * 0.1 * moving + this.hipYaw, brute ? sin * 0.07 * moving : 0);
     // Spine: lean, look pitch, bladed stance, recoil, flinches and stagger.
@@ -1070,6 +1112,7 @@ export class Humanoid {
       // Windup leans back, the strike lunges forward, then recovers.
       spineX += a < 0.5 ? -a * 0.3 : a < 0.66 ? THREE.MathUtils.lerp(-0.15, 0.4, (a - 0.5) / 0.16) : THREE.MathUtils.lerp(0.4, 0, (a - 0.66) / 0.34);
       spineY += a < 0.5 ? a * 0.3 : (1 - a) * 0.3;
+      spineX += low * (0.55 + Math.sin(Math.min(1, a / 0.66) * Math.PI) * 0.3);
     }
     if (z && this.bash >= 0) spineX += Math.sin(this.bash * Math.PI) * 0.25 - 0.1;
     this.spine.rotation.set(spineX, spineY, spineZ);
@@ -1078,8 +1121,13 @@ export class Humanoid {
     const limp = runner ? 0.94 : brute ? 0.8 : z ? 0.55 : 1;
     this.legL.upper.rotation.set(-sin * legAmp - crouch * 0.9, 0, 0);
     this.legR.upper.rotation.set(sin * legAmp * limp - crouch * 0.9, 0, 0);
-    this.legL.lower.rotation.set(Math.max(0, cos) * kneeAmp + crouch * 1.5 + (s.grounded ? 0 : 0.6), 0, 0);
-    this.legR.lower.rotation.set(Math.max(0, -cos) * kneeAmp * limp + crouch * 1.5 + (s.grounded ? 0 : 0.3), 0, 0);
+    this.legL.lower.rotation.set(Math.max(0, cos) * kneeAmp + crouch * 1.5 + (s.grounded ? 0 : 0.6) + low * 0.55, 0, 0);
+    this.legR.lower.rotation.set(Math.max(0, -cos) * kneeAmp * limp + crouch * 1.5 + (s.grounded ? 0 : 0.3) + low * 0.55, 0, 0);
+    if (low > 0.001) {
+      // Knees bent under the stoop.
+      this.legL.upper.rotation.x -= low * 0.3;
+      this.legR.upper.rotation.x -= low * 0.3;
+    }
     if (brute) {
       // Wide, heavy stance.
       this.legL.upper.rotation.z = 0.09;
@@ -1112,6 +1160,12 @@ export class Humanoid {
         if (a < 0.5) { ux = THREE.MathUtils.lerp(-reach, -2.5, a / 0.5); lx = THREE.MathUtils.lerp(-0.3, -1.1, a / 0.5); spread = 0.25; }
         else if (a < 0.66) { const t = (a - 0.5) / 0.16; ux = THREE.MathUtils.lerp(-2.5, -0.7, t); lx = THREE.MathUtils.lerp(-1.1, -0.05, t); spread = -0.05; }
         else { const t = (a - 0.66) / 0.34; ux = THREE.MathUtils.lerp(-0.7, -reach, t); lx = -0.3 * t; spread = -0.12 * t; }
+        // Clawing down at the ground: the blow comes down past the knees instead of across.
+        if (low > 0.001) {
+          const down = a < 0.5 ? 0 : a < 0.66 ? (a - 0.5) / 0.16 : 1 - (a - 0.66) / 0.34;
+          ux = THREE.MathUtils.lerp(ux, ux + 0.45 * down, low);
+          lx = THREE.MathUtils.lerp(lx, lx - 0.25 * down, low);
+        }
       }
       if (this.bash >= 0) {
         const b = this.bash;
@@ -1167,6 +1221,20 @@ export class Humanoid {
     if (this.vaultW < 0.002 && this.vault === 0) this.vaultW = 0;
     if (this.vaultW > 0) this.vaultPose(this.vaultW);
     if (this.seatW > 0.001) this.seatPose();
+    if (!z) {
+      // Down onto the belly quickly (a dive throws the body flat at once), up again a little slower.
+      const down = this.prone > this.proneW;
+      this.proneW += (this.prone - this.proneW) * (1 - Math.exp(-dt * (this.dive > 0 ? 14 : down ? 8 : 6.5)));
+      if (Math.abs(this.prone - this.proneW) < 0.002) this.proneW = this.prone;
+      this.diveW += (this.dive - this.diveW) * (1 - Math.exp(-dt * (this.dive > this.diveW ? 16 : 7)));
+      if (this.diveW < 0.002 && this.dive === 0) this.diveW = 0;
+      this.riseW += ((this.prone ? this.rise : 0) - this.riseW) * (1 - Math.exp(-dt * 10));
+      if (this.proneW > 0) {
+        // Belly crawl: one pull per arm every ~0.9 m covered.
+        this.crawlP += dt * Math.PI * 2 * (speed / 0.9) * this.moveDir;
+        this.pronePose(this.proneW, moving, s.aim);
+      }
+    }
 
     // Knocked down: fall onto the back, feet toward the facing direction, arms splayed.
     const d = this.crawl > 0.5 ? 0 : this.down;
@@ -1191,7 +1259,7 @@ export class Humanoid {
 
     // Footstep events at each plant.
     const sign = Math.sign(sin);
-    if (sign !== this.lastStepSign && moving > 0.3 && s.grounded && d < 0.2 && this.crawl < 0.5) {
+    if (sign !== this.lastStepSign && moving > 0.3 && s.grounded && d < 0.2 && this.crawl < 0.5 && this.proneW < 0.5) {
       this.onFootstep?.(Math.min(1, speed / 6) * (1 - crouch * 0.6));
     }
     this.lastStepSign = sign;
@@ -1214,6 +1282,58 @@ export class Humanoid {
     this.legL.lower.rotation.x = L(this.legL.lower.rotation.x, 1.9, e);
     this.legR.lower.rotation.x = L(this.legR.lower.rotation.x, 1.55, e);
     this.head.rotation.x = L(this.head.rotation.x, -0.45, e);
+  }
+
+  /**
+   * Flat on the belly, propped up on the elbows with the chest off the ground and the head up,
+   * legs straight out behind, a little apart, feet turned out. The body lies centred on the
+   * capsule (feet ~0.85 m behind it, head ~0.8 m ahead). Moving, it belly-crawls: the hips roll,
+   * one knee draws up and out to the side and pushes as the other leg straightens. Getting down
+   * and back up goes through the knees. In a dive the body flies stretched out, held up off the
+   * ground, legs trailing a little high; `rise` props it up on one elbow for a swing or a throw.
+   */
+  private pronePose(w: number, moving: number, aim: number): void {
+    const e = w * w * (3 - 2 * w);
+    const L = THREE.MathUtils.lerp;
+    const dv = this.diveW;
+    const rise = this.riseW;
+    const crawl = moving * (1 - dv) * (1 - aim * 0.5);
+    const cyc = Math.sin(this.crawlP);
+    const lift = dv * DIVE_LIFT;
+    // Through the knees on the way down and up: thighs forward, shins folded under.
+    const kneel = Math.sin(Math.PI * e) * (1 - dv);
+
+    this.hips.position.set(
+      L(this.hips.position.x, 0, e),
+      L(this.hips.position.y, 0.15 + lift + Math.abs(Math.cos(this.crawlP)) * 0.025 * crawl, e) + kneel * 0.12,
+      L(this.hips.position.z, 0.1, e),
+    );
+    this.hips.rotation.set(
+      L(this.hips.rotation.x, 1.5 - dv * 0.08, e),
+      L(this.hips.rotation.y, cyc * 0.1 * crawl, e),
+      L(this.hips.rotation.z, cyc * 0.07 * crawl, e),
+    );
+    // The chest propped up (higher looking up, flatter in a dive, up on an elbow to swing).
+    const chest = -0.33 - this.lookPitch * 0.22 + dv * 0.18 - rise * 0.45;
+    this.spine.rotation.set(
+      L(this.spine.rotation.x, chest, e),
+      L(this.spine.rotation.y, -cyc * 0.08 * crawl + rise * 0.25, e),
+      L(this.spine.rotation.z, -cyc * 0.05 * crawl, e),
+    );
+    // Legs: out behind, the crawling knee drawn up and out to the side along the ground, the
+    // shin folded back in beside it (frog-legged), then pushed straight again.
+    for (const [leg, side] of [[this.legL, 1], [this.legR, -1]] as const) {
+      const draw = Math.max(0, cyc * side) * crawl;
+      leg.upper.rotation.set(
+        L(leg.upper.rotation.x, -0.05 - draw * 1.15 + dv * 0.12, e) - kneel * 1.1,
+        L(leg.upper.rotation.y, (0.35 + draw * 0.2) * side, e),
+        L(leg.upper.rotation.z, (0.1 + draw * 1.1) * side, e),
+      );
+      leg.lower.rotation.set(L(leg.lower.rotation.x, 0.06 + draw * 1.44 + dv * 0.5, e) + kneel * 1.9, 0, 0);
+    }
+    // Head up to see ahead (it rides on the propped chest), turned with the view.
+    const tip = 1.5 - dv * 0.08 + chest;
+    this.head.rotation.set(L(this.head.rotation.x, -tip + 0.12 - this.lookPitch * 0.35, e), L(this.head.rotation.y, 0, e), L(this.head.rotation.z, 0, e));
   }
 
   /**
@@ -1604,6 +1724,8 @@ export class Humanoid {
     this.bike = null;
     this.bikeW = 0;
     this.root.rotation.z = 0;
+    this.prone = this.proneW = this.dive = this.diveW = this.rise = this.riseW = 0;
+    this.attackLow = this.lowW = 0;
     this.down = this.downTarget = 0;
     this.stagger = this.staggerTarget = 0;
     this.attack = this.bash = this.scream = -1;
@@ -1780,3 +1902,6 @@ function bruteLook(i: number): HumanoidLook {
 export function survivorLook(a: Appearance): HumanoidLook {
   return { outfit: a };
 }
+
+const _eyeQ = new THREE.Quaternion();
+const _eyeV = new THREE.Vector3();

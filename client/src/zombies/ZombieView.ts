@@ -99,6 +99,8 @@ const NEAR_CREDIT = 6;
  * ragdolls on death, and corpses that stay for a while and then sink away.
  */
 export class ZombieView {
+  /** The world drawn this frame (who each zombie might be swiping at). */
+  private sim: Simulation | null = null;
   private readonly views = new Map<number, View>();
   private readonly corpses: View[] = [];
   /** Bodies are pooled per kind and look with their light probe: the probe is patched into the material once. */
@@ -507,6 +509,7 @@ export class ZombieView {
   }
 
   update(dt: number, sim: Simulation, renderTime: number, camera: THREE.Camera): void {
+    this.sim = sim;
     const seen = new Set<number>();
     const cam = camera.position;
     this.ear.copy(cam);
@@ -575,6 +578,21 @@ export class ZombieView {
     }
   }
 
+  /** The survivor nearest a swiping zombie is down on the ground. */
+  private lowTarget(z: Zombie, x: number, zz: number): boolean {
+    let best = 2.6 * 2.6, low = false;
+    for (const p of this.sim?.players.values() ?? []) {
+      if (!p.alive) continue;
+      const pt = p.reachPoint(z.pos, _reach);
+      const d = (pt.x - x) ** 2 + (pt.z - zz) ** 2;
+      if (d < best && Math.abs(pt.y - z.pos.y) < 1.5) {
+        best = d;
+        low = !!p.motion.prone || p.downed;
+      }
+    }
+    return low;
+  }
+
   private animate(v: View, z: Zombie, dt: number, renderTime: number, cam: THREE.Vector3, camera: THREE.Camera): void {
     const b = v.body;
     // Interpolate between the zombie's last two updates (distant ones update less often).
@@ -599,6 +617,8 @@ export class ZombieView {
 
     const state = z.state;
     b.attack = state === 'attack' ? z.attackPhase : -1;
+    // Swiping at someone down on the ground (lying prone, or downed): it stoops to claw at them.
+    if (state === 'attack') b.attackLow = this.lowTarget(z, x, zz) ? 1 : 0;
     // Breaking in through a window pounds like a door; climbing through, it hauls itself over hunched with arms out.
     b.bash = state === 'bash' || state === 'breach' ? z.attackPhase : state === 'vault' ? 0.5 : -1;
     b.scream = state === 'scream' ? z.attackPhase : -1;
@@ -747,3 +767,4 @@ const _sp = new THREE.Vector3(), _sd = new THREE.Vector3(), _up = new THREE.Vect
 const _struck = new Map<View, number>();
 /** Every particle of a ragdoll. */
 const ALL = Array.from({ length: 15 }, (_, i) => i);
+const _reach: Vec3 = { x: 0, y: 0, z: 0 };

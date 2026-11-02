@@ -4,6 +4,7 @@ import { SPECIALS, ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zo
 import { COMBAT, type HitZone } from '../config/weapons';
 import { LEGS, LIMBS, type ArmCut, type ArmState, type ArmZone, type LegCut, type LegState, type LegZone } from '../config/limbs';
 import { FIRE } from '../config/throwables';
+import { PRONE } from '../config/player';
 import { zombieZones, type ZoneShape } from './hitzones';
 import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
 import { BARRICADE } from '../config/barricades';
@@ -22,6 +23,10 @@ export type ZombieState =
   | 'breach' | 'vault';
 
 const SEPARATION = 0.95;
+/** Scratch for the nearest point of a target's body. */
+const _reach: Vec3 = { x: 0, y: 0, z: 0 };
+/** Stops this close (m) to the nearest part of a survivor lying prone instead of stepping onto them. */
+const LOW_STOP = 0.6;
 
 /**
  * One zombie: perception (sight cones, line of sight, hearing), a small state machine, path
@@ -385,7 +390,7 @@ export class Zombie {
       const dx = chest.x - eye.x, dy = chest.y - eye.y, dz = chest.z - eye.z;
       const d = Math.hypot(dx, dy, dz);
       const tracking = this.target === p.id && sim.time - this.lastSeen < 4;
-      const range = this.def.sightRange * (p.motion.crouching ? 0.55 : 1) * (tracking ? 1.6 : 1);
+      const range = this.def.sightRange * (p.motion.prone ? PRONE.sight : p.motion.crouching ? 0.55 : 1) * (tracking ? 1.6 : 1);
       if (d > range) continue;
       if (d > 2.4 && !tracking) {
         const ang = Math.abs(angleDiff(Math.atan2(dx, dz), this.facing));
@@ -578,7 +583,8 @@ export class Zombie {
         }
         const seenRecently = sim.time - this.lastSeen < 0.6;
         if (seenRecently) this.lastKnown = { ...target.motion.pos };
-        const tp = target.motion.pos;
+        // Someone lying prone is reached wherever their body is nearest (head, side or feet).
+        const tp = target.reachPoint(this.pos, _reach);
         const d = dist2D(this.pos, tp);
         const dy = Math.abs(tp.y - this.pos.y);
         const S = SPECIALS.screamer;
@@ -598,8 +604,10 @@ export class Zombie {
           wishX = tp.x - this.pos.x;
           wishZ = tp.z - this.pos.z;
           const l = Math.hypot(wishX, wishZ) || 1;
-          wishX /= l;
-          wishZ /= l;
+          // Close beside a body on the ground it stops, rather than walk onto it.
+          const k = target.motion.prone && l < LOW_STOP ? 0 : 1 / l;
+          wishX *= k;
+          wishZ *= k;
           this.path.length = 0;
         } else {
           if (!this.pathTarget || dist2D(this.pathTarget, this.lastKnown) > 1.5 || sim.time > this.repathAt) {
@@ -623,21 +631,23 @@ export class Zombie {
       case 'attack': {
         this.attackT += dt;
         if (target) {
-          faceX = target.motion.pos.x - this.pos.x;
-          faceZ = target.motion.pos.z - this.pos.z;
+          const tp = target.reachPoint(this.pos, _reach);
+          faceX = tp.x - this.pos.x;
+          faceZ = tp.z - this.pos.z;
         }
         if (this.attackT < this.def.windup) {
           wishX = faceX;
           wishZ = faceZ;
           const l = Math.hypot(wishX, wishZ) || 1;
-          wishX /= l;
-          wishZ /= l;
+          const k = target?.motion.prone && l < LOW_STOP ? 0 : 1 / l;
+          wishX *= k;
+          wishZ *= k;
           speed = 0.35;
         }
         if (!this.landed && this.attackT >= this.def.windup) {
           this.landed = true;
           if (target && target.alive) {
-            const tp = target.motion.pos;
+            const tp = target.reachPoint(this.pos, _reach);
             const d = dist2D(this.pos, tp);
             const ang = Math.abs(angleDiff(Math.atan2(tp.x - this.pos.x, tp.z - this.pos.z), this.facing));
             const clear = sim.physics.raycast(this.chest.x, this.chest.y, this.chest.z, (tp.x - this.pos.x) / (d || 1), 0, (tp.z - this.pos.z) / (d || 1), d);

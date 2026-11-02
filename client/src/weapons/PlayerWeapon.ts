@@ -127,6 +127,36 @@ export const AKIMBO_TIMES = { right: { drop: 0.12, seat: 0.5, slide: 0.82 }, lef
 const OFFHAND_ADS = { at: [-0.2, -0.155, -0.42] as V3, roll: 0.22, toe: 0.02 };
 
 /**
+ * Lying prone, in the body's own frame (+Z ahead along it, +X its left, from the middle of it on
+ * the ground): the stock in the shoulder beside the cheek and the gun out ahead resting low on the
+ * hands; aimed, it turns onto the crosshair from there. Reloading rolls it onto its side.
+ */
+export const PRONE_POSES: Record<Hold, Record<'ready' | 'aim' | 'reload', PoseDef>> = {
+  rifle: {
+    ready: { at: [-0.13, 0.3, 0.62], rot: [0.12, 0.06, 0] },
+    aim: { at: [-0.09, 0.39, 0.64] },
+    reload: { at: [-0.13, 0.25, 0.58], rot: [0.05, 0.25, 0.9] },
+  },
+  pistol: {
+    ready: { at: [-0.06, 0.25, 0.98], rot: [0.25, 0, 0] },
+    aim: { at: [-0.03, 0.4, 1.02] },
+    reload: { at: [-0.05, 0.27, 0.9], rot: [-0.2, 0.2, 0.5] },
+  },
+  // The right gun of a pair (the left mirrors it): out ahead on both elbows, a shoulder apart.
+  akimbo: {
+    ready: { at: [-0.16, 0.24, 0.95], rot: [0.25, 0.04, 0] },
+    aim: { at: [-0.15, 0.4, 1.0] },
+    reload: { at: [-0.14, 0.24, 0.85], rot: [-0.2, 0.15, 0.3] },
+  },
+};
+/** Slung on the back while prone: along the spine, muzzle (or blade) toward the feet (spine space). */
+const FLAT_BACK = basis([-0.12, -1, -0.3], [0, 0, -1]);
+const FLAT_BLADE = basis([0.12, -1, 0], [0, 0, -1]);
+const FLAT_BLADE2 = basis([-0.12, -1, 0], [0, 0, -1]);
+/** Elbows down on the ground and out to the sides while prone (body frame). */
+const PRONE_ELBOWS = { r: [-0.5, -0.85, -0.15] as V3, l: [0.5, -0.85, -0.05] as V3 };
+
+/**
  * Down the sights (first person): which way each elbow goes (the gun's frame turned level: +Z
  * along the barrel, +X the gun's left, +Y up) and how far past the wrist the palm sits on the
  * grip. The hands run on along their forearms (the rig has no wrist joint), so this decides
@@ -137,6 +167,17 @@ export const ADS_ARMS: Record<Hold, { elbowR: V3; elbowL: V3; palm: number }> = 
   rifle: { elbowR: [-0.73, -0.27, 0.01], elbowL: [0.5, -0.6, -0.62], palm: 0.084 },
   pistol: { elbowR: [-1.4, -1.1, 0.44], elbowL: [0.16, -0.51, 0.13], palm: 0.071 },
   // Each hand on its own gun: the left elbow hangs out the way the right one does.
+  akimbo: { elbowR: [-1.4, -1.1, 0.44], elbowL: [1.4, -1.1, 0.44], palm: 0.071 },
+};
+/**
+ * The same lying prone (blended in by the body's prone weight): the support elbow out to the side,
+ * both wrists drawn further back, and the support hand cupping the fore-end from underneath (CUP, m)
+ * so it stays out of the sight picture. Tuned against `npm run check:sights` (prone cases).
+ */
+const CUP = 0.025;
+export const PRONE_ADS_ARMS: Record<Hold, { elbowR: V3; elbowL: V3; palm: number }> = {
+  rifle: { elbowR: [-0.73, -0.27, 0.01], elbowL: [0.9, -0.3, -0.3], palm: 0.12 },
+  pistol: { elbowR: [-1.4, -1.1, 0.44], elbowL: [0.16, -0.51, 0.13], palm: 0.071 },
   akimbo: { elbowR: [-1.4, -1.1, 0.44], elbowL: [1.4, -1.1, 0.44], palm: 0.071 },
 };
 
@@ -347,6 +388,9 @@ export class PlayerWeapon {
   private readonly tmpA = new THREE.Vector3();
   private readonly tmpQ = new THREE.Quaternion();
   private readonly spineQ = new THREE.Quaternion();
+  /** The body's frame (prone holds), and a spare point. */
+  private readonly rootQ = new THREE.Quaternion();
+  private readonly proneAt = new THREE.Vector3();
   private readonly leftTarget = new THREE.Vector3();
   private readonly rightTarget = new THREE.Vector3();
   private readonly poleL = new THREE.Vector3();
@@ -663,12 +707,21 @@ export class PlayerWeapon {
     body.root.updateMatrixWorld(true);
     const spine = body.spine;
     spine.getWorldQuaternion(this.spineQ);
+    body.root.getWorldQuaternion(this.rootQ);
     const stockLocal = model.stock;
+    // Lying prone the holds are the body's own, not the chest's (the torso lies along the ground).
+    const pw = body.proneWeight;
+    twist *= 1 - pw;
 
     // Ready → aim → sprint → reload → melee → holster.
     this.spinePose(poses.ready, this.anchor, this.quat);
+    if (pw > 0.001) {
+      this.bodyPose(PRONE_POSES[hold].ready, this.tmpA, this.tmpQ);
+      this.mix(this.tmpA, this.tmpQ, pw);
+    }
     if (this.aimW > 0.001) {
       spine.localToWorld(this.tmpA.set(...poses.aim.at));
+      if (pw > 0.001) this.tmpA.lerp(this.bodyPoint(PRONE_POSES[hold].aim.at, this.proneAt), pw);
       const dir = new THREE.Vector3().subVectors(input.aimPoint, this.tmpA);
       if (dir.lengthSq() < 0.25) dir.set(0, 0, 1).applyQuaternion(this.spineQ);
       dir.normalize();
@@ -693,6 +746,11 @@ export class PlayerWeapon {
     if (this.reloadW > 0.001) {
       if (off) this.keyPose(AKIMBO_RELOAD.right, s.action === 'reload' ? progress : 1, this.tmpA, this.tmpQ);
       else this.spinePose(poses.reload, this.tmpA, this.tmpQ);
+      if (pw > 0.001) {
+        this.bodyPose(PRONE_POSES[hold].reload, this.proneAt, _pq);
+        this.tmpA.lerp(this.proneAt, pw);
+        this.tmpQ.slerp(_pq, pw);
+      }
       this.mix(this.tmpA, this.tmpQ, this.reloadW);
     }
     if (this.meleeW > 0.001 && !off) {
@@ -756,6 +814,11 @@ export class PlayerWeapon {
     const spineM = spine.matrixWorld;
     this.poleR.set(-0.6, -0.65, -0.25).transformDirection(spineM);
     this.poleL.set(0.6, -0.7, -0.1).transformDirection(spineM);
+    if (pw > 0.001) {
+      // Propped on the elbows.
+      this.poleR.lerp(_pp.set(...PRONE_ELBOWS.r).normalize().applyQuaternion(this.rootQ), pw).normalize();
+      this.poleL.lerp(_pp.set(...PRONE_ELBOWS.l).normalize().applyQuaternion(this.rootQ), pw).normalize();
+    }
     model.root.localToWorld(this.rightTarget.set(0, 0, 0));
     let leftW = 1;
     if (off) {
@@ -943,15 +1006,20 @@ export class PlayerWeapon {
     // Elbows hang the same way however far up or down the gun points.
     _sd.set(0, 0, 1).applyQuaternion(model.root.quaternion);
     _lv.makeRotationY(Math.atan2(_sd.x, _sd.z));
-    this.poleR.lerp(_sp.set(...arms.elbowR).normalize().applyMatrix4(_lv), w).normalize();
-    this.poleL.lerp(_sp.set(...arms.elbowL).normalize().applyMatrix4(_lv), w).normalize();
+    const pw = body.proneWeight, lying = PRONE_ADS_ARMS[hold];
+    _sp.set(...arms.elbowR).normalize().lerp(_sq.set(...lying.elbowR).normalize(), pw);
+    this.poleR.lerp(_sp.normalize().applyMatrix4(_lv), w).normalize();
+    _sp.set(...arms.elbowL).normalize().lerp(_sq.set(...lying.elbowL).normalize(), pw);
+    this.poleL.lerp(_sp.normalize().applyMatrix4(_lv), w).normalize();
     for (const [limb, target, pole] of [[body.armR, this.rightTarget, this.poleR], [body.armL, this.leftTarget, this.poleL]] as const) {
       // A support hand only partly on the gun keeps the rest of its own pose.
       if (limb === body.armL && leftW < 0.999) continue;
       // Where the forearm points with the wrist on the grip, then the wrist back along it.
       body.reach(limb, target, pole, 1);
       limb.end.getWorldPosition(_sd).sub(limb.lower.getWorldPosition(_sp)).normalize();
-      target.addScaledVector(_sd, -arms.palm * w);
+      target.addScaledVector(_sd, -THREE.MathUtils.lerp(arms.palm, lying.palm, pw) * w);
+      // Lying prone the support hand cups the fore-end from underneath.
+      if (limb === body.armL && pw > 0.001) target.addScaledVector(_sq.set(0, 1, 0).applyQuaternion(model.root.quaternion), -CUP * pw * w);
     }
   }
 
@@ -1034,14 +1102,34 @@ export class PlayerWeapon {
     q.setFromEuler(this.e.set(r[0], r[1] * m, r[2] * m)).premultiply(this.spineQ);
   }
 
+  /** A point in the body's frame (prone holds), lifted with a diving body. */
+  private bodyPoint(at: V3, out: THREE.Vector3): THREE.Vector3 {
+    return this.body.root.localToWorld(out.set(at[0], at[1] + this.body.proneLift, at[2]));
+  }
+
+  /** A pose in the body's frame (prone holds; `mirror`: across to the left side, for the left gun of a pair). */
+  private bodyPose(p: PoseDef, pos: THREE.Vector3, q: THREE.Quaternion, mirror = false): void {
+    const m = mirror ? -1 : 1;
+    this.bodyPoint(_mv.set(p.at[0] * m, p.at[1], p.at[2]).toArray() as V3, pos);
+    const r = p.rot ?? [0, 0, 0];
+    q.setFromEuler(this.e.set(r[0], r[1] * m, r[2] * m)).premultiply(this.rootQ);
+  }
+
   private holsterPose(kind: keyof typeof HOLSTERS, pos: THREE.Vector3, q: THREE.Quaternion): void {
     const h = HOLSTERS[kind];
-    const bone = kind === 'back' || kind === 'blade' || kind === 'blade2' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : kind === 'thighL' ? this.body.legL.upper : this.body.hips;
+    const back = kind === 'back' || kind === 'blade' || kind === 'blade2';
+    const bone = back ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : kind === 'thighL' ? this.body.legL.upper : this.body.hips;
     pos.copy(h.pos);
     // A rifle slung over a backpack rides on top of it.
-    if (kind === 'back' || kind === 'blade' || kind === 'blade2') pos.z -= this.body.backDepth;
+    if (back) pos.z -= this.body.backDepth;
+    // Lying prone, a slung gun lies flat along the back instead of standing up off it.
+    const pw = back ? this.body.proneWeight : 0;
+    pos.z += 0.07 * pw;
     bone.localToWorld(pos);
-    bone.getWorldQuaternion(q).multiply(h.quat);
+    bone.getWorldQuaternion(q);
+    if (pw > 0.001) _pq.copy(q).multiply(kind === 'back' ? FLAT_BACK : kind === 'blade2' ? FLAT_BLADE2 : FLAT_BLADE);
+    q.multiply(h.quat);
+    if (pw > 0.001) q.slerp(_pq, pw);
   }
 
   private swingTwist(s: HeldState): number {
@@ -1187,8 +1275,15 @@ export class PlayerWeapon {
       q.slerp(this.tmpQ, w);
     };
     this.spinePose(poses.ready, pos, q, true);
+    // Lying prone: the body's own holds, mirrored.
+    const pw = this.body.proneWeight, lying = PRONE_POSES.akimbo;
+    if (pw > 0.001) {
+      this.bodyPose(lying.ready, this.tmpA, this.tmpQ, true);
+      mixL(pw);
+    }
     if (this.aimW > 0.001) {
       this.body.spine.localToWorld(this.tmpA.set(-poses.aim.at[0], poses.aim.at[1], poses.aim.at[2]));
+      if (pw > 0.001) this.tmpA.lerp(this.bodyPoint([-lying.aim.at[0], lying.aim.at[1], lying.aim.at[2]], _od), pw);
       const dir = _od.subVectors(input.aimPoint, this.tmpA);
       if (dir.lengthSq() < 0.25) dir.set(0, 0, 1).applyQuaternion(this.spineQ);
       dir.normalize();
@@ -1209,6 +1304,11 @@ export class PlayerWeapon {
     }
     if (this.reloadW > 0.001) {
       this.keyPose(AKIMBO_RELOAD.left, s.action === 'reload' ? p : 1, this.tmpA, this.tmpQ, true);
+      if (pw > 0.001) {
+        this.bodyPose(lying.reload, this.proneAt, _pq, true);
+        this.tmpA.lerp(this.proneAt, pw);
+        this.tmpQ.slerp(_pq, pw);
+      }
       mixL(this.reloadW);
     }
     // Two hands on a long melee weapon, a severed arm, a bike's bars or the melee weapon held out:
@@ -1308,5 +1408,7 @@ function spring(r: { z: number; vz: number; pitch: number; vp: number; yaw: numb
 const _od = new THREE.Vector3(), _o0 = new THREE.Vector3(), _oy = new THREE.Vector3(0, 1, 0), _om = new THREE.Matrix4();
 const _lp = new THREE.Vector3(), _ld = new THREE.Vector3(), _ka = new THREE.Vector3();
 const _lq = new THREE.Quaternion(), _kq = new THREE.Quaternion();
-const _sd = new THREE.Vector3(), _sp = new THREE.Vector3(), _lv = new THREE.Matrix4();
+const _sd = new THREE.Vector3(), _sp = new THREE.Vector3(), _sq = new THREE.Vector3(), _lv = new THREE.Matrix4();
 const _iq = new THREE.Quaternion(), _iw = new THREE.Vector3(), _ie = new THREE.Vector3();
+const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion();
+const _mv = new THREE.Vector3();

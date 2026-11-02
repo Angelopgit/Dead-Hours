@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Physics, RAPIER } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
+import { PRONE } from '@dead-hours/shared';
 import { LOOK_BEND } from '../characters/Humanoid';
 
 const BASE_FOV = 62;
@@ -57,6 +58,22 @@ export class ThirdPersonCamera {
   private driveBlend = 0;
   /** A body the camera and the crosshair see through (the vehicle the survivor sits in). */
   seeThrough: RAPIER.RigidBody | null = null;
+  /**
+   * 0..1 lying prone (the body's own weight): the view can't look as far up or down, the orbit
+   * centres on the shoulders, and the sights are lined up with `proneEye`, the eyes of the body
+   * lying on the ground (set by the owner every frame while prone).
+   */
+  prone = 0;
+  readonly proneEye = new THREE.Vector3();
+
+  /** How far the view may look down and up now. */
+  private get pitchMin(): number {
+    return THREE.MathUtils.lerp(-1.25, PRONE.pitchDown, this.prone);
+  }
+
+  private get pitchMax(): number {
+    return THREE.MathUtils.lerp(0.95, PRONE.pitchUp, this.prone);
+  }
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly physics: Physics) {}
 
@@ -70,8 +87,10 @@ export class ThirdPersonCamera {
     const sens = 0.0022 * c.sensitivity * zoom;
     const inv = c.invertY ? -1 : 1;
     this.yaw -= d.x * sens + t.x * zoom * friction;
+    // Past the limits (just gone prone) the view only comes back toward them.
+    const before = this.pitch;
     this.pitch -= (d.y * sens + t.y * zoom * friction) * inv;
-    this.pitch = THREE.MathUtils.clamp(this.pitch, -1.25, 0.95);
+    this.pitch = THREE.MathUtils.clamp(this.pitch, Math.min(before, this.pitchMin), Math.max(before, this.pitchMax));
     if (d.x || d.y || t.x || t.y) this.lookedAt = performance.now();
     if (input.pressed('shoulder')) this.shoulder *= -1;
   }
@@ -92,12 +111,12 @@ export class ThirdPersonCamera {
   /** Aim assist pull: turns the view by this much (radians, toward the target). */
   nudge(yaw: number, pitch: number): void {
     this.yaw += yaw;
-    this.pitch = THREE.MathUtils.clamp(this.pitch + pitch, -1.25, 0.95);
+    this.pitch = THREE.MathUtils.clamp(this.pitch + pitch, this.pitchMin, this.pitchMax);
   }
 
   /** Muzzle climb: the view kicks up (and a little sideways) and settles most of the way back. */
   addRecoil(pitch: number, yaw: number): void {
-    this.pitch = THREE.MathUtils.clamp(this.pitch + pitch, -1.25, 0.95);
+    this.pitch = THREE.MathUtils.clamp(this.pitch + pitch, this.pitchMin, Math.max(this.pitch, this.pitchMax));
     this.yaw += yaw;
     this.recover += pitch * 0.65;
     this.recoverYaw += yaw * 0.5;
@@ -122,7 +141,7 @@ export class ThirdPersonCamera {
       const k = 1 - Math.exp(-dt * 7);
       const rp = this.recover * k;
       const ry = this.recoverYaw * k;
-      this.pitch = THREE.MathUtils.clamp(this.pitch - rp, -1.25, 0.95);
+      this.pitch = THREE.MathUtils.clamp(this.pitch - rp, Math.min(this.pitch, this.pitchMin), Math.max(this.pitch, this.pitchMax));
       this.yaw -= ry;
       this.recover -= rp;
       this.recoverYaw -= ry;
@@ -130,8 +149,14 @@ export class ThirdPersonCamera {
       if (Math.abs(this.recoverYaw) < 1e-5) this.recoverYaw = 0;
     }
     this.shoulderSmoothed += (this.shoulder - this.shoulderSmoothed) * (1 - Math.exp(-dt * 10));
+    // Gone prone looking far up or down: the view eases back within reach.
+    const lim = THREE.MathUtils.clamp(this.pitch, this.pitchMin, this.pitchMax);
+    if (lim !== this.pitch) this.pitch += (lim - this.pitch) * (1 - Math.exp(-dt * 8));
 
     this.pivot.set(target.x, target.y + eyeHeight, target.z);
+    // Lying down, the view centres on the shoulders rather than the middle of the body.
+    this.pivot.x -= Math.sin(this.yaw) * 0.35 * this.prone;
+    this.pivot.z -= Math.cos(this.yaw) * 0.35 * this.prone;
     if (!this.initialized) {
       this.smoothPivot.copy(this.pivot);
       this.initialized = true;
@@ -184,12 +209,14 @@ export class ThirdPersonCamera {
     // with the head, so the shoulders and arms stay behind the sights instead of swinging in front
     // of them; never into a wall ahead.
     if (this.adsBlend > 0) {
-      const bend = -this.pitch * LOOK_BEND;
+      const bend = -this.pitch * LOOK_BEND * (1 - this.prone);
       const ahead = WAIST_TO_EYE * Math.sin(bend);
       const wall = ahead > 0 ? this.physics.sphereCast(this.eye.x, this.eye.y, this.eye.z, fwdFlat.x, 0, fwdFlat.z, 0.1, ahead) : null;
       this.eye.addScaledVector(fwdFlat, wall !== null ? Math.max(0, wall - 0.02) : ahead);
       this.eye.y -= WAIST_TO_EYE * (1 - Math.cos(bend));
     }
+    // Prone the eyes are the body's own, low on the ground ahead of where it lies.
+    if (this.prone > 0) this.eye.lerp(this.proneEye, this.prone);
     const ads = this.adsBlend;
     if (ads > 0) camPos.lerp(this.eye, ads * ads * (3 - 2 * ads));
 

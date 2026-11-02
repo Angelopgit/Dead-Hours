@@ -8,7 +8,7 @@
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
   WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, LULLS, hordeAt, hordeStart, lullDuration, lullOpening, threatAt, inLull, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
-  type Zombie, type SimLimb, type ZoneShape,
+  type Zombie, type SimLimb, type ZoneShape, PRONE, DIVE, MOTION_FLAG, packMotion, unpackMotion,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, SHAPE_MID, SHAPE_STEPS, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
   BARRICADE, Mirror, NAV_INDOOR, storeyFloors, type BarricadeSlot,
@@ -1175,6 +1175,83 @@ section('Downed and revives');
   const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
   sim.damagePlayer(sp, 500, sp.motion.pos);
   check(!sp.alive && !sp.downed && sim.phase === 'over', 'solo: zero health is still death');
+  cleanup(sim, body);
+}
+
+section('Prone and dolphin dives');
+{
+  const { sim, sp, body } = makeSim({ x: 20, y: 0.15, z: 6 });
+  run(sim, 0.5);
+  const at = { x: 20, y: 0.15, z: 6 };
+  const reach = (x: number, z: number) => sp.reachPoint({ x, y: 0, z }, { x: 0, y: 0, z: 0 });
+  check(reach(20, -3).z === 6 && reach(25, 6).x === 20, 'standing, zombies reach for the body where it stands');
+  // Lying looking along -z (yaw 0): the head is ahead, the feet behind.
+  sim.setMotion('p1', { prone: true, crouching: false, yaw: 0, pitch: 0, eyeHeight: PRONE.eyeHeight });
+  const ahead = reach(20, -3), behind = reach(20, 12), side = reach(23, 6.3);
+  check(Math.abs(ahead.z - (6 - PRONE.reachAhead)) < 1e-6 && Math.abs(behind.z - (6 + PRONE.reachBehind)) < 1e-6 && Math.abs(side.z - 6.3) < 1e-6 && side.x === 20,
+    'prone, zombies reach for the nearest part of the body (head, feet or side)');
+
+  const stance = (m: Partial<{ prone: boolean; crouching: boolean }>) =>
+    sp.arsenal.spread({ speed: 0, grounded: true, aiming: false, crouching: !!m.crouching, prone: !!m.prone });
+  check(stance({ prone: true }) < stance({ crouching: true }) && stance({ crouching: true }) < stance({}), 'lying prone is the steadiest way to shoot (less spread than crouching)');
+
+  // Out of a walker's sight at a distance it would see someone standing.
+  const far = sim.spawnZombie('walker', { x: 20, y: 0.02, z: 6 - 14 }, 'idle');
+  far.facing = 0;
+  let res = run(sim, 4);
+  check(!res.events.some((e) => e.type === 'zombieAlert') && far.state !== 'chase', 'a zombie 14 m away does not spot a survivor lying prone');
+  sim.setMotion('p1', { prone: false });
+  far.setState('idle');
+  far.facing = Math.atan2(at.x - far.pos.x, at.z - far.pos.z);
+  res = run(sim, 6, () => far.state === 'chase');
+  check(far.state === 'chase', `the same zombie spots them once they stand up (${res.time.toFixed(1)} s, ${far.state})`);
+  for (const z of [...sim.zombies]) z.removeBody();
+  sim.zombies.length = 0;
+
+  // Close by it sees them, comes to the body and claws at it, standing beside it, not on it.
+  sim.setMotion('p1', { prone: true, pos: { ...at }, vel: { x: 0, y: 0, z: 0 } });
+  const near = sim.spawnZombie('walker', { x: 20, y: 0.02, z: 6 - 7 }, 'idle');
+  near.facing = 0;
+  const hp = sp.health;
+  res = run(sim, 25, () => sp.health < hp);
+  const head = sp.reachPoint(near.pos, { x: 0, y: 0, z: 0 });
+  check(sp.health < hp && res.events.some((e) => e.type === 'zombieAttack'), `a zombie reaches a prone survivor and hurts them (${res.time.toFixed(1)} s)`);
+  check(Math.hypot(near.pos.x - head.x, near.pos.z - head.z) > 0.3 && near.pos.z < at.z - PRONE.reachAhead + 0.3, 'it stops at the head instead of walking onto the body');
+  for (const z of [...sim.zombies]) z.removeBody();
+  sim.zombies.length = 0;
+
+  // Noise: crawling is quiet, a dive lands with one thud.
+  sim.noises.length = 0;
+  sim.setMotion('p1', { prone: true, grounded: true, vel: { x: 0, y: 0, z: -PRONE.crawlSpeed } });
+  run(sim, 2);
+  const crawl = sim.noises.filter((n) => n.source === 'p1');
+  check(crawl.length >= 2 && crawl.every((n) => n.radius === PRONE.noise) && PRONE.noise < 1.2, `crawling makes only a ${PRONE.noise} m noise (quieter than crouch-walking)`);
+  sim.noises.length = 0;
+  sim.setMotion('p1', { prone: false, diving: true, grounded: false, vel: { x: 0, y: 2, z: -7 } });
+  run(sim, 0.3);
+  const inAir = sim.noises.filter((n) => n.source === 'p1').length;
+  sim.setMotion('p1', { grounded: true, vel: { x: 0, y: 0, z: -4 } });
+  run(sim, 0.5);
+  const thuds = sim.noises.filter((n) => n.source === 'p1');
+  check(inAir === 0 && thuds.length === 1 && thuds[0]!.radius === DIVE.noise, `a dive is silent in the air and lands with one ${DIVE.noise} m thud`);
+  sim.setMotion('p1', { diving: false, prone: true, vel: { x: 0, y: 0, z: 0 } });
+
+  // Online: prone and diving ride in the motion flags, and a low eye height survives the trip.
+  const frame = (prone: boolean, diving: boolean) => ({
+    motion: { ...sp.motion, prone, diving, eyeHeight: PRONE.eyeHeight }, facing: 0, trigger: false,
+    aimOrigin: sp.eye, aimDir: { x: 0, y: 0, z: -1 },
+  });
+  const a = unpackMotion(JSON.parse(JSON.stringify(packMotion(frame(true, false)))));
+  const b = unpackMotion(packMotion(frame(false, true)));
+  check(!!a && !!b && a.motion.prone === true && a.motion.diving === false && b.motion.diving === true && b.motion.prone === false && Math.abs(a.motion.eyeHeight - PRONE.eyeHeight) < 0.01
+    && MOTION_FLAG.prone === 512 && MOTION_FLAG.diving === 1024, 'prone and diving reach the server (motion flags 512 and 1024)');
+  sim.setMotion('p1', { prone: true, diving: false });
+  const snap = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+  const copy = new Simulation({ physics, map, nav, doors, seed: 4 });
+  new Mirror(copy, 'p2').apply(snap, 10);
+  const cp = copy.players.get('p1');
+  check(!!cp && cp.motion.prone === true && !cp.motion.diving, 'other survivors see them lying prone');
+  copy.dispose();
   cleanup(sim, body);
 }
 

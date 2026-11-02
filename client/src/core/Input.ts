@@ -16,7 +16,7 @@ const PAD_ACTIONS: [Action, number][] = [
 
 /** Button names shown in prompts while a controller is in use. */
 export const PAD_LABELS: Partial<Record<Action, string>> = {
-  fire: 'RT', aim: 'LT', jump: 'A', crouch: 'B', reload: 'X', interact: 'RB', heal: 'LB', melee: 'R3',
+  fire: 'RT', aim: 'LT', jump: 'A', crouch: 'B', prone: 'hold B', reload: 'X', interact: 'RB', heal: 'LB', melee: 'R3',
   flashlight: '↑', shoulder: 'hold ↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y', weapon3: 'Y',
 };
 
@@ -26,6 +26,8 @@ const TRIGGER_DOWN = 0.35;
 const PAD_TURN = 3.5;
 /** D-pad up held this long switches shoulders; a shorter press switches the flashlight. */
 const UP_HOLD = 0.4;
+/** B held this long goes prone (a tap crouches, or stands back up). */
+export const PRONE_HOLD = 0.4;
 
 let current: Device = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
 const deviceListeners = new Set<(d: Device) => void>();
@@ -95,6 +97,8 @@ export class Input {
   private padHold = 0;
   /** Seconds D-pad up has been held (-1: not pressed, or its hold already fired). */
   private upT = -1;
+  /** Seconds B has been held (-1: not pressed, or it already went prone). */
+  private proneT = -1;
   private readonly menus = new PadMenus();
 
   constructor(target: HTMLElement) {
@@ -174,7 +178,7 @@ export class Input {
   }
 
   /** A press and release seen as one press this frame. */
-  private tap(source: 'Pad' | 'Touch', action: Action): void {
+  tap(source: 'Pad' | 'Touch', action: Action): void {
     this.virtual(source, action, true);
     this.virtual(source, action, false);
   }
@@ -255,6 +259,7 @@ export class Input {
       this.padMove.x = this.padMove.y = 0;
       this.padSprint = false;
       this.upT = -1;
+      this.proneT = -1;
       this.menus.update(dt, now, edge, lx, ly, ry);
       return;
     }
@@ -279,6 +284,17 @@ export class Input {
       this.upT = -1;
       this.tap('Pad', 'flashlight');
     }
+    // B: crouch on its press (the survivor toggles it), prone once it has been held a moment.
+    if (now[B.B]) {
+      if (edge(B.B)) this.proneT = 0;
+      else if (this.proneT >= 0) {
+        this.proneT += dt;
+        if (this.proneT >= PRONE_HOLD) {
+          this.proneT = -1;
+          this.tap('Pad', 'prone');
+        }
+      }
+    } else this.proneT = -1;
     this.padMove.x = lx;
     this.padMove.y = -ly;
     // Sprint latches on a stick click and ends when the stick comes back.

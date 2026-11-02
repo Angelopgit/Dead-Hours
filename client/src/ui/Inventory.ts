@@ -4,7 +4,7 @@ import { h } from './dom';
 import { codeLabel } from '../core/Input';
 import { settings, ACTION_LABELS, type Action } from '../core/Settings';
 
-const KEYS: Action[] = ['fire', 'aim', 'reload', 'interact', 'melee', 'weapon1', 'weapon2', 'weapon3', 'heal', 'flashlight', 'sprint', 'crouch', 'jump', 'shoulder'];
+const KEYS: Action[] = ['fire', 'aim', 'reload', 'interact', 'melee', 'weapon1', 'weapon2', 'weapon3', 'heal', 'flashlight', 'sprint', 'crouch', 'prone', 'jump', 'shoulder'];
 
 /**
  * Hold-to-view inventory: carried weapons with their ammunition, bandages, this run's numbers

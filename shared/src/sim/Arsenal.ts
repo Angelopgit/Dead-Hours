@@ -5,6 +5,7 @@ import type { ZombieKind } from '../config/zombies';
 import { FIT_TIME, defaultBuild, sameBuild, tunedWeapon, type Loadout, type WeaponBuild } from '../config/progression';
 import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
 import { INJECT, type BoostId } from '../config/boosts';
+import { PRONE } from '../config/player';
 import { clamp } from './math';
 
 export interface WeaponState {
@@ -43,6 +44,8 @@ export interface MotionForSpread {
   crouching: boolean;
   grounded: boolean;
   aiming: boolean;
+  /** Lying flat (steadiest of all). */
+  prone?: boolean;
 }
 
 /** Seconds to take the melee weapon out in place of the gun. */
@@ -162,7 +165,7 @@ export class Arsenal {
     const d = this.def;
     const base = d.hipSpread + (d.aimSpread - d.hipSpread) * this.aim;
     const move = 1 + Math.min(1, m.speed / 6.2) * (this.aim > 0.5 ? 0.7 : 1.3);
-    const stance = m.crouching ? 0.75 : 1;
+    const stance = m.prone ? PRONE.spread : m.crouching ? 0.75 : 1;
     const air = m.grounded ? 1 : 2.2;
     return (base * move * stance * air + this.bloom * d.recoil * 3.2) * this.steady;
   }

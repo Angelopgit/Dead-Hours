@@ -1,6 +1,6 @@
 import { h } from './dom';
 import { settings, type Action } from '../core/Settings';
-import type { Input } from '../core/Input';
+import { PRONE_HOLD, type Input } from '../core/Input';
 
 /** Thumb travel (px) for a full push of the move stick. */
 const STICK_RADIUS = 56;
@@ -23,7 +23,7 @@ const BUTTONS: ButtonDef[] = [
   { action: 'aim', label: 'AIM', cls: 'aim', mode: 'latch' },
   { action: 'reload', label: 'RELOAD', cls: 'reload', mode: 'tap' },
   { action: 'jump', label: 'JUMP', cls: 'jump', mode: 'tap' },
-  { action: 'crouch', label: 'CROUCH', cls: 'crouch', mode: 'latch' },
+  { action: 'crouch', label: 'CROUCH', cls: 'crouch', mode: 'hold' },
   { action: 'melee', label: 'MELEE', cls: 'melee', mode: 'tap' },
   { action: 'interact', label: 'USE', cls: 'use', mode: 'hold' },
   { action: 'barricade', label: 'BOARD', cls: 'board', mode: 'hold' },
@@ -38,8 +38,9 @@ const BUTTONS: ButtonDef[] = [
 /**
  * On-screen thumb controls for phones and tablets: a floating move stick on the left half
  * (pushed to the edge it sprints), drag anywhere on the right half to look, and buttons on the
- * right. The fire button can be dragged to keep turning while shooting. Aim and crouch latch
- * on and off with a tap. Multi-touch throughout; each finger is tracked by its pointer id.
+ * right. The fire button can be dragged to keep turning while shooting. Aim latches on and off
+ * with a tap. CROUCH works like a controller's B: a tap crouches or stands, held a moment it goes
+ * prone, and while sprinting it dives. Multi-touch throughout; each finger is tracked by its pointer id.
  */
 export class TouchControls {
   readonly el: HTMLElement;
@@ -123,7 +124,10 @@ export class TouchControls {
       this.input.virtual('Touch', action, true);
       b.classList.add('on');
       if (action === 'fire') this.lookers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // Holding CROUCH a moment goes prone.
+      const prone = action === 'crouch' ? setTimeout(() => this.input.tap('Touch', 'prone'), PRONE_HOLD * 1000) : 0;
       const up = () => {
+        clearTimeout(prone);
         this.input.virtual('Touch', action, false);
         b.classList.remove('on');
         this.lookers.delete(e.pointerId);
@@ -214,7 +218,7 @@ export class TouchControls {
   /** Relabels the buttons for a seat in a vehicle (null: back on foot). */
   setSeat(seat: 'driver' | 'passenger' | null): void {
     if (seat === this.seat) return;
-    // Aim and crouch latched on foot are let go (the stick stays under the thumb).
+    // Aim latched on foot is let go (the stick stays under the thumb).
     for (const a of this.latched) {
       this.input.virtual('Touch', a, false);
       this.buttons.get(a)?.classList.remove('on');
@@ -236,6 +240,15 @@ export class TouchControls {
     label('melee', seat === 'driver' ? 'HORN' : def('melee'));
     this.buttons.get('melee')?.classList.toggle('horn', seat === 'driver');
     label('barricade', seat ? 'SEAT' : def('barricade'));
+  }
+
+  /** Shows how the survivor stands: CROUCH glows while crouched, and says PRONE lying down. */
+  setStance(stance: 'stand' | 'crouch' | 'prone'): void {
+    const b = this.buttons.get('crouch');
+    if (!b) return;
+    b.classList.toggle('lit', stance !== 'stand');
+    const label = stance === 'prone' ? 'PRONE' : 'CROUCH';
+    if (b.textContent !== label) b.textContent = label;
   }
 
   /** Shows whether the flashlight is on (its button glows). */
