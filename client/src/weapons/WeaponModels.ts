@@ -296,7 +296,8 @@ function mk14(): Spec {
     .box(0.016, 0.014, 0.02, BLACK, 0, 0.077, 0.6)
     .box(0.004, 0.022, 0.005, BLACK, 0, 0.09, 0.6)
     .box(0.04, 0.05, 0.18, TAN, 0, 0.045, -0.18)
-    .box(0.03, 0.03, 0.1, TAN, 0, 0.085, -0.17)
+    // Cheek comb, kept under the iron sight line (IRONS.marksman eye y 0.098): taller, the eye sat inside it.
+    .box(0.03, 0.016, 0.1, TAN, 0, 0.078, -0.17)
     .box(0.05, 0.12, 0.03, BLACK, 0, 0.025, -0.28)
     .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3);
   const mag = new Builder().box(0.03, 0.11, 0.07, 0x1c1c1c, 0, -0.055, 0, 0.05);

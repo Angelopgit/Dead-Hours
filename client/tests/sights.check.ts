@@ -50,6 +50,11 @@ const LENS = 0.94;
 const HANDGUN_FLOOR = -0.12;
 /** Above this (fraction of half the screen height) is past the top of the gun: nothing of the body belongs there. */
 const BORE = 0.06;
+/**
+ * Nothing of the gun itself this close to the eye (m) in the sight window: a stock comb or cheek
+ * riser the eye sits in fills the sight picture (the guns are drawn double sided).
+ */
+const GUN_CLEAR = 0.05;
 /** Depth-buffer rows (columns follow the aspect). */
 const ROWS = 90;
 
@@ -190,7 +195,7 @@ function triangles(mesh: THREE.Mesh): Float32Array {
 }
 
 interface Pose { body: Float32Array; tags: Uint8Array; gun: Float32Array[]; scoped: boolean; handgun: boolean; camera: THREE.PerspectiveCamera }
-interface Seen { window: number; above: number; nearest: number; map: string }
+interface Seen { window: number; above: number; nearest: number; gunAtEye: number; map: string }
 
 /** Aims for a second and a half at 60 fps (everything settles) and takes the final pose. */
 function aim(c: Case, look: Appearance, pitch: number): Pose {
@@ -243,7 +248,10 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
   for (const g of p.gun) gun.draw(g, vp, false);
   const R = p.scoped ? LENS : WINDOW;
   const floor = p.handgun ? HANDGUN_FLOOR : -Infinity;
-  const seen: Seen = { window: 0, above: 0, nearest: Infinity, map: '' };
+  const seen: Seen = { window: 0, above: 0, nearest: Infinity, gunAtEye: 0, map: '' };
+  // Depth-buffer z back to metres in front of the eye.
+  const n = camera.near, f = camera.far;
+  const metres = (z: number) => (2 * n * f) / (f + n - z * (f - n));
   const rows: string[] = [];
   for (let y = ROWS - 1; y >= 0; y--) {
     let row = '';
@@ -256,6 +264,7 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
       if (shows && inWindow) seen.window++;
       else if (shows && ny > BORE) seen.above++;
       if (shows && (inWindow || ny > BORE)) seen.nearest = Math.min(seen.nearest, r);
+      if (r <= R && gun.z[i] < Infinity && metres(gun.z[i]) < GUN_CLEAR) seen.gunAtEye++;
       if (map) row += shows ? (inWindow || ny > BORE ? '+' : bones ? BONE_CH[body.tag[i]] : '#') : gun.z[i] < Infinity ? '=' : Math.abs(r - R) < 0.03 ? '.' : ' ';
     }
     rows.push(row);
@@ -276,6 +285,7 @@ for (const c of CASES) {
         if (drawMap) console.log(`\n${where}\n${s.map}\n`);
         check(s.window === 0, `${where}: ${pose.scoped ? 'scope lens' : 'sight window'} clear of hands and arms${s.window ? ` (${s.window} cells show the body, nearest ${s.nearest.toFixed(2)} from the middle)` : ''}`);
         check(s.above === 0, `${where}: nothing of the body above the gun${s.above ? ` (${s.above} cells)` : ''}`);
+        check(s.gunAtEye === 0, `${where}: the eye is clear of the gun's own stock and comb${s.gunAtEye ? ` (${s.gunAtEye} cells of gun within ${GUN_CLEAR * 100} cm)` : ''}`);
       }
     }
   }
