@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GAME } from '@dead-hours/shared';
 import { isPhone, type ShadowQuality } from '../core/Settings';
+import type { Physics } from '../core/Physics';
+import { beamPower } from '../lighting/BeamPower';
 import { weatherUniforms } from '../lighting/WetShader';
 import { BONE } from '../characters/rig';
 import type { Humanoid } from '../characters/Humanoid';
@@ -19,6 +21,10 @@ const REMOTE_RANGE = 26;
 const SHADOW_NEAR = 0.85;
 /** How fast the beam follows the aim (1/s): quick, with a little weight. */
 const FOLLOW = 18;
+/** How fast a beam turns down for something close in front (1/s): quick, so walking up to a wall never flashes. */
+const DIM_RATE = 12;
+/** And back up once the way clears: gentler, so sweeping past a door frame doesn't flicker. */
+const UNDIM_RATE = 3;
 /**
  * Lights for the other survivors' lamps (the nearest get one). Every light in the scene costs every
  * lit pixel, even dark, so phones keep one.
@@ -47,16 +53,21 @@ const SETBACK = 0.14;
  * light lives in the scene from boot at zero intensity (adding a light later would recompile every
  * material), lights the world as a real spot, casts shadows when the shadow setting allows, and
  * also drives the rain glints and the volumetric beam. A small pool of shadowless spots does the
- * same for the other survivors online.
+ * same for the other survivors online. Every beam turns itself down when something is close in
+ * front of it (beamPower), so it lights a room without burning the nearest wall white.
  */
 export class Flashlight {
   readonly light = new THREE.SpotLight(0xffe9cf, 0, RANGE, ANGLE, 0.6, 1.45);
   /** The player's switch. */
   on = true;
   private lvl = 0;
+  /** How far the beam is turned down for what is close in front of it (1 = full power). */
+  private dim = 1;
   private readonly remotes: THREE.SpotLight[] = [];
+  /** The beam each pool light lit last frame. */
+  private held: (Beam | null)[] = [];
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, private readonly physics: Physics) {
     this.light.name = 'flashlight';
     this.light.shadow.camera.near = SHADOW_NEAR;
     this.light.shadow.camera.far = RANGE;
@@ -108,8 +119,14 @@ export class Flashlight {
 
   /** active: in play and alive. origin/dir: where the light sits and points. */
   update(dt: number, active: boolean, origin: THREE.Vector3, dir: THREE.Vector3): void {
+    const was = this.lvl;
     this.lvl = fade(this.lvl, active && this.on, dt);
-    this.light.intensity = INTENSITY * this.lvl;
+    if (this.lvl > 0.001) {
+      const want = beamPower(this.physics, this.light, INTENSITY, origin, dir);
+      // Just switched on: straight to the right power, no flash on the wall first.
+      this.dim = was > 0.001 ? adapt(this.dim, want, dt) : want;
+    }
+    this.light.intensity = INTENSITY * this.lvl * this.dim;
     // Hiding a light would change the light count and recompile every material: dim it instead,
     // and stop redrawing its shadow map while it is off.
     this.light.shadow.autoUpdate = this.lvl > 0.001;
@@ -122,18 +139,25 @@ export class Flashlight {
   }
 
   /** Gives the pool's lights to the lit lamps of other survivors nearest the camera. */
-  placeRemotes(beams: readonly Beam[], camera: THREE.Vector3): void {
+  placeRemotes(beams: readonly Beam[], camera: THREE.Vector3, dt = 0): void {
     const lit = beams.filter((b) => b.level > 0.01).sort((a, b) => a.origin.distanceToSquared(camera) - b.origin.distanceToSquared(camera));
+    const held: (Beam | null)[] = [];
     for (let i = 0; i < this.remotes.length; i++) {
       const l = this.remotes[i];
       const b = lit[i];
       if (!b || b.origin.distanceTo(camera) > 70) {
         l.intensity = 0;
+        held.push(null);
         continue;
       }
-      l.intensity = REMOTE_INTENSITY * b.level;
+      const want = beamPower(this.physics, l, REMOTE_INTENSITY, b.origin, b.dir);
+      // A lamp that just got a light: straight to the right power.
+      b.dim = this.held.includes(b) ? adapt(b.dim, want, dt) : want;
+      held.push(b);
+      l.intensity = REMOTE_INTENSITY * b.level * b.dim;
       aim(l, b.origin, b.dir);
     }
+    this.held = held;
   }
 }
 
@@ -142,11 +166,19 @@ export interface Beam {
   origin: THREE.Vector3;
   dir: THREE.Vector3;
   level: number;
+  /** How far the pool has turned it down for what is close in front of it (1 = full power). */
+  dim: number;
 }
 
 /** A click on, a short fade off. */
 function fade(level: number, on: boolean, dt: number): number {
   return on ? 1 : Math.max(0, level - dt * 6);
+}
+
+/** Down fast, up gently. */
+function adapt(dim: number, want: number, dt: number): number {
+  const rate = want < dim ? DIM_RATE : UNDIM_RATE;
+  return dim + (want - dim) * (1 - Math.exp(-dt * rate));
 }
 
 function aim(l: THREE.SpotLight, origin: THREE.Vector3, dir: THREE.Vector3): void {

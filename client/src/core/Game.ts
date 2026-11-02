@@ -67,7 +67,7 @@ export class Game {
       if (label && next !== lastLabel) label.textContent = lastLabel = next;
     });
     // In the scene from the start (at zero), so turning it on never recompiles materials.
-    this.flashlight = new Flashlight(this.engine.scene);
+    this.flashlight = new Flashlight(this.engine.scene, this.physics);
     setFlashlight(this.flashlight);
     this.menuCine = new MenuCinematic(this.engine.camera, this.engine.scene);
     this.menuCine.applyProbe(this.field);

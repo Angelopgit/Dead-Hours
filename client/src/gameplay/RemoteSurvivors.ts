@@ -73,7 +73,7 @@ export class RemoteSurvivors {
     const r: Remote = {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
-      lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0 },
+      lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0, dim: 1 },
       ride: null,
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
@@ -102,7 +102,7 @@ export class RemoteSurvivors {
     }
     this.beams.length = 0;
     for (const r of this.remotes.values()) this.beams.push(r.beam);
-    flashlight()?.placeRemotes(this.beams, camera.position);
+    flashlight()?.placeRemotes(this.beams, camera.position, dt);
   }
 
   /**

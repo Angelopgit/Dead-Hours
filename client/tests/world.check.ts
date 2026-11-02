@@ -4,13 +4,15 @@
  *
  * Covers spawn clearance, every doorway in both directions, every staircase both ways, the
  * safehouse routes, the backyard passages, routes into each district, door leaves blocking when
- * closed and clearing when open, and furniture clipping into walls.
+ * closed and clearing when open, furniture clipping into walls, and the flashlight turning down
+ * near walls.
  */
 import * as THREE from 'three';
 import { MAPLE_HOLLOW as map, OAK, PLAYER, propColliders } from '@dead-hours/shared';
 import { Physics, initPhysics, RAPIER, GROUP, groups } from '../src/core/Physics';
 import { DoorSystem } from '../src/gameplay/Doors';
 import { Acoustics, type Space } from '../src/audio/Acoustics';
+import { beamPower, falloff, HOTSPOT_FAR, HOTSPOT_NEAR, TRIM_ALBEDO } from '../src/lighting/BeamPower';
 
 type V = [number, number];
 const DT = 1 / 60;
@@ -273,6 +275,41 @@ console.log('Acoustics: the space around each place, and walls between gun and e
   else if (!walled.walls || walled.gain >= 0.5 || walled.cutoff > 2000) fail(`street to living room isn't muffled (${JSON.stringify(walled)})`);
   else if (!(deep.gain < walled.gain && deep.cutoff <= walled.cutoff)) fail(`basement isn't more muffled than the living room (${JSON.stringify(deep)})`);
   else console.log(`  ok   open street clear; living room through ${walled.walls} wall(s) at ${(20 * Math.log10(walled.gain)).toFixed(0)} dB below ${walled.cutoff.toFixed(0)} Hz; basement ${(20 * Math.log10(deep.gain)).toFixed(0)} dB below ${deep.cutoff.toFixed(0)} Hz`);
+}
+
+console.log('Flashlight lights a room without burning the nearest wall white');
+{
+  // The player's chest lamp (gameplay/Flashlight.ts): 95 cd, 30 m, 0.36 rad, penumbra 0.6, decay 1.45.
+  const FULL = 95;
+  const lamp = new THREE.SpotLight(0xffffff, 0, 30, 0.36, 0.6, 1.45);
+  const shine = (x: number, y: number, z: number, dx: number, dy: number, dz: number) => {
+    const from = new THREE.Vector3(x, y, z);
+    const dir = new THREE.Vector3(dx, dy, dz).normalize();
+    const power = beamPower(phys, lamp, FULL, from, dir);
+    const hit = phys.raycastHit(x, y, z, dir.x, dir.y, dir.z, 30);
+    // The white trim round the windows and doors, the palest thing on these walls.
+    const lit = (p: number) => (hit ? (FULL * p * falloff(hit.distance, 30, 1.45) * TRIM_ALBEDO) / Math.PI : 0);
+    return { power, hit, glow: lit(power), was: lit(1) };
+  };
+  // Safehouse living room, the lamp at chest height beside the windows: the north wall 2.5 m off,
+  // then half a metre, then the room's length (7 m) the other way; down Elm Street nothing is near.
+  const chest = 0.35 + 1.3;
+  const rows: [string, ReturnType<typeof shine>][] = [
+    ['wall 0.5 m', shine(3.5, chest, -24.25, 0, 0, -1)],
+    ['wall 2.5 m', shine(3.5, chest, -22.3, 0, 0, -1)],
+    ['across the room', shine(4.0, chest, -22.3, 0, -0.05, 1)],
+  ];
+  for (const [name, r] of rows) {
+    const what = `${name} (${r.hit?.surface ?? 'nothing'} at ${r.hit?.distance.toFixed(2)} m): ${(r.power * 100).toFixed(0)}% power, trim at ${r.glow.toFixed(2)} (full power ${r.was.toFixed(1)})`;
+    if (!r.hit || r.hit.surface !== 'plaster') fail(`${what}: expected a plaster wall in front`);
+    else if (r.glow > HOTSPOT_NEAR + 1e-6) fail(`${what}: brighter than the bloom cap ${HOTSPOT_NEAR}`);
+    else if (r.power < 1 && r.glow < HOTSPOT_FAR * 0.9) fail(`${what}: turned down further than it needs to`);
+    else console.log(`  ok   ${what}`);
+  }
+  const street = shine(-40, 1.5, -4.6, 1, -0.06, 0);
+  if (street.power < 1) fail(`down Elm Street the beam is turned down to ${(street.power * 100).toFixed(0)}%`);
+  else console.log('  ok   down Elm Street: full power');
+  if (!(rows[0][1].power < rows[1][1].power && rows[1][1].power < rows[2][1].power)) fail('nearer walls should turn the beam down further');
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
