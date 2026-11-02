@@ -126,6 +126,11 @@ check(none === null, 'nothing near: full speed');
   check(prop('.comms-hud', 'width') === 'var(--comms-w)' && /^min\(/.test(prop('#ui-root', '--comms-w') ?? '')
     && /^calc\(100vw - 2 \* \(3vw \+ var\(--comms-w\)\)/.test(prop('.prompt', 'max-width') ?? ''),
     'the interaction prompt wraps beside the chat column instead of printing over its lines');
+  // A resize rewraps the chat lines (a smaller window narrows the column, a phone turns or goes fullscreen), and
+  // the newest line sat cut off below the log until another came in: the log re-pins itself when it changes size.
+  const chat = readFileSync(new URL('../src/ui/ChatBox.ts', import.meta.url), 'utf8');
+  check(/new ResizeObserver\([^]*?scrollTop = this\.log\.scrollHeight[^]*?\.observe\(this\.log\)/.test(chat),
+    'the in-game chat keeps its newest line in view when the window changes size');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');

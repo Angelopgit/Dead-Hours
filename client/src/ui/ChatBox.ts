@@ -26,7 +26,10 @@ export class ChatBox {
   private readonly input: HTMLInputElement;
   private readonly unsub: () => void;
   private readonly fader: ReturnType<typeof setInterval> | null = null;
+  private readonly sized: ResizeObserver | null = null;
   private opened = false;
+  /** The log shows its newest line (the last time it scrolled). */
+  private atEnd = true;
 
   constructor(private readonly link: NetLink, private readonly mode: 'lobby' | 'game', private readonly onClose?: () => void) {
     this.log = h('div', { class: 'chat-log', role: 'log', 'aria-live': 'polite' });
@@ -63,6 +66,16 @@ export class ChatBox {
       if (stick || this.mode === 'game') this.log.scrollTop = this.log.scrollHeight;
     });
     this.log.scrollTop = this.log.scrollHeight;
+    this.log.addEventListener('scroll', () => { this.atEnd = this.log.scrollTop + this.log.clientHeight >= this.log.scrollHeight - 8; }, { passive: true });
+    // The lines rewrap when the log changes size (a smaller window narrows the column, a phone turns or goes
+    // fullscreen), and the newest one ended up cut off below the log until another line came in. Keep it in
+    // view, as a new line does. This also pins the log once it is first on the page (it had no height before).
+    if (typeof ResizeObserver !== 'undefined') {
+      this.sized = new ResizeObserver(() => {
+        if (this.atEnd || (this.mode === 'game' && !this.opened)) this.log.scrollTop = this.log.scrollHeight;
+      });
+      this.sized.observe(this.log);
+    }
     this.fade();
   }
 
@@ -123,6 +136,7 @@ export class ChatBox {
   dispose(): void {
     this.unsub();
     if (this.fader) clearInterval(this.fader);
+    this.sized?.disconnect();
     this.el.remove();
   }
 }
