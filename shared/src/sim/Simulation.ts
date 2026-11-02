@@ -751,6 +751,15 @@ export class Simulation {
     }
     if (anyHit) p.stats.shotsHit++;
     this.emit({ type: 'shot', player: id, weapon: a.weapon.id, origin: { ...o }, pellets });
+    // A rocket bursts where it struck (or at the end of its flight), a little short of the surface.
+    if (def.explosive) {
+      for (const r of pellets) {
+        const ex = r.end.x - o.x, ey = r.end.y - o.y, ez = r.end.z - o.z;
+        const L = Math.hypot(ex, ey, ez) || 1;
+        const back = Math.min(0.3, L);
+        this.explosives.explode({ x: r.end.x - (ex / L) * back, y: r.end.y - (ey / L) * back, z: r.end.z - (ez / L) * back }, p);
+      }
+    }
     return 'fired';
   }
 
@@ -2003,7 +2012,7 @@ export class Simulation {
     }
   }
 
-  /** Whether this drop carries an exclusive weapon, and which: none before five minutes survived. */
+  /** Whether this drop carries an exclusive weapon, and which: rarely before three minutes survived. */
   private rollExclusive(): WeaponId | null {
     const D = SUPPLY_DROPS;
     if (this.forceExclusive) {
@@ -2011,7 +2020,7 @@ export class Simulation {
       this.forceExclusive = null;
       return w;
     }
-    if (this.phaseTime < D.exclusiveAfter || this.rand() >= D.exclusiveChance) return null;
+    if (this.rand() >= (this.phaseTime < D.exclusiveAfter ? D.exclusiveEarly : D.exclusiveChance)) return null;
     const total = D.exclusiveWeights.reduce((s, [, k]) => s + k, 0);
     let x = this.rand() * total;
     for (const [w, k] of D.exclusiveWeights) if ((x -= k) < 0) return w;

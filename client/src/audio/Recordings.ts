@@ -44,6 +44,10 @@ export const RECORDED_SHOTS: Record<string, RecordedShot> = {
   lmg: { set: 'ar', rate: 0.97, level: 0.92, punch: 0.6 },
   battle: { set: 'battle', rate: 1, level: 0.95, punch: 0.7 },
   sniper: { set: 'sniper', rate: 1, level: 0.8, punch: 0.9 },
+  // No recordings of these two: the custom .338 borrows the 7.62 rifle's, quieter and shorter behind
+  // its suppressor; the RPG the 12 gauge's, slowed right down into the booster's deep thump.
+  wraith: { set: 'marksman', rate: 0.95, level: 0.95, punch: 0.5 },
+  rpg: { set: 'shotgun', rate: 0.62, level: 1.25, punch: 1 },
 };
 
 /**
@@ -91,6 +95,8 @@ export const RECORDED_HANDLING: Record<string, Partial<Record<FoleyKind, Handlin
   marksman: { magOut: v('rifmagout', 0.95, 0.42), magIn: v('rifmagin', 0.95, 0.55), opRod: v('oprod', 0.94, 0.62) },
   // M107: a heavy .50 box magazine and a long charging handle.
   sniper: { magOut: v('rifmagout', 0.82, 0.48), magIn: v('rifmagin', 0.82, 0.6), charge: v('archarge', 0.8, 0.68) },
+  // Custom .338: a short box magazine and a heavy bolt.
+  wraith: { magOut: v('rifmagout', 0.9, 0.42), magIn: v('rifmagin', 0.9, 0.55), bolt: v('arbolt', 0.82, 0.6) },
   // M17: magazine dropped free, a fresh one in, the slide sent home off the stop.
   pistol: { magOut: v('pmagout', 1, 0.4), magIn: v('pmagin', 1, 0.5), slide: v('pslide', 1, 0.55) },
   // M870: shells thumbed into the tube and the pump.

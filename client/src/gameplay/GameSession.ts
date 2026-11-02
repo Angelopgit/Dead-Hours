@@ -1413,7 +1413,7 @@ export class GameSession {
     const muzzle = this.weapon.muzzleWorld(this.tmpA);
     const dir = this.weapon.muzzleDir(this.tmpB);
     this.effects.muzzle(muzzle, dir, weapon);
-    audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor');
+    audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor' || weapon === 'wraith');
     this.weapon.fired(def);
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
@@ -1421,7 +1421,11 @@ export class GameSession {
     this.input.rumble(0.12 + def.recoil * 0.35, 60 + def.recoil * 60);
     this.player.faceCamera(0.7);
     if (weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
-    else this.ejectCasing(false);
+    else if (weapon === 'wraith') {
+      // Bolt action: worked by hand after every round, the case flicked out as it comes back.
+      this.later.push({ t: 0.32, fn: () => audio.foley('bolt', this.handPos(), 'wraith', 0, true) });
+      this.later.push({ t: 0.4, fn: () => this.ejectCasing(false) });
+    } else if (weapon !== 'rpg') this.ejectCasing(false);
   }
 
   /** Another survivor fired: their muzzle, their report from where they stand, tracers to where it went. */
@@ -1448,10 +1452,11 @@ export class GameSession {
       this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
     }
     const shooter = this.sim.players.get(e.player)?.arsenal;
-    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor', e.player);
+    audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor' || e.weapon === 'wraith', e.player);
     const w = r.weaponOf(e.player);
     if (w) {
       w.fired(shooter ? shooter.defOf(e.weapon) : WEAPONS[e.weapon]);
+      if (e.weapon === 'rpg') return;
       const pos = this.tmpC, d = this.tmpD;
       w.ejectWorld(pos, d);
       const floor = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 3);

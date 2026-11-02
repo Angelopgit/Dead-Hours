@@ -452,6 +452,28 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
     },
     level: 1.1, echo: 1.6, mechLevel: 0.12, velocity: 890,
   },
+  // Custom .338 behind a suppressor: the blast cut down to a hard cough, most of the energy left in
+  // the bullet's crack (still supersonic), little for the street to echo.
+  wraith: {
+    shot: {
+      blast: 0.0007, gasTau: 0.008, gasLo: 900, gas: 0.5, snapTau: 0.002, snap: 0.25,
+      crack: 0.0006, crackGain: 1.1, boomHi: 120, boomLo: 45, boomTau: 0.03, boom: 0.22,
+      rumbleTau: 0.035, rumble: 0.08, ring: [[1250, 0.012, 0.04], [2300, 0.008, 0.03]], drive: 1.4,
+    },
+    mech: null,
+    level: 0.55, echo: 0.35, mechLevel: 0, velocity: 880,
+  },
+  // RPG-7: the booster charge kicking the rocket out (a deep, long, open-ended thump with the
+  // backblast's roar), no crack: the rocket leaves well below the speed of sound.
+  rpg: {
+    shot: {
+      blast: 0.0014, gasTau: 0.026, gasLo: 800, gas: 0.8, snapTau: 0.006, snap: 0.85,
+      crack: 0, crackGain: 0, boomHi: 100, boomLo: 34, boomTau: 0.055, boom: 0.3,
+      rumbleTau: 0.07, rumble: 0.2, ring: [[600, 0.02, 0.03], [1300, 0.014, 0.025]], drive: 3.4,
+    },
+    mech: null,
+    level: 1.05, echo: 1.5, mechLevel: 0, velocity: 120,
+  },
 };
 
 // --------------------------------------------------------------- surroundings
@@ -637,6 +659,8 @@ const HANDLING: Record<string, { pitch: number; weight: number }> = {
   lmg: { pitch: 0.88, weight: 1.35 },
   battle: { pitch: 0.86, weight: 1.15 },
   sniper: { pitch: 0.7, weight: 1.6 },
+  wraith: { pitch: 0.8, weight: 1.3 },
+  rpg: { pitch: 0.65, weight: 1.7 },
 };
 
 /**

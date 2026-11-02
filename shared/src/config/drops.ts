@@ -32,13 +32,15 @@ export const SUPPLY_DROPS = {
   hoverNoise: 48,
   landNoise: 26,
   /**
-   * Exclusive weapons: once the survivors have lasted `exclusiveAfter` seconds, each drop has
-   * `exclusiveChance` of carrying a weapon case beside the ammunition, one gun for whoever gets
-   * there first. The weights pick which; the .50 cal is the rare one.
+   * Exclusive weapons: a drop has `exclusiveChance` of carrying a weapon case beside the
+   * ammunition, one gun for whoever gets there first; before the survivors have lasted
+   * `exclusiveAfter` seconds the chance is only `exclusiveEarly`. The weights pick which gun:
+   * the two snipers are the rarest.
    */
-  exclusiveAfter: 300,
-  exclusiveChance: 0.25,
-  exclusiveWeights: [['lmg', 0.4], ['battle', 0.4], ['sniper', 0.2]] as [WeaponId, number][],
+  exclusiveAfter: 180,
+  exclusiveChance: 0.12,
+  exclusiveEarly: 0.03,
+  exclusiveWeights: [['lmg', 0.25], ['battle', 0.2], ['rpg', 0.25], ['wraith', 0.15], ['sniper', 0.15]] as [WeaponId, number][],
   /** The case lies this far from the crate's centre, across the helicopter's way in. */
   caseOffset: 1.15,
   /** Chance that a drop also carries one Lazarus serum (see SERUM), lying on the crate's other side. */

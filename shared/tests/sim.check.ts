@@ -683,19 +683,21 @@ section('Helicopter supply drops');
 
 section('Exclusive supply drop weapons');
 {
-  check(EXCLUSIVE_WEAPONS.every((w) => WEAPONS[w].exclusive && WEAPONS[w].slot === 'primary' && !PRIMARY_WEAPONS.includes(w)), 'M249, SCAR-H and M107 are primaries kept off the loadout and weapon tables');
+  check(EXCLUSIVE_WEAPONS.every((w) => WEAPONS[w].exclusive && WEAPONS[w].slot === 'primary' && !PRIMARY_WEAPONS.includes(w)),
+    'M249, SCAR-H, M107, RPG-7 and the custom .338 are primaries kept off the loadout and weapon tables');
+  check(EXCLUSIVE_WEAPONS.every((w) => SUPPLY_DROPS.exclusiveWeights.some(([x, k]) => x === w && k > 0)), 'every exclusive can come out of a drop');
   const at = { x: 0, y: 0.15, z: 6 };
   const { sim, sp, body } = makeSim(at, 0.5);
   run(sim, 1);
   const roll = () => (sim as unknown as { rollExclusive(): string | null }).rollExclusive();
+  const N = 20000;
   sim.phaseTime = SUPPLY_DROPS.exclusiveAfter - 1;
   let early = 0;
-  for (let i = 0; i < 2000; i++) if (roll()) early++;
-  check(early === 0, 'no exclusive weapon in any drop before five minutes survived');
+  for (let i = 0; i < N; i++) if (roll()) early++;
+  check(Math.abs(early / N - SUPPLY_DROPS.exclusiveEarly) < 0.006, `before three minutes only ${(100 * early / N).toFixed(1)}% of drops carry one`);
   sim.phaseTime = SUPPLY_DROPS.exclusiveAfter + 1;
   const got: Record<string, number> = {};
   let rolled = 0;
-  const N = 20000;
   for (let i = 0; i < N; i++) {
     const w = roll();
     if (w) {
@@ -703,9 +705,40 @@ section('Exclusive supply drop weapons');
       got[w] = (got[w] ?? 0) + 1;
     }
   }
-  check(Math.abs(rolled / N - SUPPLY_DROPS.exclusiveChance) < 0.015, `after five minutes ${(100 * rolled / N).toFixed(1)}% of drops carry one`);
-  check((got.sniper ?? 0) < (got.lmg ?? 0) * 0.65 && (got.sniper ?? 0) < (got.battle ?? 0) * 0.65 && (got.sniper ?? 0) > 0,
-    `the .50 cal is the rare one (${JSON.stringify(got)})`);
+  check(rolled / N >= 0.1 && rolled / N <= 0.15, `after three minutes ${(100 * rolled / N).toFixed(1)}% of drops carry one (asked for 10 to 15%)`);
+  const most = Math.max(got.lmg ?? 0, got.rpg ?? 0, got.battle ?? 0);
+  check((got.sniper ?? 0) > 0 && (got.wraith ?? 0) > 0 && (got.sniper ?? 0) < most * 0.75 && (got.wraith ?? 0) < most * 0.75,
+    `the snipers are the rarest (${JSON.stringify(got)})`);
+
+  // The real thing: drops planned and flown by the night's own schedule, counted from what the
+  // helicopters announce. Many short nights of a lone survivor, each run to 12 minutes.
+  {
+    const S = sim as unknown as { runDrops(): void; nextDropAt: number };
+    let early2 = 0, earlyN = 0, late2 = 0, lateN = 0, nights = 0, nightsWithOne = 0;
+    for (let night = 0; night < 160; night++) {
+      for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
+      sim.drops.length = 0;
+      S.nextDropAt = SUPPLY_DROPS.firstAt;
+      let any = false;
+      for (sim.phaseTime = 0; sim.phaseTime < 720; sim.phaseTime += 1) {
+        const before = sim.drops.length;
+        S.runDrops();
+        if (sim.drops.length === before) continue;
+        const d = sim.drops[sim.drops.length - 1];
+        if (sim.phaseTime < SUPPLY_DROPS.exclusiveAfter) { earlyN++; if (d.weapon) early2++; } else { lateN++; if (d.weapon) late2++; }
+        if (d.weapon) any = true;
+      }
+      sim.drain();
+      nights++;
+      if (any) nightsWithOne++;
+    }
+    for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
+    sim.drops.length = 0;
+    sim.interactables.splice(0, sim.interactables.length, ...sim.interactables.filter((it) => it.kind !== 'supply' && it.kind !== 'exclusive' && it.kind !== 'serum'));
+    check(lateN > 500 && late2 / lateN >= 0.09 && late2 / lateN <= 0.16,
+      `flown for real: ${late2} of ${lateN} drops after three minutes carried one (${(100 * late2 / lateN).toFixed(1)}%), ${early2} of ${earlyN} before`);
+    console.log(`       ${nightsWithOne} of ${nights} twelve-minute nights saw at least one exclusive weapon`);
+  }
 
   // A drop forced to carry the .50 cal, flown all the way down.
   const clear = () => {
@@ -748,6 +781,38 @@ section('Exclusive supply drop weapons');
   for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
   cleanup(sim, body);
 }
+section('RPG-7');
+{
+  const at = { x: 0, y: 0.15, z: 6 };
+  const { sim, sp, body } = makeSim(at, 0.5);
+  run(sim, 1);
+  for (const z of [...sim.zombies]) z.removeBody();
+  sim.zombies.splice(0, sim.zombies.length);
+  sp.arsenal.replacePrimary('rpg', true);
+  run(sim, WEAPONS.rpg.draw + 0.1);
+  // A pack of four walkers 14 m off, the rocket aimed at the middle one.
+  const pack = [-0.8, 0, 0.8, 0.3].map((dx, i) => sim.spawnZombie('walker', { x: dx, y: 0.02, z: -8 - (i === 3 ? 1 : 0) }, 'idle'));
+  const eye = sp.eye;
+  const t = pack[1];
+  const tx = t.pos.x - eye.x, ty = t.pos.y + 1.1 - eye.y, tz = t.pos.z - eye.z;
+  const l = Math.hypot(tx, ty, tz);
+  sp.arsenal.aim = 1;
+  sp.motion.aiming = true;
+  const fired = sim.fire('p1', eye, { x: tx / l, y: ty / l, z: tz / l }, true, 7);
+  const res = run(sim, 0.2);
+  res.events.unshift(...sim.drain());
+  const boom = res.events.find((e) => e.type === 'explosion');
+  check(fired === 'fired' && !!boom && Math.hypot(boom.pos.x - t.pos.x, boom.pos.z - t.pos.z) < 1.5, 'the rocket goes off where it hits');
+  const dead = pack.filter((z) => !z.alive).length;
+  check(dead >= 3, `one rocket kills ${dead} of a pack of 4`);
+  check(sp.health === PLAYER.maxHealth, 'the shooter is safe at 14 m');
+  check(sp.arsenal.primary.mag === 0 && sp.arsenal.startReload(), 'one rocket in the tube, then a reload');
+  sp.arsenal.primary.reserve = 0;
+  for (const z of [...sim.zombies]) z.removeBody();
+  sim.zombies.splice(0, sim.zombies.length);
+  cleanup(sim, body);
+}
+
 section('Lazarus serum');
 {
   const at = { x: 0, y: 0.15, z: 6 };

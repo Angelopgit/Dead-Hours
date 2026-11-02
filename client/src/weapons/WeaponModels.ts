@@ -51,6 +51,8 @@ const FIXED_SIGHTS: Partial<Record<WeaponId, { eye: V3; fov: number; optic: Opti
   lmg: { eye: [0, 0.125, -0.2], fov: 48, optic: 'iron' },
   battle: { eye: [0, 0.14, -0.17], fov: 42, optic: 'dot' },
   sniper: { eye: [0, 0.16, -0.22], fov: 7, optic: 'scope' },
+  rpg: { eye: [0, 0.125, -0.16], fov: 46, optic: 'iron' },
+  wraith: { eye: [0, 0.14, -0.2], fov: 9, optic: 'scope' },
 };
 
 /** Iron sights each gun comes with: eye position and zoom. */
@@ -418,6 +420,70 @@ function m107(): Spec {
   };
 }
 
+function rpg7(): Spec {
+  const b = new Builder()
+    // The launch tube, wooden heat guards round its middle, the flared venturi at the back.
+    .tube(0.022, -0.46, 0.52, DARK, 0, 0.07, 10)
+    .tube(0.031, -0.06, 0.22, WOOD, 0, 0.07, 10)
+    .tube(0.025, -0.62, -0.46, STEEL, 0, 0.07, 10, 0.022)
+    .tube(0.046, -0.7, -0.62, STEEL, 0, 0.07, 10, 0.025)
+    .tube(0.026, 0.48, 0.52, STEEL, 0, 0.07, 8)
+    // Rear leaf on its block, front post at the muzzle end.
+    .box(0.03, 0.03, 0.03, BLACK, 0, 0.098, 0.0)
+    .ring(0.006, 0.004, -0.006, 0.006, BLACK, 0, 0.125, 10)
+    .box(0.024, 0.028, 0.022, BLACK, 0, 0.1, 0.42)
+    .box(0.004, 0.022, 0.005, BLACK, 0, 0.123, 0.42)
+    // Trigger grip under the tube, a second grip ahead of it.
+    .box(0.03, 0.1, 0.035, BLACK, 0, -0.01, 0.035, -0.25)
+    .box(0.012, 0.03, 0.05, BLACK, 0, 0.035, 0.07)
+    .box(0.03, 0.09, 0.035, WOOD, 0, 0.0, 0.2, -0.15);
+  // The rocket sits in the muzzle: neck, fat olive warhead, pointed nose.
+  const mag = new Builder()
+    .tube(0.018, 0, 0.08, STEEL, 0, 0, 8)
+    .tube(0.044, 0.08, 0.24, OLIVE, 0, 0, 12)
+    .tube(0.044, 0.24, 0.4, OLIVE, 0, 0, 12, 0.006)
+    .box(0.09, 0.006, 0.04, STEEL, 0, 0, 0.03)
+    .box(0.006, 0.09, 0.04, STEEL, 0, 0, 0.03);
+  return {
+    body: b, mag: { b: mag, at: [0, 0.07, 0.5] },
+    muzzle: [0, 0.07, 0.9], fore: [0.035, -0.03, 0.2], eject: [0, 0.07, -0.7], stock: [0, 0.06, -0.3], bolt: [0.03, 0.07, 0.1],
+  };
+}
+
+function wraith(): Spec {
+  const RANGER = 0x2f3a2c;
+  const b = new Builder()
+    // Custom chassis in ranger green: a slim action, a long can on the barrel.
+    .box(0.06, 0.07, 0.36, RANGER, 0, 0.05, 0.06)
+    .box(0.026, 0.012, 0.36, BLACK, 0, 0.091, 0.06)
+    .box(0.066, 0.05, 0.22, RANGER, 0, 0.035, 0.33)
+    .tube(0.014, 0.24, 0.62, STEEL, 0, 0.055)
+    .tube(0.025, 0.62, 0.96, BLACK, 0, 0.055, 12)
+    .tube(0.027, 0.62, 0.64, STEEL, 0, 0.055, 12)
+    // Scope on two rings.
+    .tube(0.019, -0.06, 0.2, 0x111214, 0, 0.14, 10)
+    .tube(0.029, -0.13, -0.06, 0x111214, 0, 0.14, 10, 0.021)
+    .tube(0.021, 0.2, 0.3, 0x111214, 0, 0.14, 10, 0.034)
+    .tube(0.024, 0.05, 0.08, 0x111214, 0, 0.14, 8)
+    .box(0.028, 0.04, 0.022, BLACK, 0, 0.11, -0.01)
+    .box(0.028, 0.04, 0.022, BLACK, 0, 0.11, 0.15)
+    // Bolt handle with a fat knob on the right.
+    .box(0.05, 0.01, 0.012, STEEL, 0.045, 0.06, -0.06)
+    .tube(0.011, -0.07, -0.04, BLACK, 0.072, 0.06, 8)
+    // Grip, guard, skeleton stock with an adjustable cheek and butt.
+    .box(0.03, 0.095, 0.035, BLACK, 0, -0.045, 0.035, -0.3)
+    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08)
+    .box(0.035, 0.025, 0.25, RANGER, 0, 0.065, -0.24)
+    .box(0.035, 0.022, 0.25, RANGER, 0, 0.0, -0.24, 0.1)
+    .box(0.03, 0.02, 0.12, BLACK, 0, 0.09, -0.24)
+    .box(0.05, 0.13, 0.025, 0x121212, 0, 0.03, -0.37);
+  const mag = new Builder().box(0.028, 0.07, 0.08, 0x1a1a1a, 0, -0.035, 0).box(0.02, 0.008, 0.06, BRASS, 0, 0.003, 0);
+  return {
+    body: b, mag: { b: mag, at: [0, 0.0, 0.12] },
+    muzzle: [0, 0.055, 0.97], fore: [0.04, -0.005, 0.32], eject: [0.035, 0.06, 0.06], stock: [0, 0.03, -0.38], bolt: [0.072, 0.06, -0.055],
+  };
+}
+
 function m17(): Spec {
   const b = new Builder()
     .box(0.028, 0.025, 0.16, COYOTE, 0, 0.035, 0.1)
@@ -574,7 +640,7 @@ function hockey(): Spec {
   };
 }
 
-const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107,
+const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith,
   katana, bat, crowbar, wrench, hockey,
 };
 

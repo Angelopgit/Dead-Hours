@@ -34,6 +34,10 @@ export const RELOAD_STEPS: Record<string, ReloadStep[]> = {
   smg: [{ cue: 'cock', at: 0.08, only: 'empty' }, ...rifleSwap(), { cue: 'slap', at: 0.87, only: 'empty' }],
   marksman: [...rifleSwap(), { cue: 'opRod', at: 0.87, only: 'empty' }],
   sniper: [...rifleSwap(), { cue: 'charge', at: 0.88, only: 'empty' }],
+  // Custom .338: a short box magazine, the bolt worked when the chamber is empty.
+  wraith: [...rifleSwap(), { cue: 'bolt', at: 0.88, only: 'empty' }],
+  // RPG-7: the next rocket pulled from the bag, pushed into the muzzle till it clicks, the hammer cocked.
+  rpg: [{ cue: 'pouchGrab', at: 0.35 }, { cue: 'magIn', at: 0.74 }, { cue: 'charge', at: 0.88, only: 'empty' }],
   // M249: cover up, box out, box in, the belt laid on the tray, cover down; charged when the bolt went home.
   lmg: [
     { cue: 'coverOpen', at: 0.08 }, ...rifleSwap(), { cue: 'belt', at: 0.8 }, { cue: 'coverClose', at: 0.87 },

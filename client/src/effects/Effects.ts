@@ -39,6 +39,7 @@ const FLASH: Partial<Record<WeaponId, { size: number; light: number }>> = {
   ar: { size: 0.42, light: 1 }, smg: { size: 0.32, light: 0.8 }, shotgun: { size: 0.65, light: 1.4 },
   marksman: { size: 0.55, light: 1.2 }, pistol: { size: 0.3, light: 0.7 }, machete: { size: 0, light: 0 },
   lmg: { size: 0.45, light: 1.0 }, battle: { size: 0.5, light: 1.1 }, sniper: { size: 0.85, light: 1.7 },
+  rpg: { size: 1.1, light: 2.2 }, wraith: { size: 0.12, light: 0.25 },
 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);

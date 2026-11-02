@@ -1,6 +1,6 @@
 export type WeaponSlot = 'primary' | 'secondary' | 'melee';
 export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper'
-  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey';
+  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -37,6 +37,8 @@ export interface WeaponDef {
   crateMags?: number;
   /** Only found in supply drops: never on the loadout screen or a weapon table. */
   exclusive?: boolean;
+  /** Fires a rocket: it goes off where it hits (a grenade's blast, see BLAST), after `damage` to whatever it struck. */
+  explosive?: boolean;
   /** How the model is held: two-handed long gun, pistol, or blade. */
   hold: 'rifle' | 'pistol' | 'melee';
   /** 0..1 summary bars for the loadout screen. */
@@ -127,6 +129,23 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     mode: 'SEMI', noise: 120, draw: 1.0, penetration: 4, maxReserve: 50, hold: 'rifle',
     stats: { damage: 1, fireRate: 0.12, handling: 0.15, range: 1 },
   },
+  rpg: {
+    id: 'rpg', name: 'Rocket Launcher', model: 'RPG-7', slot: 'primary', exclusive: true, explosive: true,
+    description: 'One rocket at a time. It bursts where it hits like a grenade: keep it away from your own feet.',
+    damage: 150, pellets: 1, fireRate: 30, magazine: 1, startReserve: 4, reloadTime: 3.4,
+    hipSpread: 2.6, aimSpread: 0.35, recoil: 1.6, range: 160, auto: false,
+    mode: 'SEMI', noise: 110, draw: 1.1, penetration: 0, maxReserve: 6, crateMags: 1, hold: 'rifle',
+    stats: { damage: 1, fireRate: 0.05, handling: 0.15, range: 0.8 },
+  },
+  // A one-off custom build: suppressed, bolt-action, in .338 Lapua.
+  wraith: {
+    id: 'wraith', name: 'Custom Sniper', model: 'WRAITH .338', slot: 'primary', exclusive: true,
+    description: 'Custom suppressed bolt-action .338. Quiet enough that the dead barely turn; one round, one kill.',
+    damage: 190, pellets: 1, fireRate: 48, magazine: 5, startReserve: 25, reloadTime: 3.1,
+    hipSpread: 6.5, aimSpread: 0.04, recoil: 1.5, range: 300, auto: false,
+    mode: 'SEMI', noise: 30, draw: 0.85, penetration: 2, maxReserve: 40, hold: 'rifle',
+    stats: { damage: 0.9, fireRate: 0.1, handling: 0.3, range: 1 },
+  },
   katana: found('katana', 'Katana', 'Long, razor sharp. Takes limbs off clean and cuts through a crowd.', { damage: 0.85, fireRate: 0.3, handling: 0.75, range: 0.1 }),
   bat: found('bat', 'Baseball Bat', 'Slow, heavy two-handed swing that knocks a crowd back.', { damage: 0.6, fireRate: 0.2, handling: 0.5, range: 0.09 }),
   crowbar: found('crowbar', 'Crowbar', 'Cast iron. Caves skulls in.', { damage: 0.7, fireRate: 0.25, handling: 0.6, range: 0.07 }),
@@ -138,7 +157,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 export const PRIMARY_WEAPONS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman'];
 export const SECONDARY_WEAPONS: WeaponId[] = ['pistol'];
 /** Primaries that only come out of supply drops. */
-export const EXCLUSIVE_WEAPONS: WeaponId[] = ['lmg', 'battle', 'sniper'];
+export const EXCLUSIVE_WEAPONS: WeaponId[] = ['lmg', 'battle', 'sniper', 'rpg', 'wraith'];
 
 /** Hit zones on a zombie and their damage multipliers. */
 export type HitZone = 'head' | 'torso' | 'armL' | 'armR' | 'legL' | 'legR';
