@@ -25,6 +25,13 @@ export class MainMenu {
   readonly el: HTMLElement;
   private panel: HTMLElement | null = null;
   private panelDispose: (() => void) | null = null;
+  /** Whether the open panel slices through the menu's words, so the menu is hidden (null: not worked out yet). */
+  private covered: boolean | null = null;
+  /**
+   * The window and the open panel change size after it opened (leaving fullscreen, a phone turning, a settings
+   * tab): the menu is re-checked then, or a panel opened in a big window sliced through it once the window shrank.
+   */
+  private readonly sizes = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => this.coverMenu()) : null;
   private online: OnlineMenu | null = null;
   private creator: CharacterCreator | null = null;
   private armory: LoadoutPanel | null = null;
@@ -78,6 +85,7 @@ export class MainMenu {
       h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'TOUCH CONTROLS ON · PLAY SIDEWAYS'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);
+    this.sizes?.observe(this.el);
     this.offAccount = account.onChange(() => this.accountTag());
     this.refreshServer(false);
   }
@@ -216,17 +224,27 @@ export class MainMenu {
   }
 
   private openPanel(el: HTMLElement, dispose?: () => void): void {
-    if (this.panel) this.panel.remove();
+    if (this.panel) { this.sizes?.unobserve(this.panel); this.panel.remove(); }
     this.panelDispose?.();
     this.panelDispose = dispose ?? null;
     this.panel = el;
     this.el.append(el);
-    // Dimmed menu words beside a panel read fine; words the panel slices through (phones, narrow windows) don't.
-    const covered = panelCoversMenu(el, this.main, (e) => !this.playOpen && !!e.closest('.menu-sub'));
+    this.covered = null;
+    this.coverMenu();
     // Panels centre themselves with a CSS translate(-50%). Animating the transform, GSAP keeps that as -50% only when
     // it reads exactly half the height and as fixed pixels otherwise, so a panel that grew afterwards (the leaderboard
     // once its rows came in) sat far below centre with its bottom cut off. The stylesheet takes it back at the end.
-    gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out', clearProps: 'transform' });
+    // Its size is watched from then on (mid-slide it sits off to the side).
+    gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out', clearProps: 'transform',
+      onComplete: () => { if (this.panel === el) this.sizes?.observe(el); } });
+  }
+
+  /** Dimmed menu words beside a panel read fine; words the panel slices through (phones, narrow windows) don't. */
+  private coverMenu(): void {
+    if (!this.panel) return;
+    const covered = panelCoversMenu(this.panel, this.main, (e) => !this.playOpen && !!e.closest('.menu-sub'));
+    if (covered === this.covered) return;
+    this.covered = covered;
     gsap.to(this.main, { opacity: covered ? 0 : 0.35, duration: 0.4 });
     this.main.style.pointerEvents = covered ? 'none' : '';
   }
@@ -235,6 +253,8 @@ export class MainMenu {
     const p = this.panel;
     if (!p) return;
     this.panel = null;
+    this.covered = null;
+    this.sizes?.unobserve(p);
     this.panelDispose?.();
     this.panelDispose = null;
     gsap.to(p, { opacity: 0, x: 16, duration: 0.25, ease: 'power2.in', onComplete: () => p.remove() });
@@ -263,6 +283,7 @@ export class MainMenu {
     this.armory?.dispose();
     this.armory = null;
     window.removeEventListener('keydown', this.onKey);
+    this.sizes?.disconnect();
     this.offAccount();
     this.el.remove();
   }
