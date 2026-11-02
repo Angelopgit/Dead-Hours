@@ -70,6 +70,15 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   color: #e6e1d8; text-shadow: 0 0 40px rgba(0,0,0,0.6); }
 .subtitle { font-family: var(--font-display); font-weight: 300; letter-spacing: 0.32em; text-transform: uppercase; color: var(--fg-dim);
   font-size: 0.95em; margin: 1em 0 3.2em 0.2em; }
+/* Holiday logo (core/Holiday.ts): the first word in Christmas red, a Santa hat on its first letter, a frosty second word.
+   The hat hangs above the title, so the title keeps a little room over it. */
+.menu.holiday .title { margin-top: 0.5em; color: #f1f3f6; text-shadow: 0 0 22px rgba(190, 215, 255, 0.22), 0 0 40px rgba(0,0,0,0.6); }
+.menu.holiday .title .t-red, .menu.holiday .title .t-cap {
+  background: linear-gradient(180deg, #f0545b 0%, #cf2630 48%, #8f121c 100%); -webkit-background-clip: text; background-clip: text;
+  color: transparent; text-shadow: none; }
+.menu.holiday .title .t-red { filter: drop-shadow(0 0 16px rgba(214, 34, 44, 0.38)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.55)); }
+.menu.holiday .title .t-cap { position: relative; display: inline-block; }
+.menu.holiday .santa-hat { position: absolute; width: 0.95em; left: -0.28em; top: -0.72em; transform: rotate(-12deg); pointer-events: none; }
 .menu-list { display: flex; flex-direction: column; gap: 0.15em; }
 .menu-item { text-align: left; font-family: var(--font-display); font-weight: 300; font-size: 1.55em; letter-spacing: 0.28em;
   padding: 0.38em 0 0.38em 0.1em; color: var(--fg-dim); position: relative; transition: color 0.25s, padding-left 0.25s; }

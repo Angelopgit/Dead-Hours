@@ -166,6 +166,7 @@ export const APPEARANCE_ITEMS = {
     { id: 'tiara', label: 'Tiara', group: F },
     { id: 'catears', label: 'Cat ears', group: F, tint: true, color: 1 },
     { id: 'witch', label: 'Witch hat', group: F, tint: true, color: 1 },
+    { id: 'santa', label: 'Santa hat', group: F, tint: true, color: 13 },
   ],
   top: [
     { id: 'tee', label: 'T-shirt', tint: true },

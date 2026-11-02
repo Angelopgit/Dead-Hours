@@ -1396,7 +1396,42 @@ function headwear(h: Kit, a: Appearance, hex: number): void {
       h.box(0xd3a628, [0.034, 0.03, 0.008], [0, 0.225, 0.14], [0.05, 0, 0]);
       break;
     }
+    case 'santa': {
+      // A soft cone that rises off the fur brim and flops over behind one ear, a white pom-pom on the tip.
+      const fur = 0xefebe3;
+      const f = frame(0.16);
+      dome(f, hex, 0.02, 1.5);
+      const rr = rim(0.02, 1.5);
+      const path = [[0, rr.y + 0.01, 0], [0, 0.12, -0.012], [-0.012, 0.215, -0.045], [-0.035, 0.265, -0.1], [-0.065, 0.255, -0.16], [-0.088, 0.2, -0.188]] as const;
+      f.put(taperTube(path, rr.rx + 0.002, 0.016), hex, O, O, [1, 1, rr.rz / rr.rx]);
+      f.put(crumple(new THREE.TorusGeometry(rr.rx + 0.006, 0.022, 8, 24), 0.004), fur, [0, rr.y + 0.012, 0], [Math.PI / 2, 0, 0], [1, rr.rz / rr.rx, 0.95]);
+      const tip = path[path.length - 1];
+      f.put(crumple(new THREE.IcosahedronGeometry(0.038, 2), 0.005), fur, [tip[0], tip[1] - 0.012, tip[2] * rr.rz / rr.rx]);
+      break;
+    }
   }
+}
+
+/**
+ * A tube along a smooth path through `points` that narrows from radius r0 to r1 (a floppy hat).
+ * Open at both ends: the brim and the pom-pom cover them.
+ */
+function taperTube(points: readonly V3[], r0: number, r1: number, segs = 18, radial = 16): THREE.BufferGeometry {
+  const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
+  const g = new THREE.TubeGeometry(curve, segs, 1, radial, false);
+  const pos = g.getAttribute('position') as THREE.BufferAttribute;
+  const c = new THREE.Vector3();
+  // TubeGeometry lays out (radial + 1) vertices per ring, unit radius around the curve point.
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    curve.getPointAt(t, c);
+    const r = r1 + (r0 - r1) * Math.pow(1 - t, 1.15);
+    for (let j = 0; j <= radial; j++) {
+      const k = i * (radial + 1) + j;
+      pos.setXYZ(k, c.x + (pos.getX(k) - c.x) * r, c.y + (pos.getY(k) - c.y) * r, c.z + (pos.getZ(k) - c.z) * r);
+    }
+  }
+  return g;
 }
 
 // ── Clothing ────────────────────────────────────────────────────────────────────────────

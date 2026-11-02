@@ -16,7 +16,8 @@ import { audio } from '../audio/AudioEngine';
 import { AutoExposure } from '../lighting/Probes';
 import type { LightField } from '../lighting/LightField';
 import { Flashlight, setFlashlight } from '../gameplay/Flashlight';
-import { weather } from '../environment/Weather';
+import { setSnowing, weather } from '../environment/Weather';
+import { HOLIDAY } from './Holiday';
 import { weatherUniforms } from '../lighting/WetShader';
 import { LoadingScreen } from '../ui/LoadingScreen';
 import { compileForPost, compileScene, nextFrame, pinPrograms, uploadTextures } from './Preload';
@@ -98,6 +99,7 @@ export class Game {
       this.input.endFrame();
     };
     await pbr;
+    this.menuSnow(true, true);
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);
     compileForPost(this.engine.renderer, this.engine.scene, this.engine.camera);
@@ -108,6 +110,15 @@ export class Game {
     gsap.to(document.getElementById('fade'), { opacity: 0, duration: 2.2, ease: 'power2.out' });
     this.menu.show(this.ui);
     if (import.meta.env.DEV) Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
+  }
+
+  /** Holiday season: snow over the menu's street instead of rain (and no lightning); the nights stay as they are. */
+  private menuSnow(on: boolean, instant: boolean): void {
+    const snow = this.world.snow;
+    if (!HOLIDAY || !snow) return;
+    snow.set(on, instant);
+    this.world.lighting.calm = on;
+    setSnowing(on, instant);
   }
 
   private unlockAudio = (): void => {
@@ -146,6 +157,7 @@ export class Game {
     ]);
     const pose = this.menuCine.pose();
     this.menuCine.setActive(false);
+    this.menuSnow(false, true);
     await this.launched(await this.launch(() => this.createSession(pose, false), 'SOLO'));
   }
 
@@ -256,6 +268,7 @@ export class Game {
       new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() })),
     ]);
     this.menuCine.setActive(false);
+    this.menuSnow(false, true);
     if (this.link !== link || !link.open) {
       await this.quitToMenu();
       return;
@@ -312,6 +325,7 @@ export class Game {
     this.session = null;
     this.doors.reset();
     this.state = 'menu';
+    this.menuSnow(true, true);
     this.menu.show(this.ui);
     gsap.to(fade, { opacity: 0, duration: 1.4 });
   }

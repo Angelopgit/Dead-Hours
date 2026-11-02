@@ -10,6 +10,7 @@ import { Smoking, sceneSmoke, type SmokeSink } from './Smoking';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 import { DECAY_BLOOD, DECAY_COMMON, DECAY_SURFACE, MAX_HITS, SURF, createDecayUniforms, decayNoise, trackDecayMaterial, untrackDecayMaterial, zombieDetail, type DecayUniforms } from './Decay';
 import { RIM, SURVIVOR_COMMON, SURVIVOR_WEAR, type BodyShading } from './Wear';
+import { HOLIDAY } from '../core/Holiday';
 
 export interface HumanoidLook {
   /** What the character wears and looks like. */
@@ -1546,6 +1547,8 @@ function bloaterLook(i: number): HumanoidLook {
 
 const ZOMBIE_SKINS = [0x7d8a72, 0x8b8a76, 0x6f7a6a, 0x948f7e, 0x86806c, 0x6a7466];
 const ZOMBIE_HATS = ['cap', 'beanie', 'hardhat', 'army', 'bandana', 'fire', 'capback', 'bike'] as const;
+/** Walker looks that wear a Santa hat in the holiday season (see core/Holiday). */
+const SANTA_ZOMBIES = new Set([1, 5, 11]);
 
 /**
  * The neighborhood's dead wear what the living wear: men and women in everyday clothes from the
@@ -1558,6 +1561,11 @@ export function zombieLook(i: number, kind: ZombieGait = 'walker'): HumanoidLook
   const rand = rng(0x5eed + k * 7919);
   const a = randomAppearance(rand);
   a.headwear = k === 11 ? 'party' : rand() < 0.35 ? ZOMBIE_HATS[Math.floor(rand() * ZOMBIE_HATS.length)] : 'none';
+  // Over the holidays a few of them were at the office Christmas party instead (the menu's walker among them).
+  if (HOLIDAY && SANTA_ZOMBIES.has(k)) {
+    a.headwear = 'santa';
+    a.headwearColor = 13;
+  }
   if (a.hair === 'afro' || a.hair === 'mohawk') a.hair = 'messy';
   a.face = k === 4 ? 'surgical' : 'none';
   a.back = k === 6 ? 'backpack' : 'none';

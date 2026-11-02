@@ -15,6 +15,8 @@ export class Lighting {
   private readonly moonBase = 1.35;
   private readonly hemiBase = 1.0;
   flash = 0;
+  /** No lightning while set (snow over the holiday menu is quiet); storms resume a while after. */
+  calm = false;
   private nextStrike = 12 + Math.random() * 18;
   private strikeQueue: { at: number; power: number }[] = [];
   private time = 0;
@@ -64,6 +66,7 @@ export class Lighting {
 
   update(dt: number): void {
     this.time += dt;
+    if (this.calm) this.nextStrike = Math.max(this.nextStrike, this.time + 10);
     if (this.time > this.nextStrike) {
       const strikes = 1 + Math.floor(Math.random() * 3);
       let at = this.time;

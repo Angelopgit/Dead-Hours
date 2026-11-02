@@ -11,6 +11,8 @@ import type { Input } from '../core/Input';
 import { net } from '../network/Net';
 import { account } from '../network/Account';
 import type { NetLink } from '../network/NetLink';
+import { HOLIDAY } from '../core/Holiday';
+import { holidayTitle } from './HolidayTitle';
 
 export interface MainMenuCallbacks {
   onSolo: () => void;
@@ -64,7 +66,7 @@ export class MainMenu {
     );
 
     this.main = h('div', { class: 'menu-main' },
-      h('h1', { class: 'title' }, GAME.title),
+      HOLIDAY ? holidayTitle(GAME.title) : h('h1', { class: 'title' }, GAME.title),
       h('div', { class: 'subtitle' }, GAME.subtitle),
       h('nav', { class: 'menu-list' },
         item('PLAY', () => this.togglePlay()),
@@ -78,7 +80,7 @@ export class MainMenu {
       ),
     );
 
-    this.el = h('div', { class: 'menu' },
+    this.el = h('div', { class: HOLIDAY ? 'menu holiday' : 'menu' },
       h('div', { class: 'menu-shade' }),
       this.main,
       h('div', { class: 'menu-footer' }, 'BUILD 0.4.1 — MAPLE HOLLOW'),
@@ -288,3 +290,4 @@ export class MainMenu {
     this.el.remove();
   }
 }
+

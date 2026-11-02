@@ -14,6 +14,8 @@ export const weather = {
   wetness: 0,
   /** Seconds, for rain and ripple animation. */
   time: 0,
+  /** Snow is falling instead (the holiday main menu): the rain holds off meanwhile. */
+  snowing: false,
 };
 
 /** Rain at a wall-clock time (ms): mostly steady rain with heavier bursts and short lulls. */
@@ -26,10 +28,16 @@ export function rainAt(ms: number): number {
 
 let started = false;
 
+/** Snow starts or stops; `instant` (behind a fade) also brings the rain straight back or away. */
+export function setSnowing(on: boolean, instant = false): void {
+  weather.snowing = on;
+  if (instant && started) weather.rain = settings.value.graphics.rain && !on ? rainAt(Date.now()) : 0;
+}
+
 export function updateWeather(dt: number): void {
   weather.time += dt;
   const on = settings.value.graphics.rain;
-  const target = on ? rainAt(Date.now()) : 0;
+  const target = on && !weather.snowing ? rainAt(Date.now()) : 0;
   if (!started) {
     started = true;
     weather.rain = target;

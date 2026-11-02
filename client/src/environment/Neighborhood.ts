@@ -17,6 +17,8 @@ import { patchWet, setWetLamps, setWetLampBudget, setWetTier, updateWetLamps, we
 import { FogLights } from '../lighting/FogLights';
 import { setLightConesVisible } from './LightCone';
 import { Rain, buildCoverMap } from './Rain';
+import { Snow } from './Snow';
+import { HOLIDAY } from '../core/Holiday';
 import { updateWeather, weather } from './Weather';
 import { updateWind } from './Wind';
 
@@ -30,6 +32,8 @@ export class Neighborhood {
   readonly sky = new Sky();
   readonly atmosphere = new Atmosphere();
   readonly rain = new Rain();
+  /** Christmas snow over the main menu (only built in the holiday season). */
+  readonly snow = HOLIDAY ? new Snow() : null;
   /** Lights for the volumetric fog (set up with the bake). */
   fogLights: FogLights | null = null;
   readonly lighting: Lighting;
@@ -76,6 +80,7 @@ export class Neighborhood {
     this.buildForest();
     this.root.add(this.atmosphere.group);
     this.root.add(this.rain.mesh);
+    if (this.snow) this.root.add(this.snow.mesh);
     weatherUniforms.uCover.value = buildCoverMap(map);
   }
 
@@ -361,6 +366,7 @@ export class Neighborhood {
     this.lighting.setShadowSize(shadowSize, renderer);
     this.atmosphere.setQuality(g.particleQuality, focus);
     this.rain.setQuality(g.particleQuality);
+    this.snow?.setQuality(g.particleQuality);
     // Low fog (Phone, Low): wet streets keep the cheap baked sheen, no per-lamp reflections.
     setWetLampBudget(g.fogQuality === 'high' ? 8 : g.fogQuality === 'medium' ? 5 : 0);
     setWetTier(!g.rain ? 'off' : g.fogQuality === 'low' ? 'cheap' : 'full');
@@ -384,6 +390,7 @@ export class Neighborhood {
     updateWetLamps(camera.position, dt);
     this.rain.update(camera, this.fog.density, this.lighting.flash * (settings.value.accessibility.reducedFlashing ? 0.2 : 1));
     updateWind(t, this.atmosphere.wind, this.atmosphere.windStrength);
+    this.snow?.update(dt, camera, this.fog.density);
     this.propFactory.foliageUniforms.uTime.value = t;
     this.propFactory.foliageUniforms.uWind.value = this.atmosphere.windStrength;
     for (const d of this.dynamic) d.update(dt, t);
@@ -397,6 +404,7 @@ export class Neighborhood {
     });
     this.sky.dispose();
     this.rain.dispose();
+    this.snow?.dispose();
     this.atmosphere.dispose();
     this.lib.dispose();
     this.envMap?.dispose();
