@@ -94,7 +94,14 @@ export type ActMsg =
   /** Popped a flip trick off an ollie on the board (the others see it). */
   | { a: 'trick'; kind: SkateTrick }
   /** Get into vehicle `v` (seat `s`, or the driver's seat if free, else the nearest); `v` -1 gets out; `s` -1 moves to the next free seat. */
-  | { a: 'seat'; v: number; s?: number };
+  | { a: 'seat'; v: number; s?: number }
+  /**
+   * Get on bicycle `id` (`seat` 'rider' picks it up, 'peg' hops on its pegs); -1 gets off (`bail`:
+   * thrown off by a wall), a rider leaving it at `at` pointing `yaw`, a passenger stepping down at `at`.
+   */
+  | { a: 'bike'; id: number; seat?: 'rider' | 'peg'; at?: Vec3; yaw?: number; bail?: boolean }
+  /** The bike's rider rings its bell. */
+  | { a: 'bell' };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

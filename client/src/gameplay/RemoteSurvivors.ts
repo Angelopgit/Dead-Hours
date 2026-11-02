@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VEHICLE, decodeAppearance, type Mirror, type SimPlayer, type Simulation, type SkateTrick, type Skateboard } from '@dead-hours/shared';
+import { BICYCLE, DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VEHICLE, decodeAppearance, type Bicycle, type Mirror, type SimPlayer, type Simulation, type SkateTrick, type Skateboard } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
-import { Humanoid, survivorLook, type SeatPose, type SkatePose } from '../characters/Humanoid';
+import { Humanoid, survivorLook, type BikeRig, type SeatPose, type SkatePose } from '../characters/Humanoid';
 import { trickProgress, type BoardPose } from './Skateboards';
+import { barAngle, type BikePose } from './Bicycles';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { DynamicProbe } from '../lighting/Probes';
@@ -34,6 +35,11 @@ interface Remote {
   trickWait: { kind: SkateTrick; t: number } | null;
   /** In a vehicle: the seat pose (hips the way the seat faces). */
   seat: SeatPose;
+  /**
+   * On a bicycle, in the saddle or on the pegs: the bike as drawn (its heading eased between
+   * snapshots, the lean, bars and cranks worked out here from how they move), else null.
+   */
+  cycle: Cycling | null;
 }
 
 interface RemoteRide {
@@ -47,6 +53,20 @@ interface RemoteRide {
   trickT: number;
   pose: SkatePose;
   board: BoardPose;
+}
+
+interface Cycling {
+  seat: 'rider' | 'peg';
+  yaw: number;
+  lean: number;
+  steer: number;
+  crank: number;
+  stand: number;
+  /** Smoothed speed and slowing (m/s, m/s²): hard slowing at speed is the brakes. */
+  speed: number;
+  slowing: number;
+  rig: BikeRig;
+  pose: BikePose;
 }
 
 const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3(), _want = new THREE.Vector3();
@@ -104,6 +124,7 @@ export class RemoteSurvivors {
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0, dim: 1 },
       ride: null, trickWait: null, seat: { yaw: 0 },
+      cycle: null,
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w, inS) => audio.foley(cue, this.hand(r, _q), w, inS);
@@ -114,7 +135,10 @@ export class RemoteSurvivors {
     return r.body.armR.end.getWorldPosition(out);
   }
 
-  update(dt: number, sim: Simulation, mirror: Mirror, camera: THREE.PerspectiveCamera): void {
+  /** `myBike`: the bike this survivor rides as drawn (whoever is on its pegs stands on it). */
+  update(dt: number, sim: Simulation, mirror: Mirror, camera: THREE.PerspectiveCamera, myBike: BikePose | null = null): void {
+    // Passengers last: they stand on the pegs of the bike as drawn this frame.
+    const pegs: [Remote, SimPlayer, Bicycle][] = [];
     for (const p of sim.players.values()) {
       if (p.id === this.me) continue;
       let r = this.remotes.get(p.id);
@@ -123,7 +147,14 @@ export class RemoteSurvivors {
         this.remotes.set(p.id, r);
       }
       const seat = sim.vehicles.seatOf(p.id);
-      if (!seat || !this.seated(r, p, dt, camera, seat[0].id, seat[1])) this.animate(r, p, dt, mirror, camera, sim.skateboards.ridden(p.id));
+      if (seat && this.seated(r, p, dt, camera, seat[0].id, seat[1])) continue;
+      const carried = p.alive ? sim.bicycles.carrying(p.id) : null;
+      if (carried) pegs.push([r, p, carried]);
+      else this.animate(r, p, dt, mirror, camera, sim.skateboards.ridden(p.id), p.alive ? sim.bicycles.ridden(p.id) : null, null);
+    }
+    for (const [r, p, b] of pegs) {
+      const under = !b.rider ? null : b.rider === this.me ? myBike : this.bikePose(b.rider);
+      this.animate(r, p, dt, mirror, camera, null, null, under);
     }
     for (const [id, r] of this.remotes) {
       if (sim.players.has(id)) continue;
@@ -147,6 +178,9 @@ export class RemoteSurvivors {
     const m = p.motion;
     r.ride = null;
     b.skate = null;
+    if (r.cycle) b.root.rotation.z = 0;
+    r.cycle = null;
+    b.bike = null;
     const ahead = yaw + Math.PI / 2;
     const driver = seat === 0;
     const facing = driver || !m.aiming ? ahead : m.yaw + Math.PI;
@@ -195,11 +229,19 @@ export class RemoteSurvivors {
     r.lamp.show(b.level, camera);
   }
 
-  private animate(r: Remote, p: SimPlayer, dt: number, mirror: Mirror, camera: THREE.PerspectiveCamera, deck: Skateboard | null): void {
+  /**
+   * `bike`: the one they pedal; `pegs`: the drawn bike whose pegs they stand on (their feet go
+   * there whatever the last snapshot said, so they never trail behind it).
+   */
+  private animate(r: Remote, p: SimPlayer, dt: number, mirror: Mirror, camera: THREE.PerspectiveCamera, deck: Skateboard | null, bike: Bicycle | null, pegs: BikePose | null): void {
     const b = r.body;
     const m = p.motion;
     b.seat = null;
     if (!p.alive || !deck) r.ride = null;
+    if (!p.alive || (!bike && !pegs)) {
+      if (r.cycle) b.root.rotation.z = 0;
+      r.cycle = null;
+    }
     // Brought back by a lull: up off the ground where the server put them.
     if (p.alive && r.ragdoll) {
       r.ragdoll = null;
@@ -219,6 +261,9 @@ export class RemoteSurvivors {
     }
     const facing = mirror.playerPose(p.id, _p) ?? m.yaw + Math.PI;
     r.pos.set(_p.x, _p.y, _p.z);
+    if (pegs) {
+      r.pos.set(pegs.pos.x - Math.sin(pegs.yaw) * BICYCLE.pegBack, pegs.pos.y + BICYCLE.pegHeight, pegs.pos.z - Math.cos(pegs.yaw) * BICYCLE.pegBack);
+    }
     const diff = Math.atan2(Math.sin(facing - r.facing), Math.cos(facing - r.facing));
     const turned = diff * (1 - Math.exp(-dt * 14));
     r.facing += turned;
@@ -239,9 +284,20 @@ export class RemoteSurvivors {
     const ride = deck ? this.skate(r, deck, m, dt) : null;
     b.skate = ride ? ride.pose : null;
     b.vault = m.vaulting && !p.downed ? 1 : 0;
+    const cyc = bike ? this.pedal(r, bike, m, dt) : pegs ? this.standOn(r, pegs) : null;
+    b.bike = cyc ? cyc.rig : null;
+    // The whole body leans with the bike (about the tyres' line); on the pegs, high over the street, that swings it out sideways.
+    b.root.rotation.order = 'YXZ';
+    b.root.rotation.z = cyc ? -cyc.lean : 0;
+    if (cyc && pegs) {
+      const k = Math.sin(cyc.lean) * BICYCLE.pegHeight;
+      b.root.position.x += Math.cos(cyc.yaw) * k;
+      b.root.position.z -= Math.sin(cyc.yaw) * k;
+    }
+    const still = !!ride || !!cyc;
     b.update(dt, {
-      speed: ride ? 0 : hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded,
-      strafe: ride ? 0 : strafe, moveAngle: ride ? 0 : moveAngle, turn: ride || dt <= 0 ? 0 : turned / dt,
+      speed: still ? 0 : hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded || !!pegs,
+      strafe: still ? 0 : strafe, moveAngle: still ? 0 : moveAngle, turn: still || dt <= 0 ? 0 : turned / dt,
     });
     // Where they are looking, far out: the arms and gun line up on it.
     const cp = Math.cos(m.pitch);
@@ -326,6 +382,104 @@ export class RemoteSurvivors {
   trick(id: string, kind: SkateTrick): void {
     const r = this.remotes.get(id);
     if (r) r.trickWait = { kind, t: 0.8 };
+  }
+
+  /**
+   * Their bicycle: the heading eases toward the one the server last gave, the lean is what a real
+   * bike needs for how fast it turns at that speed, the bars turn by how hard it turns, the cranks
+   * go round while they say they pedal (level when coasting), and hard slowing at speed is braking.
+   */
+  private pedal(r: Remote, bike: Bicycle, m: SimPlayer['motion'], dt: number): Cycling {
+    const S = BICYCLE;
+    let c = r.cycle;
+    if (!c || c.seat !== 'rider') {
+      c = {
+        seat: 'rider', yaw: bike.yaw, lean: 0, steer: 0, crank: Math.PI / 2, stand: 0, speed: 0, slowing: 0,
+        rig: { seat: 'rider', yaw: 0, crank: Math.PI / 2, stand: 0, steer: 0 },
+        pose: { pos: new THREE.Vector3(), yaw: bike.yaw, lean: 0, steer: 0, crank: Math.PI / 2, pedalling: false, brake: 0, air: false },
+      };
+      r.cycle = c;
+    }
+    const k = (rate: number) => 1 - Math.exp(-dt * rate);
+    const diff = Math.atan2(Math.sin(bike.yaw - c.yaw), Math.cos(bike.yaw - c.yaw));
+    const turn = diff * k(12);
+    c.yaw += turn;
+    const rate = dt > 0 ? turn / dt : 0;
+    const v = Math.hypot(m.vel.x, m.vel.z);
+    if (dt > 0) c.slowing += (Math.max(0, (c.speed - v) / dt) - c.slowing) * k(5);
+    c.speed += (v - c.speed) * k(10);
+    const leanTo = m.grounded ? THREE.MathUtils.clamp(Math.atan((c.speed * rate) / 9.8), -S.maxLean, S.maxLean) : c.lean * 0.9;
+    c.lean += (leanTo - c.lean) * k(6);
+    const full = c.speed < 1 ? THREE.MathUtils.lerp(S.turnStill, S.turnSlow, c.speed) : THREE.MathUtils.lerp(S.turnSlow, S.turnFast, THREE.MathUtils.smoothstep(c.speed, 2, 11));
+    c.steer += (THREE.MathUtils.clamp(rate / full, -1, 1) - c.steer) * k(7);
+    if (m.pushing) c.crank += Math.max(c.speed / S.wheel / S.gear, S.minCadence) * dt;
+    else {
+      const level = Math.round((c.crank - Math.PI / 2) / Math.PI) * Math.PI + Math.PI / 2;
+      c.crank += (level - c.crank) * k(5);
+    }
+    // Out of the saddle near the top of a sprint.
+    c.stand += ((m.pushing && c.speed > S.pedalTop * 0.9 ? 1 : 0) - c.stand) * k(4);
+    const rig = c.rig;
+    rig.seat = 'rider';
+    rig.yaw = Math.atan2(Math.sin(c.yaw - r.facing), Math.cos(c.yaw - r.facing));
+    rig.crank = c.crank;
+    rig.stand = c.stand;
+    rig.steer = barAngle(c.steer, c.speed);
+    const o = c.pose;
+    o.pos.copy(r.pos);
+    o.yaw = c.yaw;
+    o.lean = c.lean;
+    o.steer = rig.steer;
+    o.crank = c.crank;
+    o.pedalling = !!m.pushing;
+    o.brake = c.speed > 1 ? THREE.MathUtils.clamp((c.slowing - 1) / (S.brake - 1), 0, 1) : 0;
+    o.air = !m.grounded;
+    return c;
+  }
+
+  /** On someone's pegs: the feet stay on them, the bike's way and lean are the drawn bike's. */
+  private standOn(r: Remote, under: BikePose): Cycling {
+    let c = r.cycle;
+    if (!c || c.seat !== 'peg') {
+      c = {
+        seat: 'peg', yaw: under.yaw, lean: 0, steer: 0, crank: 0, stand: 0, speed: 0, slowing: 0,
+        rig: { seat: 'peg', yaw: 0, crank: 0, stand: 0, steer: 0 },
+        pose: { pos: new THREE.Vector3(), yaw: under.yaw, lean: 0, steer: 0, crank: 0, pedalling: false, brake: 0, air: false },
+      };
+      r.cycle = c;
+    }
+    c.yaw = under.yaw;
+    c.lean = under.lean;
+    c.rig.seat = 'peg';
+    c.rig.yaw = Math.atan2(Math.sin(under.yaw - r.facing), Math.cos(under.yaw - r.facing));
+    return c;
+  }
+
+  /** Where another survivor's bike is drawn (under them, in the saddle), or null when they aren't pedalling one. */
+  bikePose(id: string): BikePose | null {
+    const r = this.remotes.get(id);
+    if (!r || r.ragdoll || r.cycle?.seat !== 'rider') return null;
+    return r.cycle.pose;
+  }
+
+  /**
+   * Where another survivor's bike will be drawn this frame: where the mirror has them at its time
+   * now (the frame's survivors are drawn from the same time), the way and lean as last drawn.
+   */
+  bikeNow(id: string, mirror: Mirror, out: BikePose): BikePose | null {
+    const r = this.remotes.get(id);
+    const c = r?.cycle;
+    if (!r || r.ragdoll || !c || c.seat !== 'rider') return null;
+    if (mirror.playerPose(id, out.pos) === null) out.pos.copy(r.pos);
+    const o = c.pose;
+    out.yaw = o.yaw;
+    out.lean = o.lean;
+    out.steer = o.steer;
+    out.crank = o.crank;
+    out.pedalling = o.pedalling;
+    out.brake = o.brake;
+    out.air = o.air;
+    return out;
   }
 
   /** Where another survivor's board is drawn (under their feet), or null when they aren't riding one. */

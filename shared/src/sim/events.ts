@@ -154,7 +154,13 @@ export type SimEvent =
   | {
     type: 'vehicle'; vehicle: number; stage: 'in' | 'seat' | 'out' | 'thrown' | 'crank' | 'start' | 'dry' | 'empty' | 'crash';
     player?: string; seat?: number; pos?: Vec3; strength?: number;
-  };
+  }
+  /**
+   * A survivor got on a bicycle (picked it up, or hopped on its pegs), got off, or was thrown off
+   * (a hit, a wall, going down); or its rider rang the bell. `pos`: where the bike is (on/bell), where
+   * it fell (a rider off), or where a passenger stepped down.
+   */
+  | { type: 'bike'; player: string; bike: number; stage: 'on' | 'off' | 'bail' | 'bell'; seat: 'rider' | 'peg'; pos: Vec3; yaw: number };
 
 /** A head or leg blown off a zombie a blast killed (arms come off as real limbs, see limbSevered). */
 export interface GibPart {

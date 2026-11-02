@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Bicycle clips (dev)</title>
+    <style>
+      html, body { margin: 0; background: #1a1d22; font: 13px system-ui, sans-serif; color: #ddd; }
+      main { padding: 16px; }
+      li { margin: 4px 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Bicycle clips</h1>
+      <p>Renders riding a bicycle through the game's own audio engine into WAV files, beside a survivor's running steps (see bikeclips.ts).</p>
+      <button id="render">Render clips</button>
+      <ol id="list"></ol>
+    </main>
+    <script type="module" src="./bikeclips.ts"></script>
+  </body>
+</html>

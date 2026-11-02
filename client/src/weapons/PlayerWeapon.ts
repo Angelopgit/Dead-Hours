@@ -624,13 +624,15 @@ export class PlayerWeapon {
     // The gun goes over the shoulder (or into the holster) while the hands hold an arm.
     this.limbW = limb || clubbing ? ease(this.limbW, 1, 14) : 0;
 
+    // In a bike's saddle the hands are on the bars: the gun goes to its holster.
+    const bars = body.onBars;
     // Body channels.
     const twistRifle = THREE.MathUtils.lerp(-0.4, -0.55, this.aimW) * (1 - this.sprintW) * (1 - this.stowW) * (1 - this.reloadW * 0.5);
     let twist = hold === 'rifle' ? twistRifle : 0;
-    twist *= (1 - this.meleeW) * (1 - this.limbW);
-    // Both hands on a long weapon, or the melee weapon held out: the gun goes to its holster (the
-    // right gun of a pair for any swing: that hand takes the blade).
-    const away = Math.max(this.limbW, this.meleeTwoW, this.outW, off ? this.meleeW : 0);
+    twist *= (1 - this.meleeW) * (1 - this.limbW) * (1 - bars);
+    // Both hands on a long weapon, a bike's bars, or the melee weapon held out: the gun goes to its
+    // holster (the right gun of a pair for any swing: that hand takes the blade).
+    const away = Math.max(this.limbW, this.meleeTwoW, this.outW, bars, off ? this.meleeW : 0);
 
     body.root.updateMatrixWorld(true);
     const spine = body.spine;
@@ -854,6 +856,14 @@ export class PlayerWeapon {
       leftW += (1 - leftW) * k;
       this.poleR.lerp(_ld.set(-0.7, -0.7, 0).transformDirection(spineM), k).normalize();
       this.poleL.lerp(_ld.set(0.7, -0.7, 0).transformDirection(spineM), k).normalize();
+    }
+    if (bars > 0.001) {
+      // Hands on the grips, elbows out and down.
+      this.rightTarget.lerp(body.grips.right, bars);
+      this.leftTarget.lerp(body.grips.left, bars);
+      leftW += (1 - leftW) * bars;
+      this.poleR.lerp(_ld.set(-0.75, -0.6, -0.1).transformDirection(spineM), bars).normalize();
+      this.poleL.lerp(_ld.set(0.75, -0.6, -0.1).transformDirection(spineM), bars).normalize();
     }
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
@@ -1140,9 +1150,9 @@ export class PlayerWeapon {
       this.keyPose(AKIMBO_RELOAD.left, s.action === 'reload' ? p : 1, this.tmpA, this.tmpQ, true);
       mixL(this.reloadW);
     }
-    // Two hands on a long melee weapon, a severed arm or the melee weapon held out: holstered;
-    // otherwise it stays in the left hand.
-    const awayL = Math.max(this.limbW, this.meleeTwoW, this.outW);
+    // Two hands on a long melee weapon, a severed arm, a bike's bars or the melee weapon held out:
+    // holstered; otherwise it stays in the left hand.
+    const awayL = Math.max(this.limbW, this.meleeTwoW, this.outW, this.body.onBars);
     for (const w of [this.stowW, awayL]) {
       if (w <= 0.001) continue;
       this.holsterPose('thighL', this.tmpA, this.tmpQ);

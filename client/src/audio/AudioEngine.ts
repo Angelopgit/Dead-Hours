@@ -1153,6 +1153,9 @@ export class AudioEngine {
       onProgress?.(total > 0 ? Math.min(1, done / total) : 1);
     };
     report();
+    // The bikes' and boards' loops are built here rather than at the first ride (a hitch otherwise).
+    this.bikeBuffers();
+    this.skateBuffers();
     let decoded = false;
     void this.recordingsReady.then(() => { decoded = true; });
     while (this.ctx === ctx) {
@@ -3138,6 +3141,249 @@ export class AudioEngine {
     this.burst(d, t + 0.01, 'bandpass', 1700, 2, 0.25 * k, 0.002, 0.06);
   }
 
+  // ------------------------------------------------------------------ bicycles
+
+  private readonly bikeLoops = new Map<number, {
+    tyre: AudioBufferSourceNode; ticks: AudioBufferSourceNode; skid: AudioBufferSourceNode;
+    body: BiquadFilterNode; bodyG: GainNode; hiss: GainNode; tickG: GainNode; skidG: GainNode; gain: GainNode; panner: PannerNode;
+  }>();
+  /** Built on first use (or while a night loads): tyres on asphalt (looped), and the freewheel's ratchet (looped, 20 clicks a second at rate 1). */
+  private bikeBufs: { tyre: AudioBuffer; ticks: AudioBuffer } | null = null;
+  /** Clicks in one pass of the ratchet loop, and pawl clicks per turn of the back wheel. */
+  private static readonly TICKS = 20;
+  private static readonly PAWLS = 18;
+
+  private bikeBuffers(): { tyre: AudioBuffer; ticks: AudioBuffer } {
+    if (this.bikeBufs) return this.bikeBufs;
+    const ctx = this.ctx!;
+    const sr = ctx.sampleRate;
+    // Pneumatic tyres: a smoother hiss than urethane wheels (rubber and air soak up the grit), with
+    // a few soft ticks of stones under the tread, nothing below ~150 Hz. Crossfaded ends.
+    const n = Math.round(sr * 2.1), fade = Math.round(sr * 0.1);
+    const raw = new Float32Array(n + fade);
+    let hp = 0, prev = 0, lp = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const w = Math.random() * 2 - 1;
+      hp = 0.98 * (hp + w - prev);
+      prev = w;
+      lp += (hp - lp) * 0.55;
+      raw[i] = lp * 0.5;
+    }
+    for (let i = 0; i < raw.length;) {
+      i += 1 + Math.round((-Math.log(1 - Math.random()) * sr) / 260);
+      const a = Math.pow(Math.random(), 3) * 0.6;
+      const len = Math.round(sr * (0.0004 + Math.random() * 0.0008));
+      for (let k = 0; k < len && i + k < raw.length; k++) raw[i + k] += a * (Math.random() * 2 - 1) * Math.exp((-3 * k) / len);
+    }
+    const tyre = ctx.createBuffer(1, n, sr);
+    const d = tyre.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = i < fade ? raw[i] * (i / fade) + raw[n + i] * (1 - i / fade) : raw[i];
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += d[i] * d[i];
+    const norm = 0.3 / Math.sqrt(sum / n);
+    for (let i = 0; i < n; i++) d[i] *= norm;
+    // The freewheel: pawls snapping over the ratchet teeth, a tiny bright click with a metallic ring each.
+    const T = AudioEngine.TICKS;
+    const ticks = ctx.createBuffer(1, sr, sr);
+    const td = ticks.getChannelData(0);
+    for (let k = 0; k < T; k++) {
+      const at = Math.round(((k + (Math.random() - 0.5) * 0.12) / T) * sr);
+      const amp = 0.75 + Math.random() * 0.25;
+      const f = 4200 + Math.random() * 900, f2 = 7300 + Math.random() * 800;
+      const len = Math.round(sr * 0.012);
+      for (let j = 0; j < len; j++) {
+        const i = (at + j + sr) % sr;
+        const t = j / sr;
+        const click = j < sr * 0.0006 ? (Math.random() * 2 - 1) * (1 - j / (sr * 0.0006)) : 0;
+        td[i] += amp * (click * 0.9 + (Math.sin(2 * Math.PI * f * t) * 0.5 + Math.sin(2 * Math.PI * f2 * t) * 0.3) * Math.exp(-t * 900));
+      }
+    }
+    this.bikeBufs = { tyre, ticks };
+    return this.bikeBufs;
+  }
+
+  /**
+   * Tyres on the street, one loop per moving bike: a hiss that rises and brightens with speed
+   * (sidewalk concrete smoother, grass and dirt a soft rumble); the freewheel ticking while
+   * coasting, faster with the wheel; the back tyre scrubbing in a hard brake. Bikes left out fade.
+   */
+  bikeRoll(list: { id: number; pos: THREE.Vector3; speed: number; rough: number; coast: boolean; skid: number }[]): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const seen = new Set<number>();
+    for (const b of list) {
+      seen.add(b.id);
+      let l = this.bikeLoops.get(b.id);
+      if (!l) {
+        const bufs = this.bikeBuffers();
+        const tyre = ctx.createBufferSource();
+        tyre.buffer = bufs.tyre;
+        tyre.loop = true;
+        const body = ctx.createBiquadFilter();
+        body.type = 'bandpass';
+        body.Q.value = 0.6;
+        body.frequency.value = 900;
+        const bodyG = ctx.createGain();
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = 'highpass';
+        hpf.frequency.value = 3200;
+        const hiss = ctx.createGain();
+        const ticks = ctx.createBufferSource();
+        ticks.buffer = bufs.ticks;
+        ticks.loop = true;
+        const tickG = ctx.createGain();
+        const skid = ctx.createBufferSource();
+        skid.buffer = this.skateBuffers().white;
+        skid.loop = true;
+        const skidF = ctx.createBiquadFilter();
+        skidF.type = 'bandpass';
+        skidF.frequency.value = 1500;
+        skidF.Q.value = 1.1;
+        const skidG = ctx.createGain();
+        for (const g of [bodyG, hiss, tickG, skidG]) g.gain.value = 0;
+        const tame = ctx.createBiquadFilter();
+        tame.type = 'lowpass';
+        tame.frequency.value = 9000;
+        tame.Q.value = 0.5;
+        const gain = ctx.createGain();
+        gain.gain.value = 1;
+        const panner = this.makePanner(b.pos);
+        panner.refDistance = 3;
+        panner.rolloffFactor = 0.9;
+        tyre.connect(body).connect(bodyG).connect(gain);
+        tyre.connect(hpf).connect(hiss).connect(gain);
+        ticks.connect(tickG).connect(gain);
+        skid.connect(skidF).connect(skidG).connect(gain);
+        gain.connect(tame).connect(panner).connect(this.effects);
+        tyre.start(now, Math.random() * 1.8);
+        ticks.start(now, Math.random() * 0.9);
+        skid.start(now, Math.random() * 0.8);
+        l = { tyre, ticks, skid, body, bodyG, hiss, tickG, skidG, gain, panner };
+        this.bikeLoops.set(b.id, l);
+      }
+      const v = b.speed;
+      const soft = b.rough > 1.2;
+      const k = Math.min(1.3, v / 10);
+      l.panner.positionX.setTargetAtTime(b.pos.x, now, 0.03);
+      l.panner.positionY.setTargetAtTime(b.pos.y + 0.2, now, 0.03);
+      l.panner.positionZ.setTargetAtTime(b.pos.z, now, 0.03);
+      l.tyre.playbackRate.setTargetAtTime(0.7 + 0.38 * Math.min(1.4, v / 10), now, 0.08);
+      l.body.frequency.setTargetAtTime(soft ? 240 : 420 + v * 70, now, 0.08);
+      // Pneumatic tyres: about 3 dB under a skateboard's hard wheels at the same speed (measured with dev/bikeclips.html).
+      l.bodyG.gain.setTargetAtTime((soft ? 0.9 : 0.75 + 0.25 * Math.min(1, b.rough)) * 0.85 * Math.pow(k, 0.8), now, 0.08);
+      l.hiss.gain.setTargetAtTime((soft ? 0.05 : 0.22 * Math.min(1, b.rough) + 0.08) * 0.7 * Math.pow(k, 0.9), now, 0.08);
+      // Pawl clicks per second: wheel turns per second × pawls (18), heard while the feet are still.
+      const clicks = (v / (2 * Math.PI * 0.33)) * AudioEngine.PAWLS;
+      l.ticks.playbackRate.setTargetAtTime(THREE.MathUtils.clamp(clicks / AudioEngine.TICKS, 0.2, 4.6), now, 0.05);
+      l.tickG.gain.setTargetAtTime(b.coast && v > 0.4 ? 0.34 * Math.min(1, 0.45 + v / 6) : 0, now, b.coast ? 0.04 : 0.02);
+      l.skidG.gain.setTargetAtTime(b.skid * Math.min(1, v / 6) * 0.9, now, 0.04);
+    }
+    for (const [id, l] of this.bikeLoops) {
+      if (seen.has(id)) continue;
+      l.gain.gain.setTargetAtTime(0, now, 0.05);
+      for (const src of [l.tyre, l.ticks, l.skid]) src.stop(now + 0.6);
+      this.bikeLoops.delete(id);
+    }
+  }
+
+  /** Front then back tyre thumping over a sidewalk seam (`gap`: seconds between the wheels). */
+  bikeSeam(position: THREE.Vector3, strength: number, gap: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.08, 3);
+    const s = 0.4 + 0.6 * strength;
+    for (const [at, k] of [[t, 1], [t + Math.min(0.5, gap), 0.85]] as const) {
+      this.tone(d, at, 'sine', 120, 70, 0.4 * s * k, 0.002, 0.07);
+      this.crack(d, at, 'bandpass', 700 + Math.random() * 200, 1.1, 0.7 * s * k, 0.025);
+    }
+  }
+
+  /** Picked up off the street and straddled: tyres bouncing, the chain slapping the stay. */
+  bikeMount(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.2, 3);
+    this.tone(d, t, 'sine', 115, 70, 0.55, 0.003, 0.12);
+    this.crack(d, t, 'bandpass', 850, 1.0, 1.6, 0.05);
+    for (let i = 0; i < 4; i++) this.crack(d, t + 0.05 + i * 0.03 + Math.random() * 0.02, 'bandpass', 3000 + Math.random() * 1800, 3, 0.9 - i * 0.15, 0.015);
+    // The saddle taking the weight, the bell rung by the jolt.
+    this.tone(d, t + 0.18, 'sine', 140, 95, 0.3, 0.004, 0.08);
+    this.bellPartials(d, t + 0.02, 0.05);
+  }
+
+  /** A shoe landing on a peg. */
+  bikePeg(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.15, 3);
+    this.crack(d, t, 'bandpass', 2600, 2.5, 1.4, 0.03);
+    this.tone(d, t, 'triangle', 1900, 1700, 0.18, 0.001, 0.09);
+    this.tone(d, t, 'sine', 130, 80, 0.35, 0.003, 0.08);
+  }
+
+  /** Falling over onto its side: pedal and bar end hitting the street, the frame rattling, a spoke ring. */
+  bikeDrop(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.3, 3.5);
+    this.tone(d, t, 'sine', 95, 50, 0.55, 0.003, 0.16);
+    this.crack(d, t, 'bandpass', 1300, 1.2, 2.2, 0.06);
+    for (let i = 0; i < 5; i++) {
+      const at = t + 0.03 + i * 0.045 + Math.random() * 0.03;
+      this.crack(d, at, 'bandpass', 1800 + Math.random() * 2600, 2.2, 1.3 * (1 - i * 0.16), 0.03);
+    }
+    this.tone(d, t + 0.01, 'triangle', 2650, 2600, 0.08, 0.001, 0.5);
+    this.bellPartials(d, t + 0.04, 0.12);
+  }
+
+  /** Both tyres back on the street after a hop (`strength` by how long it was in the air). */
+  bikeLand(position: THREE.Vector3, strength: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.25, 3);
+    const k = 0.5 + 0.5 * strength;
+    this.tone(d, t, 'sine', 100, 55, 0.6 * k, 0.003, 0.14);
+    this.crack(d, t, 'bandpass', 800, 1.0, 1.6 * k, 0.06);
+    this.tone(d, t + 0.04, 'sine', 120, 65, 0.4 * k, 0.003, 0.1);
+    for (let i = 0; i < 3; i++) this.crack(d, t + 0.02 + i * 0.03, 'bandpass', 3200 + Math.random() * 1500, 3, 0.9 * k / (i + 1), 0.015);
+  }
+
+  /** Thrown off: the bike going down at speed, scraping along the asphalt, the frame clattering. */
+  bikeCrash(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.45, 4);
+    this.tone(d, t, 'sine', 90, 42, 0.8, 0.003, 0.22);
+    this.crack(d, t, 'bandpass', 1100, 1.0, 3, 0.08);
+    // Scraping: metal and rubber dragged a metre or two.
+    this.crack(d, t + 0.03, 'bandpass', 2400, 0.8, 1.3, 0.45, 0.04);
+    for (let i = 0; i < 7; i++) {
+      const at = t + 0.04 + i * 0.07 + Math.random() * 0.05;
+      this.crack(d, at, 'bandpass', 1400 + Math.random() * 3000, 2, 2.2 * (1 - i * 0.12), 0.035);
+    }
+    this.bellPartials(d, t + 0.05, 0.25);
+  }
+
+  /** The rider's bell: two quick strikes of a little steel dome. */
+  bikeBell(position: THREE.Vector3, own = false): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.25, own ? 2 : 4);
+    for (const [at, k] of [[t, 1], [t + 0.15, 0.85]] as const) {
+      this.crack(d, at, 'highpass', 5000, 0.7, 0.5 * k, 0.004);
+      this.bellPartials(d, at, k);
+    }
+  }
+
+  /** A bicycle bell's ring: the dome's inharmonic partials, a hair detuned so it shimmers. */
+  private bellPartials(d: AudioNode, t: number, k: number): void {
+    const f = 2080;
+    for (const [m, a, decay] of [[1, 0.5, 0.95], [1.004, 0.25, 0.9], [2.33, 0.22, 0.5], [3.92, 0.14, 0.3], [5.6, 0.07, 0.18]] as const) {
+      this.tone(d, t, 'sine', f * m, f * m * 0.998, a * k, 0.0015, decay);
+    }
+  }
+
   dispose(): void {
     for (const l of this.engineLoops.values()) this.stopEngine(l, this.ctx?.currentTime ?? 0);
     this.engineLoops.clear();
@@ -3147,6 +3393,8 @@ export class AudioEngine {
     this.fireLoops.clear();
     for (const l of this.skateLoops.values()) l.src.stop();
     this.skateLoops.clear();
+    for (const l of this.bikeLoops.values()) for (const src of [l.tyre, l.ticks, l.skid]) src.stop();
+    this.bikeLoops.clear();
     this.unsub?.();
     window.clearTimeout(this.bankTimer);
     this.bank.clear();

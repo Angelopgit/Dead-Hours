@@ -27,6 +27,7 @@
     "check:skate": "tsx shared/tests/skateboards.check.ts && tsx server/tests/skate.check.ts",
     "check:windows": "tsx server/tests/vault.check.ts",
     "check:vehicles": "tsx shared/tests/vehicles.check.ts && tsx server/tests/vehicles.check.ts",
+    "check:bike": "tsx shared/tests/bicycles.check.ts && tsx server/tests/bike.check.ts",
     "textures": "node client/tools/textures/generate.mjs && node client/tools/textures/encode.mjs",
     "textures:cc0": "node client/tools/textures/generate.mjs && node client/tools/textures/fetch-cc0.mjs && node client/tools/textures/encode.mjs"
   }

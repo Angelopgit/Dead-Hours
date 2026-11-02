@@ -100,15 +100,17 @@ export interface Snapshot {
    * [id, x, y, z (cm), yaw (mrad), vx, vz, speed (cm/s), steer (mrad), gas (‰), DRIVE_FLAG bits, then each seat's survivor id or 0].
    */
   vh?: (number | string)[][];
+  /** Bicycles: [id, x, y, z (cm), yaw (mrad), rider id or 0, passenger id or 0, look]. */
+  bk?: (number | string)[][];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
-export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64, vaulting: 128 } as const;
+export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64, vaulting: 128, cycling: 256 } as const;
 
 function flagsOf(m: PlayerMotion, trigger = false): number {
   return (m.crouching ? MOTION_FLAG.crouching : 0) | (m.sprinting ? MOTION_FLAG.sprinting : 0) | (m.aiming ? MOTION_FLAG.aiming : 0)
     | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0) | (m.light ? MOTION_FLAG.light : 0)
-    | (m.pushing ? MOTION_FLAG.pushing : 0) | (m.vaulting ? MOTION_FLAG.vaulting : 0);
+    | (m.pushing ? MOTION_FLAG.pushing : 0) | (m.vaulting ? MOTION_FLAG.vaulting : 0) | (m.bike !== undefined && Number.isFinite(m.bike) ? MOTION_FLAG.cycling : 0);
 }
 
 /** Smashed panes as a hex bit string (see Snapshot.g). */
@@ -193,7 +195,9 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   const panes = packPanes((i) => slots[i].kind === 'window' && !slots[i].glass, slots.length);
   const boards: (number | string)[][] = [];
   for (const k of sim.skateboards.boards) boards.push([k.id, cm(k.pos.x), cm(k.pos.y), cm(k.pos.z), milli(k.yaw), k.rider ?? 0, k.look * 2 + (k.flipped ? 1 : 0)]);
-  const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars, sk: boards };
+  const bikes: (number | string)[][] = [];
+  for (const k of sim.bicycles.bikes) bikes.push([k.id, cm(k.pos.x), cm(k.pos.y), cm(k.pos.z), milli(k.yaw), k.rider ?? 0, k.passenger ?? 0, k.look]);
+  const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars, sk: boards, bk: bikes };
   const lull = sim.lull;
   if (lull.count > 0) snap.lu = [lull.count, milli(lull.start), milli(lull.end), milli(lull.paused)];
   if (panes) snap.g = panes;
@@ -237,7 +241,7 @@ export interface MotionFrame {
 
 /**
  * [x, y, z (mm), vx, vy, vz (cm/s), yaw, pitch, facing (mrad), eyeHeight (mm), flags, aim origin (mm) ×3, aim dir ×10000 ×3,
- * and while on a skateboard its heading (mrad)]
+ * and while on a skateboard its heading (mrad), or while riding a bicycle its heading (with MOTION_FLAG.cycling)]
  */
 export function packMotion(f: MotionFrame): number[] {
   const m = f.motion;
@@ -246,7 +250,8 @@ export function packMotion(f: MotionFrame): number[] {
     mm(m.eyeHeight), flagsOf(m, f.trigger),
     mm(f.aimOrigin.x), mm(f.aimOrigin.y), mm(f.aimOrigin.z), Math.round(f.aimDir.x * 1e4), Math.round(f.aimDir.y * 1e4), Math.round(f.aimDir.z * 1e4),
   ];
-  if (m.board !== undefined && Number.isFinite(m.board)) out.push(milli(Math.atan2(Math.sin(m.board), Math.cos(m.board))));
+  const heading = m.bike !== undefined && Number.isFinite(m.bike) ? m.bike : m.board;
+  if (heading !== undefined && Number.isFinite(heading)) out.push(milli(Math.atan2(Math.sin(heading), Math.cos(heading))));
   return out;
 }
 
@@ -266,7 +271,8 @@ export function unpackMotion(a: unknown): MotionFrame | null {
       light: !!(flags & MOTION_FLAG.light),
       pushing: !!(flags & MOTION_FLAG.pushing),
       vaulting: !!(flags & MOTION_FLAG.vaulting),
-      board: n.length === 18 ? clamp(n[17] / 1000, -4, 4) : undefined,
+      board: n.length === 18 && !(flags & MOTION_FLAG.cycling) ? clamp(n[17] / 1000, -4, 4) : undefined,
+      bike: n.length === 18 && flags & MOTION_FLAG.cycling ? clamp(n[17] / 1000, -4, 4) : undefined,
     },
     facing: n[8] / 1000,
     trigger: !!(flags & MOTION_FLAG.trigger),
@@ -351,6 +357,7 @@ export class Mirror {
   private holdSelfUntil = -Infinity;
   private readonly doorHold = new Map<number, number>();
   private readonly boardHold = new Map<number, number>();
+  private readonly bikeHold = new Map<number, number>();
   private readonly tracks = new Map<string, Track>();
   private readonly carTracks = new Map<number, CarTrack>();
   private readonly held = new Map<number, HeldLimb>();
@@ -389,6 +396,11 @@ export class Mirror {
   /** Keeps a skateboard the client just hopped on or off as it is until `until`. */
   holdBoard(id: number, until: number): void {
     this.boardHold.set(id, until);
+  }
+
+  /** Keeps a bicycle the client just got on or off as it is until `until`. */
+  holdBike(id: number, until: number): void {
+    this.bikeHold.set(id, until);
   }
 
   /** Advances the copy's clock to the estimated server time (call every frame). */
@@ -731,6 +743,18 @@ export class Mirror {
       sim.vehicles.remote(id, !mine, pos, yaw, { x: n[5] / 100, y: 0, z: n[6] / 100 }, n[7] / 100, n[8] / 1000, n[9] / 1000, n[10], seats);
     }
 
+    // Bicycles (older servers send none: the copy keeps its own, placed from the same seed).
+    if (s.bk) {
+      const bk = sim.bicycles;
+      for (const r of s.bk) {
+        const id = r[0] as number;
+        if ((this.bikeHold.get(id) ?? -Infinity) > now) continue;
+        const who = (v: number | string) => (typeof v === 'string' && v ? v : null);
+        bk.remote(id, { x: (r[1] as number) / 100, y: (r[2] as number) / 100, z: (r[3] as number) / 100 }, (r[4] as number) / 1000, who(r[5]), who(r[6]), r[7] as number);
+      }
+      if (bk.bikes.length > s.bk.length) bk.bikes.length = s.bk.length;
+    }
+
     // Ammunition crates, first aid, weapon tables, landed supply crates.
     for (const r of s.i) {
       const id = r[0];
@@ -882,6 +906,20 @@ export class Mirror {
     } else if (e.type === 'vehicle') {
       // Who sits where shows at once.
       sim.vehicles.heard(e);
+    } else if (e.type === 'bike' && e.stage !== 'bell') {
+      // Who rides what shows at once (someone thrown off lets go before the next snapshot).
+      const b = sim.bicycles.bike(e.bike);
+      if (b && (e.player !== this.me || e.stage === 'bail' || (e.seat === 'peg' && e.stage !== 'on'))) {
+        if (e.seat === 'rider') {
+          b.rider = e.stage === 'on' ? e.player : null;
+          if (e.stage !== 'on') {
+            b.pos = { ...e.pos };
+            b.yaw = e.yaw;
+            b.passenger = null;
+          }
+        } else if (e.stage === 'on') b.passenger = e.player;
+        else if (b.passenger === e.player) b.passenger = null;
+      }
     } else if (e.type === 'glassBroken') {
       // At once, so the client's own shots and sight lines go through the empty frame.
       const slot = sim.barricades.slots[e.slot];

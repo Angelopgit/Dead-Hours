@@ -30,6 +30,8 @@ import { Skateboards } from './Skateboards';
 import { SKATEBOARD, type SkateTrick } from '../config/skateboards';
 import { Vehicles, type DriveState } from './Vehicles';
 import { VEHICLE } from '../config/vehicles';
+import { Bicycles } from './Bicycles';
+import { BICYCLE } from '../config/bicycles';
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -47,10 +49,12 @@ export interface PlayerMotion {
   light?: boolean;
   /** Riding a skateboard: which way the deck points (radians, like a facing). */
   board?: number;
-  /** Kicking along on the skateboard (others see the back foot push). */
+  /** Kicking along on the skateboard, or pedalling a bicycle (others see the feet go round). */
   pushing?: boolean;
   /** Vaulting through a window (others see the body tuck over the sill). */
   vaulting?: boolean;
+  /** Riding a bicycle (in the saddle): which way its front wheel points (radians, like a facing). */
+  bike?: number;
 }
 
 export interface PlayerStats {
@@ -302,6 +306,8 @@ export class Simulation {
   readonly skateboards: Skateboards;
   /** Every drivable car, cruiser, wreck and the armored truck (sim/Vehicles). */
   readonly vehicles: Vehicles;
+  /** Bicycles lying about, who rides which and who stands on whose pegs. */
+  readonly bicycles: Bicycles;
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -338,6 +344,7 @@ export class Simulation {
     // Before the boards: none is laid on a car roof.
     this.vehicles = new Vehicles(this, opts.seed ?? 1);
     this.skateboards = new Skateboards(this, opts.seed ?? 1, this.outdoorNodes);
+    this.bicycles = new Bicycles(this, opts.seed ?? 1, this.outdoorNodes, this.skateboards.boards.map((b) => b.pos));
 
     let id = 0;
     for (const p of this.map.props) {
@@ -384,6 +391,7 @@ export class Simulation {
       this.dropLimb(p, false);
       this.dropMelee(p);
       this.skateboards.hopOff(p, 'off');
+      this.bicycles.getOff(p, 'off');
     }
     this.vehicles.forget(id);
     this.players.delete(id);
@@ -515,7 +523,7 @@ export class Simulation {
   vault(id: string, index: number): boolean {
     const p = this.players.get(id);
     const s = this.barricades.slots[index];
-    if (!p || !p.up || !s || s.kind !== 'window' || !s.climb || s.boards > 0 || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id)) return false;
+    if (!p || !p.up || !s || s.kind !== 'window' || !s.climb || s.boards > 0 || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id) || this.bicycles.onBike(id)) return false;
     const m = p.motion.pos;
     const dn = Math.abs((m.x - s.center.x) * s.normal.x + (m.z - s.center.z) * s.normal.z);
     const la = Math.abs((m.x - s.center.x) * s.normal.z) + Math.abs((m.z - s.center.z) * s.normal.x);
@@ -644,6 +652,8 @@ export class Simulation {
     this.emit({ type: 'playerHurt', player: p.id, damage, from: { ...from }, health: p.health });
     // A hard enough hit throws a skateboarder off the deck.
     this.skateboards.hit(p, damage);
+    // And a bike's rider or passenger off it.
+    this.bicycles.hit(p, damage);
     if (p.health > 0) return;
     if (this.canGoDown(p)) this.downPlayer(p);
     else this.killPlayer(p);
@@ -669,6 +679,7 @@ export class Simulation {
     this.dropLimb(p, false);
     this.skateboards.hopOff(p, 'bail');
     this.vehicles.eject(p);
+    this.bicycles.getOff(p, 'bail');
     this.stopRevive(p.id);
     this.emit({ type: 'playerDowned', player: p.id, bleed: p.bleed, last: p.downs >= DOWNED.maxDowns });
   }
@@ -688,6 +699,7 @@ export class Simulation {
     this.dropMelee(p);
     this.skateboards.hopOff(p, 'bail');
     this.vehicles.eject(p);
+    this.bicycles.getOff(p, 'bail');
     this.stopRevive(p.id);
     this.emit({ type: 'playerDied', player: p.id });
     if (wipe) this.checkWipe();
@@ -715,7 +727,7 @@ export class Simulation {
     }
     const p = this.players.get(id);
     const t = this.players.get(target);
-    if (!p || !t || !p.up || !t.downed || this.phase === 'over' || !this.inReviveReach(p, t)) return false;
+    if (!p || !t || !p.up || !t.downed || this.phase === 'over' || !this.inReviveReach(p, t) || this.bicycles.onBike(id)) return false;
     if (t.reviver === id) return true;
     if (t.reviver) return false;
     this.stopRevive(id);
@@ -801,6 +813,8 @@ export class Simulation {
     if (!p || !p.up || this.phase === 'over' || this.revivingOf(id)) return 'busy';
     // The driver's hands are on the wheel.
     if (this.vehicles.driven(id)) return 'busy';
+    // Both hands on a bike's bars (the trigger rings the bell instead, see ringBell).
+    if (this.bicycles.ridden(id)) return 'busy';
     const a = p.arsenal;
     // With an arm in hand the trigger finger swings it instead.
     if (a.limb) return pressed && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
@@ -823,10 +837,10 @@ export class Simulation {
     const eye = p.eye;
     let o = origin;
     if (!(Math.hypot(origin.x - eye.x, origin.y - eye.y, origin.z - eye.z) <= COMBAT.maxOriginOffset)) o = eye;
-    // Rolling on a skateboard is smooth: only part of the speed shakes the aim.
-    // Riding is smooth: only part of the speed of a skateboard or a car shakes the aim.
+    // Riding is smooth: only part of the speed of a skateboard, a car or a bike's pegs shakes the aim.
     const seat = this.vehicles.seatOf(id);
-    const speed = seat ? Math.abs(seat[0].speed) * VEHICLE.spreadSpeed : this.skateboards.ridden(id) ? p.speed * SKATEBOARD.spreadSpeed : p.speed;
+    const speed = seat ? Math.abs(seat[0].speed) * VEHICLE.spreadSpeed : this.skateboards.ridden(id) ? p.speed * SKATEBOARD.spreadSpeed
+      : this.bicycles.carrying(id) ? p.speed * BICYCLE.spreadSpeed : p.speed;
     const spread = a.spread({ speed, crouching: p.motion.crouching, grounded: p.motion.grounded, aiming: p.motion.aiming });
     a.consume();
     p.stats.shotsFired++;
@@ -1112,7 +1126,7 @@ export class Simulation {
 
   reload(id: string): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up || this.revivingOf(id)) return false;
+    if (!p || !p.up || this.revivingOf(id) || this.bicycles.ridden(id)) return false;
     if (!p.arsenal.startReload()) return false;
     this.emit({ type: 'reload', player: id, weapon: p.arsenal.weapon.id, stage: 'start' });
     return true;
@@ -1120,7 +1134,7 @@ export class Simulation {
 
   switchWeapon(id: string, slot: 'primary' | 'secondary' | 'melee'): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up) return false;
+    if (!p || !p.up || this.bicycles.ridden(id)) return false;
     if (slot === 'melee') {
       // The melee weapon held out in place of the gun (with an arm in hand, the arm is the club;
       // in a seat there is no room to swing it).
@@ -1151,7 +1165,7 @@ export class Simulation {
    */
   melee(id: string, aim?: { origin: Vec3; dir: Vec3 }): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id)) return false;
+    if (!p || !p.up || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id) || this.bicycles.ridden(id)) return false;
     const reloading = p.arsenal.action === 'reload';
     if (!p.arsenal.startMelee()) return false;
     p.meleeAim = null;
@@ -1172,7 +1186,7 @@ export class Simulation {
    */
   throwItem(id: string, kind: ThrowKind, aim: { origin: Vec3; dir: Vec3 }): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive || this.phase === 'over' || !THROWABLES[kind] || this.vehicles.seatOf(id)) return false;
+    if (!p || !p.alive || this.phase === 'over' || !THROWABLES[kind] || this.vehicles.seatOf(id) || this.bicycles.ridden(id)) return false;
     const dl = Math.hypot(aim.dir.x, aim.dir.y, aim.dir.z);
     if (!(dl > 0.5)) return false;
     const reloading = p.arsenal.action === 'reload';
@@ -1199,7 +1213,7 @@ export class Simulation {
 
   bandage(id: string): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up || p.bandages <= 0 || p.health >= PLAYER.maxHealth || this.revivingOf(id) || this.vehicles.driven(id)) return false;
+    if (!p || !p.up || p.bandages <= 0 || p.health >= PLAYER.maxHealth || this.revivingOf(id) || this.vehicles.driven(id) || this.bicycles.ridden(id)) return false;
     if (p.arsenal.action === 'melee' || p.arsenal.action === 'bandage') return false;
     // Both hands are needed for the dressing: the arm goes down at your feet.
     this.dropLimb(p, false);
@@ -1276,6 +1290,39 @@ export class Simulation {
   skateTrick(id: string, kind: SkateTrick): boolean {
     const p = this.players.get(id);
     return !!p && this.skateboards.trick(p, kind);
+  }
+
+  /**
+   * Gets on a bicycle in reach: `rider` picks up a free one (both hands go to the bars: a reload or
+   * a dressing stops, an arm in hand is put down), `peg` hops on the pegs of one someone rides.
+   */
+  rideBike(id: string, bike: number, seat: 'rider' | 'peg'): boolean {
+    const p = this.players.get(id);
+    if (!p || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id) || !this.bicycles.mount(p, bike, seat)) return false;
+    if (seat === 'rider') {
+      if (p.arsenal.cancelReload()) this.emit({ type: 'reload', player: id, weapon: p.arsenal.weapon.id, stage: 'cancel' });
+      if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: id, stage: 'cancel' });
+      this.dropLimb(p, false);
+      // A melee weapon held out goes away again (the gun comes back to the sling).
+      if (p.arsenal.meleeOut && p.arsenal.switchTo(p.arsenal.active)) this.emit({ type: 'draw', player: id, slot: p.arsenal.active, weapon: p.arsenal.weapon.id });
+      p.work = null;
+    }
+    return true;
+  }
+
+  /**
+   * Gets off the bike (a rider's falls over at `at`, where their browser put it, when that is close
+   * by; a passenger steps down at `at`). `bail`: the rider's browser says a wall threw them off.
+   */
+  leaveBike(id: string, at?: Vec3, yaw?: number, bail = false): boolean {
+    const p = this.players.get(id);
+    return !!p && this.bicycles.getOff(p, bail ? 'bail' : 'off', at, yaw) !== null;
+  }
+
+  /** The rider rings the bell. */
+  ringBell(id: string): boolean {
+    const p = this.players.get(id);
+    return !!p && this.phase !== 'over' && this.bicycles.ring(p);
   }
 
   /** Uses an ammunition crate or first aid box. */
@@ -2021,6 +2068,7 @@ export class Simulation {
     if (this.phase !== 'over') this.stepDowned(dt);
     this.skateboards.step(dt);
     this.vehicles.step(dt);
+    this.bicycles.step(dt);
     if (this.phase !== 'over') this.runPickups();
 
     const ticks: ArsenalTick[] = [];
@@ -2034,7 +2082,7 @@ export class Simulation {
       // On a skateboard the wheels make the noise instead (Skateboards.step).
       const speed = p.speed;
       p.footstepT -= dt;
-      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded && !this.skateboards.ridden(p.id) && !this.vehicles.seatOf(p.id)) {
+      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded && !this.skateboards.ridden(p.id) && !this.vehicles.seatOf(p.id) && !this.bicycles.onBike(p.id)) {
         const radius = p.motion.crouching ? 1.2 : speed > 4.5 ? 11 : 4.5;
         this.noise(p.motion.pos, radius, p.id);
         p.footstepT = speed > 4.5 ? 0.35 : 0.55;

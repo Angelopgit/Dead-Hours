@@ -1,5 +1,5 @@
 import {
-  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion, unpackDrive,
+  BICYCLE, GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion, unpackDrive,
   BUILD_SLOTS, decodeBuild, sanitizeBuild,
   type ActMsg, type DebugMsg, type DoorBody, type Loadout, type Physics, type SimEvent, type Snapshot, type UnlockState, type Vec3,
   type WeaponBuild, type WeaponId, type ZombieKind,
@@ -11,6 +11,8 @@ const MAX_SPEED = PLAYER.sprintSpeed * 1.25;
 /** The same on a skateboard (and for a moment after coming off one, while the client hears about it). */
 const BOARD_SPEED = SKATEBOARD.maxSpeed * 1.25;
 const BOARD_GRACE = 0.8;
+/** On a bicycle (either seat), and for the same moment after getting off. */
+const BIKE_SPEED = BICYCLE.maxSpeed * 1.25;
 /** Fastest climb (stairs, jumps). */
 const MAX_CLIMB = 5.5;
 /** Movement that can be banked when messages arrive bunched together (seconds' worth). */
@@ -49,9 +51,10 @@ interface Extra {
   /** Put back here after a refused move; moves are ignored until the client is there. */
   correcting: Vec3 | null;
   correctedAt: number;
-  /** Last simulation time they were on a skateboard, and popped a trick on one. */
+  /** Last simulation time they were on a skateboard, popped a trick on one, and were on a bicycle. */
   boardAt: number;
   trickAt: number;
+  bikeAt: number;
   /** Driving: distance the car may still cover (banked like `budget`), and where the server put it back after a refused move. */
   carBudget: number;
   carCorrecting: { id: number; pos: Vec3 } | null;
@@ -123,7 +126,7 @@ export class Night {
     this.extras.set(s.id, {
       facing: sp.yaw + Math.PI, trigger: false, aimO: eye, aimD: { x: -Math.sin(sp.yaw), y: 0, z: -Math.cos(sp.yaw) },
       press: 0, pressO: eye, pressD: { x: 0, y: 0, z: -1 }, budget: MAX_SPEED * BANK, climb: MAX_CLIMB * BANK,
-      correcting: null, correctedAt: 0, boardAt: -Infinity, trickAt: -Infinity, body, collider,
+      correcting: null, correctedAt: 0, boardAt: -Infinity, trickAt: -Infinity, bikeAt: -Infinity, body, collider,
       carBudget: 0, carCorrecting: null, carCorrectedAt: 0,
     });
     this.facing.set(s.id, sp.yaw + Math.PI);
@@ -177,17 +180,30 @@ export class Night {
     const x = this.extras.get(id);
     const f = unpackMotion(raw);
     if (!p || !x || !f || !p.alive) return null;
-    if (this.sim.vehicles.seatOf(id)) {
-      // In a seat the car carries them: only where they look and aim counts.
-      const m = f.motion;
-      Object.assign(p.motion, { yaw: m.yaw, pitch: m.pitch, aiming: m.aiming, light: m.light });
+    const seated = !!this.sim.vehicles.seatOf(id);
+    if (seated || this.sim.bicycles.carrying(id)) {
+      if (seated) {
+        // In a seat the car carries them: only where they look and aim counts.
+        const m = f.motion;
+        Object.assign(p.motion, { yaw: m.yaw, pitch: m.pitch, aiming: m.aiming, light: m.light });
+        x.correcting = null;
+        x.budget = MAX_SPEED * BANK;
+      } else {
+        // On someone's pegs: the bike puts them where they stand (Bicycles.step); only how they look and aim is theirs.
+        // Stepping (or being dropped) off it, they get a rider's allowance to catch up with where the bike was drawn.
+        x.correcting = null;
+        x.bikeAt = this.sim.time;
+        x.budget = BIKE_SPEED * BANK;
+        x.climb = MAX_CLIMB * BANK;
+        const { pos: _pos, vel: _vel, grounded: _grounded, ...look } = f.motion;
+        this.sim.setMotion(id, { ...look, sprinting: false, board: undefined, bike: undefined });
+      }
       x.facing = f.facing;
       this.facing.set(id, f.facing);
       x.trigger = f.trigger;
       x.aimO = f.aimOrigin;
       x.aimD = f.aimDir;
-      x.correcting = null;
-      x.budget = MAX_SPEED * BANK;
+
       return null;
     }
     const from = p.motion.pos;
@@ -360,6 +376,23 @@ export class Night {
           if (v) x.carBudget = this.carSpeed(v) * BANK;
         }
         break;
+      case 'bike':
+        if (!Number.isInteger(m.id)) break;
+        if (m.id >= 0) {
+          if ((m.seat === 'rider' || m.seat === 'peg') && sim.rideBike(id, m.id, m.seat)) {
+            x.bikeAt = sim.time;
+            x.correcting = null;
+          }
+        } else if (sim.leaveBike(id, isVec(m.at) ? vec(m.at) : undefined, typeof m.yaw === 'number' && Number.isFinite(m.yaw) ? m.yaw : undefined, m.bail === true)) {
+          // Running it out (or stepping down off the pegs a little way from where the server had them).
+          x.bikeAt = sim.time;
+          x.budget = BIKE_SPEED * BANK;
+          x.climb = MAX_CLIMB * BANK;
+        }
+        break;
+      case 'bell':
+        sim.ringBell(id);
+        break;
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;
         const e = p.eye;
@@ -451,10 +484,13 @@ export class Night {
     x.collider.setEnabled(true);
   }
 
-  /** How fast this survivor may move now: faster on a skateboard. */
+  /** How fast this survivor may move now: faster on a skateboard, faster still on a bicycle. */
   private maxSpeed(id: string, x: Extra): number {
-    if (this.sim.skateboards.ridden(id)) x.boardAt = this.sim.time;
-    return this.sim.time - x.boardAt < BOARD_GRACE ? BOARD_SPEED : MAX_SPEED;
+    const t = this.sim.time;
+    if (this.sim.skateboards.ridden(id)) x.boardAt = t;
+    if (this.sim.bicycles.onBike(id)) x.bikeAt = t;
+    if (t - x.bikeAt < BOARD_GRACE) return BIKE_SPEED;
+    return t - x.boardAt < BOARD_GRACE ? BOARD_SPEED : MAX_SPEED;
   }
 
   /** `world` on snapshot steps: zombies move and the collision world catches up (see Simulation.step). */

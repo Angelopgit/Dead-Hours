@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { BODY_FILTER, DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
+import { BICYCLE, BODY_FILTER, DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
-import { Humanoid, type HumanoidLook, type SeatPose, type SkatePose } from '../characters/Humanoid';
+import { Humanoid, type BikeRig, type HumanoidLook, type SeatPose, type SkatePose } from '../characters/Humanoid';
+import { barAngle } from './Bicycles';
 
 /** What a survivor on foot bumps into: the world, doors, vehicles (and their cabins), the dead. */
 const FEET = groups(GROUP.player, BODY_FILTER | GROUP.zombie);
@@ -39,6 +40,39 @@ export interface Ride {
   since: number;
   /** Fixed steps in a row something has blocked the deck. */
   blocked: number;
+}
+
+/** Riding a bicycle: where it points, how fast it goes, the cranks, the lean and the brakes. */
+export interface Cycle {
+  bike: number;
+  heading: number;
+  prevHeading: number;
+  speed: number;
+  /** Smoothed steering, -1..1 (positive turns left). */
+  steer: number;
+  /** Crank angle (radians), and whether the feet are pushing them round. */
+  crank: number;
+  pedalling: boolean;
+  /** Standing up on the pedals (sprint), 0..1. */
+  stand: number;
+  /** Leaning into the turn (radians, positive: left). */
+  lean: number;
+  /** Hand brakes, 0..1. */
+  brake: number;
+  /** Someone on the pegs (heavier: slower to pick up, a lower top speed, no hops). */
+  loaded: boolean;
+  since: number;
+  blocked: number;
+}
+
+/** Standing on the pegs of someone else's bike: the session puts the feet there every frame. */
+export interface Pillion {
+  bike: number;
+  /** Where the pegs are drawn now (the feet's height), how fast they move, the bike's heading and lean. */
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  yaw: number;
+  lean: number;
 }
 
 /**
@@ -109,6 +143,14 @@ export class PlayerController {
   private seatYaw = 0;
   private readonly seatVel = new THREE.Vector3();
   private readonly seatPose: SeatPose = { yaw: 0 };
+  /** On a bicycle's saddle (null otherwise). */
+  cycle: Cycle | null = null;
+  /** On the pegs of someone's bicycle (null otherwise). */
+  pillion: Pillion | null = null;
+  private readonly bikeRig: BikeRig = { seat: 'rider', yaw: 0, crank: 0, stand: 0, steer: 0 };
+  /** A sideways step taken on the next fixed step (getting off a bike, collision-checked). */
+  private readonly sideStep = new THREE.Vector3();
+  private moveYRaw = 0;
   private moveX = 0;
   private moveY = 0;
 
@@ -153,7 +195,7 @@ export class PlayerController {
 
   /** Starts vaulting through a window along a plan from findVault (the session has checked it can). */
   startVault(plan: VaultPlan): void {
-    if (this.dead || this.downed || this.ride || this.vault || this.seated) return;
+    if (this.dead || this.downed || this.ride || this.cycle || this.pillion || this.vault || this.seated) return;
     this.vault = { plan, t: 0, tuck: 0 };
     this.jumpBuffered = 0;
     this.coyote = 0;
@@ -225,7 +267,7 @@ export class PlayerController {
   /** Pushed aside by something moving into them (a car): along the ground, never through a wall. */
   shove(dx: number, dz: number): void {
     const d = Math.hypot(dx, dz);
-    if (d < 1e-4 || this.seated || this.dead) return;
+    if (d < 1e-4 || this.seated || this.pillion || this.dead) return;
     const t = this.body.translation();
     const hit = this.physics.raycast(t.x, t.y, t.z, dx / d, 0, dz / d, d + PLAYER.radius, groups(0xffff, GROUP.static | GROUP.dynamic));
     const go = hit === null ? d : Math.max(0, hit - PLAYER.radius - 0.02);
@@ -272,6 +314,8 @@ export class PlayerController {
     this.aimToggled = false;
     this.jumpBuffered = 0;
     if (on) this.ride = null;
+    if (on) this.cycle = null;
+    if (on) this.pillion = null;
     if (on && !this.crouching) this.setCrouch(true);
   }
 
@@ -320,6 +364,80 @@ export class PlayerController {
     return THREE.MathUtils.clamp((t - TRICK_DELAY) / SKATE_TRICKS[r.trick].time, 0, 1);
   }
 
+  /**
+   * Gets on a bicycle's saddle. Running onto it, it points the way you were going and keeps some
+   * of the pace; from a standstill it points where the camera looks.
+   */
+  mountBike(bike: number, cameraYaw: number, loaded = false): void {
+    if (this.dead || this.downed || this.ride || this.cycle || this.pillion || this.vault) return;
+    const hv = Math.hypot(this.velocity.x, this.velocity.z);
+    const moving = hv > 1.5;
+    // Only a run carries on into the ride; walked up to, it sets off from rest.
+    const running = hv > PLAYER.walkSpeed + 0.6;
+    const heading = moving ? Math.atan2(this.velocity.x, this.velocity.z) : cameraYaw + Math.PI;
+    this.cycle = {
+      bike, heading, prevHeading: heading, speed: running ? Math.min(hv * 0.8, BICYCLE.pedalTop) : 0,
+      steer: 0, crank: Math.PI / 2, pedalling: false, stand: 0, lean: 0, brake: 0, loaded, since: 0, blocked: 0,
+    };
+    this.sprinting = false;
+    this.aiming = false;
+    this.aimToggled = false;
+    this.bailed = false;
+    this.facing = heading;
+    if (this.crouching) this.setCrouch(false);
+    if (this.grounded) {
+      this.intent.y = BICYCLE.mountHop;
+      this.grounded = false;
+      this.coyote = 0;
+    }
+  }
+
+  /**
+   * Gets off the saddle (or is thrown off): the bike stays where it was and falls over; the
+   * survivor steps off to its left, running out what is left of the speed. Returns where the bike
+   * is and which way it points.
+   */
+  dismountBike(): { pos: { x: number; y: number; z: number }; yaw: number } | null {
+    const c = this.cycle;
+    if (!c) return null;
+    this.cycle = null;
+    const keep = this.bailed ? 0 : Math.min(c.speed, BICYCLE.stepOffSpeed);
+    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
+    this.intent.x = fx * keep;
+    this.intent.z = fz * keep;
+    // To the bike's left: +X in its own space is (cos h, -sin h).
+    this.sideStep.set(fz * 0.55, 0, -fx * 0.55);
+    this.character.root.rotation.z = 0;
+    return { pos: { x: this.position.x, y: this.position.y, z: this.position.z }, yaw: c.heading };
+  }
+
+  /** Hops on the pegs of a bike someone else rides; the session puts the feet on them from now on. */
+  boardPegs(bike: number, pos: THREE.Vector3, yaw: number): void {
+    if (this.dead || this.downed || this.ride || this.cycle || this.pillion || this.vault) return;
+    this.pillion = { bike, pos: pos.clone(), vel: new THREE.Vector3(), yaw, lean: 0 };
+    this.sprinting = false;
+    this.putAt(pos);
+  }
+
+  /** Steps down off the pegs, to `at` (the session found the spot) with the bike's way and some of its speed. */
+  leavePegs(at: { x: number; y: number; z: number } | null, speed = 0): void {
+    const pl = this.pillion;
+    if (!pl) return;
+    this.pillion = null;
+    this.character.root.rotation.z = 0;
+    if (at) this.putAt(at);
+    const keep = Math.min(speed, BICYCLE.stepOffSpeed * 0.6);
+    this.intent.x = Math.sin(pl.yaw) * keep;
+    this.intent.z = Math.cos(pl.yaw) * keep;
+    this.intent.y = 0;
+  }
+
+  /** Where the bike's front wheel points now, between fixed steps. */
+  cycleHeading(alpha: number): number {
+    const c = this.cycle;
+    return c ? c.prevHeading + wrap(c.heading - c.prevHeading) * alpha : this.facing;
+  }
+
   /** Where the deck points now, between fixed steps. */
   rideHeading(alpha: number): number {
     const r = this.ride;
@@ -356,7 +474,8 @@ export class PlayerController {
       aiming: this.aiming,
       grounded: this.grounded,
       board: this.ride ? wrap(this.ride.heading) : undefined,
-      pushing: !!this.ride && this.ride.push >= 0,
+      bike: this.cycle ? wrap(this.cycle.heading) : undefined,
+      pushing: (!!this.ride && this.ride.push >= 0) || (!!this.cycle && this.cycle.pedalling),
       vaulting: !!this.vault,
     };
   }
@@ -387,6 +506,9 @@ export class PlayerController {
     this.forwardAmount = f;
     this.moveX = r;
     this.moveY = f;
+    this.moveYRaw = f;
+    // Hands on the bars: nothing to aim.
+    if (this.cycle) this.aiming = this.aimToggled = false;
   }
   private crouchHeld = false;
   private sprintHeld = false;
@@ -410,17 +532,26 @@ export class PlayerController {
       this.seatedStep(dt, cameraYaw);
       return;
     }
+    if (this.pillion) {
+      this.pegStep(dt, cameraYaw);
+      return;
+    }
     if (this.vault) {
       this.vaultStep(dt);
       return;
     }
-    // Hold-to-crouch with Ctrl/C.
-    const wantCrouch = this.crouchHeld || this.downed;
+    // Hold-to-crouch with Ctrl/C (not in the saddle).
+    const wantCrouch = (this.crouchHeld && !this.cycle) || this.downed;
     if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
 
     if (this.downed) this.aiming = false;
     const ride = this.ride;
-    if (ride) {
+    const cycle = this.cycle;
+    if (cycle) {
+      this.sprinting = false;
+      this.aiming = false;
+      this.cycleStep(dt);
+    } else if (ride) {
       this.sprinting = false;
       this.rideStep(dt);
     } else {
@@ -444,9 +575,10 @@ export class PlayerController {
     this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
     // On the board the jump is an ollie (crouched too: that's how it's done), and with the stick
-    // held to a side or back a flip trick off it.
+    // held to a side or back a flip trick off it; on a bike a hop (not with someone on the pegs).
+    if (cycle?.loaded) this.jumpBuffered = 0;
     if (this.jumpBuffered > 0 && this.coyote > 0 && (!this.crouching || ride) && !this.downed) {
-      this.intent.y = ride ? SKATEBOARD.ollie : PLAYER.jumpVelocity;
+      this.intent.y = ride ? SKATEBOARD.ollie : cycle ? BICYCLE.hop : PLAYER.jumpVelocity;
       this.jumpBuffered = 0;
       this.coyote = 0;
       this.grounded = false;
@@ -465,7 +597,9 @@ export class PlayerController {
     // defeats autostep at slow speeds (crouch-walking would stall on door thresholds).
     if (this.grounded && this.intent.y < 0) this.intent.y = 0;
 
-    const desired = { x: this.intent.x * dt, y: this.intent.y * dt, z: this.intent.z * dt };
+    if (cycle) this.frontWheel(dt);
+    const desired = { x: this.intent.x * dt + this.sideStep.x, y: this.intent.y * dt, z: this.intent.z * dt + this.sideStep.z };
+    this.sideStep.set(0, 0, 0);
     this.controller.computeColliderMovement(this.collider, desired, undefined, FEET);
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
@@ -482,6 +616,7 @@ export class PlayerController {
     // Bonk head on ceilings.
     if (!this.grounded && desired.y > 0 && m.y < desired.y * 0.5) this.intent.y = 0;
     if (ride) this.rideCollide(dt, desired, m);
+    if (cycle) this.cycleCollide(dt, desired, m);
     if (dt > 0) this.velocity.set(m.x / dt, this.intent.y, m.z / dt);
     const t = this.body.translation();
     const next = { x: t.x + m.x, y: t.y + m.y, z: t.z + m.z };
@@ -500,11 +635,12 @@ export class PlayerController {
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     let desiredFacing = this.facing;
     const toCamera = this.aiming || this.faceT > 0;
-    if (toCamera) desiredFacing = cameraYaw + Math.PI;
+    if (cycle) desiredFacing = cycle.heading;
+    else if (toCamera) desiredFacing = cameraYaw + Math.PI;
     else if (this.ride) desiredFacing = this.ride.heading - Math.PI / 2 + 0.55;
     else if (hv > 0.4) desiredFacing = Math.atan2(this.velocity.x, this.velocity.z);
     const diff = Math.atan2(Math.sin(desiredFacing - this.facing), Math.cos(desiredFacing - this.facing));
-    const turned = diff * (1 - Math.exp(-dt * (toCamera ? 20 : this.ride ? 9 : 11)));
+    const turned = cycle ? diff : diff * (1 - Math.exp(-dt * (toCamera ? 20 : this.ride ? 9 : 11)));
     this.facing += turned;
     this.turnRate = dt > 0 ? turned / dt : 0;
   }
@@ -620,6 +756,142 @@ export class PlayerController {
     if (got > want * 0.2) r.heading = wrap(r.heading + wrap(Math.atan2(m.x, m.z) - r.heading) * 0.5);
   }
 
+  /**
+   * One fixed step in the saddle: the stick's sideways axis steers (sharp at riding pace, wide at
+   * speed, the bike walked round on the spot when stopped), forward pedals up to the top speed
+   * (standing on the pedals with sprint held goes faster), back brakes, and the bike coasts on
+   * with very little rolling resistance. The cranks turn with the back wheel while pedalling.
+   */
+  private cycleStep(dt: number): void {
+    const c = this.cycle!;
+    const S = BICYCLE;
+    c.since += dt;
+    c.prevHeading = c.heading;
+    const steerTo = THREE.MathUtils.clamp(-this.moveX, -1, 1);
+    c.steer += (steerTo - c.steer) * (1 - Math.exp(-dt * 7));
+    const v = c.speed;
+    const rate = (v < 1 ? THREE.MathUtils.lerp(S.turnStill, S.turnSlow, v) : THREE.MathUtils.lerp(S.turnSlow, S.turnFast, THREE.MathUtils.smoothstep(v, 2, 11))) * (this.grounded ? 1 : S.airTurn);
+    const turn = c.steer * rate;
+    c.heading = wrap(c.heading + turn * dt);
+    // Leaning into the turn as a real bike must (gravity against the turn), only so far.
+    const leanTo = this.grounded ? THREE.MathUtils.clamp(Math.atan((v * turn) / 9.8), -S.maxLean, S.maxLean) : c.lean * 0.9;
+    c.lean += (leanTo - c.lean) * (1 - Math.exp(-dt * 6));
+
+    let soft = false;
+    if (this.grounded) {
+      const g = this.physics.raycastHit(this.position.x, this.position.y + 0.3, this.position.z, 0, -1, 0, 0.6);
+      soft = !!g && (g.surface === 'grass' || g.surface === 'dirt');
+    }
+    const hard = this.sprintHeld && this.noSprintT <= 0;
+    const top = (hard ? S.sprintTop : S.pedalTop) * (c.loaded ? S.loadTop : 1);
+    const effort = this.moveYRaw > 0.2 ? Math.min(1, this.moveYRaw) : 0;
+    c.pedalling = effort > 0 && this.grounded && v < top + 0.3;
+    c.stand += ((c.pedalling && hard ? 1 : 0) - c.stand) * (1 - Math.exp(-dt * 6));
+    if (c.pedalling) {
+      const ease = THREE.MathUtils.clamp(((top - v) / top) * S.pedalEase, 0, 1);
+      c.speed += S.pedalAccel * effort * (soft ? S.offRoadPedal : 1) * (c.loaded ? S.loadAccel : 1) * (hard ? 1.15 : 1) * ease * dt;
+      // The cranks turn with the back wheel (the gearing), never slower than a first push.
+      c.crank += Math.max(v / S.wheel / S.gear, S.minCadence * effort) * dt;
+    } else {
+      // Coasting: pedals level, the freewheel ticks.
+      const level = Math.round((c.crank - Math.PI / 2) / Math.PI) * Math.PI + Math.PI / 2;
+      c.crank += (level - c.crank) * (1 - Math.exp(-dt * 5));
+    }
+    c.brake = this.moveYRaw < -0.2 ? Math.min(1, -this.moveYRaw) : 0;
+    if (c.brake > 0) c.speed -= S.brake * c.brake * dt;
+    if (this.grounded) {
+      const settle = !c.pedalling && c.speed < S.settleBelow ? S.settle : 0;
+      c.speed -= (S.rolling + settle + (soft ? S.offRoad : 0) + S.drag * c.speed * c.speed) * dt;
+    }
+    c.speed = THREE.MathUtils.clamp(c.speed, 0, S.maxSpeed);
+    this.intent.x = Math.sin(c.heading) * c.speed;
+    this.intent.z = Math.cos(c.heading) * c.speed;
+  }
+
+  /**
+   * The front wheel runs ahead of the rider's capsule: a ray along the frame at wheel height stops
+   * it short of walls (scraping round a glancing one), and a wall taken head-on at speed throws the
+   * rider (`bailed`).
+   */
+  private frontWheel(dt: number): void {
+    const c = this.cycle!;
+    const S = BICYCLE;
+    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
+    const ahead = S.frontReach - PLAYER.radius;
+    const look = ahead + c.speed * dt + 0.05;
+    const hit = this.physics.raycastHit(this.position.x + fx * PLAYER.radius, this.position.y + S.frontProbe, this.position.z + fz * PLAYER.radius, fx, 0, fz, look);
+    if (!hit || hit.ny > 0.7) return;
+    const room = Math.max(0, hit.distance - ahead);
+    const square = -(hit.nx * fx + hit.nz * fz);
+    if (c.speed > S.bailSpeed && square > 0.7) {
+      this.bailed = true;
+      c.speed = 0;
+    } else {
+      c.speed = Math.min(c.speed, room / Math.max(dt, 1e-4));
+      // A glancing wall turns the bike along it.
+      if (square < 0.85 && c.speed < 1) {
+        const tx = fx - hit.nx * (fx * hit.nx + fz * hit.nz), tz = fz - hit.nz * (fx * hit.nx + fz * hit.nz);
+        if (Math.hypot(tx, tz) > 0.1) c.heading = wrap(c.heading + wrap(Math.atan2(tx, tz) - c.heading) * 0.25);
+      }
+    }
+    this.intent.x = fx * c.speed;
+    this.intent.z = fz * c.speed;
+  }
+
+  /** What got in the capsule's way this step (as on a skateboard): a glancing blow scrapes speed off, head-on at speed throws the rider. */
+  private cycleCollide(dt: number, desired: { x: number; z: number }, m: { x: number; z: number }): void {
+    const c = this.cycle!;
+    const want = Math.hypot(desired.x, desired.z);
+    if (want < 1e-4) {
+      c.blocked = 0;
+      return;
+    }
+    const got = Math.hypot(m.x, m.z);
+    if (got >= want * 0.85) {
+      c.blocked = 0;
+      return;
+    }
+    if (++c.blocked < 2) return;
+    const along = m.x * Math.sin(c.heading) + m.z * Math.cos(c.heading);
+    if (c.speed > BICYCLE.bailSpeed && along < want * BICYCLE.bailKeep) {
+      this.bailed = true;
+      c.speed = 0;
+      return;
+    }
+    c.speed = Math.max(0, along / dt);
+    if (got > want * 0.2) c.heading = wrap(c.heading + wrap(Math.atan2(m.x, m.z) - c.heading) * 0.5);
+  }
+
+  /** On someone's pegs: the feet go where the session says the pegs are; the body turns to the view. */
+  private pegStep(dt: number, cameraYaw: number): void {
+    const pl = this.pillion!;
+    this.sprinting = false;
+    const wantCrouch = this.crouchHeld && !this.downed;
+    if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
+    this.position.copy(pl.pos);
+    this.velocity.copy(pl.vel);
+    this.grounded = true;
+    this.intent.set(0, 0, 0);
+    this.jumpBuffered = 0;
+    this.airTime = 0;
+    this.body.setNextKinematicTranslation({ x: pl.pos.x, y: pl.pos.y + this.height / 2, z: pl.pos.z });
+    const want = cameraYaw + Math.PI;
+    const diff = Math.atan2(Math.sin(want - this.facing), Math.cos(want - this.facing));
+    const turned = diff * (1 - Math.exp(-dt * 16));
+    this.facing += turned;
+    this.turnRate = dt > 0 ? turned / dt : 0;
+  }
+
+  /** Puts the capsule (and the drawn survivor) somewhere at once, keeping the speed. */
+  private putAt(pos: { x: number; y: number; z: number }): void {
+    this.position.set(pos.x, pos.y, pos.z);
+    this.prevPosition.copy(this.position);
+    this.renderPosition.copy(this.position);
+    const c = { x: pos.x, y: pos.y + this.height / 2, z: pos.z };
+    this.body.setTranslation(c, true);
+    this.body.setNextKinematicTranslation(c);
+  }
+
   private setCrouch(on: boolean): void {
     const newHeight = on ? PLAYER.crouchHeight : PLAYER.height;
     if (!on) {
@@ -648,11 +920,24 @@ export class PlayerController {
 
   /** Interpolates the render transform between fixed steps and animates the rig. */
   render(dt: number, alpha: number): void {
-    if (!this.seated) this.renderPosition.lerpVectors(this.prevPosition, this.position, alpha);
+    const pl = this.pillion;
+    if (pl) this.renderPosition.copy(pl.pos);
+    else if (!this.seated) this.renderPosition.lerpVectors(this.prevPosition, this.position, alpha);
     if (this.dead) return;
     this.character.root.position.copy(this.renderPosition);
     if (this.seated) this.character.root.position.y -= 0.88;
+    this.character.root.rotation.order = 'YXZ';
     this.character.root.rotation.y = this.facing;
+    // On a bike the whole body leans with it (about the tyres' line on the street).
+    const cyc = this.cycle;
+    const lean = cyc ? cyc.lean : pl ? pl.lean : 0;
+    this.character.root.rotation.z = -lean;
+    if (pl) {
+      // The pegs sit above the street: leaning swings them out to the side.
+      const k = Math.sin(lean) * BICYCLE.pegHeight;
+      this.character.root.position.x += Math.cos(pl.yaw) * k;
+      this.character.root.position.z -= Math.sin(pl.yaw) * k;
+    }
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     const right = new THREE.Vector3(Math.cos(this.facing), 0, -Math.sin(this.facing));
     const strafe = hv > 0.1 ? (this.velocity.x * right.x + this.velocity.z * right.z) / hv : 0;
@@ -678,19 +963,35 @@ export class PlayerController {
     if (this.seated) {
       this.seatPose.yaw = wrap(this.seatYaw + Math.PI / 2 - this.facing);
       c.seat = this.seatPose;
+      c.bike = null;
       this.character.update(dt, { speed: 0, crouch: 0, aim: this.aiming ? 1 : 0, grounded: true, strafe: 0, moveAngle: 0, turn: 0 });
       return;
     }
     c.seat = null;
+    const br = this.bikeRig;
+    if (cyc) {
+      br.seat = 'rider';
+      br.yaw = wrap(this.cycleHeading(alpha) - this.facing);
+      br.crank = cyc.crank;
+      br.stand = cyc.stand;
+      br.steer = barAngle(cyc.steer, cyc.speed);
+    } else if (pl) {
+      br.seat = 'peg';
+      br.yaw = wrap(pl.yaw - this.facing);
+      br.stand = 0;
+      br.steer = 0;
+    }
+    c.bike = cyc || pl ? br : null;
+    const still = !!r || !!cyc || !!pl;
     this.character.update(dt, {
-      // Standing on the deck: no stride (the skate pose does the legs).
-      speed: r ? 0 : hv,
+      // Standing on the deck or the pegs, or in the saddle: no stride (the ride's pose does the legs).
+      speed: still ? 0 : hv,
       crouch: this.crouching ? 1 : 0,
       aim: this.aiming ? 1 : 0,
-      grounded: this.grounded,
-      strafe: r ? 0 : strafe,
-      moveAngle: r ? 0 : moveAngle,
-      turn: r ? 0 : this.turnRate,
+      grounded: this.grounded || !!pl,
+      strafe: still ? 0 : strafe,
+      moveAngle: still ? 0 : moveAngle,
+      turn: still ? 0 : this.turnRate,
     });
   }
 
@@ -706,6 +1007,7 @@ export class PlayerController {
     this.velocity.set(0, 0, 0);
     this.vault = null;
     if (this.ride) this.ride.speed = 0;
+    if (this.cycle) this.cycle.speed = 0;
   }
 
   /** Back on their feet at `pos` (a lull brought them back), the body facing camera yaw `yaw`. */
@@ -727,6 +1029,9 @@ export class PlayerController {
     this.vault = null;
     this.seated = null;
     this.character.seat = null;
+    this.cycle = null;
+    this.pillion = null;
+    this.character.root.rotation.z = 0;
     this.clearInput();
     this.sprinting = false;
     this.velocity.set(0, 0, 0);

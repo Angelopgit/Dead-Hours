@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, C2S, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
+  BARRICADE, BICYCLE, C2S, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
-  type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
+  type ActMsg, type BarricadeSlot, type Bicycle, type BikeSeat, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
   type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type Vehicle, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
@@ -40,6 +40,7 @@ import { MeleePickups } from './MeleePickups';
 import { SkateboardView, type BoardPose } from './Skateboards';
 import type { VehicleView } from './VehicleView';
 import { Driving } from './Driving';
+import { BicycleView, barAngle, type BikePose } from './Bicycles';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { ChatBox } from '../ui/ChatBox';
@@ -97,7 +98,7 @@ export interface SessionOptions {
 }
 
 interface Candidate {
-  kind: 'door' | 'limb' | 'revive' | 'board' | 'vehicle' | Interactable['kind'];
+  kind: 'door' | 'limb' | 'revive' | 'board' | 'vehicle' | 'bike' | Interactable['kind'];
   pos: THREE.Vector3;
   door?: Door;
   it?: Interactable;
@@ -105,6 +106,8 @@ interface Candidate {
   mate?: SimPlayer;
   board?: Skateboard;
   vehicle?: Vehicle;
+  bike?: Bicycle;
+  seat?: BikeSeat;
   /** How near it counts as (default: straight-line distance from the chest). */
   near?: number;
 }
@@ -192,6 +195,18 @@ export class GameSession {
   /** Engine sounds handed to the audio each frame (the nearest few running vehicles). */
   private readonly engineSounds: (EngineSound & { d: number })[] = [];
   private readonly engineList: EngineSound[] = [];
+  /** Bicycles lying about and under riders (and passengers on the pegs). */
+  private readonly bikes: BicycleView;
+  private bikeHinted = false;
+  private pegHinted = false;
+  /** Online: when this survivor asked for the saddle or the pegs (the server may have given them to someone else). */
+  private bikeAskedAt = 0;
+  private bikeBailSentAt = -Infinity;
+  private bellAt = -Infinity;
+  private handsHintAt = -Infinity;
+  private readonly myBike: BikePose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, steer: 0, crank: 0, pedalling: false, brake: 0, air: false };
+  /** The bike under this survivor's feet on someone's pegs, where it is drawn this frame. */
+  private readonly underPegs: BikePose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, steer: 0, crank: 0, pedalling: false, brake: 0, air: false };
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -378,6 +393,7 @@ export class GameSession {
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
     this.skates = new SkateboardView(engine.scene, field, physics);
+    this.bikes = new BicycleView(engine.scene, field, physics);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     this.barricades = new BarricadeView(engine.scene, this.sim, field);
     this.drops = new SupplyDrops(engine.scene);
@@ -513,6 +529,10 @@ export class GameSession {
       const ember = emberSample();
       place(ember.root, 6.5, 6);
       undo.push(ember.dispose);
+      // A bicycle of every look (frame paint, chrome, rubber, the saddle).
+      const bikes = this.bikes.sample();
+      place(bikes.root, -4, 4);
+      undo.push(bikes.dispose);
       // The field gunsmith's overlay draws the gun as see-through materials (their own programs).
       const smith = new GunsmithStage(true);
       smith.onMaterials = (m) => this.probe.attach(m);
@@ -1022,6 +1042,7 @@ export class GameSession {
       this.receive();
     }
     if (this.link) this.syncSeat();
+    this.gluePegs();
     let steps = 0;
     while (this.accumulator >= step && steps < 5) {
       this.shoveFromCars();
@@ -1065,10 +1086,10 @@ export class GameSession {
     p.render(dt, alpha);
     if (p.landed) {
       p.landed = false;
-      // On a board the wheels take the landing (the board's own clack plays). A drop out of an
-      // upstairs window lands hard.
-      this.cam.addTrauma(p.ride ? 0.06 : Math.min(0.45, 0.12 + Math.max(0, p.landAir - 0.35) * 0.6));
-      if (!p.ride) audio.footstep(Math.min(1, 0.8 + p.landAir * 0.3), this.indoors);
+      // On a board or a bike the wheels take the landing (its own clack or thump plays). A drop out
+      // of an upstairs window lands hard.
+      this.cam.addTrauma(p.ride ? 0.06 : p.cycle ? 0.08 : Math.min(0.45, 0.12 + Math.max(0, p.landAir - 0.35) * 0.6));
+      if (!p.ride && !p.cycle) audio.footstep(Math.min(1, 0.8 + p.landAir * 0.3), this.indoors);
     }
     if (p.vaultLanded) {
       p.vaultLanded = false;
@@ -1077,6 +1098,7 @@ export class GameSession {
     }
     this.updateRide(dt);
     this.updateDriving(dt);
+    this.updateCycle(dt);
 
     // Camera.
     if (this.phase === 'table') {
@@ -1123,11 +1145,13 @@ export class GameSession {
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
     this.pickups.update(live, this.sim, this.engine.camera);
     if (m) {
-      this.remotes!.update(live, this.sim, m, this.engine.camera);
+      this.remotes!.update(live, this.sim, m, this.engine.camera, this.ownBikePose(alpha));
       this.updateVoices();
     }
     // After the other survivors: their boards go under their feet as drawn this frame (not the last).
     this.skates.update(live, this.sim, this.engine.camera, (b) => this.boardPose(b, alpha));
+    // After the others: their bikes go where they are drawn this frame.
+    this.bikes.update(live, this.sim, this.engine.camera, (b) => this.bikePose(b, alpha));
     // Lights for the other survivors' lamps and the headlights of cars (not this survivor's own:
     // the flashlight is theirs while they drive), nearest first.
     this.beamList.length = 0;
@@ -1201,8 +1225,8 @@ export class GameSession {
 
   private get canAim(): boolean {
     const a = this.me.arsenal;
-    // Nothing to aim down while both hands are on a severed arm (or on the wheel).
-    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb && !a.meleeOut && !this.player.seated?.driver;
+    // Nothing to aim down while both hands are on a severed arm (or on the wheel, or the handlebars).
+    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb && !a.meleeOut && !this.player.seated?.driver && !this.player.cycle;
   }
 
   private fovTo(dt: number, fov: number): void {
@@ -1308,6 +1332,10 @@ export class GameSession {
       return;
     }
 
+    if (p.cycle) {
+      this.saddleInput(dt);
+      return;
+    }
     this.fireHeld = input.held('fire');
     if (input.pressed('fire')) this.fireBuffer = 0.18;
     if (this.fireHeld || this.fireBuffer > 0) p.blockSprint(0.35);
@@ -1344,6 +1372,34 @@ export class GameSession {
     if (input.held('inventory')) this.inventory.show(this.ui, this.me, this.timerText());
     else this.inventory.hide();
 
+    this.handleInteraction(dt);
+  }
+
+  /**
+   * In the saddle both hands are on the bars: the trigger rings the bell, and the keys that would
+   * want a hand (reload, swap, swing, throw, bandage, the gunsmith) only say so.
+   */
+  private saddleInput(dt: number): void {
+    const input = this.input;
+    this.fireHeld = false;
+    this.fireBuffer = 0;
+    this.wantReload = this.wantMelee = this.wantHeal = false;
+    this.wantSlot = null;
+    this.wantThrow = null;
+    this.throws.priming = null;
+    if (input.pressed('fire')) this.ringBell();
+    const wheel = input.consumeWheel();
+    const hands: Action[] = ['reload', 'weapon1', 'weapon2', 'weapon3', 'melee', 'grenade', 'molotov', 'heal', 'gunsmith'];
+    if ((wheel !== 0 || hands.some((k) => input.pressed(k))) && this.netNow - this.handsHintAt > 1.5) {
+      this.handsHintAt = this.netNow;
+      this.hud.feedLine(`HANDS ON THE BARS · ${actionLabel('interact') || 'USE'} TO GET OFF`);
+    }
+    if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
+      this.chatBox.open();
+      input.clear();
+    }
+    if (input.held('inventory')) this.inventory.show(this.ui, this.me, this.timerText());
+    else this.inventory.hide();
     this.handleInteraction(dt);
   }
 
@@ -1437,7 +1493,8 @@ export class GameSession {
   /** This survivor's own actions the session already showed when they were made. */
   private predicted(e: SimEvent): boolean {
     if (!('player' in e) || e.player !== this.myId) return false;
-    return e.type === 'dryFire' || e.type === 'refit' || e.type === 'throwStart' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start');
+    return e.type === 'dryFire' || e.type === 'refit' || e.type === 'throwStart' || (e.type === 'melee' && e.stage === 'swing') || (e.type === 'bandage' && e.stage === 'start')
+      || (e.type === 'bike' && e.stage === 'bell');
   }
 
   /** What the server would do between snapshots: hands keep moving, doors keep swinging, zombies stay solid. */
@@ -1616,10 +1673,19 @@ export class GameSession {
       return;
     }
     if (this.keepReviving()) return;
-    // On a skateboard [interact] steps off (nothing else is in reach from the deck).
+    // On a skateboard [interact] steps off (nothing else is in reach from the deck); on a bike, gets off it.
     if (this.player.ride) {
       this.hud.setPrompt('interact', 'HOP OFF THE SKATEBOARD');
       if (this.input.pressed('interact')) this.leaveBoard(false);
+      return;
+    }
+    if (this.player.cycle || this.player.pillion) {
+      if (this.work) this.sendWork(null);
+      this.hud.setPrompt('interact', this.player.cycle ? 'GET OFF THE BIKE' : 'HOP OFF THE PEGS');
+      if (this.input.pressed('interact')) {
+        if (this.player.cycle) this.leaveBike(false);
+        else this.leavePegs();
+      }
       return;
     }
     // [jump] at a window in front goes through it.
@@ -1689,6 +1755,10 @@ export class GameSession {
       const gas = v.gas <= 0 ? 'NO GAS' : `GAS ${Math.max(1, Math.round(v.gas * 100))}%`;
       this.hud.setPrompt('interact', `${v.seats[0] === null ? 'DRIVE' : 'GET IN'} THE ${v.def.name} · ${gas}`);
     }
+    else if (best.kind === 'bike') {
+      const rider = best.seat === 'peg' && best.bike!.rider ? this.sim.players.get(best.bike!.rider) : undefined;
+      this.hud.setPrompt('interact', best.seat === 'peg' ? `HOP ON THE PEGS${rider ? ` · ${rider.name.toUpperCase()} RIDES` : ''}` : 'GET ON THE BIKE');
+    }
     else if (best.kind === 'limb') {
       const l = best.limb!;
       const what = LIMB_NAME[l.cut];
@@ -1714,6 +1784,8 @@ export class GameSession {
       this.rideBoard(best.board!);
     } else if (best.kind === 'vehicle') {
       this.getIn(best.vehicle!);
+    } else if (best.kind === 'bike') {
+      this.rideBike(best.bike!, best.seat!);
     } else if (best.kind === 'limb') {
       if (this.link) this.act({ a: 'grab', limb: best.limb!.id });
       else this.sim.grabLimb(this.myId, best.limb!.id);
@@ -2188,6 +2260,252 @@ export class GameSession {
     }
   }
 
+  // ------------------------------------------------------------------ bicycles
+
+  /**
+   * Gets on a bike in reach: picks up one lying about, or hops on the pegs of one a teammate
+   * rides. At once here; online the server may give the seat to someone quicker.
+   */
+  private rideBike(b: Bicycle, seat: BikeSeat): void {
+    const p = this.player;
+    if (p.ride || p.cycle || p.pillion || !this.me.up) return;
+    const under = seat === 'peg' ? this.drawnBike(b, this.underPegs) : null;
+    if (seat === 'peg' && !under) return;
+    if (this.link) {
+      if (seat === 'rider') {
+        b.rider = this.myId;
+        b.pos = { x: p.position.x, y: p.position.y, z: p.position.z };
+      } else b.passenger = this.myId;
+      this.mirror!.holdBike(b.id, this.netNow + this.link.rtt + 0.5);
+      this.link.act({ a: 'bike', id: b.id, seat });
+    } else if (!this.sim.rideBike(this.myId, b.id, seat)) return;
+    this.bikeAskedAt = this.netNow;
+    if (this.work) this.sendWork(null);
+    if (seat === 'rider') {
+      // Both hands go to the bars: whatever they were doing stops (the server does the same).
+      const a = this.me.arsenal;
+      if (this.link) {
+        a.cancelReload();
+        a.cancelBandage();
+        if (a.meleeOut) a.switchTo(a.active);
+      }
+      this.throws.priming = null;
+      p.mountBike(b.id, this.cam.yaw, !!b.passenger && b.passenger !== this.myId);
+    } else {
+      p.boardPegs(b.id, this.pegsOf(under!, this.tmpE), under!.yaw);
+    }
+    const d = this.input.device;
+    const k = (a: Action, alt: string) => actionLabel(a) || alt;
+    if (seat === 'rider' && !this.bikeHinted) {
+      this.bikeHinted = true;
+      this.hud.notify('BICYCLE', d === 'touch'
+        ? 'STICK UP PEDALS · DOWN BRAKES · SIDEWAYS STEERS · JUMP HOPS · FIRE RINGS THE BELL · USE GETS OFF'
+        : d === 'pad'
+          ? `LEFT STICK PEDAL · BRAKE · STEER · ${k('jump', 'A')} HOP · ${k('sprint', 'L3')} STAND ON THE PEDALS · ${k('fire', 'RT')} BELL · ${k('interact', 'RB')} GET OFF`
+          : `${k('forward', 'W')} PEDAL · ${k('back', 'S')} BRAKE · ${k('left', 'A')}/${k('right', 'D')} STEER · ${k('jump', 'SPACE')} HOP · ${k('sprint', 'SHIFT')} STAND ON THE PEDALS · ${k('fire', 'FIRE')} BELL · ${k('interact', 'E')} GET OFF`,
+        5);
+    } else if (seat === 'peg' && !this.pegHinted) {
+      this.pegHinted = true;
+      this.hud.notify('ON THE PEGS', `AIM AND SHOOT WHILE THEY PEDAL · ${d === 'touch' ? 'USE' : k('interact', d === 'pad' ? 'RB' : 'E')} HOPS OFF`, 4);
+    }
+  }
+
+  /** Gets off the saddle (or, `bail`, is thrown off by a wall): the bike falls over where the session put it. */
+  private leaveBike(bail: boolean): void {
+    const p = this.player;
+    const c = p.cycle;
+    if (bail) p.bailed = true;
+    const at = p.dismountBike();
+    p.bailed = false;
+    if (!c || !at) return;
+    const pos = at.pos;
+    const d = this.physics.raycast(pos.x, pos.y + 0.5, pos.z, 0, -1, 0, 2);
+    if (d !== null) pos.y = pos.y + 0.5 - d;
+    if (this.link) {
+      const b = this.sim.bicycles.bike(c.bike);
+      if (b && b.rider === this.myId) {
+        b.rider = null;
+        b.passenger = null;
+        b.pos = { ...pos };
+        b.yaw = at.yaw;
+      }
+      this.mirror!.holdBike(c.bike, this.netNow + this.link.rtt + 0.5);
+      this.link.act({ a: 'bike', id: -1, at: pos, yaw: at.yaw, bail });
+      if (bail) {
+        this.bikeBailSentAt = this.netNow;
+        this.bikeBailFeedback(v3(pos, this.tmpE), 'THROWN OFF THE BIKE');
+      }
+    } else {
+      // A bail comes back as an event (the feedback is shown there).
+      this.sim.leaveBike(this.myId, pos, at.yaw, bail);
+    }
+  }
+
+  /** Steps down off the pegs, beside the back wheel (the side with room), with some of the bike's speed. */
+  private leavePegs(): void {
+    const p = this.player;
+    const pl = p.pillion;
+    if (!pl) return;
+    const spot = this.stepDown(pl.pos, pl.yaw);
+    p.leavePegs(spot, Math.hypot(pl.vel.x, pl.vel.z));
+    if (this.link) {
+      const b = this.sim.bicycles.bike(pl.bike);
+      if (b && b.passenger === this.myId) b.passenger = null;
+      this.mirror!.holdBike(pl.bike, this.netNow + this.link.rtt + 0.5);
+      this.link.act({ a: 'bike', id: -1, at: spot, yaw: pl.yaw });
+    } else this.sim.leaveBike(this.myId, spot, pl.yaw);
+  }
+
+  /** Where a passenger steps down: to the bike's left of the pegs (its right if a wall is there), on the floor. */
+  private stepDown(pegs: THREE.Vector3, yaw: number): Vec3 {
+    const lx = Math.cos(yaw), lz = -Math.sin(yaw);
+    const y = pegs.y + 0.3;
+    let side = 1;
+    for (const s of [1, -1]) {
+      const room = this.physics.raycast(pegs.x, y, pegs.z, lx * s, 0, lz * s, 0.9);
+      if (room === null) {
+        side = s;
+        break;
+      }
+    }
+    const x = pegs.x + lx * side * 0.7, z = pegs.z + lz * side * 0.7;
+    const d = this.physics.raycast(x, y + 0.2, z, 0, -1, 0, 3);
+    return { x, y: d !== null ? y + 0.2 - d : pegs.y - BICYCLE.pegHeight, z };
+  }
+
+  /** Thrown off (or knocked off) a bike: it clatters down, the view jolts. */
+  private bikeBailFeedback(pos: THREE.Vector3, line: string): void {
+    audio.bikeCrash(pos);
+    this.cam.addTrauma(0.38);
+    this.input.rumble(0.55, 240);
+    this.hud.feedLine(line);
+  }
+
+  /** The bell on the bars (the trigger finger's only job in the saddle): heard down the street, by the dead too. */
+  private ringBell(): void {
+    if (this.netNow - this.bellAt < BICYCLE.bellEvery) return;
+    this.bellAt = this.netNow;
+    if (this.link) {
+      this.link.act({ a: 'bell' });
+      audio.bikeBell(this.bellPos(this.tmpE), true);
+    } else this.sim.ringBell(this.myId);
+  }
+
+  /** The bell, on the left of the bars of this survivor's bike. */
+  private bellPos(out: THREE.Vector3): THREE.Vector3 {
+    const p = this.player;
+    const yaw = p.cycle ? p.cycle.heading : p.facing;
+    return out.set(p.renderPosition.x + Math.sin(yaw) * BICYCLE.grips.z, p.renderPosition.y + BICYCLE.grips.y, p.renderPosition.z + Math.cos(yaw) * BICYCLE.grips.z);
+  }
+
+  /**
+   * Every frame on a bike. In the saddle: a wall taken head-on throws the rider off, a bike the
+   * server gave to someone else comes out from under them, someone on the pegs makes it heavier,
+   * and at speed the view swings round behind it unless the player is looking about. On the pegs:
+   * a seat the server gave to someone else (or a bike that is gone) puts the feet back on the street.
+   */
+  private updateCycle(dt: number): void {
+    const p = this.player;
+    const c = p.cycle;
+    const grace = this.link ? this.link.rtt + 0.8 : 0;
+    if (c) {
+      this.cam.rush = THREE.MathUtils.smoothstep(c.speed, 6, BICYCLE.sprintTop);
+      if (p.bailed) {
+        this.leaveBike(true);
+        return;
+      }
+      if (!this.me.up || this.phase === 'dead') {
+        p.dismountBike();
+        return;
+      }
+      const b = this.sim.bicycles.bike(c.bike);
+      if (!b || (b.rider !== this.myId && this.netNow - this.bikeAskedAt > grace)) {
+        p.dismountBike();
+        if (b?.rider) this.hud.feedLine('SOMEONE ELSE GOT TO THAT BIKE');
+        return;
+      }
+      c.loaded = !!b.passenger && b.passenger !== this.myId;
+      if (this.phase === 'playing') this.cam.follow(dt, c.heading, 1.6 * THREE.MathUtils.smoothstep(c.speed, 2, 7));
+      return;
+    }
+    const pl = p.pillion;
+    if (!pl) return;
+    if (!this.me.up || this.phase === 'dead') {
+      p.leavePegs(null);
+      return;
+    }
+    const b = this.sim.bicycles.bike(pl.bike);
+    if (!b || ((b.passenger !== this.myId || !b.rider) && this.netNow - this.bikeAskedAt > grace)) {
+      p.leavePegs(this.stepDown(pl.pos, pl.yaw));
+      if (b?.passenger) this.hud.feedLine('SOMEONE ELSE GOT ON THOSE PEGS');
+    }
+  }
+
+  /** Before the fixed steps: a passenger's feet go where the pegs of the bike under them are drawn this frame. */
+  private gluePegs(): void {
+    const pl = this.player.pillion;
+    if (!pl) return;
+    const b = this.sim.bicycles.bike(pl.bike);
+    const under = b ? this.drawnBike(b, this.underPegs) : null;
+    if (!b || !under) return;
+    this.pegsOf(under, pl.pos);
+    const rider = b.rider ? this.sim.players.get(b.rider) : undefined;
+    if (rider) pl.vel.set(rider.motion.vel.x, 0, rider.motion.vel.z);
+    else pl.vel.set(0, 0, 0);
+    pl.yaw = under.yaw;
+    pl.lean = under.lean;
+  }
+
+  /** Where the pegs are (the soles on top of them) on a bike drawn so. */
+  private pegsOf(bike: BikePose, out: THREE.Vector3): THREE.Vector3 {
+    return out.set(bike.pos.x - Math.sin(bike.yaw) * BICYCLE.pegBack, bike.pos.y + BICYCLE.pegHeight, bike.pos.z - Math.cos(bike.yaw) * BICYCLE.pegBack);
+  }
+
+  /**
+   * Where another survivor's bike is drawn now (online: where the mirror has its rider at this
+   * frame's time, the way and lean as last drawn), or where it lies.
+   */
+  private drawnBike(b: Bicycle, out: BikePose): BikePose | null {
+    if (b.rider && b.rider !== this.myId && this.remotes && this.mirror) {
+      const now = this.remotes.bikeNow(b.rider, this.mirror, out);
+      if (now) return now;
+    }
+    if (b.rider === this.myId) return this.ownBikePose(1);
+    out.pos.set(b.pos.x, b.pos.y, b.pos.z);
+    out.yaw = b.yaw;
+    out.lean = 0;
+    out.steer = 0;
+    out.pedalling = false;
+    out.brake = 0;
+    out.air = false;
+    return out;
+  }
+
+  /** This survivor's own bike as drawn (under them in the saddle), or null when they aren't pedalling one. */
+  private ownBikePose(alpha: number): BikePose | null {
+    const p = this.player;
+    const c = p.cycle;
+    if (!c || this.phase === 'dead') return null;
+    const o = this.myBike;
+    o.pos.copy(p.renderPosition);
+    o.yaw = p.cycleHeading(alpha);
+    o.lean = c.lean;
+    o.steer = barAngle(c.steer, c.speed);
+    o.crank = c.crank;
+    o.pedalling = c.pedalling;
+    o.brake = c.brake;
+    o.air = !p.grounded;
+    return o;
+  }
+
+  /** Where a ridden bike is drawn: under this survivor, or another. */
+  private bikePose(b: Bicycle, alpha: number): BikePose | null {
+    if (!b.rider) return null;
+    if (b.rider !== this.myId) return this.remotes?.bikePose(b.rider) ?? null;
+    const c = this.player.cycle;
+    return c && c.bike === b.id ? this.ownBikePose(alpha) : null;
+  }
+
   /** The opening this survivor could work on from where they stand (inside, within reach), if any. */
   private workableSlot(): BarricadeSlot | null {
     if (!this.me.alive) return null;
@@ -2250,6 +2568,11 @@ export class GameSession {
     for (const v of this.sim.vehicles.inReach(this.me)) {
       const at = this.vehicleView.drawnPose(v.id, this.tmpC) !== null ? this.tmpC : this.tmpC.set(v.pos.x, v.pos.y, v.pos.z);
       cands.push({ kind: 'vehicle', pos: new THREE.Vector3(at.x, at.y + v.def.low, at.z), vehicle: v, near: outsideBy(v, p.x, p.z) + 0.2 });
+    }
+    // Bicycles the same (one lying about to pick up, or the pegs of one a teammate rides, by where it is drawn).
+    for (const { bike, seat } of this.sim.bicycles.inReach(this.me)) {
+      const at = seat === 'peg' ? this.drawnBike(bike, this.underPegs)?.pos ?? v3(bike.pos, new THREE.Vector3()) : v3(bike.pos, new THREE.Vector3());
+      cands.push({ kind: 'bike', pos: new THREE.Vector3(at.x, at.y + (seat === 'peg' ? 0.6 : 0.35), at.z), bike, seat, near: Math.hypot(at.x - p.x, at.z - p.z) - 0.2 });
     }
     for (const it of this.sim.reachable(this.myId)) {
       if (it.supply <= 0) continue;
@@ -2474,6 +2797,46 @@ export class GameSession {
         const who = this.sim.players.get(e.player);
         if (!who) break;
         audio.meleePickup(e.weapon, A.set(who.motion.pos.x, who.motion.pos.y + 1.2, who.motion.pos.z));
+        break;
+      }
+      case 'bike': {
+        v3(e.pos, A);
+        const p = this.player;
+        if (e.stage === 'bell') {
+          // (Online this survivor's own ring played when it was pressed.)
+          if (e.player === this.myId) audio.bikeBell(this.bellPos(A), true);
+          else audio.bikeBell(this.remotes?.positionOf(e.player, A)?.setY(A.y - 0.1) ?? A.setY(A.y + BICYCLE.grips.y));
+          break;
+        }
+        if (e.player === this.myId) {
+          if (e.seat === 'rider' && e.stage === 'bail') {
+            // Knocked off by a hit (a wall the session saw itself, and showed then).
+            if (p.cycle) {
+              p.bailed = true;
+              p.dismountBike();
+              p.bailed = false;
+            }
+            if (this.link && this.netNow - this.bikeBailSentAt < this.link.rtt + 1) break;
+            this.bikeBailFeedback(A, 'KNOCKED OFF THE BIKE');
+          } else if (e.seat === 'peg' && e.stage !== 'on' && p.pillion) {
+            // Put down beside the bike: its rider got off or was thrown, or a hit knocked this survivor off.
+            const pl = p.pillion;
+            p.leavePegs(e.pos, e.stage === 'bail' ? 0 : Math.hypot(pl.vel.x, pl.vel.z));
+            if (e.stage === 'bail') {
+              this.cam.addTrauma(0.3);
+              this.input.rumble(0.45, 200);
+              this.hud.feedLine('KNOCKED OFF THE PEGS');
+            }
+          }
+          break;
+        }
+        if (e.stage === 'bail' && e.seat === 'rider') audio.bikeCrash(A);
+        // Someone hopped on this survivor's pegs (or off them).
+        const mine = this.player.cycle;
+        if (mine && mine.bike === e.bike && e.seat === 'peg') {
+          const who = this.sim.players.get(e.player)?.name.toUpperCase() ?? 'SOMEONE';
+          this.hud.feedLine(e.stage === 'on' ? `${who} HOPPED ON THE PEGS` : `${who} HOPPED OFF`);
+        }
         break;
       }
       case 'meleeTaken': {
@@ -3198,7 +3561,7 @@ export class GameSession {
     hud.setWarning(limb || a.meleeOut ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
     // Dynamic crosshair: gap follows the real spread cone (rolling on a skateboard is smooth).
-    const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : p.seated ? VEHICLE.spreadSpeed : 1);
+    const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : p.seated ? VEHICLE.spreadSpeed : p.pillion ? BICYCLE.spreadSpeed : 1);
     const spread = a.spread({ speed: hv, crouching: p.crouching, grounded: p.grounded, aiming: p.aiming });
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
@@ -3206,7 +3569,7 @@ export class GameSession {
     // Down the sights, the sights are the crosshair. Not while the mouse is free either: "CLICK TO
     // CONTINUE" stands in the middle of the screen then, and the crosshair would strike through it.
     this.updateDownPanel();
-    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4 && !p.seated?.driver);
+    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && this.cam.ads < 0.4 && !p.seated?.driver);
     hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
@@ -3307,6 +3670,7 @@ export class GameSession {
     audio.engines([]);
     this.vehicleView.reset();
     this.skates.dispose();
+    this.bikes.dispose();
     this.inventory.dispose();
     this.engine.canvas.style.cursor = '';
     this.input.enabled = false;

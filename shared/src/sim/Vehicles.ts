@@ -186,6 +186,7 @@ export class Vehicles {
     }
     if (s < 0) return false;
     this.sim.leaveBoard(p.id);
+    this.sim.leaveBike(p.id);
     v.seats[s] = p.id;
     v.touched = true;
     this.seated.set(p.id, [v, s]);

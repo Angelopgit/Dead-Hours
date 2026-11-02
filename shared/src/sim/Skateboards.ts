@@ -92,7 +92,7 @@ export class Skateboards {
 
   /** Whether a survivor standing here can hop on this board (in reach, nobody on it). */
   canRide(p: SimPlayer, b: Skateboard): boolean {
-    if (!p.up || b.rider !== null || this.ridden(p.id)) return false;
+    if (!p.up || b.rider !== null || this.ridden(p.id) || this.sim.bicycles?.onBike(p.id)) return false;
     const m = p.motion.pos;
     return dist2D(m, b.pos) <= SKATEBOARD.reach + 0.6 && Math.abs(m.y - b.pos.y) <= SKATEBOARD.reachUp;
   }
@@ -100,6 +100,7 @@ export class Skateboards {
   /** Boards free to hop on within reach of a survivor, nearest first. */
   inReach(p: SimPlayer): Skateboard[] {
     const m = p.motion.pos;
+    if (this.sim.bicycles?.onBike(p.id)) return [];
     return this.boards
       .filter((b) => b.rider === null && dist2D(m, b.pos) <= SKATEBOARD.reach && Math.abs(m.y - b.pos.y) <= SKATEBOARD.reachUp)
       .sort((a, b) => dist2D(m, a.pos) - dist2D(m, b.pos));

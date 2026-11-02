@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { ArmState, ArmZone, HitZone, LegState, LegZone, LimbZone, ZombieKind } from '@dead-hours/shared';
+import { BICYCLE, type ArmState, type ArmZone, type HitZone, type LegState, type LegZone, type LimbZone, type ZombieKind } from '@dead-hours/shared';
 import { chain } from '../lighting/BakeShader';
 import { BODY_KNEE, GLOSS_CAP_GLSL, GLOSS_CEIL } from '../lighting/GlossCap';
 import { rng, randomAppearance, paletteColor, type Appearance } from '@dead-hours/shared';
@@ -77,6 +77,23 @@ export interface SkatePose {
 export interface SeatPose {
   /** Which way the seat faces, relative to the body's facing (radians). */
   yaw: number;
+}
+
+/**
+ * On a bicycle (Humanoid.bike): in the saddle, feet on the pedals and hands on the grips, or
+ * standing on the pegs over the back wheel. The owner fills it in every frame (and rolls the root
+ * with the bike's lean).
+ */
+export interface BikeRig {
+  seat: 'rider' | 'peg';
+  /** Which way the bike points, relative to the body's facing (radians). */
+  yaw: number;
+  /** Crank angle (radians; 0: the right pedal at the top). */
+  crank: number;
+  /** Standing up on the pedals, 0..1. */
+  stand: number;
+  /** How far the bars are turned (radians, positive: left; see barAngle). */
+  steer: number;
 }
 
 export interface Limb {
@@ -503,6 +520,19 @@ export class Humanoid {
   seat: SeatPose | null = null;
   private seatW = 0;
   private readonly lastSeat: SeatPose = { yaw: 0 };
+  /** On a bicycle (null otherwise): the saddle or the pegs. */
+  bike: BikeRig | null = null;
+  /** 0..1 how far into the bike pose (eases in and out). */
+  bikeW = 0;
+  private readonly lastBike: BikeRig = { seat: 'rider', yaw: 0, crank: 0, stand: 0, steer: 0 };
+  /** Facing the bike's front (+1) or its back (-1) on the pegs. */
+  private pegFace = 1;
+  /** Where the hands hold the bars (world), while riding: PlayerWeapon puts them there. */
+  readonly grips = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+  /** 0..1 how much the hands belong on the bars (in the saddle). */
+  get onBars(): number {
+    return this.lastBike.seat === 'rider' ? this.bikeW : 0;
+  }
   /** +1 regular (left foot forward), -1 goofy. */
   private stance = 1;
   private pushK = 0;
@@ -983,7 +1013,12 @@ export class Humanoid {
       const sy = Math.atan2(Math.sin(this.lastSeat.yaw), Math.cos(this.lastSeat.yaw));
       hipTarget = THREE.MathUtils.lerp(hipTarget, THREE.MathUtils.clamp(sy, -1.7, 1.7), this.seatW);
     }
-    this.hipYaw += (hipTarget - this.hipYaw) * (1 - Math.exp(-dt * (this.skateW > 0 ? 12 : 8)));
+    // On a bike the hips square up to the frame (in the saddle), or to its front or back (on the pegs).
+    if (this.bike) Object.assign(this.lastBike, this.bike);
+    this.bikeW += ((this.bike ? 1 : 0) - this.bikeW) * (1 - Math.exp(-dt * 10));
+    if (!this.bike && this.bikeW < 0.003) this.bikeW = 0;
+    if (this.bikeW > 0) hipTarget = THREE.MathUtils.lerp(hipTarget, this.bikeHip(), this.bikeW);
+    this.hipYaw += (hipTarget - this.hipYaw) * (1 - Math.exp(-dt * (this.skateW > 0 || this.bikeW > 0 ? 12 : 8)));
 
     // Turning on the spot shuffles the feet.
     const turn = Math.abs(target.turn ?? 0);
@@ -1127,6 +1162,7 @@ export class Humanoid {
 
     if (z && this.crawl > 0.001) this.crawlPose(p, moving, sv);
     if (this.skateW > 0.001) this.skatePose(crouch);
+    if (this.bikeW > 0.001) this.bikePose(crouch);
     this.vaultW += (this.vault - this.vaultW) * (1 - Math.exp(-dt * 16));
     if (this.vaultW < 0.002 && this.vault === 0) this.vaultW = 0;
     if (this.vaultW > 0) this.vaultPose(this.vaultW);
@@ -1190,7 +1226,7 @@ export class Humanoid {
     const run = THREE.MathUtils.smoothstep(speed, 3.5, 6);
     this.winded = THREE.MathUtils.clamp(this.winded + (run * 0.14 - (1 - run) * 0.07) * dt, 0, 1);
     this.breathP += dt * Math.PI * 2 * (0.23 + 0.4 * this.winded);
-    const settle = (1 - moving) * (1 - this.skateW) * (this.smoothed.grounded ? 1 : 0) * (1 - this.down);
+    const settle = (1 - moving) * (1 - this.skateW) * (1 - this.bikeW) * (this.smoothed.grounded ? 1 : 0) * (1 - this.down);
     this.still += (settle - this.still) * (1 - Math.exp(-dt * 3));
     const st = this.still;
 
@@ -1362,6 +1398,86 @@ export class Humanoid {
     }
   }
 
+  /** Which way the hips turn on a bike (relative to the facing). */
+  private bikeHip(): number {
+    const bk = this.lastBike;
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+    if (bk.seat === 'rider') return wrap(bk.yaw);
+    // On the pegs: square to the front or the back of the bike, whichever leaves less to turn toward the view.
+    const fwd = wrap(bk.yaw), back = wrap(bk.yaw + Math.PI);
+    if (this.pegFace > 0 ? Math.abs(back) < Math.abs(fwd) - 0.9 : Math.abs(fwd) < Math.abs(back) - 0.9) this.pegFace = -this.pegFace;
+    return THREE.MathUtils.clamp(this.pegFace > 0 ? fwd : back, -1.3, 1.3);
+  }
+
+  /**
+   * On a bike. In the saddle: hips on it, leaning over to the bars (standing up off it to sprint),
+   * head up to see the street, the feet going round with the pedals (leg IK), and where the grips
+   * are for the hands. On the pegs: standing tall over the back wheel, knees soft, a foot on each
+   * peg whichever way the hips face.
+   */
+  private bikePose(crouch: number): void {
+    const w = this.bikeW;
+    const e = w * w * (3 - 2 * w);
+    const bk = this.lastBike;
+    const L = THREE.MathUtils.lerp;
+    const B = BICYCLE;
+    // Bike axes in the root's space: forward (front wheel) and its left side.
+    const bx = Math.sin(bk.yaw), bz = Math.cos(bk.yaw);
+    const sx = Math.cos(bk.yaw), sz = -Math.sin(bk.yaw);
+    const at = (out: THREE.Vector3, side: number, y: number, along: number) => out.set(bx * along + sx * side, y, bz * along + sz * side);
+    if (bk.seat === 'peg') {
+      this.hips.position.y = L(this.hips.position.y, 0.93 - crouch * 0.3, e);
+      this.root.updateMatrixWorld(true);
+      const face = this.pegFace;
+      const ankle = 0.035;
+      // The foot on the hips' left goes on the peg on that side.
+      at(_bk1, B.pegOut * face, ankle, 0.0);
+      at(_bk2, -B.pegOut * face, ankle, 0.0);
+      this.root.localToWorld(_bk1);
+      this.root.localToWorld(_bk2);
+      const fx = Math.sin(this.hipYaw), fz = Math.cos(this.hipYaw);
+      const pole = _bk3.set(fx, -0.1, fz).applyQuaternion(this.root.getWorldQuaternion(_bkq)).normalize();
+      this.reach(this.legL, _bk1, pole, e);
+      this.reach(this.legR, _bk2, pole, e);
+      return;
+    }
+    const st = bk.stand;
+    // In the saddle: hips over it (forward and up off it when standing on the pedals).
+    const sy = B.seat + st * 0.2 - crouch * 0.05, sz2 = B.saddle.z + st * 0.13;
+    at(_bk1, 0, sy, sz2);
+    this.hips.position.x = L(this.hips.position.x, _bk1.x, e);
+    this.hips.position.y = L(this.hips.position.y, sy, e);
+    this.hips.position.z = L(this.hips.position.z, _bk1.z, e);
+    this.hips.rotation.z *= 1 - e;
+    // Leaning over to the bars, the head up to see the street; rocking side to side out of the saddle.
+    const rock = Math.sin(bk.crank) * 0.12 * st;
+    this.spine.rotation.x = L(this.spine.rotation.x, 0.5 + st * 0.18, e);
+    this.spine.rotation.z = L(this.spine.rotation.z, rock, e);
+    this.spine.rotation.y = L(this.spine.rotation.y, bk.steer * 0.2, e);
+    this.head.rotation.x = L(this.head.rotation.x, -0.42 - st * 0.12, e);
+    this.root.updateMatrixWorld(true);
+    // Feet on the pedals: the right pedal at `crank`, the left opposite (the ankle a little above and behind the spindle).
+    const bb = B.bottomBracket, c = B.crank;
+    for (const [leg, side, phase] of [[this.legR, -B.pedalOut, 0], [this.legL, B.pedalOut, Math.PI]] as const) {
+      const a = bk.crank + phase;
+      at(_bk1, side, bb.y + Math.cos(a) * c + 0.065, bb.z + Math.sin(a) * c - 0.03);
+      this.root.localToWorld(_bk1);
+      // Knees forward over the pedals, a touch out.
+      at(_bk2, side * 0.4, -0.1, 1);
+      _bk2.applyQuaternion(this.root.getWorldQuaternion(_bkq)).normalize();
+      this.reach(leg, _bk1, _bk2, e);
+    }
+    // The grips, turned with the bars about the head tube.
+    const g = B.grips, h = B.head;
+    const turn = bk.steer;
+    for (const [out, side] of [[this.grips.left, 1], [this.grips.right, -1]] as const) {
+      const gx = side * g.x, gz = g.z - h.z;
+      const rx = gx * Math.cos(turn) + gz * Math.sin(turn), rz = -gx * Math.sin(turn) + gz * Math.cos(turn);
+      at(out, rx, g.y, h.z + rz);
+      this.root.localToWorld(out);
+    }
+  }
+
   /** Shoulder and hip stumps turn with the (collapsed) upper limb, so they flail like the stub they are. */
   private syncStumps(): void {
     for (const arm of ['armL', 'armR'] as const) {
@@ -1485,6 +1601,9 @@ export class Humanoid {
     this.vault = this.vaultW = 0;
     this.seat = null;
     this.seatW = 0;
+    this.bike = null;
+    this.bikeW = 0;
+    this.root.rotation.z = 0;
     this.down = this.downTarget = 0;
     this.stagger = this.staggerTarget = 0;
     this.attack = this.bash = this.scream = -1;
@@ -1523,6 +1642,8 @@ const _m = new THREE.Matrix4();
 /** Skate pose scratch (reach() uses the ones above). */
 const _sk1 = new THREE.Vector3(), _sk2 = new THREE.Vector3(), _sk3 = new THREE.Vector3(), _sk4 = new THREE.Vector3();
 const _skq = new THREE.Quaternion();
+const _bk1 = new THREE.Vector3(), _bk2 = new THREE.Vector3(), _bk3 = new THREE.Vector3();
+const _bkq = new THREE.Quaternion();
 
 /** Decay uniforms for a zombie look (`body` false for a severed arm cut from it). */
 export function decayOf(look: HumanoidLook, seed: number, body: boolean): DecayUniforms {
