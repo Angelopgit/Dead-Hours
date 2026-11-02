@@ -1618,6 +1618,7 @@ export class GameSession {
   private updateRide(dt: number): void {
     const p = this.player;
     const r = p.ride;
+    this.cam.rush = r ? THREE.MathUtils.smoothstep(r.speed, 5, SKATEBOARD.sprintTop) : 0;
     if (!r) return;
     p.kicked = p.popped = false;
     if (p.bailed) {

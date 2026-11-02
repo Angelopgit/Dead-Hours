@@ -68,6 +68,9 @@ export class ThirdPersonCamera {
    * Swings the view round behind `heading` (riding a skateboard), only once the player has left
    * the look alone for a moment: turning to look or aim always wins.
    */
+  /** 0..1: how fast the survivor is going on wheels (the view widens with it). */
+  rush = 0;
+
   follow(dt: number, heading: number, rate: number): void {
     if (performance.now() - this.lookedAt < 1100 || rate <= 0) return;
     const want = heading + Math.PI;
@@ -178,7 +181,7 @@ export class ThirdPersonCamera {
       this.camera.rotateY((Math.sin(t * 41 + 2) * 0.04) * s);
       this.camera.rotateZ((Math.sin(t * 29 + 4) * 0.05) * s);
     }
-    const shoulderFov = THREE.MathUtils.lerp(BASE_FOV, AIM_FOV, a) + (sprinting ? 4 : 0);
+    const shoulderFov = THREE.MathUtils.lerp(BASE_FOV, AIM_FOV, a) + (sprinting ? 4 : 0) + this.rush * 9 * (1 - a);
     // Zoom follows the eye's move (the blend already eases), so the sights don't swim.
     const fov = THREE.MathUtils.lerp(shoulderFov, this.adsFov, ads);
     const near = ads > 0.05 ? ADS_NEAR : NEAR;

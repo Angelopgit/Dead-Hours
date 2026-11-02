@@ -16,40 +16,41 @@ export const SKATEBOARD = {
 
   // ---- riding (client prediction; the server only checks speeds against maxSpeed)
   /** Top speed from pushing, and with sprint held (pushing hard). */
-  pushTop: 7.2,
-  sprintTop: 9.2,
+  pushTop: 9.5,
+  sprintTop: 12.5,
   /** Seconds per kick: foot down, push back, foot back on the tail. */
-  pushPeriod: 0.56,
+  pushPeriod: 0.5,
   /** Part of the kick cycle the foot is on the ground pushing. */
-  pushFrom: 0.18,
-  pushTo: 0.62,
-  /** Speed gained per second while the foot pushes, from a standstill (less nearer the top). */
-  pushAccel: 8.5,
+  pushFrom: 0.16,
+  pushTo: 0.64,
+  /** Speed gained per second while the foot pushes, from a standstill; it tails off over the last half of the way to the top. */
+  pushAccel: 15,
+  pushEase: 2,
   /** Rolling resistance (m/s²) and air drag (per (m/s)²) while coasting. */
-  rolling: 0.3,
-  drag: 0.006,
+  rolling: 0.25,
+  drag: 0.0035,
   /** Grass and dirt grab the wheels: extra slowing (m/s²), and the share of a push that still counts. */
   offRoad: 4.5,
   offRoadPush: 0.3,
   /** Braking with the back foot (m/s² at full stick). */
   brake: 7.5,
   /** Turn rate (rad/s) at walking pace (kick turns) and at top speed (wide carves). */
-  turnSlow: 2.7,
-  turnFast: 1.25,
+  turnSlow: 2.9,
+  turnFast: 1.6,
   /** Steering reaches this share of its rate in the air. */
   airTurn: 0.35,
   /** Ollie: straight up off the tail. */
   ollie: 4.7,
   /** Hop onto the board (a little jump as the feet land on the deck). */
-  mountHop: 2.4,
+  mountHop: 1.8,
   /** Taking a wall head-on faster than this throws the rider off. */
-  bailSpeed: 5.4,
+  bailSpeed: 6.5,
   /** Share of the speed left after a head-on hit that counts as stopped dead. */
   bailKeep: 0.35,
   /** Stepping off keeps at most this much of the speed (running it out). */
-  stepOffSpeed: 5.5,
+  stepOffSpeed: 6,
   /** Hard cap, and what the server lets a rider move at (with its usual slack on top). */
-  maxSpeed: 10,
+  maxSpeed: 14,
 
   // ---- what the deck does to everything else
   /** Hits at least this hard knock the rider off (a zombie's swipe, a blast, a raider's round). */

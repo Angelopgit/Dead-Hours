@@ -365,7 +365,7 @@ export class PlayerController {
       if (before < S.pushFrom && r.push >= S.pushFrom) this.kicked = true;
       if (r.push >= S.pushFrom && r.push < S.pushTo && this.grounded) {
         // Easy from a standstill, harder the nearer the top speed.
-        r.speed += S.pushAccel * (soft ? S.offRoadPush : 1) * THREE.MathUtils.clamp(((top - r.speed) / top) * 1.6, 0, 1) * dt;
+        r.speed += S.pushAccel * (soft ? S.offRoadPush : 1) * THREE.MathUtils.clamp(((top - r.speed) / top) * S.pushEase, 0, 1) * dt;
       }
       if (r.push >= 1) r.push = wantPush ? 0 : -1;
     }

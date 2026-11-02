@@ -2434,11 +2434,70 @@ export class AudioEngine {
 
   // ------------------------------------------------------------------ skateboards
 
-  private readonly skateLoops = new Map<number, { src: AudioBufferSourceNode; gain: GainNode; roll: BiquadFilterNode; rumble: GainNode; hiss: GainNode; panner: PannerNode }>();
+  private readonly skateLoops = new Map<number, {
+    src: AudioBufferSourceNode; gain: GainNode; body: BiquadFilterNode; bodyG: GainNode; grit: GainNode; low: GainNode; panner: PannerNode;
+  }>();
+  /** Built on first use: wheels-on-asphalt texture (looped) and plain white noise for the deck's cracks. */
+  private skateBufs: { roll: AudioBuffer; white: AudioBuffer } | null = null;
+
+  private skateBuffers(): { roll: AudioBuffer; white: AudioBuffer } {
+    if (this.skateBufs) return this.skateBufs;
+    const ctx = this.ctx!;
+    const sr = ctx.sampleRate;
+    // Urethane on asphalt: a hiss full of grit (little stones and cracks popping under the wheels),
+    // nothing below ~120 Hz. The ends are crossfaded so the loop has no seam of its own.
+    const n = Math.round(sr * 1.7), fade = Math.round(sr * 0.08);
+    const raw = new Float32Array(n + fade);
+    let hp = 0, prev = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const w = Math.random() * 2 - 1;
+      hp = 0.984 * (hp + w - prev);
+      prev = w;
+      raw[i] = hp * 0.45;
+    }
+    for (let i = 0; i < raw.length;) {
+      i += 1 + Math.round((-Math.log(1 - Math.random()) * sr) / 900);
+      const a = Math.pow(Math.random(), 2.4) * 1.1;
+      const len = Math.round(sr * (0.0003 + Math.random() * 0.0011));
+      for (let k = 0; k < len && i + k < raw.length; k++) raw[i + k] += a * (Math.random() * 2 - 1) * Math.exp((-3 * k) / len);
+    }
+    const roll = ctx.createBuffer(1, n, sr);
+    const d = roll.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = i < fade ? raw[i] * (i / fade) + raw[n + i] * (1 - i / fade) : raw[i];
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += d[i] * d[i];
+    const norm = 0.3 / Math.sqrt(sum / n);
+    for (let i = 0; i < n; i++) d[i] *= norm;
+    const white = ctx.createBuffer(1, sr, sr);
+    const wd = white.getChannelData(0);
+    for (let i = 0; i < wd.length; i++) wd[i] = Math.random() * 2 - 1;
+    this.skateBufs = { roll, white };
+    return this.skateBufs;
+  }
+
+  /** A sharp, bright hit: white noise through a filter with a fast envelope (wood and wheels on the street). */
+  private crack(dest: AudioNode, t: number, type: BiquadFilterType, freq: number, q: number, peak: number, decay: number, attack = 0.0006): void {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = this.skateBuffers().white;
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + attack + decay);
+    src.connect(f).connect(g).connect(dest);
+    src.start(t, Math.random() * 0.8);
+    src.stop(t + attack + decay + 0.05);
+    this.free(src, f, g);
+  }
 
   /**
-   * Wheels rolling: one loop per moving board, the urethane whir rising in pitch and level with
-   * speed, a low rumble under it, and grit on rough asphalt. Boards left out fade away.
+   * Wheels rolling: one loop per moving board. The grit runs faster and brighter and louder with
+   * speed; asphalt is coarse and loud, smooth concrete and floors hiss, grass and dirt only thud.
+   * Boards left out fade away.
    */
   skateRoll(list: { id: number; pos: THREE.Vector3; speed: number; rough: number }[]): void {
     const ctx = this.ctx;
@@ -2449,44 +2508,52 @@ export class AudioEngine {
       seen.add(b.id);
       let l = this.skateLoops.get(b.id);
       if (!l) {
-        const src = this.noiseSource(true);
-        src.playbackRate.value = 0.9 + Math.random() * 0.2;
-        const roll = ctx.createBiquadFilter();
-        roll.type = 'bandpass';
-        roll.Q.value = 1.1;
-        roll.frequency.value = 300;
-        const lp = ctx.createBiquadFilter();
-        lp.type = 'lowpass';
-        lp.frequency.value = 160;
-        const rumble = ctx.createGain();
-        rumble.gain.value = 0;
-        const hp = ctx.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.value = 2600;
-        const hiss = ctx.createGain();
-        hiss.gain.value = 0;
+        const src = ctx.createBufferSource();
+        src.buffer = this.skateBuffers().roll;
+        src.loop = true;
+        const body = ctx.createBiquadFilter();
+        body.type = 'bandpass';
+        body.Q.value = 0.55;
+        body.frequency.value = 900;
+        const bodyG = ctx.createGain();
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = 'highpass';
+        hpf.frequency.value = 2600;
+        const grit = ctx.createGain();
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass';
+        lpf.frequency.value = 320;
+        const low = ctx.createGain();
+        for (const g of [bodyG, grit, low]) g.gain.value = 0;
+        const tame = ctx.createBiquadFilter();
+        tame.type = 'lowpass';
+        tame.frequency.value = 5200;
+        tame.Q.value = 0.5;
         const gain = ctx.createGain();
         gain.gain.value = 0;
         const panner = this.makePanner(b.pos);
-        panner.refDistance = 2.2;
-        const mix = ctx.createGain();
-        mix.gain.value = 1;
-        src.connect(roll).connect(mix);
-        src.connect(lp).connect(rumble).connect(mix);
-        src.connect(hp).connect(hiss).connect(mix);
-        mix.connect(gain).connect(panner).connect(this.effects);
-        src.start(now, Math.random() * 2);
-        l = { src, gain, roll, rumble, hiss, panner };
+        panner.refDistance = 3;
+        panner.rolloffFactor = 0.9;
+        src.connect(body).connect(bodyG).connect(gain);
+        src.connect(hpf).connect(grit).connect(gain);
+        src.connect(lpf).connect(low).connect(gain);
+        gain.connect(tame).connect(panner).connect(this.effects);
+        src.start(now, Math.random() * 1.5);
+        l = { src, gain, body, bodyG, grit, low, panner };
         this.skateLoops.set(b.id, l);
       }
-      const k = Math.min(1.3, b.speed / 7);
+      const v = b.speed;
+      const soft = b.rough > 1.2;
+      const k = Math.min(1.25, v / 8);
       l.panner.positionX.setTargetAtTime(b.pos.x, now, 0.03);
       l.panner.positionY.setTargetAtTime(b.pos.y + 0.05, now, 0.03);
       l.panner.positionZ.setTargetAtTime(b.pos.z, now, 0.03);
-      l.roll.frequency.setTargetAtTime(220 + b.speed * 70, now, 0.08);
-      l.rumble.gain.setTargetAtTime(1.4 * k, now, 0.08);
-      l.hiss.gain.setTargetAtTime(0.06 * b.rough * k, now, 0.08);
-      l.gain.gain.setTargetAtTime(0.5 * Math.sqrt(k) * (0.55 + 0.45 * Math.min(1, b.rough)), now, 0.06);
+      l.src.playbackRate.setTargetAtTime(0.62 + 0.42 * Math.min(1.3, v / 8), now, 0.08);
+      l.body.frequency.setTargetAtTime(soft ? 260 : 380 + v * 95, now, 0.08);
+      l.bodyG.gain.setTargetAtTime(soft ? 0.5 : 0.75 + 0.3 * Math.min(1, b.rough), now, 0.08);
+      l.grit.gain.setTargetAtTime(soft ? 0.04 : 0.32 * Math.min(1, b.rough) + 0.06, now, 0.08);
+      l.low.gain.setTargetAtTime(soft ? 1.2 : 0.7, now, 0.08);
+      l.gain.gain.setTargetAtTime(1.3 * Math.pow(k, 0.75) * (soft ? 0.55 : 1), now, 0.06);
     }
     for (const [id, l] of this.skateLoops) {
       if (seen.has(id)) continue;
@@ -2496,15 +2563,16 @@ export class AudioEngine {
     }
   }
 
-  /** A sidewalk seam under the wheels: front then back truck clicking over it. */
+  /** A sidewalk seam under the wheels: the front truck then the back one clacking over it. */
   skateSeam(position: THREE.Vector3, strength: number): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    const d = this.out(position, 0.1, 2.5);
-    const gap = 0.38 / Math.max(1.5, strength * 7);
-    for (const at of [t, t + gap]) {
-      this.burst(d, at, 'bandpass', 900, 1.3, 0.16 * strength + 0.04, 0.001, 0.035);
-      this.tone(d, at, 'sine', 150, 90, 0.12 * strength + 0.03, 0.001, 0.05);
+    const d = this.out(position, 0.12, 3);
+    const gap = 0.36 / Math.max(1.5, strength * 8);
+    const s = 0.45 + 0.55 * strength;
+    for (const [at, k] of [[t, 1], [t + gap, 0.8]] as const) {
+      this.crack(d, at, 'bandpass', 1500 + Math.random() * 300, 1.3, 1.6 * s * k, 0.03);
+      this.tone(d, at, 'sine', 170, 95, 0.32 * s * k, 0.001, 0.05);
     }
   }
 
@@ -2513,10 +2581,10 @@ export class AudioEngine {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const d = this.out(position, 0.3, 3);
-    this.burst(d, t, 'bandpass', 1900, 1.4, 0.55, 0.0008, 0.04);
-    this.burst(d, t, 'highpass', 4200, 0.8, 0.18, 0.0005, 0.02);
-    this.tone(d, t, 'triangle', 260, 140, 0.32, 0.001, 0.07);
-    this.tone(d, t, 'sine', 120, 70, 0.3, 0.002, 0.09);
+    this.crack(d, t, 'bandpass', 1350, 1.4, 3, 0.05);
+    this.crack(d, t, 'highpass', 3800, 0.7, 0.8, 0.018);
+    this.tone(d, t, 'triangle', 340, 170, 0.22, 0.001, 0.07);
+    this.tone(d, t, 'sine', 115, 60, 0.25, 0.002, 0.1);
   }
 
   /** Four wheels and a deck coming back down (`strength` 0..1 by how long it was in the air). */
@@ -2524,20 +2592,21 @@ export class AudioEngine {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const d = this.out(position, 0.35, 3);
-    const k = 0.4 + 0.6 * strength;
-    this.burst(d, t, 'lowpass', 900, 0.8, 0.7 * k, 0.001, 0.09);
-    this.burst(d, t + 0.004, 'bandpass', 1500, 1.2, 0.35 * k, 0.001, 0.05);
-    this.tone(d, t, 'sine', 95, 48, 0.55 * k, 0.002, 0.14);
-    this.tone(d, t + 0.01, 'triangle', 210, 120, 0.18 * k, 0.001, 0.06);
+    const k = 0.5 + 0.5 * strength;
+    this.crack(d, t, 'bandpass', 950, 1.0, 2.8 * k, 0.08);
+    this.crack(d, t + 0.012, 'bandpass', 1700, 1.4, 1.8 * k, 0.05);
+    this.tone(d, t, 'sine', 95, 45, 0.4 * k, 0.002, 0.16);
+    // The trucks rattling as it settles.
+    for (let i = 1; i <= 3; i++) this.crack(d, t + 0.03 + i * 0.025 + Math.random() * 0.01, 'bandpass', 2400 + Math.random() * 900, 2, 0.9 * k / i, 0.012);
   }
 
-  /** The back foot pushing along: a shoe scuffing the street. */
+  /** The back foot pushing along: a shoe sole scuffing the street. */
   skateKick(position: THREE.Vector3): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    const d = this.out(position, 0.05, 2);
-    this.burst(d, t, 'bandpass', 1500 + Math.random() * 400, 0.7, 0.16, 0.02, 0.13, 0.9 + Math.random() * 0.2);
-    this.burst(d, t, 'lowpass', 300, 0.7, 0.12, 0.004, 0.06);
+    const d = this.out(position, 0.05, 2.5);
+    this.crack(d, t, 'bandpass', 1900 + Math.random() * 500, 0.7, 0.45, 0.16, 0.035);
+    this.crack(d, t, 'bandpass', 520, 0.9, 0.5, 0.05, 0.004);
   }
 
   /** Board slapped down and stepped onto. */
@@ -2545,33 +2614,34 @@ export class AudioEngine {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const d = this.out(position, 0.25, 3);
-    this.burst(d, t, 'bandpass', 700, 1.1, 0.45, 0.001, 0.07);
-    this.tone(d, t, 'sine', 140, 85, 0.35, 0.002, 0.1);
-    this.burst(d, t + 0.13, 'lowpass', 600, 0.8, 0.3, 0.002, 0.07);
-    this.tone(d, t + 0.13, 'sine', 110, 70, 0.25, 0.002, 0.08);
+    this.crack(d, t, 'bandpass', 900, 1.1, 2.6, 0.06);
+    this.tone(d, t, 'sine', 150, 85, 0.45, 0.002, 0.1);
+    this.crack(d, t + 0.13, 'bandpass', 650, 0.9, 1.8, 0.06);
+    this.tone(d, t + 0.13, 'sine', 115, 70, 0.35, 0.002, 0.08);
   }
 
   /** Stepping off: the board's tail tapping down. */
   skateOff(position: THREE.Vector3): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    const d = this.out(position, 0.2, 2.5);
-    this.burst(d, t, 'bandpass', 1100, 1.2, 0.3, 0.001, 0.05);
-    this.tone(d, t, 'sine', 160, 95, 0.22, 0.002, 0.07);
+    const d = this.out(position, 0.2, 3);
+    this.crack(d, t, 'bandpass', 1150, 1.3, 2.2, 0.045);
+    this.tone(d, t, 'sine', 165, 95, 0.32, 0.002, 0.07);
   }
 
-  /** Thrown off: the board clattering away end over end, the survivor's feet scrabbling. */
+  /** Thrown off: the board clattering away end over end. */
   skateBail(position: THREE.Vector3): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const d = this.out(position, 0.45, 4);
-    for (let i = 0; i < 5; i++) {
-      const at = t + 0.02 + i * 0.11 + Math.random() * 0.06;
-      const k = 1 - i * 0.16;
-      this.burst(d, at, 'bandpass', 800 + Math.random() * 900, 1.2, 0.45 * k, 0.001, 0.06);
-      this.tone(d, at, 'sine', 130 + Math.random() * 40, 70, 0.3 * k, 0.002, 0.08);
+    for (let i = 0; i < 6; i++) {
+      const at = t + 0.02 + i * 0.1 + Math.random() * 0.06;
+      const k = 1 - i * 0.14;
+      this.crack(d, at, 'bandpass', 700 + Math.random() * 1400, 1.2, 3 * k, 0.06);
+      this.tone(d, at, 'sine', 130 + Math.random() * 50, 70, 0.4 * k, 0.002, 0.08);
     }
-    this.burst(d, t, 'bandpass', 1300, 0.6, 0.22, 0.01, 0.25);
+    // Wheels skidding sideways on the asphalt.
+    this.crack(d, t, 'bandpass', 2200, 0.6, 1.2, 0.35, 0.02);
   }
 
   dispose(): void {
