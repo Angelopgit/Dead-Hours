@@ -142,6 +142,12 @@ check(none === null, 'nothing near: full speed');
   const menu = readFileSync(new URL('../src/ui/MainMenu.ts', import.meta.url), 'utf8');
   check(/new ResizeObserver\(\(\) => this\.coverMenu\(\)\)/.test(menu) && /\.observe\(this\.el\)/.test(menu) && /\.observe\(el\)/.test(menu),
     'the main menu re-checks whether a panel covers it when the window or the panel changes size');
+  // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
+  // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
+  // to the stylesheet and the column lifts clear.
+  const hud = readFileSync(new URL('../src/ui/HUD.ts', import.meta.url), 'utf8');
+  check(/new ResizeObserver\([^]*?--vitals-h[^]*?\.observe\(vitals\)/.test(hud) && /var\(--vitals-h/.test(prop('.comms-hud', 'bottom') ?? ''),
+    'the in-game chat column lifts clear of boost chips stacked over the health panel');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');

@@ -103,6 +103,11 @@ export class HUD {
   private readonly chips = new Map<string, BoostChip>();
   /** A wash of the dose's colour round the screen edges as it goes in. */
   private readonly flash: HTMLElement;
+  /**
+   * Hands the health panel's height to the stylesheet (`--vitals-h` on the UI root): boost chips stack up over the
+   * name, and the online chat column above lifts clear of them instead of printing its lines over the chips.
+   */
+  private readonly sized: ResizeObserver;
   private timerText = '';
   private warningText = '';
   private lastReadout = '';
@@ -204,6 +209,9 @@ export class HUD {
       this.car,
       this.fps,
     );
+    const vitals = this.boostRow.parentElement!;
+    this.sized = new ResizeObserver(() => this.el.parentElement?.style.setProperty('--vitals-h', `${vitals.offsetHeight}px`));
+    this.sized.observe(vitals);
     this.setSpread(0);
   }
 
@@ -473,6 +481,8 @@ export class HUD {
     gsap.killTweensOf([this.notice, this.fill, this.lag, this.el, this.marker, this.flash]);
     for (const c of this.chips.values()) gsap.killTweensOf(c.el);
     for (const c of [...Array.from(this.arcs.children), ...Array.from(this.feed.children), ...Array.from(this.trick.children)]) gsap.killTweensOf(c);
+    this.sized.disconnect();
+    this.el.parentElement?.style.removeProperty('--vitals-h');
     this.el.remove();
   }
 }
