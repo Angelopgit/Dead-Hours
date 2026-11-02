@@ -285,6 +285,12 @@ export const APPEARANCE_ITEMS = {
     { id: 'smoky', label: 'Smoky eyes', tint: true, lean: W },
     { id: 'eyeblack', label: 'Eye black' },
   ],
+  smoke: [
+    { id: 'none', label: 'None' },
+    { id: 'cigarette', label: 'Cigarette' },
+    { id: 'joint', label: 'Joint' },
+    { id: 'blunt', label: 'Blunt' },
+  ],
 } as const satisfies Record<string, readonly AppearanceItem[]>;
 
 export type AppearanceSlot = keyof typeof APPEARANCE_ITEMS;
@@ -329,6 +335,8 @@ export interface Appearance {
   ears: ItemId<'ears'>;
   makeup: ItemId<'makeup'>;
   makeupColor: number;
+  /** Lit and held in the mouth: a cigarette, a joint or a blunt, with a glowing tip and smoke. */
+  smoke: ItemId<'smoke'>;
 }
 
 type FieldKind = { slot: AppearanceSlot } | { palette: PaletteName };
@@ -349,6 +357,8 @@ export const APPEARANCE_FIELDS: readonly (readonly [keyof Appearance, FieldKind]
   ['gear', { slot: 'gear' }], ['gearColor', { palette: 'cloth' }],
   // Added with female survivors: older saves and clients simply stop before these (male, none).
   ['body', { slot: 'body' }], ['ears', { slot: 'ears' }], ['makeup', { slot: 'makeup' }], ['makeupColor', { palette: 'makeup' }],
+  // Added with smokes: older strings stop before it (none).
+  ['smoke', { slot: 'smoke' }],
 ];
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -365,6 +375,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   back: 'backpack', backColor: 8,
   gear: 'none', gearColor: 8,
   body: 'male', ears: 'none', makeup: 'none', makeupColor: 2,
+  smoke: 'none',
 };
 
 /** Where a new female survivor starts (the creator's reset, and switching body type). */
@@ -473,5 +484,7 @@ export function randomAppearance(rand: () => number = Math.random, body?: BodyTy
     ears: maybe('ears', female ? 0.6 : 0.12),
     makeup: female ? maybe('makeup', 0.45) : 'none',
     makeupColor: Math.floor(rand() * MAKEUP_COLORS.length),
+    // Drawn last, so every field before it comes out as it did before smokes existed.
+    smoke: maybe('smoke', 0.12),
   });
 }

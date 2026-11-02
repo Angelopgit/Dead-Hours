@@ -289,6 +289,13 @@ export const HEAD_K = 0.92;
 /** How much of the jaw narrowing applies at head-space height y: none at the cheekbones, all of it at the chin. */
 const jawK = (y: number) => THREE.MathUtils.smoothstep(-y, -0.1, 0.005);
 
+const _w = new THREE.Vector3();
+/** A head-space point as built to where it is drawn: the jawline narrowing, then HEAD_K (see headSink). */
+function headWarp(v: THREE.Vector3): THREE.Vector3 {
+  const j = jawK(v.y);
+  return v.set(v.x * (1 - 0.12 * j) * HEAD_K, v.y * HEAD_K, (v.z < 0 ? v.z * (1 - 0.06 * j) : v.z) * HEAD_K);
+}
+
 /**
  * Head bone parts go through here: a jawline (the lower face narrowing toward the chin, the back
  * of the jaw tucking in under the skull), then shrunk by HEAD_K. Everything on the head (beards,
@@ -299,9 +306,8 @@ function headSink(sink: PartSink): PartSink {
     g.applyMatrix4(m);
     const pos = g.getAttribute('position') as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-      const j = jawK(y);
-      pos.setXYZ(i, x * (1 - 0.12 * j) * HEAD_K, y * HEAD_K, (z < 0 ? z * (1 - 0.06 * j) : z) * HEAD_K);
+      headWarp(_w.fromBufferAttribute(pos, i));
+      pos.setXYZ(i, _w.x, _w.y, _w.z);
     }
     pos.needsUpdate = true;
     const shade = surf?.shade;
@@ -543,6 +549,7 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
   shoes(kit, a, b, b.shins);
   gloves(kit, a, b);
   if (!covered) faceGear(head, a, b, cloth(a.faceColor));
+  smokable(head, a, b);
   neck(spine, a, b, cloth(a.neckColor));
   const backDepth = back(spine, a, b, cloth(a.backColor)) + b.bulk;
   gear(spine, hips, kit, a, b, cloth(a.gearColor));
@@ -2019,6 +2026,110 @@ function faceGear(h: Kit, a: Appearance, b: Body, hex: number): void {
       temples(h, hex, EYE_Y + 0.01);
       break;
   }
+}
+
+// ── Smokes ──────────────────────────────────────────────────────────────────────────────
+
+export type SmokeKind = 'cigarette' | 'joint' | 'blunt';
+
+interface SmokeShape {
+  /** Length from where it sits in the lips to the lit end; radius at the lips and at the lit end. */
+  len: number;
+  r0: number;
+  r1: number;
+  /** How far it droops from straight out (radians), and how far it turns out past the mouth's corner. */
+  droop: number;
+  yaw: number;
+}
+
+const SMOKES: Record<SmokeKind, SmokeShape> = {
+  cigarette: { len: 0.074, r0: 0.0042, r1: 0.0042, droop: 0.3, yaw: 0.3 },
+  // Rolled cone: thin at the crutch, fat where it burns.
+  joint: { len: 0.07, r0: 0.0034, r1: 0.006, droop: 0.24, yaw: 0.26 },
+  blunt: { len: 0.088, r0: 0.0063, r1: 0.0069, droop: 0.2, yaw: 0.22 },
+};
+
+/** Faces that cover the mouth: nothing to hold a smoke with. */
+const COVERS_MOUTH = new Set(['bandanamask', 'surgical', 'gasmask', 'hockey']);
+/** The lit end, glowing (Humanoid draws it, so it can flare on a drag). */
+const EMBER_LEN = 0.005;
+const CHAR = 0x3a3330;
+
+/** Who holds a lit smoke in the mouth (living survivors whose mouth isn't covered), and which one. */
+function smokeKind(a: Appearance, zombie: boolean): SmokeKind | null {
+  if (zombie || a.smoke === 'none' || !(a.smoke in SMOKES)) return null;
+  if (COVERS_MOUTH.has(a.face) || COVERS_FACE.has(a.headwear)) return null;
+  return a.smoke as SmokeKind;
+}
+
+/** Head-space frame of the smoke: origin in the lips at the right corner of the mouth, +Z out along it. */
+function smokeFrame(h: Kit, a: Appearance, s: SmokeShape): Kit {
+  const lip = a.facialHair === 'beard' ? 0.013 : a.facialHair === 'goatee' || a.facialHair === 'stubble' ? 0.004 : 0;
+  return h.at([-0.0135, 0.0615, 0.112 + lip], [s.droop, -s.yaw, 0]);
+}
+
+/** A section of the smoke from z0 to z1 out of the lips, radius ra to rb. */
+function smokeSeg(f: Kit, hex: number, z0: number, z1: number, ra: number, rb: number, seg = 8): void {
+  f.cyl(hex, rb, ra, z1 - z0, [0, 0, (z0 + z1) / 2], [Math.PI / 2, 0, 0], 1, { seg });
+}
+
+/** A cigarette, joint or blunt hanging from the corner of the mouth, up to its charred, lit end. */
+function smokable(h: Kit, a: Appearance, b: Body): void {
+  const kind = smokeKind(a, b.zombie);
+  if (!kind) return;
+  const s = SMOKES[kind];
+  const f = smokeFrame(h, a, s);
+  const r = (z: number) => s.r0 + (s.r1 - s.r0) * (z / s.len);
+  const end = s.len - 0.003;
+  switch (kind) {
+    case 'cigarette':
+      // Cork filter, a thin gold band, white paper.
+      smokeSeg(f, 0xc4874c, 0, 0.026, s.r0, s.r0);
+      smokeSeg(f, 0xd6bf72, 0.026, 0.0275, s.r0 * 1.02, s.r0 * 1.02);
+      smokeSeg(f, 0xeeeae2, 0.0275, end, s.r0, s.r0);
+      break;
+    case 'joint':
+      // A rolled card crutch, then papers twisting wider toward the lit end.
+      smokeSeg(f, 0xd8c79f, 0, 0.011, s.r0 * 1.06, s.r0 * 1.06);
+      smokeSeg(f, 0xf1ede0, 0.011, end, r(0.011), r(end));
+      break;
+    case 'blunt':
+      // Wet, darker end at the lips; a tobacco-leaf wrap with its seam spiralling round.
+      smokeSeg(f, 0x48301c, 0, 0.008, s.r0, r(0.008), 10);
+      smokeSeg(f, 0x6a4527, 0.008, end, r(0.008), r(end), 10);
+      for (const z of [0.024, 0.042, 0.06, 0.076]) f.torus(0x50331d, r(z) + 0.0002, 0.0008, [0, 0, z], [0.5, 0, 0], 1, 3, 12);
+      break;
+  }
+  smokeSeg(f, CHAR, end, s.len, r(end) * 1.02, r(s.len) * 1.02);
+}
+
+/** Where a survivor's smoke burns, in head-bone space as drawn (HEAD_K and the jawline applied). */
+export interface SmokeRig {
+  kind: SmokeKind;
+  /** The glowing end. */
+  ember: THREE.BufferGeometry;
+  /** Tip of the lit end, and the way the smoke points. */
+  tip: THREE.Vector3;
+  dir: THREE.Vector3;
+  /** Where breath leaves the mouth. */
+  mouth: THREE.Vector3;
+}
+
+/** The lit end of the smoke an appearance holds (null: none, or a mask over the mouth). */
+export function smokeRig(a: Appearance): SmokeRig | null {
+  const kind = smokeKind(a, false);
+  if (!kind) return null;
+  const s = SMOKES[kind];
+  const parts: THREE.BufferGeometry[] = [];
+  const capture: PartSink = (g) => { parts.push(g); };
+  const f = smokeFrame(new Kit(headSink(capture), BONE.head), a, s);
+  const r = s.r1 * 0.98;
+  smokeSeg(f, 0, s.len, s.len + EMBER_LEN, r, r * 0.8);
+  const tip = headWarp(new THREE.Vector3(0, 0, s.len + EMBER_LEN).applyMatrix4(f.frame));
+  const dir = new THREE.Vector3(0, 0, 1).transformDirection(f.frame);
+  const lip = a.facialHair === 'beard' ? 0.013 : 0;
+  const mouth = headWarp(new THREE.Vector3(0.004, 0.062, 0.122 + lip));
+  return { kind, ember: parts[0], tip, dir, mouth };
 }
 
 function neck(sp: Kit, a: Appearance, b: Body, hex: number): void {

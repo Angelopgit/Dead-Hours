@@ -5,6 +5,7 @@ import type { Quality } from '../core/Settings';
 import { ParticleBatch, SHAPE, type ParticleSpec } from './Particles';
 import { DECAL, DecalBatch } from './Decals';
 import { Casings } from './Casings';
+import { SmokeWisps } from './Smoke';
 
 export type Gore = 'off' | 'reduced' | 'full';
 
@@ -56,6 +57,8 @@ export class Effects {
   private readonly glow: ParticleBatch;
   readonly decals: DecalBatch;
   readonly casings: Casings;
+  /** Survivors' cigarette, joint and blunt smoke (see Smoking). */
+  readonly smoke: SmokeWisps;
   private readonly light = new THREE.PointLight(0xffb066, 0, 10, 2);
   private lightT = 0;
   private lightPower = 0;
@@ -74,7 +77,9 @@ export class Effects {
     this.glow = new ParticleBatch(700, true);
     this.decals = new DecalBatch(380);
     this.casings = new Casings(56);
-    this.root.add(this.decals.mesh, this.soft.mesh, this.glow.mesh, this.casings.mesh);
+    // A little brighter than the explosions' smoke ambient, so a thin wisp still reads at night.
+    this.smoke = new SmokeWisps(220, new THREE.Color(0.2, 0.21, 0.24));
+    this.root.add(this.decals.mesh, this.soft.mesh, this.glow.mesh, this.casings.mesh, this.smoke.mesh);
     this.light.castShadow = false;
     // The flash light stays in the scene at zero intensity: adding and removing lights would
     // recompile every lit material.
@@ -87,6 +92,7 @@ export class Effects {
     this.quality = q === 'low' ? 0.35 : q === 'medium' ? 0.65 : 1;
     this.soft.setCapacity(this.quality);
     this.glow.setCapacity(this.quality);
+    this.smoke.setQuality(this.quality);
     this.decals.setCapacity(q === 'low' ? 0.45 : q === 'medium' ? 0.75 : 1);
     this.gore = gore;
     this.reducedFlashing = reducedFlashing;
@@ -518,6 +524,7 @@ export class Effects {
     this.glow.clear();
     this.decals.clear();
     this.casings.clear();
+    this.smoke.clear();
     this.light.intensity = 0;
   }
 
@@ -527,6 +534,7 @@ export class Effects {
     this.glow.update(dt);
     this.decals.update(dt);
     this.casings.update(dt);
+    this.smoke.update(dt, camera);
     this.lightT -= dt;
     this.light.intensity = this.lightT > 0 ? this.lightPower * 9 * (this.lightT / 0.06) : 0;
   }
@@ -536,6 +544,7 @@ export class Effects {
     this.glow.dispose();
     this.decals.dispose();
     this.casings.dispose();
+    this.smoke.dispose();
     this.light.removeFromParent();
     this.light.dispose();
     this.root.removeFromParent();

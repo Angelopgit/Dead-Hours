@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { Appearance } from '@dead-hours/shared';
 import { Humanoid, survivorLook } from './Humanoid';
+import { SmokeWisps } from '../effects/Smoke';
 
-export type PreviewFocus = 'body' | 'head' | 'hat' | 'torso' | 'legs' | 'feet' | 'hands' | 'back';
+export type PreviewFocus = 'body' | 'head' | 'hat' | 'torso' | 'legs' | 'feet' | 'hands' | 'back' | 'smoke';
 
 const FRAMING: Record<PreviewFocus, { y: number; dist: number; side?: number }> = {
   body: { y: 0.9, dist: 4.1 },
@@ -14,6 +15,8 @@ const FRAMING: Record<PreviewFocus, { y: number; dist: number; side?: number }> 
   feet: { y: 0.22, dist: 1.5 },
   hands: { y: 0.95, dist: 2.2 },
   back: { y: 1.25, dist: 2.2, side: Math.PI + 0.45 },
+  // The face turned to show the smoke in profile, with room above for it to rise.
+  smoke: { y: 1.74, dist: 1.55, side: 0.7 },
 };
 
 const IDLE = { speed: 0, crouch: 0, aim: 0, grounded: true, strafe: 0 };
@@ -37,6 +40,8 @@ export class CharacterPreview {
   private last = 0;
   private readonly resizeObs: ResizeObserver;
   private readonly disposables: { dispose(): void }[] = [];
+  /** Smoke from a cigarette, joint or blunt, lit to suit the studio lights. */
+  private readonly smoke = new SmokeWisps(90, new THREE.Color(0.62, 0.65, 0.72));
 
   constructor() {
     this.canvas.className = 'creator-canvas';
@@ -66,8 +71,8 @@ export class CharacterPreview {
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.045;
-    this.scene.add(floor, this.turntable);
-    this.disposables.push(tex, floorMat, floorGeo);
+    this.scene.add(floor, this.turntable, this.smoke.mesh);
+    this.disposables.push(tex, floorMat, floorGeo, this.smoke);
 
     this.canvas.addEventListener('pointerdown', this.onDown);
     window.addEventListener('pointermove', this.onMove);
@@ -96,6 +101,7 @@ export class CharacterPreview {
   setAppearance(a: Appearance): void {
     const prev = this.body;
     this.body = new Humanoid(survivorLook(a));
+    this.body.smokeSink = this.smoke;
     this.body.update(1 / 60, IDLE);
     this.turntable.add(this.body.root);
     prev?.dispose();
@@ -143,6 +149,7 @@ export class CharacterPreview {
     const { y, dist } = this.frame;
     this.camera.position.set(0, y + dist * 0.08, dist);
     this.camera.lookAt(0, y, 0);
+    this.smoke.update(dt, this.camera);
     this.renderer.render(this.scene, this.camera);
   }
 

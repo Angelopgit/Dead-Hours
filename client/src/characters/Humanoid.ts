@@ -5,7 +5,8 @@ import { chain } from '../lighting/BakeShader';
 import { BODY_KNEE, GLOSS_CAP_GLSL, GLOSS_CEIL } from '../lighting/GlossCap';
 import { rng, randomAppearance, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
-import { ARM, EYE_Y, HEAD_K, LEG, SHOULDER_X, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
+import { ARM, EYE_Y, HEAD_K, LEG, SHOULDER_X, dress, eyeParts, smokeRig, type DressResult, type Mutation, type PartSink } from './Outfit';
+import { Smoking, sceneSmoke, type SmokeSink } from './Smoking';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
 import { DECAY_BLOOD, DECAY_COMMON, DECAY_SURFACE, MAX_HITS, SURF, createDecayUniforms, decayNoise, trackDecayMaterial, untrackDecayMaterial, zombieDetail, type DecayUniforms } from './Decay';
 import { RIM, SURVIVOR_COMMON, SURVIVOR_WEAR, type BodyShading } from './Wear';
@@ -410,6 +411,10 @@ export class Humanoid {
   private readonly irises: THREE.Mesh | null = null;
   private readonly eyeGeometries: THREE.BufferGeometry[] = [];
   private readonly eyeMaterial: THREE.MeshStandardMaterial | null = null;
+  /** Survivors with a cigarette, joint or blunt: its glowing end, drags and smoke. */
+  readonly smoking: Smoking | null = null;
+  /** Where its smoke goes; null uses the scene's (the night's effects). */
+  smokeSink: SmokeSink | null = null;
   /** Where the eyes look (head space offset of the irises), where they are going, and when they move next. */
   private readonly gaze = new THREE.Vector2();
   private readonly gazeTo = new THREE.Vector2();
@@ -576,6 +581,10 @@ export class Humanoid {
       eyes.scale.setScalar(HEAD_K);
       this.eyes = eyes;
       this.head.add(eyes);
+    }
+    if (!this.zombie) {
+      const rig = smokeRig(look.outfit);
+      if (rig) this.smoking = new Smoking(rig, this.head);
     }
   }
 
@@ -912,6 +921,8 @@ export class Humanoid {
       this.glance(dt, target);
       if (this.weathering) this.weather(dt, target);
     }
+    // Smoke rises while the head is drawn (not collapsed for aiming down sights, not hidden).
+    this.smoking?.update(dt, this.smokeSink ?? sceneSmoke(), this.root.visible && this.head.scale.x > 0.5, !this.ragdoll);
     if (this.ragdoll) return;
     const s = this.smoothed;
     const k = 1 - Math.exp(-dt * 10);
@@ -1441,6 +1452,7 @@ export class Humanoid {
     releaseBody(this.bodyKey);
     for (const g of this.eyeGeometries) g.dispose();
     this.eyeMaterial?.dispose();
+    this.smoking?.dispose();
   }
 }
 

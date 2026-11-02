@@ -105,7 +105,9 @@ const FRAG = /* glsl */ `
       float lit = 0.55 + 0.45 * clamp(vUv.y * 0.55 + 0.45 + (n1.g - 0.5) * 0.5, 0.0, 1.0);
       vec3 glow = vGlow * vec3(1.6, 0.6, 0.16) * (0.35 + 0.65 * clamp(0.6 - vUv.y * 0.5, 0.0, 1.0)) * (0.5 + noise);
       vec3 col = vColor * (uAmbient * lit + glow) + fire * 0.7;
-      col = mix(col, fogColor, fogF);
+      #ifdef USE_FOG
+        col = mix(col, fogColor, fogF);
+      #endif
       gl_FragColor = vec4(col, a);
     #endif
   }

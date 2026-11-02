@@ -2360,6 +2360,17 @@ section('Survivor appearance');
   check(women > 120 && women < 280, `random looks are a mix of men and women (${women}/400 women)`);
   check(beards === 0 && menMakeup === 0, 'random women get no beards, random men no makeup, sundresses come with a skirt');
 
+  // Smokes: a lit cigarette, joint or blunt, the last field on the wire.
+  check(ids('smoke').join() === 'none,cigarette,joint,blunt', 'smokes: none, cigarette, joint, blunt');
+  const smoker = sanitizeAppearance({ ...DEFAULT_APPEARANCE, smoke: 'blunt' });
+  check(smoker.smoke === 'blunt' && sameLook(decodeAppearance(encodeAppearance(smoker)), smoker), 'a smoke survives the wire');
+  const preSmoke = encodeAppearance(smoker).split('.').slice(0, 1 + APPEARANCE_FIELDS.findIndex(([k]) => k === 'smoke')).join('.');
+  check(decodeAppearance(preSmoke).smoke === 'none' && sameLook(decodeAppearance(preSmoke), { ...smoker, smoke: 'none' }), 'looks saved before smokes load with none, the rest unchanged');
+  check(sanitizeAppearance({ ...DEFAULT_APPEARANCE, smoke: 'cigar' }).smoke === 'none', 'unknown smokes fall back to none');
+  let smokers = 0;
+  for (let i = 0; i < 400; i++) if (randomAppearance(rand).smoke !== 'none') smokers++;
+  check(smokers > 15 && smokers < 90, `some random survivors smoke, most don't (${smokers}/400)`);
+
   const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
   const cowboy = sanitizeAppearance({ ...DEFAULT_APPEARANCE, headwear: 'cowboy', top: 'flannel', eyes: 'fierce', eyeColor: 5 });
   const p2 = sim.addPlayer('p2', 'Cowboy', 'ar', 'pistol', { x: 1, y: 0.15, z: 6 }, 0, encodeAppearance(cowboy));

@@ -21,6 +21,7 @@ import type { NetLink } from '../network/NetLink';
 import { account } from '../network/Account';
 import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
+import { emberSample, sceneSmoke, setSceneSmoke } from '../characters/Smoking';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { SeveredArm, clearSeveredCache } from '../characters/Severed';
 import { setZombieDetail } from '../characters/Decay';
@@ -315,6 +316,8 @@ export class GameSession {
 
     // World feedback.
     this.effects = new Effects(engine.scene, physics);
+    // Every survivor's cigarette, joint or blunt smokes into this night's effects.
+    setSceneSmoke(this.effects.smoke);
     this.effects.isMoving = (pos, n) => {
       const hit = physics.raycastHit(pos.x + n.x * 0.06, pos.y + n.y * 0.06, pos.z + n.z * 0.06, -n.x, -n.y, -n.z, 0.15);
       return hit !== null && this.doorColliders.has(hit.collider.handle);
@@ -464,6 +467,10 @@ export class GameSession {
       const raid = this.raid.sample();
       place(raid.root, 6, 6);
       undo.push(raid.dispose);
+      // A survivor's lit cigarette end (its smoke shares the explosions' smoke program).
+      const ember = emberSample();
+      place(ember.root, 6.5, 6);
+      undo.push(ember.dispose);
       // The field gunsmith's overlay draws the gun as see-through materials (their own programs).
       const smith = new GunsmithStage(true);
       smith.onMaterials = (m) => this.probe.attach(m);
@@ -2825,6 +2832,7 @@ export class GameSession {
     this.pickups.dispose();
     this.drops.dispose();
     audio.helicopters(new Map());
+    if (sceneSmoke() === this.effects.smoke) setSceneSmoke(null);
     this.effects.dispose();
     this.throws.dispose();
     this.pyro.dispose();

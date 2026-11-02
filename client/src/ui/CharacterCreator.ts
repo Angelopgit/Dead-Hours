@@ -96,6 +96,9 @@ const TABS: Tab[] = [
     { kind: 'items', title: 'Vests & belts', slot: 'gear' },
     { kind: 'colors', title: 'Color', key: 'gearColor', palette: 'cloth', when: tinted('gear') },
   ] },
+  { id: 'smoke', label: 'Smokes', focus: 'smoke', sections: [
+    { kind: 'items', title: 'Lit, in the mouth', slot: 'smoke' },
+  ] },
 ];
 
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
