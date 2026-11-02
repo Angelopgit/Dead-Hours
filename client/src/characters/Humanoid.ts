@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { ArmState, ArmZone, HitZone, LegState, LegZone, LimbZone, ZombieKind } from '@dead-hours/shared';
 import { chain } from '../lighting/BakeShader';
-import { rng, randomAppearance, type Appearance } from '@dead-hours/shared';
+import { rng, randomAppearance, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
-import { EYE_Y, SHOULDER_X, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
+import { ARM, EYE_Y, HEAD_K, LEG, SHOULDER_X, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
 import { goreMaterial, stumpGeometry, tintGore } from './Gore';
-import { DECAY_BLOOD, DECAY_COMMON, DECAY_SURFACE, MAX_HITS, SURF, createDecayUniforms, trackDecayMaterial, untrackDecayMaterial, zombieDetail, type DecayUniforms } from './Decay';
+import { DECAY_BLOOD, DECAY_COMMON, DECAY_SURFACE, MAX_HITS, SURF, createDecayUniforms, decayNoise, trackDecayMaterial, untrackDecayMaterial, zombieDetail, type DecayUniforms } from './Decay';
+import { RIM, SURVIVOR_COMMON, SURVIVOR_WEAR, type BodyShading } from './Wear';
 
 export interface HumanoidLook {
   /** What the character wears and looks like. */
@@ -151,14 +152,18 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
   const parts: THREE.BufferGeometry[] = [];
   const color = new THREE.Color();
   const accent = new THREE.Color();
+  const tint = new THREE.Color();
   const grime = look.zombie;
+  const skinHex = look.skin ?? paletteColor('skin', look.outfit.skin);
   const rand = rng(hashString(key));
-  const sink: PartSink = (g, bone, hex, m, surf) => {
+  const sink: PartSink = (g, bone, hex, m, surf, blend) => {
     const geo = g.index ? g.toNonIndexed() : g;
     if (geo !== g) g.dispose();
     geo.deleteAttribute('uv');
-    geo.applyMatrix4(m.premultiply(bones[bone].matrixWorld));
-    const n = geo.getAttribute('position').count;
+    // Bone space first: soft shading and joint weights are laid out there.
+    geo.applyMatrix4(m);
+    const P = geo.getAttribute('position');
+    const n = P.count;
     const col = new Float32Array(n * 3);
     const pat = new Float32Array(n * 4);
     const si = new Uint16Array(n * 4);
@@ -167,24 +172,40 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
     const muddy = grime && hex !== look.skin ? 0.4 : 0;
     color.setHex(hex).lerp(MUD, muddy);
     accent.setHex(surf?.accent ?? hex).lerp(MUD, muddy);
-    // Zombies: which surface this is (rotting skin, cloth that tears, or hard gear and hair that doesn't).
-    const cls = !grime ? 0 : look.skin !== undefined && nearHex(hex, look.skin, 40) ? SURF.skin : bone === BONE.head ? SURF.hard : SURF.cloth;
+    // Which surface this is: skin (rots on zombies, gets grubby on survivors), cloth (tears,
+    // creases, wears and gets dirty) or hard gear and hair (doesn't).
+    const cls = grime
+      ? look.skin !== undefined && nearHex(hex, look.skin, 40) ? SURF.skin : bone === BONE.head ? SURF.hard : SURF.cloth
+      : hex === skinHex || (bone === BONE.head && nearHex(hex, skinHex, 14)) ? SURF.skin : bone === BONE.head ? SURF.hard : SURF.cloth;
     const type = (surf?.pattern ?? 0) + cls * 8;
+    const shadeFn = surf?.shade;
     for (let i = 0; i < n; i += 3) {
-      // Zombies: per-face grime so clothes and skin read as filthy, not flat.
+      // Per-face variation (zombies: grime, so clothes and skin read as filthy, not flat).
       const k = grime ? 0.72 + rand() * 0.32 : 0.94 + rand() * 0.08;
       for (let j = i; j < i + 3 && j < n; j++) {
-        col[j * 3] = color.r * k;
-        col[j * 3 + 1] = color.g * k;
-        col[j * 3 + 2] = color.b * k;
-        pat[j * 4] = accent.r * k;
-        pat[j * 4 + 1] = accent.g * k;
-        pat[j * 4 + 2] = accent.b * k;
+        tint.setRGB(k, k, k);
+        if (shadeFn) shadeFn(P.getX(j), P.getY(j), P.getZ(j), tint);
+        col[j * 3] = color.r * tint.r;
+        col[j * 3 + 1] = color.g * tint.g;
+        col[j * 3 + 2] = color.b * tint.b;
+        pat[j * 4] = accent.r * tint.r;
+        pat[j * 4 + 1] = accent.g * tint.g;
+        pat[j * 4 + 2] = accent.b * tint.b;
         pat[j * 4 + 3] = type;
         si[j * 4] = bone;
-        sw[j * 4] = 1;
+        if (blend) {
+          // Toward a joint the skin follows both bones, evenly at the joint itself.
+          const u = Math.min(1, Math.abs(P.getY(j) - blend.y) / blend.band);
+          const w = 0.5 * (1 - u * u * (3 - 2 * u));
+          si[j * 4 + 1] = blend.bone;
+          sw[j * 4] = 1 - w;
+          sw[j * 4 + 1] = w;
+        } else {
+          sw[j * 4] = 1;
+        }
       }
     }
+    geo.applyMatrix4(bones[bone].matrixWorld);
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('pattern', new THREE.BufferAttribute(pat, 4));
     geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
@@ -198,10 +219,14 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
   return { geometry: merged, dress: result, refs: 0 };
 }
 
-/** Survivors' eyes: their own small mesh on the head bone, so they can blink. */
-function buildEyes(a: Appearance): THREE.BufferGeometry {
+/**
+ * Survivors' eyes: their own small meshes on the head bone, so they can blink, the whites and
+ * lashes in one and the irises (with pupils and glints) in another that moves as they look about.
+ */
+function buildEyes(a: Appearance): { whites: THREE.BufferGeometry; irises: THREE.BufferGeometry } {
   const color = new THREE.Color();
-  const parts = eyeParts(a).map(({ g, hex, m }) => {
+  const whites: THREE.BufferGeometry[] = [], irises: THREE.BufferGeometry[] = [];
+  for (const { g, hex, m, iris } of eyeParts(a)) {
     const geo = g.index ? g.toNonIndexed() : g;
     if (geo !== g) g.dispose();
     geo.deleteAttribute('uv');
@@ -211,11 +236,14 @@ function buildEyes(a: Appearance): THREE.BufferGeometry {
     color.setHex(hex);
     for (let i = 0; i < n; i++) color.toArray(col, i * 3);
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    return geo;
-  });
-  const merged = mergeGeometries(parts, false)!;
-  for (const p of parts) p.dispose();
-  return merged;
+    (iris ? irises : whites).push(geo);
+  }
+  const merge = (ps: THREE.BufferGeometry[]) => {
+    const merged = mergeGeometries(ps, false)!;
+    for (const p of ps) p.dispose();
+    return merged;
+  };
+  return { whites: merge(whites), irises: merge(irises) };
 }
 
 /**
@@ -223,31 +251,39 @@ function buildEyes(a: Appearance): THREE.BufferGeometry {
  * Patterns (plaid, stripes, camo, flowers, knit, denim) mix the vertex color with the part's
  * accent. Each bone carries a 0..1 blood amount; splotchy patches spread as it grows.
  */
-export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Array, decay?: DecayUniforms): void {
-  chain(mat, decay ? 'wounds-z' : 'wounds', (shader) => {
+export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Array, decay?: DecayUniforms, look?: BodyShading): void {
+  const shading = look ?? { uGrime: { value: new THREE.Vector4() }, uRim: { value: decay ? RIM.zombie : RIM.survivor } };
+  chain(mat, decay ? 'wounds-z' : 'wounds-s', (shader) => {
     shader.uniforms.uWounds = { value: wounds };
+    Object.assign(shader.uniforms, shading);
     let defs = '';
     if (decay) {
       Object.assign(shader.uniforms, decay);
       defs = `#define ZOMBIE_DECAY\n${zombieDetail() === 'lite' ? '#define DECAY_LITE\n' : ''}`;
+    } else {
+      shader.uniforms.uZNoise = { value: decayNoise() };
     }
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         uniform float uWounds[${BONE_COUNT}];
         attribute vec4 pattern;
         varying float vWound;
+        varying float vBone;
         varying vec3 vWoundP;
         varying vec4 vPat;
         varying vec3 vPatN;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vWound = uWounds[int(skinIndex.x + 0.5)];
+        vBone = skinIndex.x;
         vWoundP = position;
         vPat = pattern;
         vPatN = normal;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         ${defs}
+        uniform vec4 uRim;
         varying float vWound;
+        varying float vBone;
         varying vec3 vWoundP;
         varying vec4 vPat;
         varying vec3 vPatN;
@@ -265,10 +301,11 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
         #else
         #define WN(P_) wNoise(P_)
         #define WN2(P_) wNoise(P_)
+        ${SURVIVOR_COMMON}
         #endif`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float zWet = 0.0;
-        // pattern.w = fabric pattern + 8 * surface class (zombies).
+        // pattern.w = fabric pattern + 8 * surface class.
         float vZSurf = floor((vPat.w + 0.5) / 8.0);
         float pType = vPat.w - vZSurf * 8.0;
         if (pType > 0.5) {
@@ -303,6 +340,8 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
         }
         #ifdef ZOMBIE_DECAY
         ${DECAY_SURFACE}
+        #else
+        ${SURVIVOR_WEAR}
         #endif
         if (vWound > 0.001) {
           #ifdef DECAY_LITE
@@ -320,7 +359,15 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
         #endif`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         // Blood and raw flesh glisten.
-        roughnessFactor = mix(roughnessFactor, 0.3, clamp(zWet, 0.0, 1.0));`);
+        roughnessFactor = mix(roughnessFactor, 0.3, clamp(zWet, 0.0, 1.0));`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        {
+          // A faint cool rim round the silhouette and a little fill, so a body reads against
+          // the dark and its face and folds don't sink into black away from the lamps.
+          float rimF = 1.0 - saturate(dot(geometryNormal, geometryViewDir));
+          rimF *= rimF * rimF;
+          reflectedLight.indirectDiffuse += uRim.rgb * rimF * (0.25 + 2.0 * material.diffuseColor) + uRim.w * material.diffuseColor;
+        }`);
   });
   if (decay) {
     // The detail level is part of the program: switching it recompiles (see setZombieDetail).
@@ -348,8 +395,16 @@ export class Humanoid {
   readonly bones: THREE.Bone[];
   readonly mesh: THREE.SkinnedMesh;
   readonly material: THREE.MeshStandardMaterial;
-  private readonly eyes: THREE.Mesh | null = null;
+  /** Survivors: whites and irises together (squashed to blink); zombies: the glowing eyes. */
+  private readonly eyes: THREE.Object3D | null = null;
+  /** Survivors' irises, shifted as they glance about. */
+  private readonly irises: THREE.Mesh | null = null;
+  private readonly eyeGeometries: THREE.BufferGeometry[] = [];
   private readonly eyeMaterial: THREE.MeshStandardMaterial | null = null;
+  /** Where the eyes look (head space offset of the irises), where they are going, and when they move next. */
+  private readonly gaze = new THREE.Vector2();
+  private readonly gazeTo = new THREE.Vector2();
+  private gazeT = Math.random() * 2;
   private readonly skeleton: THREE.Skeleton;
   private readonly bodyKey: string;
   /** How far gear on the back sticks out (a slung rifle rides on top of a backpack). */
@@ -423,6 +478,17 @@ export class Humanoid {
   private readonly soakTo = new Float32Array(MAX_HITS);
   private nextHit = 0;
   private readonly body: BodyEntry;
+  /**
+   * Survivors' grime (shader uniform): x dirt and y blood, 0..1 each, z a per-body seed. Dirt
+   * builds up by itself while `weathering` (in a night); blood comes from splatter().
+   */
+  readonly grime = new THREE.Vector4(0, 0, Math.random() * 40, 0);
+  weathering = false;
+  // Idle life: breathing (faster after a run), shifting weight, settling into a ready stance.
+  private breathP = Math.random() * 6;
+  private winded = 0;
+  private shiftP = Math.random() * 13;
+  private still = 0;
 
   constructor(look: HumanoidLook) {
     this.zombie = !!look.zombie;
@@ -448,10 +514,10 @@ export class Humanoid {
     this.head.position.y = 0.58;
     // Women's shoulders sit a little closer in.
     const shoulder = SHOULDER_X[look.outfit.body === 'female' ? 'female' : 'male'] * girth;
-    this.armL = limb(this.spine, shoulder, 0.48, 0.31, 0.29);
-    this.armR = limb(this.spine, -shoulder, 0.48, 0.31, 0.29);
-    this.legL = limb(this.hips, 0.1 * girth, -0.04, 0.44, 0.44);
-    this.legR = limb(this.hips, -0.1 * girth, -0.04, 0.44, 0.44);
+    this.armL = limb(this.spine, shoulder, 0.48, ARM.upper, ARM.lower);
+    this.armR = limb(this.spine, -shoulder, 0.48, ARM.upper, ARM.lower);
+    this.legL = limb(this.hips, 0.1 * girth, -0.04, LEG.upper, LEG.lower);
+    this.legR = limb(this.hips, -0.1 * girth, -0.04, LEG.upper, LEG.lower);
     this.bones = [
       this.hips, this.spine, this.head,
       this.armL.upper, this.armL.lower, this.armR.upper, this.armR.lower,
@@ -462,7 +528,7 @@ export class Humanoid {
     this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, flatShading: true });
     this.bodyKey = JSON.stringify(look);
     if (this.zombie) this.decay = decayOf(look, (hashString(this.bodyKey) % 97) * 1.37, true);
-    patchWounds(this.material, this.wounds, this.decay ?? undefined);
+    patchWounds(this.material, this.wounds, this.decay ?? undefined, { uGrime: { value: this.grime }, uRim: { value: this.zombie ? RIM.zombie : RIM.survivor } });
     const body = acquireBody(this.bodyKey, look, this.bones);
     this.body = body;
     this.backDepth = body.dress.backDepth;
@@ -482,13 +548,22 @@ export class Humanoid {
       const g = mergeGeometries([l, r])!;
       l.dispose();
       r.dispose();
+      this.eyeGeometries.push(g);
       this.eyes = new THREE.Mesh(g, this.eyeMaterial);
+      this.eyes.scale.setScalar(HEAD_K);
       this.head.add(this.eyes);
     } else if (body.dress.eyesVisible) {
       this.eyeMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.28 });
-      this.eyes = new THREE.Mesh(buildEyes(look.outfit), this.eyeMaterial);
-      this.eyes.position.y = EYE_Y;
-      this.head.add(this.eyes);
+      const { whites, irises } = buildEyes(look.outfit);
+      this.eyeGeometries.push(whites, irises);
+      const eyes = new THREE.Mesh(whites, this.eyeMaterial);
+      this.irises = new THREE.Mesh(irises, this.eyeMaterial);
+      eyes.add(this.irises);
+      // The head is drawn HEAD_K of its built size (see Outfit's headSink).
+      eyes.position.y = EYE_Y * HEAD_K;
+      eyes.scale.setScalar(HEAD_K);
+      this.eyes = eyes;
+      this.head.add(eyes);
     }
   }
 
@@ -821,7 +896,9 @@ export class Humanoid {
       // Blink every few seconds; a ragdoll's eyes stay shut.
       this.blinkT -= dt;
       if (this.blinkT < -0.14) this.blinkT = 1.5 + Math.random() * 4;
-      this.eyes.scale.y = this.ragdoll ? 0.12 : this.blinkT < 0 ? 0.12 + Math.abs(this.blinkT + 0.07) * 12 : 1;
+      this.eyes.scale.y = HEAD_K * (this.ragdoll ? 0.12 : this.blinkT < 0 ? 0.12 + Math.abs(this.blinkT + 0.07) * 12 : 1);
+      this.glance(dt, target);
+      if (this.weathering) this.weather(dt, target);
     }
     if (this.ragdoll) return;
     const s = this.smoothed;
@@ -988,9 +1065,9 @@ export class Humanoid {
       this.armR.upper.rotation.set(swingR - crouch * 0.2 - fl[1].x * 0.05, 0, -0.08);
       this.armL.lower.rotation.set(-0.25 - run * 0.9, 0, 0);
       this.armR.lower.rotation.set(-0.25 - run * 0.9, 0, 0);
-      const breathe = Math.sin(performance.now() * 0.0018 + this.seed) * 0.02 * (1 - moving);
       // The head keeps looking where the body faces whatever the hips and shoulders do.
-      this.head.rotation.set(-lean * 0.6 + breathe - this.lookPitch * 0.4 + fh[0].x * 0.1, -this.twist - (swingY - sin * 0.1 * moving) * 0.7, fh[1].x * 0.08);
+      this.head.rotation.set(-lean * 0.6 - this.lookPitch * 0.4 + fh[0].x * 0.1, -this.twist - (swingY - sin * 0.1 * moving) * 0.7, fh[1].x * 0.08);
+      this.idleLife(dt, speed, moving, crouch, s.aim);
     }
 
     if (z && this.crawl > 0.001) this.crawlPose(p, moving, sv);
@@ -1024,6 +1101,84 @@ export class Humanoid {
     }
     this.lastStepSign = sign;
     if (this.stumps.size) this.syncStumps();
+  }
+
+  /**
+   * Survivors standing about: they breathe (quicker and deeper for a while after a run), shift
+   * their weight from foot to foot every several seconds (hips swaying over the standing leg,
+   * the other knee easing), and settle into a ready stance, feet apart with the left a little
+   * forward and the knees soft. The feet stay where they are planted.
+   */
+  private idleLife(dt: number, speed: number, moving: number, crouch: number, aim: number): void {
+    const run = THREE.MathUtils.smoothstep(speed, 3.5, 6);
+    this.winded = THREE.MathUtils.clamp(this.winded + (run * 0.14 - (1 - run) * 0.07) * dt, 0, 1);
+    this.breathP += dt * Math.PI * 2 * (0.23 + 0.4 * this.winded);
+    const settle = (1 - moving) * (1 - this.skateW) * (this.smoothed.grounded ? 1 : 0) * (1 - this.down);
+    this.still += (settle - this.still) * (1 - Math.exp(-dt * 3));
+    const st = this.still;
+
+    // Breath: the chest lifts (the head holds its gaze).
+    // (Less while aiming, so the gun on the shoulder doesn't bob with it.)
+    const b = (Math.sin(this.breathP) + 0.25 * Math.sin(this.breathP * 2)) * (1 + this.winded * 1.6) * (0.35 + 0.65 * st) * (1 - aim * 0.6);
+    this.spine.rotation.x -= b * 0.012;
+    this.head.rotation.x += b * 0.008;
+
+    if (st < 0.002) return;
+    // A slight lean into the stance, the head drifting about a little when not aiming.
+    this.spine.rotation.x += 0.05 * st;
+    this.head.rotation.x -= 0.03 * st;
+    const t = this.breathP * 0.37 + this.seed;
+    this.head.rotation.y += (Math.sin(t * 0.31) * 0.09 + Math.sin(t * 0.13 + 1.7) * 0.06) * st * (1 - aim);
+
+    // Weight shift: mostly resting on one leg, moving across now and then.
+    this.shiftP += dt * (Math.PI * 2) / 13;
+    const w = Math.tanh(Math.sin(this.shiftP) * 2.5) / Math.tanh(2.5) * st * (1 - aim * 0.6) * (1 - crouch);
+    const sway = w * 0.018, roll = w * 0.035;
+    this.hips.position.x += sway;
+    this.hips.rotation.z += roll;
+    this.spine.rotation.z -= roll * 0.8;
+
+    // Feet apart, left foot forward, knees soft (the free one more so), hips down to match.
+    const legLen = LEG.upper + LEG.lower;
+    const plant = -roll - Math.asin(sway / legLen);
+    const soft = 0.1 * st * (1 - crouch);
+    const kL = soft + Math.max(0, -w) * 0.12, kR = soft + Math.max(0, w) * 0.12;
+    this.legL.upper.rotation.z += 0.075 * st + plant;
+    this.legR.upper.rotation.z += -0.075 * st + plant;
+    this.legL.upper.rotation.x += -0.08 * st - kL / 2;
+    this.legR.upper.rotation.x += 0.05 * st - kR / 2;
+    this.legL.lower.rotation.x += kL;
+    this.legR.lower.rotation.x += kR;
+    this.hips.position.y -= legLen * (1 - Math.cos(Math.min(kL, kR) / 2)) + legLen * (1 - Math.cos(0.075 * st)) * 0.5;
+  }
+
+  /** Eyes: a dart aside every second or few and back, leading the head into a turn, ahead while aiming. */
+  private glance(dt: number, target: LocomotionState): void {
+    if (!this.irises) return;
+    this.gazeT -= dt;
+    if (this.gazeT <= 0) {
+      this.gazeT = 0.5 + Math.random() * 2.6;
+      if (Math.random() < 0.35) this.gazeTo.set(0, 0);
+      else this.gazeTo.set((Math.random() * 2 - 1) * 0.0034, (Math.random() * 2 - 1) * 0.002);
+    }
+    const free = 1 - THREE.MathUtils.smoothstep(target.aim, 0.3, 0.7);
+    const tx = THREE.MathUtils.clamp(this.gazeTo.x * free + (target.turn ?? 0) * 0.0016, -0.0042, 0.0042);
+    const ty = this.gazeTo.y * free;
+    const k = 1 - Math.exp(-dt * 30);
+    this.gaze.x += (tx - this.gaze.x) * k;
+    this.gaze.y += (ty - this.gaze.y) * k;
+    this.irises.position.set(this.gaze.x, this.gaze.y, 0);
+  }
+
+  /** Dirt builds up through a night: faster on the move, crouching, and most of all on the ground. */
+  private weather(dt: number, target: LocomotionState): void {
+    const rate = 0.0006 + target.speed * 0.00016 + target.crouch * 0.0012 + this.down * 0.02;
+    this.grime.x = Math.min(1, this.grime.x + rate * dt);
+  }
+
+  /** Blood on the survivor's clothes and skin (a hit taken, a kill up close): adds up to 1. */
+  splatter(amount: number): void {
+    this.grime.y = Math.min(1, this.grime.y + amount);
   }
 
   /**
@@ -1250,10 +1405,8 @@ export class Humanoid {
     this.gore?.dispose();
     this.skeleton.dispose();
     releaseBody(this.bodyKey);
-    if (this.eyes) {
-      this.eyes.geometry.dispose();
-      this.eyeMaterial?.dispose();
-    }
+    for (const g of this.eyeGeometries) g.dispose();
+    this.eyeMaterial?.dispose();
   }
 }
 

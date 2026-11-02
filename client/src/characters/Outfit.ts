@@ -5,14 +5,29 @@ import { BONE } from './rig';
 /** Fabric patterns, drawn per pixel by the character material from bind-pose position. */
 export const PATTERN = { none: 0, plaid: 1, stripes: 2, camo: 3, floral: 4, knit: 5, denim: 6 } as const;
 
+/** Per-vertex soft shading: scales `c` for a vertex at bone-space (x, y, z) (shadow under the jaw, eye sockets). */
+export type Shade = (x: number, y: number, z: number, c: THREE.Color) => void;
+
 export interface Surface {
   pattern?: number;
   /** Second pattern color (plaid lines, stripes, flowers). */
   accent?: number;
+  /** Soft shading over the part (see Shade). */
+  shade?: Shade;
 }
 
-/** Receives one primitive: its bone, color, bone-space transform and optional fabric pattern. */
-export type PartSink = (g: THREE.BufferGeometry, bone: number, hex: number, m: THREE.Matrix4, s?: Surface) => void;
+/**
+ * A limb's joint (elbow, knee): the part's vertices within `band` of bone-space height `y` lean
+ * on `bone` as well, up to half at the joint, so the limb bends there in one smooth piece.
+ */
+export interface SkinBlend {
+  bone: number;
+  y: number;
+  band: number;
+}
+
+/** Receives one primitive: its bone, color, bone-space transform, optional fabric pattern and joint blend. */
+export type PartSink = (g: THREE.BufferGeometry, bone: number, hex: number, m: THREE.Matrix4, s?: Surface, blend?: SkinBlend) => void;
 
 type V3 = readonly [number, number, number];
 const O: V3 = [0, 0, 0];
@@ -49,8 +64,16 @@ class Kit {
     return new Kit(this.sink, this.bone, this.frame.clone().multiply(mat(p, r, s)));
   }
 
-  put(g: THREE.BufferGeometry, hex: number, p?: V3, r?: V3, s?: V3 | number, surf?: Surface): void {
-    this.sink(g, this.bone, hex, this.frame.clone().multiply(mat(p, r, s)), surf);
+  put(g: THREE.BufferGeometry, hex: number, p?: V3, r?: V3, s?: V3 | number, surf?: Surface, blend?: SkinBlend): void {
+    this.sink(g, this.bone, hex, this.frame.clone().multiply(mat(p, r, s)), surf, blend);
+  }
+
+  /**
+   * A limb's surface turned from `rings` (radii scaled by `rk`, `inf` out from them), `seg` sides,
+   * closed at the top and/or bottom; `blend` bends it with the next bone at a joint.
+   */
+  lathe(hex: number, rings: readonly Ring[], rk: number, inf: number, seg: number, caps: { top?: boolean; bottom?: boolean }, surf?: Surface, blend?: SkinBlend): void {
+    this.put(latheGeometry(rings, rk, inf, seg, !!caps.top, !!caps.bottom), hex, O, O, 1, surf, blend);
   }
 
   /** Oriented so local +Y points along `dir`. */
@@ -115,6 +138,212 @@ function crumple(g: THREE.BufferGeometry, amount: number): THREE.BufferGeometry 
   return g;
 }
 
+// ── Limbs ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One ring of a limb's surface: height down its bone (y, negative), radius, how far forward it
+ * sits (calves bulge behind, thighs in front). `fine` rings round out joints and muscles on
+ * survivors; zombies (there are a lot of them) skip them.
+ */
+export type Ring = readonly [y: number, r: number, z?: number, fine?: 1];
+
+/** Bone lengths of the rig (Humanoid builds its limbs from these). */
+export const ARM = { upper: 0.31, lower: 0.29 } as const;
+export const LEG = { upper: 0.44, lower: 0.44 } as const;
+/** How far each side of an elbow or knee the skin bends with both bones. */
+const BEND = 0.07;
+
+/** Shoulder down to the elbow: deltoid, biceps, narrowing into the elbow. */
+const ARM_UP: readonly Ring[] = [[0.015, 0.05], [-0.04, 0.057], [-0.11, 0.055, 0.002, 1], [-0.19, 0.049], [-0.25, 0.044, 0, 1], [-0.285, 0.042, 0, 1], [-0.31, 0.041]];
+/** Elbow to the wrist: the forearm's swell just below the elbow, thin at the wrist. */
+const ARM_LO: readonly Ring[] = [[0, 0.041], [-0.025, 0.043, 0, 1], [-0.07, 0.046], [-0.14, 0.041, 0, 1], [-0.22, 0.034], [-0.29, 0.03]];
+/** Hip to knee and knee to ankle, bare: a full thigh, a calf swelling out behind, slim ankles. */
+const LEG_UP: Record<'male' | 'female', readonly Ring[]> = {
+  male: [[0.03, 0.078], [-0.05, 0.083, 0.004], [-0.16, 0.078, 0.005, 1], [-0.28, 0.068, 0.002], [-0.37, 0.059, 0, 1], [-0.41, 0.0555, 0, 1], [-0.44, 0.054]],
+  female: [[0.03, 0.084], [-0.05, 0.09, 0.004], [-0.16, 0.082, 0.005, 1], [-0.28, 0.068, 0.002], [-0.37, 0.057, 0, 1], [-0.41, 0.0535, 0, 1], [-0.44, 0.052]],
+};
+const LEG_LO: Record<'male' | 'female', readonly Ring[]> = {
+  male: [[0, 0.054], [-0.03, 0.0555, -0.001, 1], [-0.08, 0.059, -0.005], [-0.15, 0.06, -0.007, 1], [-0.25, 0.049, -0.004], [-0.35, 0.04, 0, 1], [-0.44, 0.036]],
+  female: [[0, 0.052], [-0.03, 0.0535, -0.001, 1], [-0.08, 0.057, -0.005], [-0.15, 0.057, -0.007, 1], [-0.25, 0.046, -0.004], [-0.35, 0.037, 0, 1], [-0.44, 0.033]],
+};
+
+/** Radius and forward offset of a ring list at height y (linear between rings, clamped). */
+export function ringAt(rings: readonly Ring[], y: number): { r: number; z: number } {
+  if (y >= rings[0][0]) return { r: rings[0][1], z: rings[0][2] ?? 0 };
+  for (let i = 1; i < rings.length; i++) {
+    const [y1, r1, z1 = 0] = rings[i];
+    if (y >= y1) {
+      const [y0, r0, z0 = 0] = rings[i - 1];
+      const t = (y - y0) / (y1 - y0);
+      return { r: r0 + (r1 - r0) * t, z: z0 + (z1 - z0) * t };
+    }
+  }
+  const l = rings[rings.length - 1];
+  return { r: l[1], z: l[2] ?? 0 };
+}
+
+/** The rings a body is built with (zombies skip the fine ones). */
+const ringsFor = (b: Body, rings: readonly Ring[]): readonly Ring[] => (b.zombie ? rings.filter((r) => !r[3]) : rings);
+
+/** Turned surface through `rings` (see Kit.lathe): smooth normals, optional end caps. */
+function latheGeometry(rings: readonly Ring[], rk: number, inf: number, seg: number, top: boolean, bottom: boolean): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const idx: number[] = [];
+  const at = (i: number, j: number) => i * (seg + 1) + j;
+  rings.forEach(([y, r, z = 0], i) => {
+    const R = r * rk + inf;
+    // The surface's slope here (-dR/dy), so normals lean with a swelling muscle.
+    const prev = rings[Math.max(0, i - 1)], next = rings[Math.min(rings.length - 1, i + 1)];
+    const dy = next[0] - prev[0], dr = (next[1] - prev[1]) * rk;
+    const slope = dy !== 0 ? -dr / dy : 0;
+    const l = Math.hypot(1, slope);
+    for (let j = 0; j <= seg; j++) {
+      const t = (j / seg) * TAU;
+      const sx = Math.sin(t), cz = Math.cos(t);
+      pos.push(sx * R, y, cz * R + z * rk);
+      nor.push(sx / l, slope / l, cz / l);
+    }
+  });
+  for (let i = 0; i + 1 < rings.length; i++) {
+    for (let j = 0; j < seg; j++) {
+      const a = at(i, j), b = at(i, j + 1), c = at(i + 1, j + 1), d = at(i + 1, j);
+      idx.push(a, d, c, a, c, b);
+    }
+  }
+  const cap = (i: number, up: boolean) => {
+    const [y, , z = 0] = rings[i];
+    const c = pos.length / 3;
+    pos.push(0, y, z * rk);
+    nor.push(0, up ? 1 : -1, 0);
+    const base = pos.length / 3;
+    for (let j = 0; j <= seg; j++) {
+      pos.push(pos[at(i, j) * 3], pos[at(i, j) * 3 + 1], pos[at(i, j) * 3 + 2]);
+      nor.push(0, up ? 1 : -1, 0);
+    }
+    for (let j = 0; j < seg; j++) {
+      if (up) idx.push(c, base + j, base + j + 1);
+      else idx.push(c, base + j + 1, base + j);
+    }
+  };
+  if (top) cap(0, true);
+  if (bottom) cap(rings.length - 1, false);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+/** Rings `inf` out from another list's, sampled at `ys` (a sleeve or hem over the limb). */
+function over(rings: readonly Ring[], ys: readonly number[], inf: number): Ring[] {
+  return ys.map((y) => {
+    const { r, z } = ringAt(rings, y);
+    return [y, r + inf, z] as const;
+  });
+}
+
+/** A strip (track-suit stripe) down the outer side of a limb, following its surface. */
+function stripe(k: Kit, rings: readonly Ring[], rk: number, inf: number, side: number, hex: number, w: number): void {
+  for (let i = 0; i + 1 < rings.length; i++) {
+    const [y0, r0] = rings[i], [y1, r1] = rings[i + 1];
+    const a = new THREE.Vector3(side * (r0 * rk + inf + 0.002), y0, 0), b = new THREE.Vector3(side * (r1 * rk + inf + 0.002), y1, 0);
+    const d = b.clone().sub(a);
+    const m = a.clone().add(b).multiplyScalar(0.5);
+    k.putAlong(new THREE.BoxGeometry(0.006, d.length() + 0.004, w), hex, [m.x, m.y, m.z], d);
+  }
+}
+
+/**
+ * A hand at the end of the forearm (lower arm bone space, wrist at -ARM.lower): the palm facing
+ * the body's midline, the thumb forward, the fingers curled as round a grip (zombies' clawing,
+ * half open). `fingers` colors fingers and thumb (bare under fingerless gloves).
+ */
+function hand(lo: Kit, s: number, b: Body, palm: number, fingers: number, inf: number): void {
+  const h = lo.at([0, -ARM.lower, 0], O, b.hand);
+  const i2 = inf * 2;
+  h.box(palm, [0.032 + i2, 0.076 + inf, 0.07 + i2], [s * 0.002, -0.034, 0.002]);
+  // Survivors' fingers half closed (round a grip, or relaxed at the side), zombies' clawing.
+  const [c1, c2] = b.zombie ? [0.38, 0.55] : [0.42, 0.55];
+  // Each knuckle's box reaches back into the one before, so bending opens no notch.
+  const k1 = h.at([s * 0.001, -0.068, 0.001], [0, 0, -s * c1]);
+  k1.box(fingers, [0.023 + i2, 0.05, 0.068 + i2], [0, -0.016, 0]);
+  const k2 = k1.at([0, -0.04, 0], [0, 0, -s * c2]);
+  k2.box(fingers, [0.02 + i2, 0.034, 0.064 + i2], [0, -0.012, 0]);
+  // Thumb from the heel of the hand on the front edge, wrapped round toward the fingers.
+  const dir = b.zombie ? new THREE.Vector3(-s * 0.25, -0.75, 0.5) : new THREE.Vector3(-s * 0.42, -0.82, 0.3);
+  dir.normalize();
+  const base = new THREE.Vector3(-s * 0.004, -0.024, 0.031).addScaledVector(dir, 0.025);
+  if (b.zombie) h.putAlong(new THREE.BoxGeometry(0.019 + i2, 0.05, 0.02 + i2), fingers, [base.x, base.y, base.z], dir);
+  else h.putAlong(new THREE.CylinderGeometry(0.0095 + inf, 0.0118 + inf, 0.05, 5), fingers, [base.x, base.y, base.z], dir);
+}
+
+// ── Head ────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The head and everything on it is drawn this much smaller than it is built (about the neck),
+ * so bodies stand a little over seven heads tall.
+ */
+export const HEAD_K = 0.92;
+
+/** How much of the jaw narrowing applies at head-space height y: none at the cheekbones, all of it at the chin. */
+const jawK = (y: number) => THREE.MathUtils.smoothstep(-y, -0.1, 0.005);
+
+/**
+ * Head bone parts go through here: a jawline (the lower face narrowing toward the chin, the back
+ * of the jaw tucking in under the skull), then shrunk by HEAD_K. Everything on the head (beards,
+ * masks, makeup, helmets) is warped alike, so whatever sat on the face still does.
+ */
+function headSink(sink: PartSink): PartSink {
+  return (g, bone, hex, m, surf, blend) => {
+    g.applyMatrix4(m);
+    const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const j = jawK(y);
+      pos.setXYZ(i, x * (1 - 0.12 * j) * HEAD_K, y * HEAD_K, (z < 0 ? z * (1 - 0.06 * j) : z) * HEAD_K);
+    }
+    pos.needsUpdate = true;
+    const shade = surf?.shade;
+    const s = shade ? { ...surf, shade: (x: number, y: number, z: number, c: THREE.Color) => shade(x / HEAD_K, y / HEAD_K, z / HEAD_K, c) } : surf;
+    sink(g, bone, hex, new THREE.Matrix4(), s, blend);
+  };
+}
+
+const gauss = (d2: number) => Math.exp(-d2);
+
+/**
+ * Soft shading on the face (head space, as built): shadow under the jaw and chin, eye sockets,
+ * beside and under the nose, toward the temples; warmth on the cheeks, nose and ears.
+ */
+const faceShade: Shade = (x, y, z, c) => {
+  const ax = Math.abs(x);
+  const front = THREE.MathUtils.smoothstep(z, 0.02, 0.09);
+  let k = 1;
+  // Under the jaw: the bottom of the head falls into shadow, deepest toward the neck (the chin's
+  // front much less, or it reads as stubble).
+  k *= 1 - 0.3 * THREE.MathUtils.smoothstep(-y, -0.045, 0.005) * (1 - 0.65 * front);
+  // Eye sockets, under the brow.
+  k *= 1 - 0.17 * front * gauss(((ax - 0.042) / 0.03) ** 2 + ((y - 0.142) / 0.024) ** 2);
+  // Beside the nose, and the little shadow under it.
+  k *= 1 - 0.12 * front * gauss(((ax - 0.021) / 0.012) ** 2 + ((y - 0.1) / 0.022) ** 2);
+  k *= 1 - 0.08 * front * gauss((x / 0.016) ** 2 + ((y - 0.08) / 0.008) ** 2);
+  // Temples and the sides of the face turn away.
+  k *= 1 - 0.07 * THREE.MathUtils.smoothstep(ax, 0.075, 0.115);
+  c.multiplyScalar(k);
+  // Blood under the skin: cheeks, nose tip, ears.
+  const warm = 0.9 * front * gauss(((ax - 0.066) / 0.026) ** 2 + ((y - 0.092) / 0.022) ** 2) + 0.7 * front * gauss((x / 0.014) ** 2 + ((y - 0.098) / 0.014) ** 2) + 0.6 * gauss(((ax - 0.113) / 0.012) ** 2 + ((y - 0.115) / 0.03) ** 2);
+  c.r *= 1 + 0.07 * warm;
+  c.g *= 1 - 0.025 * warm;
+  c.b *= 1 - 0.04 * warm;
+};
+
+/** The neck in the jaw's shadow at the top, lighter where it meets the shoulders. */
+const neckShade: Shade = (_x, y, z, c) => {
+  const k = 1 - 0.3 * THREE.MathUtils.smoothstep(y, -0.07, 0.01) * (0.55 + 0.45 * THREE.MathUtils.smoothstep(z, -0.02, 0.05));
+  c.multiplyScalar(k);
+};
+
 export interface DressOptions {
   zombie: boolean;
   /** Skin color (hex), overriding the palette (zombies). */
@@ -145,10 +374,16 @@ interface Body {
   female: boolean;
   /** Hand size (gloves). */
   hand: number;
+  /** Leg thickness (heavier builds have heavier legs). */
+  leg: number;
+  /** Sides of each limb's surface. */
+  seg: number;
   zombie: boolean;
   rand: () => number;
   /** How far the top's outer layer stands off the torso; straps, packs and vests go over it. */
   bulk: number;
+  /** What covers the shins, once the legs are dressed (knee pads go over it). */
+  shins?: Shins;
 }
 
 const BUILD = { slim: [0.9, 0.93, 0.92], average: [1, 1, 1], broad: [1.11, 1.08, 1.1] } as const;
@@ -288,22 +523,24 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
   const female = a.body === 'female';
   const b: Body = {
     bx: build[0] * g, bz: build[1] * g, arm: build[2] * g * (female ? 0.9 : 1), skin: o.skin ?? paletteColor('skin', a.skin),
-    female, hand: female ? 0.9 : 1, zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0,
+    female, hand: female ? 0.9 : 1, leg: 1 + (build[0] * g - 1) * 0.6, seg: o.zombie ? 7 : 10,
+    zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0,
   };
   const kit = (bone: number) => new Kit(sink, bone);
-  const head = kit(BONE.head), spine = kit(BONE.spine), hips = kit(BONE.hips);
+  // The neck keeps its length; the head on it is shaped and scaled (headSink).
+  const neckKit = kit(BONE.head), head = new Kit(headSink(sink), BONE.head), spine = kit(BONE.spine), hips = kit(BONE.hips);
   const cloth = (i: number) => paletteColor('cloth', i);
   const hairHex = paletteColor('hair', a.hairColor);
   const covered = COVERS_FACE.has(a.headwear);
 
-  face(head, a, b, hairHex, covered);
+  face(head, neckKit, a, b, hairHex, covered);
   hair(head, a, b, hairHex, COVER[a.headwear] ?? 'hat');
   earrings(head, a, COVER[a.headwear] ?? 'hat');
   if (!covered) beard(head, a, b, hairHex);
   headwear(head, a, cloth(a.headwearColor));
   top(spine, kit, a, b);
-  pants(hips, spine, kit, a, b);
-  shoes(kit, a, b);
+  b.shins = pants(hips, spine, kit, a, b);
+  shoes(kit, a, b, b.shins);
   gloves(kit, a, b);
   if (!covered) faceGear(head, a, b, cloth(a.faceColor));
   neck(spine, a, b, cloth(a.neckColor));
@@ -381,13 +618,15 @@ function makeupColors(a: Appearance, b: Body): { lips?: number; lids?: number; c
   }
 }
 
-function face(h: Kit, a: Appearance, b: Body, hairHex: number, covered: boolean): void {
+function face(h: Kit, neck: Kit, a: Appearance, b: Body, hairHex: number, covered: boolean): void {
   const skin = b.skin;
-  if (b.female) h.cyl(skin, 0.047, 0.057, 0.12, [0, -0.04, 0], O, 1, { seg: 8 });
-  else h.cyl(skin, 0.055, 0.065, 0.12, [0, -0.04, 0], O, 1, { seg: 8 });
-  h.put(new THREE.IcosahedronGeometry(1, 2), skin, [0, 0.12, 0], O, [0.117, 0.1404, 0.13]);
-  for (const s of [1, -1]) h.ball(shade(skin, 0.94), [0.016, 0.03, 0.022], [s * 0.113, 0.115, -0.008], [0, 0, s * 0.1], undefined, 6, 5);
-  h.box(shade(skin, 0.97), [0.024, 0.038, 0.024], [0, 0.102, 0.122], [-0.32, 0, 0]);
+  const soft: Surface = { shade: faceShade };
+  // A neck that narrows up into the jaw.
+  if (b.female) neck.cyl(skin, 0.042, 0.055, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: 10 }, { shade: neckShade });
+  else neck.cyl(skin, 0.05, 0.063, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: 10 }, { shade: neckShade });
+  h.put(new THREE.IcosahedronGeometry(1, 2), skin, [0, 0.12, 0], O, [0.117, 0.1404, 0.13], soft);
+  for (const s of [1, -1]) h.ball(shade(skin, 0.94), [0.016, 0.03, 0.022], [s * 0.113, 0.115, -0.008], [0, 0, s * 0.1], soft, 6, 5);
+  h.box(shade(skin, 0.97), [0.024, 0.038, 0.024], [0, 0.102, 0.122], [-0.32, 0, 0], soft);
   if (b.zombie) {
     // A slack, dark mouth.
     h.ball(0x2a0c0a, [0.026, 0.012, 0.008], [0, 0.058, 0.115], [0.1, 0, 0], undefined, 8, 5);
@@ -464,20 +703,23 @@ function earrings(h: Kit, a: Appearance, cover: Cover): void {
   }
 }
 
-/** Eye geometry (head-bone space, relative to the eye line at EYE_Y): sclera, iris, pupil, glint, lids. */
-export function eyeParts(a: Appearance): { g: THREE.BufferGeometry; hex: number; m: THREE.Matrix4 }[] {
+/** One piece of the eyes; `iris` pieces (iris, pupil, glint) move together when the eyes look about. */
+export interface EyePart { g: THREE.BufferGeometry; hex: number; m: THREE.Matrix4; iris?: boolean }
+
+/** Eye geometry (head-bone space as built, relative to the eye line at EYE_Y): sclera, iris, pupil, glint, lids. */
+export function eyeParts(a: Appearance): EyePart[] {
   const e = EYES[a.eyes] ?? EYES.almond;
   const iris = paletteColor('eye', a.eyeColor);
-  const out: { g: THREE.BufferGeometry; hex: number; m: THREE.Matrix4 }[] = [];
-  const add = (g: THREE.BufferGeometry, hex: number, m: THREE.Matrix4) => out.push({ g, hex, m });
+  const out: EyePart[] = [];
+  const add = (g: THREE.BufferGeometry, hex: number, m: THREE.Matrix4, moves = false) => out.push({ g, hex, m, iris: moves });
   for (const s of [1, -1]) {
     const frame = mat([s * EYE_X, 0, EYE_Z], [0, s * 0.2, s * e.tilt]);
     const at = (p: V3, r: V3, sc: V3 | number) => frame.clone().multiply(mat(p, r, sc));
     add(new THREE.SphereGeometry(1, 12, 8), 0xe9e4dc, at(O, O, [e.sx, e.sy, 0.016]));
     const ir = Math.min(0.0115, e.sy * 0.95);
-    add(new THREE.SphereGeometry(1, 12, 8), iris, at([0, 0, 0.0115], O, [ir, ir, 0.0055]));
-    add(new THREE.SphereGeometry(1, 10, 6), 0x050505, at([0, 0, 0.0145], O, [ir * 0.45, ir * 0.45, 0.003]));
-    add(new THREE.SphereGeometry(1, 6, 4), 0xffffff, at([-s * ir * 0.35 + s * 0.001, ir * 0.4, 0.0168], O, ir * 0.17));
+    add(new THREE.SphereGeometry(1, 12, 8), iris, at([0, 0, 0.0115], O, [ir, ir, 0.0055]), true);
+    add(new THREE.SphereGeometry(1, 10, 6), 0x050505, at([0, 0, 0.0145], O, [ir * 0.45, ir * 0.45, 0.003]), true);
+    add(new THREE.SphereGeometry(1, 6, 4), 0xffffff, at([-s * ir * 0.35 + s * 0.001, ir * 0.4, 0.0168], O, ir * 0.17), true);
     // Lash line along the top edge of an open eye (lidded eyes have the lid's edge instead).
     const female = a.body === 'female';
     const liner = a.makeup === 'liner' || a.makeup === 'glam' || a.makeup === 'smoky';
@@ -1075,23 +1317,46 @@ function torso(sp: Kit, b: Body, hex: number, surf?: Surface): void {
   sp.cyl(hex, 0.21, 0.16, 0.5, [0, 0.27, 0], O, [b.bx, 1, 0.62 * b.bz], { seg: 14 }, surf);
 }
 
+/** Elbow and knee balls' size relative to the joint ring: inside the limb's flat sides while it is straight. */
+const jointK = (b: Body) => Math.cos(Math.PI / b.seg) * 0.97;
+
+/** Rings of the arm a body is built with (upper arm, forearm). */
+const armRings = (b: Body) => ({ up: ringsFor(b, ARM_UP), lo: ringsFor(b, ARM_LO) });
+
+/**
+ * Both arms in a sleeve style: upper arm and forearm each one tapered surface, bending smoothly
+ * at the elbow (the two meet in the same ring and share it between both bones there), with a
+ * ball at the elbow that keeps its point when it bends far.
+ */
 function sleeves(kit: (bone: number) => Kit, b: Body, kind: Sleeve, hex: number, surf?: Surface, cuff?: number): void {
   const skin = b.skin;
+  const { up: UP, lo: LO } = armRings(b);
   for (const s of [1, -1]) {
-    const up = kit(s > 0 ? BONE.armLUpper : BONE.armRUpper), lo = kit(s > 0 ? BONE.armLLower : BONE.armRLower);
+    const ub = s > 0 ? BONE.armLUpper : BONE.armRUpper, lb = ub + 1;
+    const up = kit(ub), lo = kit(lb);
     const k = b.arm;
     // Zombie sleeves are often torn off at the elbow.
     const torn = b.zombie && b.rand() < 0.5;
-    const inf = kind === 'jacket' ? 0.01 : kind === 'puffy' ? 0.022 : 0;
+    const inf = kind === 'jacket' ? 0.01 : kind === 'puffy' ? 0.022 : kind === 'long' ? 0.003 : 0;
     const upHex = kind === 'none' || kind === 'short' ? skin : hex;
     const loHex = kind === 'long' || kind === 'jacket' || kind === 'puffy' ? (torn ? skin : hex) : skin;
+    const upInf = upHex === skin ? 0 : inf, loInf = loHex === skin ? 0 : inf;
+    const upSurf = upHex === skin ? undefined : surf, loSurf = loHex === skin ? undefined : surf;
     up.ball(kind === 'none' ? skin : hex, 0.062 * k + inf, [0, -0.01, 0], O, kind === 'none' ? undefined : surf, 8, 6);
-    up.cyl(upHex, (0.055 + inf) * k, (0.045 + inf) * k, 0.31, [0, -0.155, 0], O, 1, { seg: 8 }, upHex === skin ? undefined : surf);
-    lo.cyl(loHex, (0.045 + inf * 0.8) * k, (0.038 + inf * 0.8) * k, 0.29, [0, -0.145, 0], O, 1, { seg: 8 }, loHex === skin ? undefined : surf);
-    if (kind === 'short') up.cyl(hex, 0.066 * k, 0.06 * k, 0.13, [0, -0.06, 0], O, 1, { seg: 8 }, surf);
-    if (kind === 'puffy') for (const y of [-0.1, -0.22]) up.torus(hex, 0.052 * k, 0.018, [0, y, 0], [Math.PI / 2, 0, 0], 1, 4, 10, TAU, surf);
-    if (loHex !== skin && cuff !== undefined) lo.cyl(cuff, 0.046 * k + inf * 0.8, 0.046 * k + inf * 0.8, 0.035, [0, -0.272, 0], O, 1, { seg: 8 });
-    if (torn && (kind === 'long' || kind === 'jacket')) lo.cyl(hex, 0.05 * k, 0.046 * k, 0.04, [0, -0.02, 0], O, 1, { seg: 7 }, surf);
+    // A sleeve ending at the elbow is closed off there (the bare forearm runs on inside it).
+    up.lathe(upHex, UP, k, upInf, b.seg, { top: true, bottom: upInf !== loInf }, upSurf, { bone: lb, y: -ARM.upper, band: BEND });
+    lo.lathe(loHex, LO, k, loInf, b.seg, { top: upInf !== loInf, bottom: true }, loSurf, { bone: ub, y: 0, band: BEND });
+    lo.ball(loHex, ringAt(LO, 0).r * k * jointK(b) + loInf, [0, 0, 0], O, loSurf, b.seg, b.zombie ? 3 : 5);
+    if (kind === 'short') up.lathe(hex, [[0.01, 0.065], [-0.06, 0.064], [-0.125, 0.06]], k, 0, b.seg, { top: true, bottom: true }, surf);
+    if (kind === 'puffy') for (const y of [-0.1, -0.22]) up.torus(hex, ringAt(UP, y).r * k + inf - 0.006, 0.018, [0, y, 0], [Math.PI / 2, 0, 0], 1, 4, 10, TAU, surf);
+    if (loHex !== skin && cuff !== undefined) {
+      const r = ringAt(LO, -0.272).r * k + loInf + 0.004;
+      lo.cyl(cuff, r, r, 0.035, [0, -0.272, 0], O, 1, { seg: b.seg });
+    }
+    if (torn && (kind === 'long' || kind === 'jacket')) {
+      const r = ringAt(LO, -0.02).r * k;
+      lo.cyl(hex, r + 0.01, r + 0.007, 0.04, [0, -0.02, 0], O, 1, { seg: 7 }, surf);
+    }
   }
 }
 
@@ -1260,9 +1525,9 @@ function top(sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): void 
       torso(sp, b, main);
       sleeves(kit, b, 'long', main, undefined, main);
       for (const s of [1, -1]) {
-        for (const [bone, len, y] of [[s > 0 ? BONE.armLUpper : BONE.armRUpper, 0.31, -0.155], [s > 0 ? BONE.armLLower : BONE.armRLower, 0.29, -0.145]] as const) {
-          kit(bone).box(acc, [0.012, len, 0.016], [s * 0.05 * b.arm, y, 0]);
-        }
+        const { up, lo } = armRings(b);
+        stripe(kit(s > 0 ? BONE.armLUpper : BONE.armRUpper), up, b.arm, 0.003, s, acc, 0.016);
+        stripe(kit(s > 0 ? BONE.armLLower : BONE.armRLower), lo, b.arm, 0.003, s, acc, 0.016);
       }
       sp.box(0x9a9ca0, [0.006, 0.46, 0.006], [0, 0.27, frontZ(b, 0.27) + 0.003]);
       sp.cyl(main, 0.075, 0.08, 0.05, [0, 0.535, 0], O, [1, 1, 0.95], { seg: 12 });
@@ -1438,7 +1703,28 @@ function skirt(hp: Kit, b: Body, hex: number, y0: number, y1: number, r0: number
   hp.tube(hex, r0, r1, y0 - y1, [0, (y0 + y1) / 2, 0], O, [bp, 1, 0.8 * bp], seg, surf);
 }
 
-function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): void {
+/**
+ * Trouser legs over bare ones: `ease` looser all round, half the muscle showing through, and
+ * below the knee hanging straight (or tapering, or flaring) toward a `hem` (null: skin tight).
+ */
+function trouserRings(thigh: readonly Ring[], shin: readonly Ring[], ease: number, hem: number | null): { up: Ring[]; lo: Ring[] } {
+  const up = thigh.map(([y, r, z = 0, f]): Ring => [y, r + ease, z * 0.5, f]);
+  const knee = up[up.length - 1][1];
+  const lo = shin.map(([y, r, z = 0, f]): Ring => {
+    if (hem === null) return [y, r + ease, z * 0.5, f];
+    const t = -y / LEG.lower;
+    return [y, Math.max(r + ease * 0.6, knee + (hem - knee) * t), z * 0.35, f];
+  });
+  return { up, lo };
+}
+
+/** What covers the shins (for boots to fit over): rings and their scale. */
+interface Shins {
+  rings: readonly Ring[];
+  k: number;
+}
+
+function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): Shins {
   const hex = paletteColor('cloth', a.pantsColor);
   const bp = 0.97 + (b.bx - 1) * 0.5;
   const F = b.female;
@@ -1450,9 +1736,10 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   // Bare legs (shorts, skirts) or tights under the plaid skirt.
   const bare = a.pants === 'shorts' || a.pants === 'denimshorts' || a.pants === 'skirt';
   const legHex = a.pants === 'plaidskirt' ? 0x1f1d22 : b.skin;
-  // Women's legs: fuller thighs, slimmer calves and ankles.
-  const thigh: V3 = F ? [0.087, 0.06, 0] : [0.08, 0.06, 0], shin: V3 = F ? [0.06, 0.047, 0] : [0.06, 0.051, 0];
-  const skinThigh: V3 = F ? [0.081, 0.056, 0] : [0.074, 0.058, 0], skinShin: V3 = F ? [0.056, 0.043, 0] : [0.058, 0.049, 0];
+  // Women's legs: fuller thighs, slimmer knees, calves and ankles.
+  const body = F ? 'female' : 'male';
+  const skinUp = ringsFor(b, LEG_UP[body]), skinLo = ringsFor(b, LEG_LO[body]);
+  const lk = b.leg;
   if (skirted) {
     hp.cyl(shade(hex, 0.45), 0.16, 0.15, 0.2, [0, 0, 0], O, [bp, 1, 0.7 * bp], { seg: 10 });
     skirt(hp, b, hex, 0.1, -0.24, 0.172, a.pants === 'plaidskirt' ? 0.25 : 0.235, surf, a.pants === 'plaidskirt' ? 20 : 16);
@@ -1462,35 +1749,36 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   } else {
     hp.cyl(hex, 0.17, 0.15, 0.2, [0, 0, 0], O, [bp, 1, 0.7 * bp], { seg: 10 }, surf);
   }
+  const jog = a.pants === 'joggers';
+  const tight = a.pants === 'leggings';
+  const hem = a.pants === 'flares' ? 0.078 : jog ? 0.047 : tight ? null : F ? 0.053 : 0.056;
+  const legs = bare || skirted ? { up: skinUp, lo: skinLo } : trouserRings(skinUp, skinLo, tight ? 0.003 : F ? 0.007 : 0.008, hem);
+  const legColor = bare || skirted ? legHex : hex;
+  const legSurf = bare || skirted ? undefined : surf;
   for (const s of [1, -1]) {
-    const up = kit(s > 0 ? BONE.legLUpper : BONE.legRUpper), lo = kit(s > 0 ? BONE.legLLower : BONE.legRLower);
-    if (bare || skirted) {
-      up.cyl(legHex, skinThigh[0], skinThigh[1], 0.44, [0, -0.22, 0], O, 1, { seg: 8 });
-      lo.cyl(legHex, skinShin[0], skinShin[1], 0.44, [0, -0.22, 0], O, 1, { seg: 8 });
-      if (a.pants === 'shorts') {
-        up.cyl(hex, 0.088, 0.08, 0.27, [0, -0.125, 0], O, 1, { seg: 8 }, surf);
-        lo.cyl(0xdcdad4, 0.054, 0.052, 0.08, [0, -0.4, 0], O, 1, { seg: 8 });
-      } else if (a.pants === 'denimshorts') {
-        up.cyl(hex, skinThigh[0] + 0.008, skinThigh[0] + 0.002, 0.12, [0, -0.045, 0], O, 1, { seg: 8 }, surf);
-        up.cyl(mixHex(hex, 0xf2efe8, 0.55), skinThigh[0] + 0.003, skinThigh[0] + 0.003, 0.014, [0, -0.108, 0], O, 1, { seg: 8 });
-      }
-    } else {
-      const jog = a.pants === 'joggers';
-      const tight = a.pants === 'leggings';
-      const t = tight ? -0.006 : 0;
-      up.cyl(hex, thigh[0] + t, thigh[1] + t, 0.44, [0, -0.22, 0], O, 1, { seg: 8 }, surf);
-      // Flares widen from the knee to the shoe.
-      const hem = a.pants === 'flares' ? 0.078 : jog ? 0.046 : tight ? shin[1] - 0.005 : shin[1];
-      lo.cyl(hex, shin[0] + t, hem, 0.44, [0, -0.22, 0], O, 1, { seg: a.pants === 'flares' ? 10 : 8 }, surf);
-      if (jog) lo.cyl(shade(hex, 0.8), 0.049, 0.049, 0.05, [0, -0.42, 0], O, 1, { seg: 8 }, { pattern: PATTERN.knit });
+    const ub = s > 0 ? BONE.legLUpper : BONE.legRUpper, lb = ub + 1;
+    const up = kit(ub), lo = kit(lb);
+    // Thigh and shin bend together at the knee (see sleeves), a ball there for a deep crouch.
+    up.lathe(legColor, legs.up, lk, 0, b.seg, { top: true }, legSurf, { bone: lb, y: -LEG.upper, band: BEND });
+    lo.lathe(legColor, legs.lo, lk, 0, b.seg, { bottom: true }, legSurf, { bone: ub, y: 0, band: BEND });
+    lo.ball(legColor, legs.lo[0][1] * lk * jointK(b), [0, 0, 0], O, legSurf, b.seg, b.zombie ? 3 : 5);
+    if (a.pants === 'shorts') {
+      up.lathe(hex, over(skinUp, [0.03, -0.08, -0.18, -0.27], 0.013), lk, 0, b.seg, { top: true, bottom: true }, surf);
+      lo.lathe(0xdcdad4, over(skinLo, [-0.33, -0.39, -0.44], 0.005), lk, 0, b.seg, { top: true, bottom: true });
+    } else if (a.pants === 'denimshorts') {
+      up.lathe(hex, over(skinUp, [0.03, -0.05, -0.105], 0.008), lk, 0, b.seg, { top: true, bottom: true }, surf);
+      up.lathe(mixHex(hex, 0xf2efe8, 0.55), over(skinUp, [-0.1, -0.116], 0.0095), lk, 0, b.seg, { top: true, bottom: true });
+    } else if (jog) {
+      lo.lathe(shade(hex, 0.8), over(legs.lo, [-0.395, -0.445], 0.003), lk, 0, b.seg, { top: true, bottom: true }, { pattern: PATTERN.knit });
     }
     if (a.pants === 'cargo' || a.pants === 'shorts' || a.pants === 'camo') {
-      up.box(shade(hex, 0.92), [0.03, 0.09, 0.08], [s * 0.082, -0.25, 0], O, surf);
-      up.box(shade(hex, 0.82), [0.034, 0.02, 0.084], [s * 0.083, -0.205, 0], O, surf);
+      const out = (ringAt(a.pants === 'shorts' ? over(skinUp, [-0.25], 0.013) : legs.up, -0.25).r - 0.068) * lk;
+      up.box(shade(hex, 0.92), [0.024, 0.09, 0.075], [s * (0.078 + out), -0.25, 0], O, surf);
+      up.box(shade(hex, 0.82), [0.028, 0.02, 0.079], [s * (0.079 + out), -0.205, 0], O, surf);
     }
     if (a.pants === 'work') {
-      lo.box(shade(hex, 0.78), [0.075, 0.09, 0.02], [0, -0.04, 0.056]);
-      up.box(shade(hex, 0.85), [0.02, 0.12, 0.012], [s * 0.04, -0.22, -0.07]);
+      lo.box(shade(hex, 0.78), [0.075, 0.09, 0.02], [0, -0.04, ringAt(legs.lo, -0.04).r * lk - 0.004]);
+      up.box(shade(hex, 0.85), [0.02, 0.12, 0.012], [s * 0.04, -0.22, -Math.sqrt(Math.max(0, (ringAt(legs.up, -0.22).r * lk) ** 2 - 0.04 ** 2))]);
     }
   }
   const belt = (F ? 0.176 : 0.172) * bp;
@@ -1514,11 +1802,21 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
       sp.box(0xc9a233, [0.018, 0.018, 0.008], [x, 0.3, (F ? chestZ(b, x, 0.3) : frontZ(b, 0.3)) + 0.012]);
     }
   }
+  return { rings: legs.lo, k: lk };
 }
 
-function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body): void {
+function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body, shin: Shins): void {
   const hex = paletteColor('cloth', a.shoesColor);
   const sole = a.shoes === 'sneakers' || a.shoes === 'hightops' ? 0xe6e3dc : 0x1a1816;
+  /** A boot shaft's radius over shin heights y0..y1: at least `r`, and clear of the calf or trousers inside. */
+  const fit = (r: number, y0: number, y1: number) => {
+    let m = r;
+    for (let i = 0; i <= 4; i++) {
+      const q = ringAt(shin.rings, y0 + ((y1 - y0) * i) / 4);
+      m = Math.max(m, (q.r + Math.abs(q.z)) * shin.k + 0.004);
+    }
+    return m;
+  };
   for (const s of [1, -1]) {
     const lo = kit(s > 0 ? BONE.legLLower : BONE.legRLower);
     switch (a.shoes) {
@@ -1529,41 +1827,47 @@ function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body): void {
         break;
       case 'hightops':
         lo.box(hex, [0.1, 0.075, 0.23], [0, -0.47, 0.05]);
-        lo.cyl(hex, 0.062, 0.064, 0.11, [0, -0.415, 0], O, 1, { seg: 8 });
+        { const r = fit(0.062, -0.36, -0.44); lo.cyl(hex, r, r + 0.002, 0.11, [0, -0.415, 0], O, 1, { seg: 8 }); }
         lo.box(sole, [0.106, 0.028, 0.245], [0, -0.508, 0.052]);
         lo.ball(0xeeeae0, [0.002, 0.022, 0.022], [s * 0.052, -0.43, 0.0], O, undefined, 6, 4);
         break;
       case 'combat':
         lo.box(hex, [0.104, 0.08, 0.24], [0, -0.47, 0.05]);
-        lo.cyl(hex, 0.064, 0.066, 0.17, [0, -0.375, 0], O, 1, { seg: 8 });
+        {
+          const r = fit(0.064, -0.29, -0.44);
+          lo.cyl(hex, r, r + 0.002, 0.17, [0, -0.375, 0], O, 1, { seg: 8 });
+          for (let i = 0; i < 4; i++) lo.box(0x0d0d0d, [0.05, 0.006, 0.006], [0, -0.33 - i * 0.03, r]);
+        }
         lo.box(sole, [0.11, 0.03, 0.252], [0, -0.51, 0.052]);
-        for (let i = 0; i < 4; i++) lo.box(0x0d0d0d, [0.05, 0.006, 0.006], [0, -0.33 - i * 0.03, 0.064]);
         break;
       case 'work':
         lo.box(hex, [0.108, 0.085, 0.24], [0, -0.468, 0.05]);
-        lo.cyl(hex, 0.064, 0.066, 0.11, [0, -0.405, 0], O, 1, { seg: 8 });
+        { const r = fit(0.064, -0.35, -0.44); lo.cyl(hex, r, r + 0.002, 0.11, [0, -0.405, 0], O, 1, { seg: 8 }); }
         lo.box(shade(hex, 0.7), [0.1, 0.05, 0.06], [0, -0.475, 0.145]);
         lo.box(0x3a2a1e, [0.114, 0.036, 0.255], [0, -0.51, 0.052]);
         break;
       case 'rain':
         lo.box(hex, [0.106, 0.08, 0.24], [0, -0.47, 0.05]);
-        lo.cyl(hex, 0.072, 0.069, 0.3, [0, -0.32, 0], O, 1, { seg: 10 });
+        { const r = fit(0.072, -0.17, -0.44); lo.cyl(hex, r, r - 0.003, 0.3, [0, -0.32, 0], O, 1, { seg: 10 }); }
         lo.box(shade(hex, 0.6), [0.11, 0.025, 0.25], [0, -0.508, 0.052]);
         break;
       case 'kneeboots':
         // Tall, fitted boots up to just under the knee, on a low block heel.
         lo.box(hex, [0.094, 0.07, 0.225], [0, -0.472, 0.052]);
-        lo.cyl(hex, 0.068, 0.06, 0.4, [0, -0.27, 0], O, 1, { seg: 10 });
-        lo.cyl(shade(hex, 0.8), 0.071, 0.071, 0.025, [0, -0.08, 0], O, 1, { seg: 10 });
+        {
+          const rt = fit(0.068, -0.07, -0.2), rb = fit(0.06, -0.3, -0.44);
+          lo.cyl(hex, rt, rb, 0.4, [0, -0.27, 0], O, 1, { seg: 10 });
+          lo.cyl(shade(hex, 0.8), rt + 0.003, rt + 0.003, 0.025, [0, -0.08, 0], O, 1, { seg: 10 });
+          lo.box(0x9a9ca0, [0.006, 0.3, 0.006], [s * (rt + (rb - rt) * 0.55 - 0.004), -0.29, -0.02]);
+        }
         lo.box(0x141210, [0.098, 0.016, 0.16], [0, -0.511, 0.085]);
         lo.box(0x141210, [0.07, 0.03, 0.05], [0, -0.503, -0.035]);
-        lo.box(0x9a9ca0, [0.006, 0.3, 0.006], [s * 0.062, -0.29, -0.02]);
         break;
       case 'heeledboots':
         // Ankle boots with a pointed toe and a heel.
         lo.box(hex, [0.09, 0.07, 0.2], [0, -0.468, 0.035]);
         lo.box(hex, [0.068, 0.05, 0.06], [0, -0.478, 0.155]);
-        lo.cyl(hex, 0.062, 0.058, 0.13, [0, -0.4, 0], O, 1, { seg: 8 });
+        lo.cyl(hex, fit(0.062, -0.335, -0.4), fit(0.058, -0.4, -0.44), 0.13, [0, -0.4, 0], O, 1, { seg: 8 });
         lo.box(0x141210, [0.092, 0.012, 0.15], [0, -0.508, 0.09]);
         lo.cyl(0x141210, 0.02, 0.016, 0.05, [0, -0.49, -0.04], O, [1.2, 1, 1], { seg: 6 });
         break;
@@ -1587,28 +1891,30 @@ function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body): void {
   }
 }
 
+/** Hands, bare or gloved: the same hand (see hand), the glove a little fuller, with a cuff at the wrist. */
 function gloves(kit: (bone: number) => Kit, a: Appearance, b: Body): void {
   const hex = paletteColor('cloth', a.glovesColor);
+  const wrist = ringAt(ARM_LO, -ARM.lower).r * b.arm;
   for (const s of [1, -1]) {
-    const lo = b.hand === 1 ? kit(s > 0 ? BONE.armLLower : BONE.armRLower) : kit(s > 0 ? BONE.armLLower : BONE.armRLower).at(O, O, [b.hand, 1, b.hand]);
+    const lo = kit(s > 0 ? BONE.armLLower : BONE.armRLower);
     switch (b.zombie ? 'none' : a.gloves) {
       case 'work':
-        lo.box(hex, [0.077, 0.096, 0.057], [0, -0.33, 0]);
-        lo.cyl(shade(hex, 0.8), 0.05, 0.048, 0.045, [0, -0.29, 0], O, 1, { seg: 8 });
+        hand(lo, s, b, hex, hex, 0.004);
+        lo.cyl(shade(hex, 0.8), wrist + 0.011, wrist + 0.009, 0.045, [0, -ARM.lower + 0.006, 0], O, 1, { seg: 8 });
         break;
       case 'fingerless':
-        lo.box(hex, [0.075, 0.056, 0.055], [0, -0.311, 0]);
-        lo.box(b.skin, [0.068, 0.04, 0.048], [0, -0.355, 0]);
+        hand(lo, s, b, hex, b.skin, 0.002);
+        lo.cyl(hex, wrist + 0.005, wrist + 0.005, 0.02, [0, -ARM.lower + 0.004, 0], O, 1, { seg: 8 });
         break;
       case 'leather':
-        lo.box(hex, [0.074, 0.094, 0.054], [0, -0.33, 0]);
-        lo.cyl(hex, 0.043, 0.042, 0.03, [0, -0.29, 0], O, 1, { seg: 8 });
+        hand(lo, s, b, hex, hex, 0.0025);
+        lo.cyl(hex, wrist + 0.007, wrist + 0.006, 0.03, [0, -ARM.lower + 0.006, 0], O, 1, { seg: 8 });
         break;
       case 'latex':
-        lo.box(hex, [0.072, 0.092, 0.052], [0, -0.33, 0]);
+        hand(lo, s, b, hex, hex, 0.0012);
         break;
       default:
-        lo.box(b.skin, [0.07, 0.09, 0.05], [0, -0.33, 0]);
+        hand(lo, s, b, b.skin, b.skin, 0);
     }
   }
 }
@@ -1927,8 +2233,9 @@ function gear(sp: Kit, hp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Bo
     case 'kneepads':
       for (const bone of [BONE.legLLower, BONE.legRLower]) {
         const lo = kit(bone);
-        lo.box(hex, [0.09, 0.085, 0.03], [0, -0.03, 0.058], [-0.1, 0, 0]);
-        lo.cyl(shade(hex, 0.7), 0.064, 0.064, 0.02, [0, -0.06, 0], O, 1, { seg: 8 });
+        const knee = b.shins ? ringAt(b.shins.rings, -0.06).r * b.shins.k : 0.06;
+        lo.box(hex, [0.09, 0.085, 0.03], [0, -0.03, knee], [-0.1, 0, 0]);
+        lo.cyl(shade(hex, 0.7), knee + 0.004, knee + 0.004, 0.02, [0, -0.06, 0], O, 1, { seg: 8 });
       }
       break;
   }

@@ -57,6 +57,7 @@ export class RemoteSurvivors {
 
   private create(p: SimPlayer): Remote {
     const body = new Humanoid(survivorLook(decodeAppearance(p.appearance)));
+    body.weathering = true;
     this.scene.add(body.root);
     const probe = new DynamicProbe(this.field);
     probe.attach(body.surfaces());
@@ -271,6 +272,10 @@ export class RemoteSurvivors {
     return this.remotes.get(id)?.weapon ?? null;
   }
 
+  bodyOf(id: string): Humanoid | null {
+    return this.remotes.get(id)?.body ?? null;
+  }
+
   /** Where a survivor is drawn (sound of their actions). */
   positionOf(id: string, out: THREE.Vector3): THREE.Vector3 | null {
     const r = this.remotes.get(id);
@@ -300,6 +305,7 @@ export class RemoteSurvivors {
     d.normalize();
     r.hurtDir.copy(d);
     r.body.flinch('torso', d.x, d.z, Math.min(1, amount / 25));
+    r.body.splatter(Math.min(0.12, amount * 0.004));
   }
 
   setGore(on: boolean): void {

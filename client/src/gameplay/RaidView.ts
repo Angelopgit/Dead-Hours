@@ -122,6 +122,9 @@ export class RaidView {
 
   private create(r: Raider): RaiderBody {
     const body = new Humanoid(survivorLook(decodeAppearance(r.appearance)));
+    // They have been living rough out there for a while.
+    body.grime.x = 0.45 + Math.random() * 0.3;
+    body.grime.y = 0.1 + Math.random() * 0.25;
     this.scene.add(body.root);
     const probe = new DynamicProbe(this.field);
     probe.attach(body.surfaces());

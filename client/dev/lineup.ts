@@ -3,7 +3,8 @@
  * side by side under studio lights, for checking how pieces fit (`view=head|torso|legs|body`;
  * `base={"body":"female"}` dresses a woman, `items=a,b` picks a few). `slot=zombies` shows walkers,
  * `slot=specials` screamers and bloaters (`scream=0.5` poses them mid-scream), `slot=crawlers` legless
- * zombies crawling (`speed=1` drags them along, `attack=0.55` mid-lunge). Not part of the game build.
+ * zombies crawling (`speed=1` drags them along, `attack=0.55` mid-lunge). `view=hands` frames the
+ * hands, `grime=0.6,0.3` dirties survivors (dirt, blood). Not part of the game build.
  */
 import * as THREE from 'three';
 import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, sanitizeAppearance, type Appearance, type AppearanceSlot } from '@dead-hours/shared';
@@ -20,6 +21,7 @@ const view = q.get('view') ?? 'body';
 const yaw = Number(q.get('yaw') ?? 0.35);
 const base: Appearance = sanitizeAppearance({ ...DEFAULT_APPEARANCE, ...JSON.parse(q.get('base') ?? '{}') });
 const cols = Number(q.get('cols') ?? 8);
+const grime = (q.get('grime') ?? '').split(',').map(Number);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -68,6 +70,7 @@ looks.forEach(({ label, look }, i) => {
   h.update(0.016, { speed: 0, crouch: 0, aim: 0, grounded: true, strafe: 0 });
   h.setVisible(false);
   if (q.get('gore') === '0') h.goreShown = false;
+  if (q.has('grime')) h.grime.set(grime[0] || 0, grime[1] || 0, i * 3.7, 0);
   if (slot === 'kinds') {
     h.oldWounds(i * 977 + 5, q.has('old') ? Number(q.get('old')) : 0);
     shoot(h, i);
@@ -105,11 +108,15 @@ function shoot(h: Humanoid, seed: number): void {
 // One camera framing a single character; each grid cell renders one of them.
 const camera = new THREE.PerspectiveCamera(view === 'head' ? 24 : view === 'body' ? 30 : 28, cellW / cellH, 0.05, 50);
 if (view === 'head') {
-  camera.position.set(0, 1.78, 1.55);
-  camera.lookAt(0, 1.7, 0);
+  camera.position.set(0, 1.76, 1.55);
+  camera.lookAt(0, 1.68, 0);
 } else if (view === 'torso') {
   camera.position.set(0, 1.42, 2.3);
   camera.lookAt(0, 1.2, 0);
+} else if (view === 'hands') {
+  // The left hand, from in front and a little to its side.
+  camera.position.set(0.42, 1.0, 0.8);
+  camera.lookAt(0.2, 0.86, 0);
 } else if (view === 'legs') {
   camera.position.set(0, 0.8, 2.6);
   camera.lookAt(0, 0.5, 0);

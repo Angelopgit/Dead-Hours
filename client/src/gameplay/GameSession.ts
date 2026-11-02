@@ -283,6 +283,7 @@ export class GameSession {
     this.probe = new DynamicProbe(field);
     this.probe.attach(this.player.character.surfaces());
     this.player.character.onFootstep = (l) => audio.footstep(l, this.indoors);
+    this.player.character.weathering = true;
     this.weapon = new PlayerWeapon(engine.scene, this.player.character);
     this.probe.attach(this.weapon.materials());
     this.weapon.onMaterials = (m) => this.probe.attach(m);
@@ -1875,6 +1876,7 @@ export class GameSession {
           this.hud.hitMarker(kind);
         }
         if (!e.killed && Math.random() < 0.4) audio.zombieHurt(this.zombies.headOf(e.zombie, C) ?? A, this.zombies.pitchOf(e.zombie));
+        this.bloody(e.by, A, e.melee ? (e.killed ? 0.05 : 0.03) : e.killed ? 0.015 : 0);
         break;
       }
       case 'limbSevered':
@@ -2229,6 +2231,13 @@ export class GameSession {
     this.effects.eject(pos, dir, floor !== null ? pos.y - floor : p.y, shell, this.player.velocity);
   }
 
+  /** Blood on whoever made a hit close enough to wear it (melee, or a kill within 3 m). */
+  private bloody(by: string, at: THREE.Vector3, amount: number): void {
+    if (amount <= 0) return;
+    const body = by === this.myId ? this.player.character : this.remotes?.bodyOf(by);
+    if (body && body.root.position.distanceToSquared(at) < 12) body.splatter(amount);
+  }
+
   private onHurt(damage: number, from: Vec3): void {
     const p = this.player.position;
     const dx = from.x - p.x, dz = from.z - p.z;
@@ -2239,6 +2248,7 @@ export class GameSession {
     this.hud.damageFrom(Math.atan2(right, fwd), damage);
     this.lastHurtDir.set(-dx / len, 0, -dz / len);
     this.player.character.flinch('torso', -dx / len, -dz / len, Math.min(1, damage / 25));
+    this.player.character.splatter(Math.min(0.12, damage * 0.004));
     this.cam.addTrauma(0.22 + Math.min(0.4, damage / 60));
     this.input.rumble(0.45 + Math.min(0.5, damage / 50), 160);
     this.hurtFlash = Math.min(1, this.hurtFlash + 0.35 + damage / 50);
