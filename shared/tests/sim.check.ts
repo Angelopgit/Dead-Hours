@@ -11,7 +11,7 @@ import {
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
-  BARRICADE, Mirror, NAV_INDOOR, type BarricadeSlot,
+  BARRICADE, Mirror, NAV_INDOOR, storeyFloors, type BarricadeSlot,
   BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
   levelStart, owns, runXp, sameBuild, sanitizeBuild, sanitizeLoadout, tunedWeapon, unlockTrack, type WeaponBuild, type WeaponId,
 } from '../src/index';
@@ -1474,6 +1474,43 @@ section('Barricades');
   const oakWins = wins.filter((s) => s.houseId.startsWith('oak-'));
   const oakClimb = oakWins.filter((s) => s.outNode >= 0);
   check(oak.every((h) => oakWins.some((s) => s.houseId === h.id)) && oakClimb.length >= oakWins.length * 0.85, `Oak Street's homes take boards on their windows like Elm's (${oakClimb.length} of ${oakWins.length} climbable)`);
+  cleanup(sim, body);
+}
+{
+  // Boards go up from the opening's own storey: never from the basement under it (a workbench by
+  // the front wall sat right under a window) or the bedroom over it.
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const houseOf = new Map(map.houses.map((h) => [h.id, h]));
+  const within = (h: { x: number; z: number; w: number; d: number }, x: number, z: number) => Math.abs(x - h.x) < h.w / 2 && Math.abs(z - h.z) < h.d / 2;
+  const workable = (at: Vec3) => {
+    sp.motion.pos = { x: at.x, y: at.y + 0.02, z: at.z };
+    return sim.barricades.slots.filter((s) => sim.canWork(sp, s));
+  };
+  const nodes: Vec3[] = [];
+  for (let n = 0; n < nav.nodeCount; n++) if (nav.reachable(n)) nodes.push(nav.nodePos(n));
+  const indoors = new Map([...houseOf.values()].filter((h) => h.enterable).map((h) => [h.id, nodes.filter((p) => within(h, p.x, p.z))]));
+  let above = 0, below = 0, same = 0;
+  const wrong = new Set<string>();
+  for (const s of sim.barricades.slots) {
+    const h = houseOf.get(s.houseId)!;
+    for (const p of indoors.get(h.id) ?? []) {
+      if (Math.hypot(p.x - s.center.x, p.z - s.center.z) > 2.5) continue;
+      sp.motion.pos = { x: p.x, y: p.y + 0.02, z: p.z };
+      if (!sim.canWork(sp, s)) continue;
+      const dy = p.y - storeyFloors(h)[0];
+      if (dy < -1.5) below++;
+      else if (dy > 2) above++;
+      else { same++; continue; }
+      wrong.add(h.label ?? h.id);
+    }
+  }
+  check(above + below === 0 && same > 2000, `nothing is boarded up through a floor, from a basement or upstairs (${same} spots on the right storey, wrong in: ${[...wrong].join(', ') || 'none'})`);
+  const benches = map.props.filter((p) => p.kind === 'workbench' && (p.y ?? 0) < -1);
+  const offered = benches.filter((b) => nodes.some((p) => Math.hypot(p.x - b.x, p.z - b.z) < 1.4 && Math.abs(p.y - (b.y ?? 0)) < 0.5 && workable(p).length > 0));
+  check(benches.length >= 9 && offered.length === 0, `no basement workbench offers to board up a window (${benches.length} benches, ${offered.length} do)`);
+  const wins = sim.barricades.slots.filter((s) => s.kind === 'window' && s.inNode >= 0);
+  const fromInside = wins.filter((s) => workable(nav.nodePos(s.inNode)).includes(s));
+  check(fromInside.length === wins.length, `every climbable window can still be boarded up from the floor inside it (${fromInside.length} of ${wins.length})`);
   cleanup(sim, body);
 }
 const houseSlots = (sim: Simulation, house: string, kind: 'door' | 'window') => sim.barricades.slots.filter((s) => s.houseId === house && s.kind === kind);

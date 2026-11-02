@@ -458,9 +458,11 @@ export class Simulation {
     this.emit({ type: 'barricade', slot: slot.index, boards: slot.boards, change: 'broken', player: null, pos: { ...slot.center } });
   }
 
-  /** Whether a survivor can work on a slot from where they stand: inside, within reach. */
+  /** Whether a survivor can work on a slot from where they stand: inside, on its storey, within reach. */
   canWork(p: SimPlayer, slot: BarricadeSlot): boolean {
     if (!p.up || this.revivingOf(p.id)) return false;
+    // Through a floor is out of reach, however close: the basement under a window, the room over it.
+    if (Math.abs(p.motion.pos.y - slot.floor) > BARRICADE.floorReach) return false;
     const e = p.eye, c = slot.center;
     if (Math.hypot(e.x - c.x, (e.y - c.y) * 0.5, e.z - c.z) > BARRICADE.reach) return false;
     return this.barricades.side(slot, p.motion.pos.x, p.motion.pos.z) < 0;

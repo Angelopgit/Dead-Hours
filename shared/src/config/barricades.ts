@@ -10,6 +10,11 @@ export const BARRICADE = {
   pryTime: 0.9,
   /** Furthest a survivor's eye can be from the opening's centre while working on it (m). */
   reach: 2.3,
+  /**
+   * Furthest a survivor's feet can be above or below the floor of the opening's storey (m): work
+   * stays on the opening's own floor, never from the basement under a window or the bedroom over it.
+   */
+  floorReach: 1.0,
   /** Pounding one board soaks before it splits off (a door gives way at 1; walkers hit 0.14). */
   boardStrength: 0.7,
   /** Hammer blows while nailing, and how far each carries to zombie ears (m). */

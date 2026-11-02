@@ -1661,8 +1661,7 @@ export class GameSession {
   private workableSlot(): BarricadeSlot | null {
     if (!this.me.alive) return null;
     const p = this.player.position;
-    const slot = this.barricades.nearest(this.tmpA.set(p.x, p.y + this.player.eyeHeight, p.z), BARRICADE.reach);
-    return slot && this.sim.canWork(this.me, slot) ? slot : null;
+    return this.barricades.nearest(this.tmpA.set(p.x, p.y + this.player.eyeHeight, p.z), BARRICADE.reach, (s) => this.sim.canWork(this.me, s));
   }
 
   /**

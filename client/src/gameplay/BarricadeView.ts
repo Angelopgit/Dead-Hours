@@ -117,14 +117,14 @@ export class BarricadeView {
     }
   }
 
-  /** Nearest slot centre within `maxDist` of a point, with its distance. */
-  nearest(pos: THREE.Vector3, maxDist: number): BarricadeSlot | null {
+  /** Nearest slot centre within `maxDist` of a point (among those `ok` allows). */
+  nearest(pos: THREE.Vector3, maxDist: number, ok?: (slot: BarricadeSlot) => boolean): BarricadeSlot | null {
     let best: BarricadeSlot | null = null;
     let bestD = maxDist;
     for (const v of this.views) {
       const c = v.slot.center;
       const d = Math.hypot(c.x - pos.x, (c.y - pos.y) * 0.5, c.z - pos.z);
-      if (d < bestD) {
+      if (d < bestD && (!ok || ok(v.slot))) {
         bestD = d;
         best = v.slot;
       }

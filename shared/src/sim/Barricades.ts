@@ -1,6 +1,7 @@
 import type { RAPIER, Physics } from '../physics/Physics';
 import type { DoorBody } from '../physics/DoorBody';
 import { BARRICADE, isBarricadeWindow } from '../config/barricades';
+import { storeyFloors } from '../map/builder';
 import type { MapDefinition } from '../types/world';
 import type { NavGrid } from './NavGrid';
 import type { Vec3 } from './math';
@@ -28,6 +29,8 @@ export interface BarricadeSlot {
   height: number;
   /** Height of the opening's bottom edge (the sill for windows, the floor for doors). */
   bottom: number;
+  /** Floor of the storey the opening is in: survivors work on it standing there. */
+  floor: number;
   max: number;
   boards: number;
   /** Pounding the outermost board has soaked (it splits off at BARRICADE.boardStrength). */
@@ -54,13 +57,14 @@ export class Barricades {
       const slot = this.add({
         kind: 'door', houseId: s.houseId, ref: d.index,
         center: { x: s.x, y: (s.floorY ?? 0.3) + s.h / 2, z: s.z }, normal: { ...d.normal }, axis: s.axis,
-        width: s.w, height: s.h, bottom: s.floorY ?? 0.3, max: BARRICADE.doorBoards, glass: false, pane: null, outNode: -1, inNode: -1,
+        width: s.w, height: s.h, bottom: s.floorY ?? 0.3, floor: s.floorY ?? 0.3, max: BARRICADE.doorBoards, glass: false, pane: null, outNode: -1, inNode: -1,
       });
       this.byDoor.set(d.index, slot);
     }
     const houses = new Map(map.houses.map((h) => [h.id, h]));
     map.windows.forEach((w, i) => {
-      if (!isBarricadeWindow(houses.get(w.houseId), w)) return;
+      const house = houses.get(w.houseId);
+      if (!house || !isBarricadeWindow(house, w)) return;
       const normal = w.axis === 'x' ? { x: 0, z: w.outward } : { x: w.outward, z: 0 };
       const bottom = w.y - w.h / 2;
       const pane = physics.paneAt(w.x, w.y, w.z);
@@ -79,7 +83,7 @@ export class Barricades {
       const ok = out >= 0 && inn >= 0;
       const slot = this.add({
         kind: 'window', houseId: w.houseId, ref: i, center: { x: w.x, y: w.y, z: w.z }, normal, axis: w.axis,
-        width: w.w, height: w.h, bottom, max: BARRICADE.windowBoards, glass: true, pane, outNode: ok ? out : -1, inNode: ok ? inn : -1,
+        width: w.w, height: w.h, bottom, floor: storeyFloors(house)[0], max: BARRICADE.windowBoards, glass: true, pane, outNode: ok ? out : -1, inNode: ok ? inn : -1,
       });
       if (ok) nav.setLink(WINDOW_LINK_BASE + slot.index, out, inn);
       if (pane) this.byPane.set(pane.handle, slot);
