@@ -345,7 +345,7 @@ export class GameSession {
     this.hud.onPrompt = (action, text) => this.touch.setUse(action, text);
     this.assist = new AimAssist(physics);
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
-    this.skip = h('div', { class: 'skip' }, 'PRESS ANY KEY TO SKIP');
+    this.skip = h('div', { class: 'skip' });
     this.clickToPlay = h('div', { class: 'click-to-play' }, 'CLICK TO CONTINUE');
     const sig = { signal: this.abort.signal };
     document.addEventListener('pointerlockchange', this.onLockChange, sig);
@@ -356,6 +356,7 @@ export class GameSession {
       // Back on the mouse mid-game: it has to be captured again with a click.
       if (d === 'mouse' && this.phase === 'playing' && !this.input.locked) this.ui.append(this.clickToPlay);
       else if (d !== 'mouse') this.clickToPlay.remove();
+      if (this.phase === 'intro') this.skip.textContent = this.skipHint();
     });
     this.abort.signal.addEventListener('abort', offDevice);
     // Tapping the spectator line brings the results back (as Escape does).
@@ -469,6 +470,7 @@ export class GameSession {
   /** Fade from black → exterior establishing shot → glide to the safehouse → hand over control. */
   private runIntro(from: { position: THREE.Vector3; target: THREE.Vector3 }): void {
     this.phase = 'intro';
+    this.skip.textContent = this.skipHint();
     this.ui.append(...this.letterbox, this.skip);
     const c = this.introCam;
     const p = this.player.position;
@@ -485,6 +487,12 @@ export class GameSession {
       .to(fade, { opacity: 0, duration: 0.6, ease: 'power1.out' }, 6.95);
     this.engine.camera.fov = 48;
     this.engine.camera.updateProjectionMatrix();
+  }
+
+  /** What skips the opening shot here: any key, a tap anywhere (onCanvasClick), or B / Start (Escape from PadMenus). */
+  private skipHint(): string {
+    const d = this.input.device;
+    return d === 'touch' ? 'TAP TO SKIP' : d === 'pad' ? 'PRESS B TO SKIP' : 'PRESS ANY KEY TO SKIP';
   }
 
   private quickStart(): void {

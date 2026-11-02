@@ -115,6 +115,9 @@ check(none === null, 'nothing near: full speed');
   check(pointer('#ui-root > .comms-hud') === 'none', 'touch: the in-game chat column lets touches through to the move stick');
   check(pointer('.chat-game') === 'none', 'touch: closed chat lines let touches through');
   check(pointer('.chat-game.open') === 'auto', 'the open chat box still takes clicks');
+  // The opening shot skips on a tap or click on the canvas: its black bars and "TAP TO SKIP" line must
+  // let it through (a tap on the line itself, or on a bar, did nothing).
+  check(pointer('#ui-root > .letterbox, #ui-root > .skip') === 'none', 'touch: a tap on the intro bars or the skip line skips the opening shot');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');

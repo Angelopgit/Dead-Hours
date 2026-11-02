@@ -219,6 +219,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .skip { position: absolute; right: 4vw; bottom: 5vh; font-size: 0.75em; letter-spacing: 0.3em; color: var(--fg-dim); }
 .letterbox { position: absolute; left: 0; right: 0; height: 9vh; background: #000; }
 .letterbox.top { top: 0; } .letterbox.bottom { bottom: 0; }
+/* A tap or click anywhere skips the opening shot, the bars and the line itself included (they took it). */
+#ui-root > .letterbox, #ui-root > .skip { pointer-events: none; }
 
 /* ── Pause ────────────────────────────────────────────── */
 .pause { position: absolute; inset: 0; background: rgba(5, 7, 10, 0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
