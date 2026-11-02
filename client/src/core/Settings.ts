@@ -13,6 +13,8 @@ export type AimAssist = 'off' | 'low' | 'standard';
 /** On-screen thumb controls: shown on touch screens, or always, or never. */
 export type TouchMode = 'auto' | 'on' | 'off';
 export type GraphicsPreset = 'phone' | 'low' | 'medium' | 'high';
+/** Wind-swayed grass on the lawns: how dense and how far it reaches. */
+export type GrassQuality = 'off' | 'low' | 'medium' | 'high';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
@@ -48,6 +50,7 @@ export interface SettingsData {
     rain: boolean;
     /** Low fog is flat; medium and high add volumetric light shafts. */
     fogQuality: Quality;
+    grass: GrassQuality;
     particleQuality: Quality;
     gore: GoreLevel;
     renderDistance: number;
@@ -144,6 +147,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     motionBlur: true,
     rain: true,
     fogQuality: 'high',
+    grass: 'high',
     particleQuality: 'high',
     gore: 'full',
     renderDistance: 220,
@@ -167,23 +171,23 @@ export const DEFAULT_SETTINGS: SettingsData = {
 export const GRAPHICS_PRESETS: Record<GraphicsPreset, Partial<SettingsData['graphics']>> = {
   phone: {
     resolutionScale: 0.7, adaptiveResolution: true, shadows: 'off', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: false, fogQuality: 'low', particleQuality: 'low',
-    renderDistance: 120, fpsLimit: 30,
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: false, fogQuality: 'low', grass: 'low',
+    particleQuality: 'low', renderDistance: 120, fpsLimit: 30,
   },
   low: {
     resolutionScale: 0.8, adaptiveResolution: true, shadows: 'low', textureQuality: 'medium', antialias: false,
-    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', particleQuality: 'low',
-    renderDistance: 150, fpsLimit: 0,
+    bloom: false, filmGrain: false, ambientOcclusion: false, motionBlur: false, rain: true, fogQuality: 'low', grass: 'low',
+    particleQuality: 'low', renderDistance: 150, fpsLimit: 0,
   },
   medium: {
     resolutionScale: 1, adaptiveResolution: true, shadows: 'medium', textureQuality: 'high', antialias: false,
-    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: false, rain: true, fogQuality: 'medium', particleQuality: 'medium',
-    renderDistance: 200, fpsLimit: 0,
+    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: false, rain: true, fogQuality: 'medium', grass: 'medium',
+    particleQuality: 'medium', renderDistance: 200, fpsLimit: 0,
   },
   high: {
     resolutionScale: 1, adaptiveResolution: true, shadows: 'high', textureQuality: 'high', antialias: true,
-    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: true, rain: true, fogQuality: 'high', particleQuality: 'high',
-    renderDistance: 260, fpsLimit: 0,
+    bloom: true, filmGrain: true, ambientOcclusion: true, motionBlur: true, rain: true, fogQuality: 'high', grass: 'high',
+    particleQuality: 'high', renderDistance: 260, fpsLimit: 0,
   },
 };
 
@@ -221,7 +225,15 @@ export class Settings {
     this.data = structuredClone(DEFAULT_SETTINGS);
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) this.data = deepMerge(this.data, JSON.parse(raw));
+      if (raw) {
+        const saved = JSON.parse(raw);
+        this.data = deepMerge(this.data, saved);
+        // Saved before grass existed: match it to the rest of the graphics (phones and Low get the light grass).
+        if (saved?.graphics && !('grass' in saved.graphics)) {
+          const p = this.data.graphics.particleQuality;
+          this.data.graphics.grass = isPhone() || p === 'low' ? 'low' : p;
+        }
+      }
       // First visit on a phone: start from the phone preset (it can be changed in Settings).
       else if (isPhone()) Object.assign(this.data.graphics, GRAPHICS_PRESETS.phone);
     } catch {

@@ -57,6 +57,7 @@ import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
+import { GRASS_TRAMPLERS, trampleGrass, type GrassFoot } from '../environment/Grass';
 
 /**
  * 'loading': built but not yet shown (Game gets it ready behind its loading screen; keys and
@@ -231,6 +232,9 @@ export class GameSession {
   private readonly touch: TouchControls;
   private readonly assist: AimAssist;
   private readonly fill = new THREE.PointLight(0xa8b8d0, 1.6, 9, 1.5);
+  /** Feet and bodies in the grass this frame (pooled), and the camera distances they sort by. */
+  private readonly feet: (GrassFoot & { d: number })[] = [];
+  private feetCount = 0;
   /** The flashlight clipped to the survivor's chest. */
   private readonly lamp: ChestLamp;
   private readonly tmpTorchDir = new THREE.Vector3();
@@ -1160,6 +1164,7 @@ export class GameSession {
     this.vehicleView.beams(this.beamList, this.driving?.vehicle.id ?? -1);
     flashlight()?.placeRemotes(this.beamList, this.engine.camera.position, live);
     this.updateEngines(running);
+    this.updateGrassFeet();
     this.barricades.update(live, this.engine.camera);
     if (this.work) this.work.t += live;
     this.bleedHeldLimb(live);
@@ -1181,6 +1186,56 @@ export class GameSession {
       this.areaCooldown = 2.5;
       this.hud.notify(area, '', 1.6);
     }
+  }
+
+  /**
+   * Survivors, zombies, bodies and cars on the lawns push the grass aside, and supply drops
+   * flatten it so their crates, cases and syringes never hide in it: this survivor first, then the
+   * nearest to the camera.
+   */
+  private updateGrassFeet(): void {
+    const cam = this.engine.camera.position;
+    this.feetCount = 0;
+    const add = (x: number, y: number, z: number, r: number) => {
+      // Lawns are at ground level: nobody upstairs or in a basement touches them.
+      if (y > 0.5 || y < -0.4) return;
+      const d = (x - cam.x) ** 2 + (z - cam.z) ** 2;
+      if (d > 30 * 30) return;
+      let f = this.feet[this.feetCount];
+      if (!f) this.feet.push((f = { x: 0, z: 0, r: 0, k: 0, d: 0 }));
+      f.x = x;
+      f.z = z;
+      f.r = r;
+      f.k = 1;
+      f.d = d;
+      this.feetCount++;
+    };
+    if (this.ragdoll) {
+      this.ragdoll.center(this.tmpA);
+      add(this.tmpA.x, this.ragdoll.floorY, this.tmpA.z, 0.95);
+    } else {
+      const p = this.player.renderPosition;
+      add(p.x, p.y, p.z, 0.6);
+    }
+    const mine = this.feetCount;
+    for (const it of this.sim.interactables) {
+      if (!it || it.supply <= 0 || (it.kind !== 'supply' && it.kind !== 'exclusive' && it.kind !== 'serum')) continue;
+      add(it.pos.x, 0, it.pos.z, it.kind === 'supply' ? 1.4 : 0.9);
+    }
+    // Cars press it flat under both axles (parked on a lawn, or driven across one).
+    for (const v of this.sim.vehicles.list) {
+      const c = Math.cos(v.yaw), sn = Math.sin(v.yaw), r = v.def.track + 0.45;
+      for (const a of v.def.axles) add(v.pos.x + c * a, v.pos.y, v.pos.z - sn * a, r);
+    }
+    this.remotes?.feet(add);
+    this.zombies.feet(add);
+    const live = this.feet.slice(0, this.feetCount);
+    if (live.length > GRASS_TRAMPLERS) {
+      const rest = live.slice(mine).sort((a, b) => a.d - b.d);
+      live.length = mine;
+      live.push(...rest);
+    }
+    trampleGrass(live);
   }
 
   /** Voices from where each survivor stands; who is talking lights up (name tags and the list). */
@@ -3693,6 +3748,7 @@ export class GameSession {
   };
 
   dispose(): void {
+    trampleGrass([]);
     this.abort.abort();
     this.doors.onPiece = null;
     audio.setAcoustics(null);

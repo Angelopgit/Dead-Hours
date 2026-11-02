@@ -115,6 +115,7 @@ export class SettingsPanel {
         row('Motion blur', toggle(this.g('motionBlur'), this.setG('motionBlur')), 'Blurs fast camera turns'),
         row('Rain', toggle(this.g('rain'), this.setG('rain')), 'Rain, wet streets and puddles'),
         row('Fog quality', seg([['low', 'Low'], ['medium', 'Med'], ['high', 'High']], this.g('fogQuality'), this.setG('fogQuality')), 'Medium and High add volumetric light shafts'),
+        row('Grass', seg([['off', 'Off'], ['low', 'Low'], ['medium', 'Med'], ['high', 'High']], this.g('grass'), this.setG('grass')), 'Lawn grass that sways in the wind'),
         row('Particle quality', seg([['low', 'Low'], ['medium', 'Med'], ['high', 'High']], this.g('particleQuality'), this.setG('particleQuality'))),
         row('Gore', seg([['off', 'Off'], ['reduced', 'Reduced'], ['full', 'Full']], this.g('gore'), this.setG('gore')), 'Blood, wounds and splatter'),
         row('Render distance', slider(80, 300, 10, this.g('renderDistance'), this.setG('renderDistance'), (v) => `${v}m`)),

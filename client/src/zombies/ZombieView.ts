@@ -495,6 +495,17 @@ export class ZombieView {
    * `renderTime` is the simulation time being shown (one step behind the latest, plus the
    * render interpolation fraction).
    */
+  /** Where bodies press the grass down (x, y, z, radius): every zombie on its feet or crawling, and the dead. */
+  feet(out: (x: number, y: number, z: number, r: number) => void): void {
+    for (const v of this.views.values()) out(v.pos.x, v.pos.y, v.pos.z, v.kind === 'crawler' ? 0.85 : v.kind === 'brute' || v.kind === 'bloater' ? 0.75 : 0.55);
+    for (const c of this.corpses) {
+      const r = c.ragdoll;
+      if (!r || c.deadT > SPAWNING.corpseTime) continue;
+      r.center(this.tmp);
+      out(this.tmp.x, r.floorY, this.tmp.z, 0.95);
+    }
+  }
+
   update(dt: number, sim: Simulation, renderTime: number, camera: THREE.Camera): void {
     const seen = new Set<number>();
     const cam = camera.position;

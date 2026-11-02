@@ -150,6 +150,8 @@ export class Game {
       this.flashlight.setShadows(g.shadows);
       this.world.applySettings(this.engine.renderer, this.engine.shadowMapSize, focus);
     }
+    // On its own: the grass only swaps its blade tiles (same shader), nothing else rebuilds.
+    this.world.grass.setQuality(g.grass);
   }
 
   async startSolo(): Promise<void> {

@@ -21,6 +21,8 @@ import { Snow } from './Snow';
 import { HOLIDAY } from '../core/Holiday';
 import { updateWeather, weather } from './Weather';
 import { updateWind } from './Wind';
+import { Grass } from './Grass';
+import { groundNoise, woodsAt } from './Lawn';
 
 const FOG_DENSITY: Record<Quality, number> = { low: 0.017, medium: 0.02, high: 0.022 };
 export const FOG_COLOR = 0x252e3c;
@@ -34,6 +36,8 @@ export class Neighborhood {
   readonly rain = new Rain();
   /** Christmas snow over the main menu (only built in the holiday season). */
   readonly snow = HOLIDAY ? new Snow() : null;
+  /** Wind-swayed lawn grass (merged blade tiles around the camera, swayed on the GPU). */
+  readonly grass: Grass;
   /** Lights for the volumetric fog (set up with the bake). */
   fogLights: FogLights | null = null;
   readonly lighting: Lighting;
@@ -78,6 +82,9 @@ export class Neighborhood {
     this.clutterCount = Clutter.build(map, this.lib, batch);
     this.staticMeshes = batch.build(this.root, 'map');
     this.buildForest();
+    // After the static batches: grass draws after the houses, so the ones in front hide it cheaply.
+    this.grass = new Grass(map);
+    this.root.add(this.grass.root);
     this.root.add(this.atmosphere.group);
     this.root.add(this.rain.mesh);
     if (this.snow) this.root.add(this.snow.mesh);
@@ -183,7 +190,7 @@ export class Neighborhood {
     // Lawn planes with vertex-color variation (patchy dead grass; forest floor in the woods), open over basements.
     const b = this.map.bounds;
     const grass = this.lib.get('grass');
-    const nearTree = forestDistance(this.map);
+    const woodsOf = woodsAt(this.map);
     for (const r of subtractRects({ x0: b.x0 - 60, x1: b.x1 + 60, z0: b.z0 - 60, z1: b.z1 + 60 }, this.map.excavations)) {
       const w = r.x1 - r.x0, d = r.z1 - r.z0;
       const g = new THREE.PlaneGeometry(w, d, Math.max(1, Math.round(w / 3.5)), Math.max(1, Math.round(d / 3.5)));
@@ -196,17 +203,11 @@ export class Neighborhood {
         const x = pos.getX(i);
         const z = pos.getZ(i);
         uv.setXY(i, x / grass.texScale, z / grass.texScale);
-        const n = Math.sin(x * 0.11) * Math.cos(z * 0.13) + Math.sin(x * 0.031 + z * 0.047) * 0.8;
+        const n = groundNoise(x, z);
         const dry = THREE.MathUtils.smoothstep(n, 0.2, 1.2);
         const v = 0.85 + n * 0.12;
-        // North of Elm and along the sides the forest floor starts on a straight line; south of Elm it
-        // follows the trees, so Oak Street's lots keep their grass. Past the edge of the map it's all woods.
-        const woods = Math.max(
-          THREE.MathUtils.smoothstep(-z, 50, 60),
-          THREE.MathUtils.smoothstep(Math.abs(x), 113, 121),
-          z > 40 ? 1 - THREE.MathUtils.smoothstep(nearTree(x, z), 3, 9) : 0,
-          THREE.MathUtils.smoothstep(z - b.z1, -4, 2),
-        );
+        // The forest floor: see woodsAt (the grass thins out the same way).
+        const woods = woodsOf(x, z);
         const r0 = v * (1 + dry * 0.35), g0 = v * (1 + dry * 0.12), b0 = v * (1 - dry * 0.1);
         colors[i * 3] = THREE.MathUtils.lerp(r0, 0.95 + n * 0.1, woods);
         colors[i * 3 + 1] = THREE.MathUtils.lerp(g0, 0.62, woods);
@@ -371,6 +372,7 @@ export class Neighborhood {
     setWetLampBudget(g.fogQuality === 'high' ? 8 : g.fogQuality === 'medium' ? 5 : 0);
     setWetTier(!g.rain ? 'off' : g.fogQuality === 'low' ? 'cheap' : 'full');
     setLightConesVisible(g.fogQuality === 'low');
+    this.grass.setQuality(g.grass);
     this.lib.setAnisotropy(g.textureQuality === 'low' ? 1 : g.textureQuality === 'medium' ? 4 : 8);
     void this.lib.loadPbr(renderer, g.textureQuality);
   }
@@ -391,6 +393,8 @@ export class Neighborhood {
     this.rain.update(camera, this.fog.density, this.lighting.flash * (settings.value.accessibility.reducedFlashing ? 0.2 : 1));
     updateWind(t, this.atmosphere.wind, this.atmosphere.windStrength);
     this.snow?.update(dt, camera, this.fog.density);
+    // Rain comes with stronger wind in the grass.
+    this.grass.update(camera as THREE.PerspectiveCamera, 1 + weather.rain * 0.35);
     this.propFactory.foliageUniforms.uTime.value = t;
     this.propFactory.foliageUniforms.uWind.value = this.atmosphere.windStrength;
     for (const d of this.dynamic) d.update(dt, t);
@@ -405,6 +409,7 @@ export class Neighborhood {
     this.sky.dispose();
     this.rain.dispose();
     this.snow?.dispose();
+    this.grass.dispose();
     this.atmosphere.dispose();
     this.lib.dispose();
     this.envMap?.dispose();
@@ -427,30 +432,4 @@ function mergeAll(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   return out;
-}
-
-/** Distance from a ground point to the nearest forest tree (capped at 12 m), from a 6 m grid of the woods. */
-function forestDistance(map: MapDefinition): (x: number, z: number) => number {
-  const cell = 6;
-  const grid = new Map<number, number[]>();
-  const key = (cx: number, cz: number) => cx * 4096 + cz;
-  for (const p of map.props) {
-    if (!p.forest) continue;
-    const k = key(Math.floor(p.x / cell), Math.floor(p.z / cell));
-    let list = grid.get(k);
-    if (!list) grid.set(k, (list = []));
-    list.push(p.x, p.z);
-  }
-  return (x, z) => {
-    const cx = Math.floor(x / cell), cz = Math.floor(z / cell);
-    let best = 144;
-    for (let i = -2; i <= 2; i++) {
-      for (let j = -2; j <= 2; j++) {
-        const list = grid.get(key(cx + i, cz + j));
-        if (!list) continue;
-        for (let n = 0; n < list.length; n += 2) best = Math.min(best, (list[n] - x) ** 2 + (list[n + 1] - z) ** 2);
-      }
-    }
-    return Math.sqrt(best);
-  };
 }

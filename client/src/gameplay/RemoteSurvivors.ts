@@ -135,6 +135,16 @@ export class RemoteSurvivors {
     return r.body.armR.end.getWorldPosition(out);
   }
 
+  /** Where the others press the grass down (x, y, z, radius), standing or fallen. */
+  feet(out: (x: number, y: number, z: number, r: number) => void): void {
+    for (const r of this.remotes.values()) {
+      if (r.ragdoll) {
+        r.ragdoll.center(_p);
+        out(_p.x, r.ragdoll.floorY, _p.z, 0.95);
+      } else out(r.pos.x, r.pos.y, r.pos.z, 0.55);
+    }
+  }
+
   /** `myBike`: the bike this survivor rides as drawn (whoever is on its pegs stands on it). */
   update(dt: number, sim: Simulation, mirror: Mirror, camera: THREE.PerspectiveCamera, myBike: BikePose | null = null): void {
     // Passengers last: they stand on the pegs of the bike as drawn this frame.

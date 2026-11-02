@@ -16,6 +16,7 @@
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
     "check:world": "tsx client/tests/world.check.ts",
     "check:houses": "tsx client/tests/houses.check.ts",
+    "check:grass": "tsx client/tests/grass.check.ts",
     "check:audio": "tsx client/tests/audio.check.ts",
     "check:sim": "tsx shared/tests/sim.check.ts",
     "check:raid": "tsx shared/tests/raid.check.ts",
