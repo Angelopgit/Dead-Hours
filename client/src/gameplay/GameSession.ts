@@ -298,6 +298,9 @@ export class GameSession {
     };
     this.effects.casings.onBounce = (pos, shell, strength) => audio.casing(pos, shell, strength);
     this.zombies = new ZombieView(engine.scene, physics, field, this.effects);
+    // Every zombie look built and its shaders compiled now, while the screen is dark, so the first
+    // horde doesn't stutter (each new look costs a frame 10-80 ms otherwise).
+    this.zombies.warm(engine.renderer, engine.camera, engine.scene);
     this.raid = new RaidView(engine.scene, physics, field);
     this.zombies.onCorpseSettled = (pos) => this.effects.pool(pos, 0.9 + Math.random() * 0.5, 120);
     this.zombies.onStep = (pos, gait, loudness) => audio.zombieStep(pos, gait, loudness);

@@ -961,7 +961,8 @@ export class Simulation {
       const [lo, hi] = S.reinforcements;
       const want = lo + Math.floor(this.rand() * (hi - lo + 1));
       const [minD, maxD] = S.reinforceDistance;
-      for (let i = 0; i < want && extra < S.reinforceCap && alive < SPAWNING.maxPopulation; i++) {
+      // A spot that doesn't work out is tried again (a few times), so the call brings what it rolled.
+      for (let tries = 0; fresh < want && tries < want * 3 && extra < S.reinforceCap && alive < SPAWNING.maxPopulation; tries++) {
         const at = this.findSpawnPoint(minD, maxD);
         if (!at) continue;
         const z = this.spawnZombie(this.rand() < S.reinforceRunners ? 'runner' : 'walker', at, 'approach');
@@ -1672,11 +1673,24 @@ export class Simulation {
     return s[clamp(alive, 1, s.length) - 1];
   }
 
+  /**
+   * The player scale as far as the night has grown into it: a bigger team starts with part of its
+   * extra zombies and gets the rest over the first minutes (SPAWNING.teamRamp). Everything the
+   * spawner sizes by team (target, surge bonus, spawn rate, brute and special caps) uses this.
+   */
+  get teamScale(): number {
+    const s = this.playerScale;
+    if (s <= 1) return s;
+    const r = SPAWNING.teamRamp;
+    const t = this.phase === 'survival' ? this.phaseTime : 0;
+    return 1 + (s - 1) * (r.start + (1 - r.start) * clamp(t / r.full, 0, 1));
+  }
+
   /** Target population for the basic spawner (the Phase 5 director replaces this). */
   get populationTarget(): number {
     if (this.phase !== 'survival') return 0;
     const solo = SPAWNING.basePopulation + (SPAWNING.growthPerMinute * this.phaseTime) / 60;
-    return Math.min(SPAWNING.maxPopulation, Math.floor(solo * this.playerScale));
+    return Math.min(SPAWNING.maxPopulation, Math.floor(solo * this.teamScale));
   }
 
   /** True while a horde surge is under way. */
@@ -1688,7 +1702,7 @@ export class Simulation {
   get spawnTarget(): number {
     const base = this.populationTarget;
     if (!this.surging) return base;
-    return Math.min(SPAWNING.maxPopulation, base + Math.floor(hordeBonus(this.horde.wave) * this.playerScale));
+    return Math.min(SPAWNING.maxPopulation, base + Math.floor(hordeBonus(this.horde.wave) * this.teamScale));
   }
 
   // ---------------------------------------------------------------- the van raid (Raid.ts)
@@ -1845,11 +1859,12 @@ export class Simulation {
       return;
     }
     const at = this.findSpawnPoint();
-    // The first arrivals come in quickly; afterwards a steady trickle.
+    // The first arrivals come in quicker; afterwards a steady trickle. Never faster than
+    // minInterval: a surge or a big team pours in over seconds, not in one burst.
     const [lo, hi] = SPAWNING.interval;
     const surge = this.surging;
-    const wait = surge ? HORDES.interval : alive < target * 0.5 ? 0.35 : lo + this.rand() * (hi - lo);
-    this.spawnAt = this.time + wait / this.playerScale;
+    const wait = surge ? HORDES.interval : alive < target * 0.5 ? SPAWNING.fillInterval : lo + this.rand() * (hi - lo);
+    this.spawnAt = this.time + Math.max(SPAWNING.minInterval, wait / this.teamScale);
     if (!at) return;
     // A surge comes straight for the survivors.
     this.spawnZombie(this.pickKind(), at, surge || this.rand() < 0.78 ? 'approach' : 'wander');
@@ -1865,12 +1880,12 @@ export class Simulation {
     if (r < runner) return 'runner';
     if (r < runner + share(SPAWNING.mix.brute)) {
       const brutes = this.zombies.filter((z) => z.alive && z.kind === 'brute').length;
-      if (brutes < Math.floor((SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) * this.playerScale)) return 'brute';
+      if (brutes < Math.floor((SPAWNING.bruteBase + Math.floor(t / SPAWNING.bruteEvery)) * this.teamScale)) return 'brute';
     }
     // Specials, each held to a few at once.
     const special = (kind: 'screamer' | 'bloater', base: number) => {
       const n = this.zombies.filter((z) => z.alive && z.kind === kind).length;
-      return n < Math.floor((base + Math.floor(t / SPAWNING.specialEvery)) * this.playerScale);
+      return n < Math.floor((base + Math.floor(t / SPAWNING.specialEvery)) * this.teamScale);
     };
     const r2 = 1 - r;
     const screamer = share(SPAWNING.mix.screamer);

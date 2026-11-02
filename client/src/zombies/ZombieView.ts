@@ -60,6 +60,9 @@ const BLEED_TIME = 40;
 
 const MAX_CORPSES = 14;
 
+/** Kinds the spawner sends (crawlers are walkers that lost their legs: walker bodies). */
+const WARM_KINDS: readonly ZombieKind[] = ['walker', 'runner', 'brute', 'screamer', 'bloater'];
+
 /** Voice pitch per kind: brutes rumble, runners shriek, screamers shriek higher, bloaters gurgle low. */
 const VOICE_PITCH: Record<ZombieKind, number> = { walker: 1, runner: 1.32, brute: 0.62, crawler: 1, screamer: 1.5, bloater: 0.74 };
 /**
@@ -109,14 +112,50 @@ export class ZombieView {
     return list;
   }
 
-  private acquire(kind: ZombieKind, look: number): { body: Humanoid; probe: DynamicProbe } {
-    let entry = this.poolOf(kind, look).pop();
-    if (!entry) {
-      const body = new Humanoid(zombieLookOf(kind === 'crawler' ? 'walker' : kind, look));
-      const probe = new DynamicProbe(this.field, 0.3 + Math.random() * 0.1);
-      probe.attach(body.surfaces());
-      entry = { body, probe };
+  private build(kind: ZombieKind, look: number): { body: Humanoid; probe: DynamicProbe } {
+    const body = new Humanoid(zombieLookOf(kind === 'crawler' ? 'walker' : kind, look));
+    const probe = new DynamicProbe(this.field, 0.3 + Math.random() * 0.1);
+    probe.attach(body.surfaces());
+    return { body, probe };
+  }
+
+  /**
+   * Builds one body of every zombie look ahead of time (while the screen is dark), and compiles
+   * their shaders when given the renderer. Otherwise each look's first appearance costs a frame
+   * 10-80 ms to build, and a horde brings dozens of looks in its first seconds.
+   */
+  warm(renderer?: THREE.WebGLRenderer, camera?: THREE.Camera, scene?: THREE.Scene): number {
+    const t0 = performance.now();
+    const built: { body: Humanoid; probe: DynamicProbe }[] = [];
+    for (const kind of WARM_KINDS) {
+      for (let look = 0; look < kindLooks(kind); look++) {
+        const list = this.poolOf(kind, look);
+        if (list.length) continue;
+        const e = this.build(kind, look);
+        list.push(e);
+        built.push(e);
+      }
     }
+    if (renderer && camera && built.length) {
+      // Bodies only take part in a compile while they are in the graph and visible. The scene is
+      // drawn into a render target (post effects), whose shader variant differs from the screen's.
+      for (const e of built) {
+        e.body.setVisible(true);
+        this.root.add(e.body.root);
+      }
+      const was = renderer.getRenderTarget();
+      const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+      renderer.setRenderTarget(rt);
+      renderer.compile(this.root, camera, scene);
+      renderer.setRenderTarget(was);
+      rt.dispose();
+      for (const e of built) e.body.root.removeFromParent();
+    }
+    return performance.now() - t0;
+  }
+
+  private acquire(kind: ZombieKind, look: number): { body: Humanoid; probe: DynamicProbe } {
+    const entry = this.poolOf(kind, look).pop() ?? this.build(kind, look);
     const h = entry.body;
     h.resetPose();
     h.clearWounds();

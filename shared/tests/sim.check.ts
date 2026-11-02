@@ -438,23 +438,37 @@ section('Horde size by survivors');
   const { sim, sp, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
   sim.phase = 'survival';
   sim.phaseTime = 0;
-  check(sim.populationTarget === 6, `one survivor starts against 6 (${sim.populationTarget})`);
+  const base = SPAWNING.basePopulation, full4 = SPAWNING.playerScale[3];
+  check(sim.populationTarget === base, `one survivor starts against ${base} (${sim.populationTarget})`);
+  check(sim.teamScale === 1, 'one survivor has no team ramp');
   const others = [2, 3, 4].map((i) => sim.addPlayer(`p${i}`, `P${i}`, 'ar', 'pistol', { x: 4.8 + i, y: 0.32, z: -22.3 }, 0));
-  check(sim.populationTarget === Math.floor(6 * SPAWNING.playerScale[3]), `four survivors start against ${sim.populationTarget}`);
+  const start4 = 1 + (full4 - 1) * SPAWNING.teamRamp.start;
+  check(Math.abs(sim.teamScale - start4) < 1e-9 && sim.populationTarget === Math.floor(base * start4), `four survivors start against ${sim.populationTarget}, not the full ${Math.floor(base * full4)}`);
+  check(sim.populationTarget <= 8, `a full lobby opens against a handful (${sim.populationTarget})`);
+  sim.phaseTime = SPAWNING.teamRamp.full / 2;
+  const half4 = sim.teamScale;
+  check(half4 > start4 && half4 < full4, `the team's extra eases in with time (${start4.toFixed(2)} → ${half4.toFixed(2)} → ${full4})`);
+  sim.phaseTime = SPAWNING.teamRamp.full;
+  check(Math.abs(sim.teamScale - full4) < 1e-9, `four survivors face the full scale after ${SPAWNING.teamRamp.full / 60} minutes`);
+  sim.phaseTime = 0;
   const fifth = sim.addPlayer('p5', 'P5', 'ar', 'pistol', { x: 10.8, y: 0.32, z: -22.3 }, 0);
   check(sim.playerScale === SPAWNING.playerScale[3], 'a fifth survivor counts as four');
   fifth.alive = false;
   others[2].alive = false;
   check(sim.playerScale === SPAWNING.playerScale[2], 'the dead do not count');
   sim.phaseTime = 5 * 60;
-  const one = Math.floor(6 + 2.2 * 5);
+  const one = Math.floor(base + SPAWNING.growthPerMinute * 5);
   for (const o of others) o.alive = false;
   check(sim.populationTarget === one, `after five minutes one survivor faces ${one} (${sim.populationTarget})`);
   sp.alive = false;
   check(sim.playerScale === 1, 'nobody alive scales like one');
   sp.alive = true;
   sim.phaseTime = 3 * 3600;
-  check(sim.populationTarget === 200, `the horde stops at 200 (${sim.populationTarget})`);
+  check(sim.populationTarget === SPAWNING.maxPopulation, `the horde stops at ${SPAWNING.maxPopulation} (${sim.populationTarget})`);
+  for (const o of others) o.alive = true;
+  sim.phaseTime = 10 * 60;
+  const ten = sim.populationTarget;
+  check(ten <= 45, `four survivors face ${ten} after ten minutes, not a crowd`);
   cleanup(sim, body);
 }
 section('Horde waves');
@@ -493,14 +507,40 @@ section('Horde waves');
   check(runners > 2000 * (0.14 + hordeRunnerBoost(1) - 0.05), `more runners during a surge (${runners} of 2000)`);
   const before = sim.zombies.length;
   run(HORDES.firstAt + 1, 120);
-  check(sim.zombies.length > before + 3, `the surge pours in quickly (${before} → ${sim.zombies.length} in 2 s)`);
+  check(sim.zombies.length > before + 2, `the surge pours in (${before} → ${sim.zombies.length} in 2 s)`);
   sim.addPlayer('p2', 'P2', 'ar', 'pistol', { x: 6, y: 0.32, z: -22.3 }, 0);
-  check(sim.spawnTarget === Math.min(200, sim.populationTarget + Math.floor(hordeBonus(1) * SPAWNING.playerScale[1])), 'a bigger team gets a bigger surge');
+  check(sim.teamScale > 1 && sim.spawnTarget === Math.min(SPAWNING.maxPopulation, sim.populationTarget + Math.floor(hordeBonus(1) * sim.teamScale)), 'a bigger team gets a bigger surge');
   run(HORDES.firstAt + hordeDuration(1) - 0.05, 6);
   check(seen.includes('over1') && !sim.surging && sim.horde.survived === 1, `wave 1 is outlasted (${seen.join(' ')})`);
   run(hordeStart(3) + 1, 2);
   check(seen.filter((s) => s.startsWith('over')).length === 2 && seen.indexOf('over2') < seen.indexOf('surge3'), `a skipped wave still counts once (${seen.join(' ')})`);
   check(sim.horde.wave === 3 && sim.surging, 'wave 3 surges');
+  cleanup(sim, body);
+}
+section('Spawns come spread out');
+{
+  // A full lobby deep into the night, in a big surge, with nobody thinning the horde: the worst case.
+  const { sim, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
+  for (const i of [2, 3, 4]) sim.addPlayer(`p${i}`, `P${i}`, 'ar', 'pistol', { x: 4.8 + i, y: 0.32, z: -22.3 }, 0);
+  sim.phase = 'survival';
+  sim.phaseTime = hordeStart(6) + 0.5;
+  const perSecond = new Map<number, number>();
+  let spawned = 0;
+  for (let i = 0; i < 600; i++) {
+    sim.step(1 / 60);
+    for (const e of sim.drain()) {
+      if (e.type !== 'zombieSpawned') continue;
+      spawned++;
+      const sec = Math.floor(sim.time);
+      perSecond.set(sec, (perSecond.get(sec) ?? 0) + 1);
+    }
+  }
+  const most = Math.ceil(1 / SPAWNING.minInterval);
+  const peak = Math.max(0, ...perSecond.values());
+  check(sim.surging && sim.spawnTarget > 40, `four survivors in wave 6 face a big surge (target ${sim.spawnTarget})`);
+  check(sim.spawnTarget <= SPAWNING.maxPopulation, `the surge stays under the cap of ${SPAWNING.maxPopulation}`);
+  check(peak <= most, `never more than ${most} spawns in one second (${peak})`);
+  check(spawned >= 10 && spawned <= 10 / SPAWNING.minInterval + 1, `the surge still pours in steadily (${spawned} in 10 s)`);
   cleanup(sim, body);
 }
 const chaseFrom = (sim: Simulation, kind: 'walker' | 'runner' | 'brute', at: Vec3, target: Vec3) => {

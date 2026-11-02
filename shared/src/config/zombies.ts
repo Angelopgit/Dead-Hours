@@ -89,12 +89,12 @@ export const SPECIALS = {
     noise: 70,
     callRadius: 55,
     /** Fresh dead that come running from out of sight per scream, and from how far. */
-    reinforcements: [3, 5] as [number, number],
+    reinforcements: [2, 3] as [number, number],
     reinforceDistance: [26, 48] as [number, number],
     /** Share of those that are runners. */
     reinforceRunners: 0.35,
     /** Called reinforcements alive at once, beyond the night's normal population. */
-    reinforceCap: 14,
+    reinforceCap: 8,
   },
   bloater: {
     /** Blast radius (m): full damage at the centre falling to `edge` of it at the rim. */
@@ -114,18 +114,33 @@ export const SPECIALS = {
 
 /** Survival tuning that Phase 5's director will replace with a full escalation model. */
 export const SPAWNING = {
-  /** Population when the outbreak starts, and how it grows (for one survivor). */
-  basePopulation: 6,
-  growthPerMinute: 2.2,
-  /** Hard cap on zombies alive at once, whatever the player count. */
-  maxPopulation: 200,
+  /**
+   * Population when the outbreak starts, and how it grows (for one survivor). Kept low on purpose:
+   * the night starts with a handful and builds, so a lobby never meets a crowd in its first minutes.
+   */
+  basePopulation: 5,
+  growthPerMinute: 1.5,
+  /**
+   * Hard cap on zombies alive at once, whatever the player count. Each one costs a lobby's server
+   * about 0.3% of a core and every client ~45 bytes of each snapshot (server/tests/spawns.ts).
+   */
+  maxPopulation: 90,
   /**
    * Multiplier on the population target, the spawn rate and the brute cap by survivors alive,
    * index 0 for one survivor up to index 3 for four (more count as four).
    */
-  playerScale: [1, 1.6, 2.2, 2.8] as readonly number[],
-  /** Seconds between spawns while below target (divided by the player scale). */
+  playerScale: [1, 1.35, 1.65, 1.9] as readonly number[],
+  /**
+   * A bigger team's extra zombies ease in with time: the night opens with `start` of the extra
+   * and reaches the full player scale `full` seconds into the outbreak.
+   */
+  teamRamp: { start: 0.4, full: 600 },
+  /** Seconds between spawns while below target (divided by the team scale). */
   interval: [1.6, 3.4] as [number, number],
+  /** The same while fewer than half the target are out (the first arrivals come in quicker). */
+  fillInterval: 0.9,
+  /** Never two spawns closer together than this, whatever the team or a horde surge. */
+  minInterval: 0.45,
   minDistance: 42,
   maxDistance: 85,
   /** Zombies farther than this from every player, unaware of anyone, are recycled. */
@@ -166,11 +181,14 @@ export const HORDES = {
   duration: 40,
   durationGrowth: 8,
   maxDuration: 90,
-  /** Extra zombies over the base target (for one survivor; scaled by player count like the rest). */
-  bonus: 10,
-  bonusGrowth: 7,
-  /** Seconds between surge spawns while below the surge target (divided by the player scale). */
-  interval: 0.3,
+  /** Extra zombies over the base target (for one survivor; scaled by the team scale like the rest). */
+  bonus: 6,
+  bonusGrowth: 4,
+  /**
+   * Seconds between surge spawns while below the surge target (divided by the team scale, never
+   * under SPAWNING.minInterval): a wave pours in over several seconds instead of all at once.
+   */
+  interval: 0.6,
   /** Extra runner share during a surge, plus this much more per wave, up to `maxRunnerBoost`. */
   runnerBoost: 0.1,
   runnerBoostGrowth: 0.03,
