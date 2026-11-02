@@ -789,6 +789,8 @@ export class Simulation {
     const a = p.arsenal;
     // With an arm in hand the trigger finger swings it instead.
     if (a.limb) return pressed && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
+    // With the melee weapon held out, the trigger swings it (held down, it keeps swinging).
+    if (a.meleeOut) return a.action === 'idle' && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
     const def = a.def;
     if (!def.auto && !pressed) return 'busy';
     p.work = null;
@@ -1067,9 +1069,19 @@ export class Simulation {
     return true;
   }
 
-  switchWeapon(id: string, slot: 'primary' | 'secondary'): boolean {
+  switchWeapon(id: string, slot: 'primary' | 'secondary' | 'melee'): boolean {
     const p = this.players.get(id);
     if (!p || !p.up) return false;
+    if (slot === 'melee') {
+      // The melee weapon held out in place of the gun (with an arm in hand, the arm is the club).
+      if (p.arsenal.limb) return false;
+      const reloading = p.arsenal.action === 'reload';
+      const weaponBefore = p.arsenal.weapon.id;
+      if (!p.arsenal.drawMelee()) return false;
+      if (reloading) this.emit({ type: 'reload', player: id, weapon: weaponBefore, stage: 'cancel' });
+      this.emit({ type: 'draw', player: id, slot: 'melee', weapon: p.arsenal.meleeId });
+      return true;
+    }
     // Reaching for a gun means tossing the arm aside.
     if (p.arsenal.limb) {
       if (p.arsenal.action === 'melee') return false;
@@ -2425,7 +2437,7 @@ export class Simulation {
         p.throwAim = null;
         break;
       case 'throwDone':
-        this.emit({ type: 'draw', player: p.id, slot: a.active, weapon: a.weapon.id });
+        this.emit({ type: 'draw', player: p.id, slot: a.meleeOut ? 'melee' : a.active, weapon: a.meleeOut ? a.meleeId : a.weapon.id });
         break;
       case 'meleeDone':
         // The arm came apart mid-swing: back to the gun.

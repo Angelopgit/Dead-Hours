@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, isMelee, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
@@ -208,7 +208,7 @@ export class GameSession {
   private fireHeld = false;
   private fireBuffer = 0;
   private wantReload = false;
-  private wantSlot: 'primary' | 'secondary' | null = null;
+  private wantSlot: 'primary' | 'secondary' | 'melee' | null = null;
   private wantMelee = false;
   private wantHeal = false;
 
@@ -1135,14 +1135,14 @@ export class GameSession {
   private adsSight(): Sight | null {
     if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing') return null;
     const a = this.me.arsenal;
-    if (a.action === 'reload' || a.action === 'draw' || a.limb) return null;
+    if (a.action === 'reload' || a.action === 'draw' || a.limb || a.meleeOut) return null;
     return this.sightFor(a.weapon.id);
   }
 
   private get canAim(): boolean {
     const a = this.me.arsenal;
     // Nothing to aim down while both hands are on a severed arm.
-    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb;
+    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb && !a.meleeOut;
   }
 
   private fovTo(dt: number, fov: number): void {
@@ -1234,8 +1234,14 @@ export class GameSession {
     if (input.pressed('reload')) this.wantReload = true;
     if (input.pressed('weapon1')) this.wantSlot = 'primary';
     if (input.pressed('weapon2')) this.wantSlot = 'secondary';
+    if (input.pressed('weapon3')) this.wantSlot = 'melee';
     const wheel = input.consumeWheel();
-    if (wheel !== 0) this.wantSlot = a.active === 'primary' ? 'secondary' : 'primary';
+    if (wheel !== 0) {
+      // Primary → secondary → melee weapon in hand → primary (the other way scrolling up).
+      const order = ['primary', 'secondary', 'melee'] as const;
+      const at = a.meleeOut ? 2 : a.active === 'primary' ? 0 : 1;
+      this.wantSlot = order[(at + (wheel > 0 ? 1 : 2)) % 3];
+    }
     if (input.pressed('melee')) this.wantMelee = true;
     this.throwInput();
     if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
@@ -1290,6 +1296,12 @@ export class GameSession {
     const pressed = this.fireBuffer > 0;
     this.fireBuffer = Math.max(0, this.fireBuffer - step);
     if (!this.fireHeld && !pressed) return;
+    if (a.meleeOut) {
+      // The melee weapon in hand: the trigger swings it, again and again while held.
+      const o = this.cam.aimOrigin, d = this.cam.aimDir;
+      if (sim.fire(this.myId, { x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, pressed, 1) !== 'busy') this.fireBuffer = 0;
+      return;
+    }
     // Holding the trigger on an empty magazine clicks once, not every step.
     if (a.weapon.mag <= 0 && !pressed) return;
     if (!a.def.auto && !pressed) return;
@@ -1354,7 +1366,7 @@ export class GameSession {
       const o = this.cam.aimOrigin, d = this.cam.aimDir;
       this.link!.motion(packMotion({
         motion: this.myMotion(), facing: this.player.facing,
-        trigger: this.phase === 'playing' && this.fireHeld && !this.me.arsenal.limb,
+        trigger: this.phase === 'playing' && this.fireHeld && !this.me.arsenal.limb && !this.me.arsenal.meleeOut,
         aimOrigin: { x: o.x, y: o.y, z: o.z }, aimDir: { x: d.x, y: d.y, z: d.z },
       }));
     }
@@ -1382,8 +1394,8 @@ export class GameSession {
     if (this.wantSlot) {
       const slot = this.wantSlot;
       this.wantSlot = null;
-      // With an arm in hand the server throws it aside first.
-      if (a.limb ? a.action !== 'melee' : a.switchTo(slot)) this.act({ a: 'switch', slot });
+      // With an arm in hand the server throws it aside first (and the arm is the club then).
+      if (slot === 'melee' ? a.drawMelee() : a.limb ? a.action !== 'melee' : a.switchTo(slot)) this.act({ a: 'switch', slot });
     }
     if (this.wantMelee) {
       this.wantMelee = false;
@@ -1415,6 +1427,14 @@ export class GameSession {
     if (a.limb) {
       // The trigger finger swings the arm.
       if (pressed) {
+        this.fireBuffer = 0;
+        swing();
+      }
+      return;
+    }
+    if (a.meleeOut) {
+      // The melee weapon in hand: the trigger swings it, again and again while held.
+      if (a.action === 'idle') {
         this.fireBuffer = 0;
         swing();
       }
@@ -2064,15 +2084,23 @@ export class GameSession {
         } else audio.skateBail(A);
         break;
       }
+      case 'draw': {
+        // The melee weapon taken out to hold: the same grip-settling sound as picking it up.
+        if (e.slot !== 'melee' || !isMelee(e.weapon)) break;
+        const who = this.sim.players.get(e.player);
+        if (!who) break;
+        audio.meleePickup(e.weapon, A.set(who.motion.pos.x, who.motion.pos.y + 1.2, who.motion.pos.z));
+        break;
+      }
       case 'meleeTaken': {
         v3(e.pos, A);
         audio.meleePickup(e.weapon, A);
         if (e.player !== this.myId) break;
         if (e.weapon === 'katanas') {
-          this.hud.notify('DUAL KATANAS', `${actionLabel('melee') || 'MELEE'} TO SWING · THE BLADES CUT IN TURN`, 3.2);
+          this.hud.notify('DUAL KATANAS', `${actionLabel('melee') || 'MELEE'} TO SWING · ${actionLabel('weapon3') || 'SWAP'} TO HOLD THEM OUT`, 3.2);
         } else if (!this.meleeHinted) {
           this.meleeHinted = true;
-          this.hud.notify(`${WEAPONS[e.weapon].model} IN HAND`, `${actionLabel('melee') || 'MELEE'} TO SWING · IT REPLACES YOUR MACHETE`, 3.2);
+          this.hud.notify(`${WEAPONS[e.weapon].model} IN HAND`, `${actionLabel('melee') || 'MELEE'} TO SWING · ${actionLabel('weapon3') || 'SWAP'} TO HOLD IT OUT`, 3.2);
         }
         if (e.swapped) this.hud.feedLine(`LEFT THE ${WEAPONS[e.swapped].model} BEHIND`);
         break;
@@ -2727,13 +2755,14 @@ export class GameSession {
     hud.setArmor(me.alive ? me.armor : 0, SERUM.armor);
     const limb = a.limb && !a.limb.broken ? a.limb : null;
     hud.weapon({
-      model: limb ? (LIMB_NAME[limb.cut]) : def.model,
+      model: limb ? (LIMB_NAME[limb.cut]) : a.meleeOut ? WEAPONS[a.meleeId].model : def.model,
       mag: a.weapon.mag,
       magazine: def.magazine,
       reserve: a.weapon.reserve,
-      mode: def.mode,
+      mode: a.meleeOut && !limb ? 'MELEE' : def.mode,
       reload: a.action === 'reload' ? a.progress : null,
-      slot: a.active,
+      slot: a.meleeOut ? 'melee' : a.active,
+      meleeModel: WEAPONS[a.meleeId].model,
       primaryModel: WEAPONS[a.primary.id].model,
       secondaryModel: WEAPONS[a.secondary.id].model,
       bandages: me.bandages,
@@ -2756,7 +2785,7 @@ export class GameSession {
     const allEmpty = total(a.primary) === 0 && total(a.secondary) === 0;
     const critical = total(a.weapon) <= def.magazine && def.mode !== 'MELEE';
     // (Not while the hands are full of something else to fight with.)
-    hud.setWarning(limb ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
+    hud.setWarning(limb || a.meleeOut ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
     // Dynamic crosshair: gap follows the real spread cone (rolling on a skateboard is smooth).
     const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : 1);

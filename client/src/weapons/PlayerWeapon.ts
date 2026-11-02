@@ -21,6 +21,8 @@ export interface HeldState {
   meleeWith?: 'machete' | 'limb';
   /** The melee weapon quick swings use: the machete, or one found lying around. */
   meleeId?: WeaponId;
+  /** The melee weapon held out in place of the gun (its own quick slot): the guns are slung. */
+  meleeOut?: boolean;
   /** Attachments and finishes on the guns (models are rebuilt when one changes). */
   builds?: Loadout;
   /** What the current throw is. */
@@ -227,6 +229,8 @@ export class PlayerWeapon {
   private meleeW = 0;
   /** The gun put away for a two-handed swing (katana, bat, hockey stick). */
   private meleeTwoW = 0;
+  /** The gun put away while the melee weapon is held out. */
+  private outW = 0;
   private meleeShown: MeleeId = 'machete';
   /** Dual katanas: the left blade cuts this swing (they take turns). */
   private dualLeft = true;
@@ -484,8 +488,11 @@ export class PlayerWeapon {
     this.reloadW = ease(this.reloadW, s.action === 'reload' ? 1 : 0, 12);
     this.meleeW = ease(this.meleeW, s.action === 'melee' ? 1 : 0, 22);
     this.meleeTwoW = ease(this.meleeTwoW, s.action === 'melee' && !clubbing && style.twoHands ? 1 : 0, 26);
-    // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm).
-    const drawing = s.action === 'draw' && !limb;
+    const out = !!s.meleeOut && !limb;
+    this.outW = ease(this.outW, out ? 1 : 0, 16);
+    // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm,
+    // or taking the melee weapon out).
+    const drawing = s.action === 'draw' && !limb && !out;
     const stowTarget = s.action === 'bandage' || throwing ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
     this.stowW = drawing ? stowTarget : ease(this.stowW, stowTarget, 9);
     // The gun goes over the shoulder (or into the holster) while the hands hold an arm.
@@ -496,7 +503,7 @@ export class PlayerWeapon {
     let twist = hold === 'rifle' ? twistRifle : 0;
     twist *= (1 - this.meleeW) * (1 - this.limbW);
     // Both hands on a long weapon: the gun goes to its holster for the swing.
-    const away = Math.max(this.limbW, this.meleeTwoW);
+    const away = Math.max(this.limbW, this.meleeTwoW, this.outW);
 
     body.root.updateMatrixWorld(true);
     const spine = body.spine;
@@ -621,6 +628,32 @@ export class PlayerWeapon {
         meleeModel.root.localToWorld(this.leftTarget.copy(meleeModel.fore));
         this.poleL.set(0.7, -0.5, -0.3).transformDirection(spineM);
         leftW = 1;
+      }
+    } else if (out) {
+      // Held out, ready to swing (the swing's own first key), brought from the holster on a draw.
+      const lift = s.action === 'draw' ? smooth(seg(progress, 0.05, 0.9)) : 1;
+      const readyKeys = offModel ? DUAL_GUARD_R : style.keys;
+      this.keyPose(readyKeys, 0, this.tmpA, this.tmpQ);
+      this.holsterPose(style.holster, meleeModel.root.position, meleeModel.root.quaternion);
+      meleeModel.root.position.lerp(this.tmpA, lift);
+      meleeModel.root.quaternion.slerp(this.tmpQ, lift);
+      meleeModel.root.updateMatrixWorld(true);
+      meleeModel.root.localToWorld(this.rightTarget.set(0, 0, 0));
+      this.poleR.set(-0.8, -0.4, -0.4).transformDirection(spineM);
+      leftW = 0;
+      if (offModel) {
+        this.keyPose(DUAL_GUARD_L, 0, this.tmpA, this.tmpQ);
+        this.holsterPose('blade2', offModel.root.position, offModel.root.quaternion);
+        offModel.root.position.lerp(this.tmpA, lift);
+        offModel.root.quaternion.slerp(this.tmpQ, lift);
+        offModel.root.updateMatrixWorld(true);
+        offModel.root.localToWorld(this.leftTarget.set(0, 0, 0));
+        this.poleL.set(0.8, -0.4, -0.4).transformDirection(spineM);
+        leftW = 1;
+      } else if (style.twoHands) {
+        meleeModel.root.localToWorld(this.leftTarget.copy(meleeModel.fore));
+        this.poleL.set(0.7, -0.5, -0.3).transformDirection(spineM);
+        leftW = lift;
       }
     } else {
       this.holsterPose(style.holster, meleeModel.root.position, meleeModel.root.quaternion);
@@ -908,7 +941,7 @@ export class PlayerWeapon {
   private cues(s: HeldState, def: WeaponDef, p: number): void {
     const id = def.id;
     // Taking hold of a severed arm is its own sound, not a gun coming out.
-    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb) this.onCue?.('draw', id, 0);
+    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb && !s.meleeOut) this.onCue?.('draw', id, 0);
     if (s.action !== 'reload') return;
     const fresh = this.lastAction !== 'reload';
     if (fresh) this.reloadEmpty = (s.active === 'primary' ? s.primary.mag : s.secondary.mag) === 0;

@@ -4,7 +4,7 @@ import { h } from './dom';
 import { codeLabel } from '../core/Input';
 import { settings, ACTION_LABELS, type Action } from '../core/Settings';
 
-const KEYS: Action[] = ['fire', 'aim', 'reload', 'interact', 'melee', 'weapon1', 'weapon2', 'heal', 'flashlight', 'sprint', 'crouch', 'jump', 'shoulder'];
+const KEYS: Action[] = ['fire', 'aim', 'reload', 'interact', 'melee', 'weapon1', 'weapon2', 'weapon3', 'heal', 'flashlight', 'sprint', 'crouch', 'jump', 'shoulder'];
 
 /**
  * Hold-to-view inventory: carried weapons with their ammunition, bandages, this run's numbers
@@ -85,8 +85,8 @@ export class Inventory {
       );
     };
     this.cards.replaceChildren(
-      card(slot('PRIMARY', 'weapon1'), a.primary.id, a.primary, a.active === 'primary'),
-      card(slot('SECONDARY', 'weapon2'), a.secondary.id, a.secondary, a.active === 'secondary'),
+      card(slot('PRIMARY', 'weapon1'), a.primary.id, a.primary, a.active === 'primary' && !a.meleeOut && !limb),
+      card(slot('SECONDARY', 'weapon2'), a.secondary.id, a.secondary, a.active === 'secondary' && !a.meleeOut && !limb),
       limb
         ? h('div', { class: 'inv-card active' },
           slot('MELEE', 'melee'),
@@ -95,7 +95,7 @@ export class Inventory {
           h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
           h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
         )
-        : card(slot('MELEE', 'melee'), a.meleeId, null, false),
+        : card(slot('MELEE', 'weapon3'), a.meleeId, null, a.meleeOut),
     );
     this.supplies.replaceChildren(
       slot('MEDICAL', 'heal'),

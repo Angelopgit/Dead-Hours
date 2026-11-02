@@ -11,9 +11,11 @@ export interface WeaponReadout {
   mode: string;
   /** 0..1 while reloading, otherwise null. */
   reload: number | null;
-  slot: 'primary' | 'secondary';
+  slot: 'primary' | 'secondary' | 'melee';
   primaryModel: string;
   secondaryModel: string;
+  /** The melee weapon (its own quick slot). */
+  meleeModel?: string;
   bandages: number;
   /** 0..1 while bandaging. */
   healing: number | null;
@@ -61,6 +63,7 @@ export class HUD {
   private readonly wBarFill: HTMLElement;
   private readonly slot1: HTMLElement;
   private readonly slot2: HTMLElement;
+  private readonly slot3: HTMLElement;
   private readonly bandages: HTMLElement;
   private readonly fragLine: HTMLElement;
   private readonly molotovLine: HTMLElement;
@@ -114,6 +117,7 @@ export class HUD {
     this.wBar = h('div', { class: 'w-bar' }, this.wBarFill);
     this.slot1 = h('div', { class: 'w-slot' });
     this.slot2 = h('div', { class: 'w-slot' });
+    this.slot3 = h('div', { class: 'w-slot' });
     this.bandages = h('div', { class: 'w-heal' });
     this.armorFill = h('i');
     this.armorText = h('span', {}, '0');
@@ -142,7 +146,7 @@ export class HUD {
         this.stance,
       ),
       h('div', { class: 'weapon-panel' },
-        h('div', { class: 'w-slots' }, this.slot1, this.slot2),
+        h('div', { class: 'w-slots' }, this.slot1, this.slot2, this.slot3),
         this.wModel,
         h('div', { class: 'w-ammo' }, this.wMag, this.wSep, this.wReserve),
         this.wMode,
@@ -228,7 +232,7 @@ export class HUD {
     const club = r.hits != null && r.wear != null;
     this.wMag.textContent = club ? String(r.hits) : r.mode === 'MELEE' ? '—' : String(r.mag);
     this.wReserve.textContent = club ? (r.hits === 1 ? 'HIT LEFT' : 'HITS LEFT') : r.mode === 'MELEE' ? '' : String(r.reserve);
-    this.wSep.style.display = club ? 'none' : '';
+    this.wSep.style.display = club || r.mode === 'MELEE' ? 'none' : '';
     this.wReserve.style.marginLeft = club ? '0.45em' : '';
     this.wMag.classList.toggle('low', club ? r.hits! <= 2 : r.magazine > 0 && r.mag <= Math.max(1, Math.floor(r.magazine * 0.25)));
     this.wReserve.classList.toggle('low', !club && r.reserve === 0);
@@ -242,11 +246,16 @@ export class HUD {
     const keys = inputDevice() !== 'mouse';
     const key1 = keys ? '' : actionLabel('weapon1');
     const key2 = keys ? '' : actionLabel('weapon2');
+    const key3 = keys ? '' : actionLabel('weapon3');
     const keyH = actionLabel('heal');
     this.slot1.textContent = key1 ? `${key1}  ${r.primaryModel}` : r.primaryModel;
     this.slot2.textContent = key2 ? `${key2}  ${r.secondaryModel}` : r.secondaryModel;
     this.slot1.classList.toggle('on', r.slot === 'primary');
     this.slot2.classList.toggle('on', r.slot === 'secondary');
+    const m3 = r.meleeModel ?? '';
+    this.slot3.textContent = key3 ? `${key3}  ${m3}` : m3;
+    this.slot3.style.display = m3 ? '' : 'none';
+    this.slot3.classList.toggle('on', r.slot === 'melee');
     this.bandages.textContent = r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? `${keyH}  ` : ''}BANDAGE × ${r.bandages}`;
     this.bandages.classList.toggle('none', r.bandages === 0 && r.healing === null);
     const keyG = actionLabel('grenade'), keyM = actionLabel('molotov');

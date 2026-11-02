@@ -17,7 +17,7 @@ const PAD_ACTIONS: [Action, number][] = [
 /** Button names shown in prompts while a controller is in use. */
 export const PAD_LABELS: Partial<Record<Action, string>> = {
   fire: 'RT', aim: 'LT', jump: 'A', crouch: 'B', reload: 'X', interact: 'RB', heal: 'LB', melee: 'R3',
-  flashlight: '↑', shoulder: 'hold ↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y',
+  flashlight: '↑', shoulder: 'hold ↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y', weapon3: 'Y',
 };
 
 const STICK_DEAD = 0.14;

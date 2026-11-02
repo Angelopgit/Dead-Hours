@@ -17,14 +17,14 @@ export type GraphicsPreset = 'phone' | 'low' | 'medium' | 'high';
 export type Action =
   | 'forward' | 'back' | 'left' | 'right'
   | 'sprint' | 'crouch' | 'jump' | 'interact' | 'barricade'
-  | 'reload' | 'melee' | 'weapon1' | 'weapon2'
+  | 'reload' | 'melee' | 'weapon1' | 'weapon2' | 'weapon3'
   | 'inventory' | 'shoulder' | 'fire' | 'aim' | 'heal'
   | 'talk' | 'radio' | 'chat' | 'gunsmith' | 'grenade' | 'molotov' | 'flashlight';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right',
   sprint: 'Sprint', crouch: 'Crouch', jump: 'Jump / Vault', interact: 'Interact', barricade: 'Board up / pry off',
-  reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon',
+  reload: 'Reload', melee: 'Melee attack', weapon1: 'Primary weapon', weapon2: 'Secondary weapon', weapon3: 'Melee weapon in hand',
   inventory: 'Inventory', shoulder: 'Switch shoulder', fire: 'Fire', aim: 'Aim', heal: 'Use bandage',
   talk: 'Push to talk', radio: 'Team radio', chat: 'Text chat', gunsmith: 'Customize weapon',
   grenade: 'Throw grenade (hold to aim)', molotov: 'Throw Molotov (hold to aim)',
@@ -116,6 +116,7 @@ export const DEFAULT_BINDINGS: Record<Action, string[]> = {
   melee: ['KeyF'],
   weapon1: ['Digit1'],
   weapon2: ['Digit2'],
+  weapon3: ['Digit5'],
   inventory: ['Tab'],
   shoulder: ['KeyV'],
   fire: ['Mouse0'],

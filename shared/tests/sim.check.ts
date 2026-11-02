@@ -2330,6 +2330,59 @@ section('Found melee weapons');
     run(sim, 0.1);
   }
 
+  // The melee weapon held out from its own quick slot: the trigger swings it.
+  {
+    for (const zz of [...sim.zombies]) zz.removeBody();
+    sim.zombies.length = 0;
+    sp.arsenal.meleeId = 'katana';
+    run(sim, 1);
+    sim.drain();
+    check(sim.switchWeapon('p1', 'melee') && sp.arsenal.meleeOut && sp.arsenal.action === 'draw', 'the katana taken out in place of the gun');
+    check(sim.drain().some((e) => e.type === 'draw' && e.slot === 'melee' && e.weapon === 'katana'), 'everyone hears it come out');
+    run(sim, 0.5);
+    check(sp.arsenal.action === 'idle' && sp.arsenal.fireState() === 'busy' && !sp.arsenal.startReload(), 'held out: no shooting or reloading with it');
+    sp.motion.yaw = 0;
+    const zz = sim.spawnZombie('brute', { x: standAt.x, y: 0.02, z: standAt.z - 1.3 }, 'idle');
+    zz.facing = 0;
+    run(sim, 0.05);
+    const e = sp.eye;
+    const tor = zz.zones([]).find((s2) => s2.zone === 'torso')!;
+    const to = along(tor.a, tor.b, 0.5);
+    const l = Math.hypot(to.x - e.x, to.y - e.y, to.z - e.z);
+    const dir = { x: (to.x - e.x) / l, y: (to.y - e.y) / l, z: (to.z - e.z) / l };
+    const hp = zz.health;
+    const mag = sp.arsenal.primary.mag;
+    check(sim.fire('p1', e, dir, true, 1) === 'fired' && sp.arsenal.action === 'melee' && sp.arsenal.primary.mag === mag, 'pulling the trigger swings it (no round spent)');
+    run(sim, MELEE.katana.duration + 0.05);
+    const after1 = zz.health;
+    check(after1 < hp, `the swing cuts the zombie (${(hp - after1).toFixed(0)} damage)`);
+    // Trigger held: it keeps swinging.
+    let swings = 0;
+    for (let i = 0; i < 90; i++) {
+      if (sim.fire('p1', sp.eye, dir, false, 1) === 'fired') swings++;
+      run(sim, DT);
+    }
+    check(swings >= 2, `holding the trigger keeps swinging (${swings} swings in 1.5 s)`);
+    const snap3 = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+    const copy3 = new Simulation({ physics, map, nav, doors, seed: 3 });
+    new Mirror(copy3, 'someone-else').apply(snap3, 10);
+    const them3 = copy3.players.get('p1')!;
+    check(them3.arsenal.meleeOut && them3.arsenal.active === sp.arsenal.active, 'other screens see it held out');
+    copy3.dispose();
+    run(sim, 1);
+    check(sim.switchWeapon('p1', 'primary') && !sp.arsenal.meleeOut && sp.arsenal.action === 'draw', 'back to the gun on its own key');
+    run(sim, sp.arsenal.def.draw + 0.1);
+    check(sp.arsenal.fireState() === 'ok', 'the gun fires again');
+    sim.switchWeapon('p1', 'melee');
+    check(!sim.switchWeapon('p1', 'melee'), 'taking it out twice does nothing');
+    run(sim, 0.5);
+    check(sim.switchWeapon('p1', 'primary') && !sp.arsenal.meleeOut, 'the primary comes back even though it was the active slot');
+    run(sim, 1);
+    for (const z2 of [...sim.zombies]) z2.removeBody();
+    sim.zombies.length = 0;
+    sp.arsenal.meleeId = 'hockey';
+  }
+
   // Dying leaves it on the floor.
   for (const zz of [...sim.zombies]) zz.removeBody();
   sim.zombies.length = 0;

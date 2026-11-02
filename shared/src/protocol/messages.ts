@@ -68,7 +68,7 @@ export const S2C = {
 export type ActMsg =
   | { a: 'fire'; o: Vec3; d: Vec3 }
   | { a: 'reload' }
-  | { a: 'switch'; slot: 'primary' | 'secondary' }
+  | { a: 'switch'; slot: 'primary' | 'secondary' | 'melee' }
   | { a: 'melee'; o: Vec3; d: Vec3 }
   | { a: 'bandage' }
   | { a: 'use'; id: number }

@@ -233,7 +233,7 @@ export class Night {
         sim.reload(id);
         break;
       case 'switch':
-        if (m.slot === 'primary' || m.slot === 'secondary') sim.switchWeapon(id, m.slot);
+        if (m.slot === 'primary' || m.slot === 'secondary' || m.slot === 'melee') sim.switchWeapon(id, m.slot);
         break;
       case 'melee':
         sim.melee(id, isVec(m.o) && isVec(m.d) ? { origin: vec(m.o), dir: vec(m.d) } : undefined);

@@ -50,7 +50,7 @@ export interface SnapPlayer {
   dt: number;
   /** Lazarus serum armor ×10 (left out when none). */
   ar?: number;
-  /** [active (1 secondary), action, actionT, actionTotal, primary id, mag, reserve, secondary id, mag, reserve, melee with limb, aim ×1000, melee weapon,
+  /** [active (1 secondary, +2 melee held out), action, actionT, actionTotal, primary id, mag, reserve, secondary id, mag, reserve, melee with limb, aim ×1000, melee weapon,
    * frags, Molotovs, throw kind] */
   w: number[];
   /** The arm in hand: [id, arm, cut, kind, look, scale ×1000, wear, maxWear, broken], or 0. */
@@ -137,7 +137,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
       m: [cm(m.pos.x), cm(m.pos.y), cm(m.pos.z), cm(m.vel.x), cm(m.vel.y), cm(m.vel.z), milli(m.yaw), milli(m.pitch), milli(facing.get(p.id) ?? m.yaw + Math.PI), cm(m.eyeHeight), flagsOf(m)],
       hp: Math.round(p.health * 10), al: p.alive ? 1 : 0, b: p.bandages, dt: milli(p.diedAt), ...(p.armor > 0 ? { ar: Math.round(p.armor * 10) } : {}),
       w: [
-        a.active === 'secondary' ? 1 : 0, idx(ACTIONS, a.action), milli(Math.max(0, a.actionT)), milli(a.actionTotal),
+        (a.active === 'secondary' ? 1 : 0) | (a.meleeOut ? 2 : 0), idx(ACTIONS, a.action), milli(Math.max(0, a.actionT)), milli(a.actionTotal),
         idx(WEAPON_IDS, a.primary.id), a.primary.mag, a.primary.reserve, idx(WEAPON_IDS, a.secondary.id), a.secondary.mag, a.secondary.reserve,
         a.meleeWith === 'limb' ? 1 : 0, milli(a.aim), idx(WEAPON_IDS, a.meleeId),
         a.throwables.frag, a.throwables.molotov, idx(THROWS, a.throwKind),
@@ -687,7 +687,8 @@ export class Mirror {
   }
 
   private syncArsenal(a: Arsenal, w: number[], lb: number[] | 0, remote: boolean): void {
-    a.active = w[0] === 1 ? 'secondary' : 'primary';
+    a.active = (w[0] & 1) === 1 ? 'secondary' : 'primary';
+    a.meleeOut = (w[0] & 2) !== 0;
     const action = ACTIONS[w[1]] ?? 'idle';
     const t = w[2] / 1000;
     // Small differences in timing are left alone (the animation would hitch on every snapshot).

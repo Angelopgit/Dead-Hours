@@ -41,6 +41,9 @@ export interface MotionForSpread {
   aiming: boolean;
 }
 
+/** Seconds to take the melee weapon out in place of the gun. */
+export const MELEE_DRAW = 0.32;
+
 function fresh(id: WeaponId, builds: Loadout): WeaponState {
   const d = tunedWeapon(id, builds[id]);
   return { id, mag: d.magazine, reserve: d.startReserve };
@@ -59,6 +62,11 @@ export class Arsenal {
   /** Attachments and finishes fitted to each gun (checked against the player's unlocks before they get here). */
   builds: Loadout;
   active: 'primary' | 'secondary' = 'primary';
+  /**
+   * The melee weapon held out in place of a gun (its own quick slot): the trigger swings it and
+   * the guns stay slung. `active` remembers the gun to come back to.
+   */
+  meleeOut = false;
   action: ArsenalAction = 'draw';
   actionT: number;
   actionTotal: number;
@@ -114,7 +122,7 @@ export class Arsenal {
       w.reserve += w.mag - d.magazine;
       w.mag = d.magazine;
     }
-    if (w === this.weapon && !this.limb) {
+    if (w === this.weapon && !this.limb && !this.meleeOut) {
       this.cancelReload();
       this.action = 'draw';
       this.actionTotal = this.actionT = FIT_TIME;
@@ -150,7 +158,7 @@ export class Arsenal {
 
   /** Whether a round can be fired now; 'empty' means the trigger clicks dry. */
   fireState(): 'ok' | 'empty' | 'busy' {
-    if (this.limb) return 'busy';
+    if (this.limb || this.meleeOut) return 'busy';
     if (this.action === 'draw' || this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return 'busy';
     if (this.action === 'reload') {
       // Shell-by-shell reloads can be interrupted to fire what is loaded.
@@ -175,7 +183,7 @@ export class Arsenal {
   }
 
   startReload(): boolean {
-    if (this.action !== 'idle' || this.limb) return false;
+    if (this.action !== 'idle' || this.limb || this.meleeOut) return false;
     const d = this.def;
     const w = this.weapon;
     if (w.mag >= d.magazine || w.reserve <= 0) return false;
@@ -196,14 +204,36 @@ export class Arsenal {
   }
 
   switchTo(slot: 'primary' | 'secondary'): boolean {
-    if (slot === this.active && this.action !== 'draw') return false;
+    if (slot === this.active && this.action !== 'draw' && !this.meleeOut) return false;
     if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
     this.cancelReload();
+    this.meleeOut = false;
     this.active = slot;
     this.action = 'draw';
     this.actionTotal = this.actionT = this.def.draw;
     this.cooldown = Math.max(this.cooldown, 0);
     return true;
+  }
+
+  /**
+   * Takes the melee weapon out in place of the gun (its own quick slot): held until a gun is
+   * picked again. Not with an arm in the hands, mid-swing, bandaging or throwing.
+   */
+  drawMelee(): boolean {
+    if (this.meleeOut || this.limb) return false;
+    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    this.cancelReload();
+    this.meleeOut = true;
+    this.interruptedSlot = null;
+    this.action = 'draw';
+    this.actionTotal = this.actionT = MELEE_DRAW;
+    this.cooldown = Math.max(this.cooldown, 0);
+    return true;
+  }
+
+  /** How long a draw takes now: the melee weapon when it is out, else the gun. */
+  get drawTime(): number {
+    return this.meleeOut ? MELEE_DRAW : this.def.draw;
   }
 
   /** Swings the machete, or the arm when one is in hand (not while still getting a grip on it). */
@@ -228,6 +258,7 @@ export class Arsenal {
   grabLimb(limb: HeldLimb): boolean {
     if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
     this.cancelReload();
+    this.meleeOut = false;
     this.limb = limb;
     this.action = 'draw';
     this.actionTotal = this.actionT = LIMBS.grab;
@@ -294,7 +325,7 @@ export class Arsenal {
     const total = Math.round(share * (nd.magazine + nd.startReserve));
     const mag = Math.min(nd.magazine, total);
     this.primary = { id, mag, reserve: total - mag };
-    if (this.active === 'primary') {
+    if (this.active === 'primary' && !this.meleeOut) {
       this.cancelReload();
       this.action = 'draw';
       this.actionTotal = this.actionT = nd.draw;
@@ -314,6 +345,7 @@ export class Arsenal {
     }
     for (const k of Object.keys(this.throwables) as ThrowKind[]) this.throwables[k] = Math.max(this.throwables[k], THROWABLES[k].start);
     this.limb = null;
+    this.meleeOut = false;
     this.meleeWith = 'machete';
     this.releasePending = false;
     this.meleeHitPending = false;
@@ -352,7 +384,7 @@ export class Arsenal {
       if (this.actionT <= 0) {
         // Back to the gun, re-drawing if the swing interrupted a draw.
         this.action = this.interruptedSlot ? 'draw' : 'idle';
-        if (this.interruptedSlot) this.actionTotal = this.actionT = this.def.draw * 0.6;
+        if (this.interruptedSlot) this.actionTotal = this.actionT = this.drawTime * 0.6;
         this.interruptedSlot = null;
         out.push('meleeDone');
       }
@@ -366,7 +398,7 @@ export class Arsenal {
       if (this.actionT <= 0) {
         // The gun comes back up.
         this.action = 'draw';
-        this.actionTotal = this.actionT = this.def.draw * (this.interruptedSlot ? 0.6 : 0.45);
+        this.actionTotal = this.actionT = this.drawTime * (this.interruptedSlot ? 0.6 : 0.45);
         this.interruptedSlot = null;
         out.push('throwDone');
       }
