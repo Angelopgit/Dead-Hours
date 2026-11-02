@@ -1,4 +1,4 @@
-import { WORLD_FILTER, type Physics, type Surface } from '../physics/Physics';
+import { WORLD_FILTER, type Physics, type RAPIER, type Surface } from '../physics/Physics';
 import { BLAST, FIRE, THROWABLES, THROWING, type ThrowableDef, type ThrowKind } from '../config/throwables';
 import type { HitZone } from '../config/weapons';
 import type { ArmZone } from '../config/limbs';
@@ -88,7 +88,10 @@ export interface FlightContact {
  * included, characters not). Returns the surface it hit hard enough to bounce, if any.
  * Shared by the simulation and the client's aiming arc so the arc shows where it will go.
  */
-export function flightStep(physics: Physics, f: { pos: Vec3; vel: Vec3; rest: boolean }, def: ThrowableDef, dt: number): FlightContact | null {
+export function flightStep(
+  physics: Physics, f: { pos: Vec3; vel: Vec3; rest: boolean }, def: ThrowableDef, dt: number,
+  glass?: (collider: RAPIER.Collider, at: Vec3, dir: Vec3) => boolean,
+): FlightContact | null {
   if (f.rest) return null;
   const v = f.vel, p = f.pos;
   v.y -= THROWING.gravity * dt;
@@ -98,7 +101,10 @@ export function flightStep(physics: Physics, f: { pos: Vec3; vel: Vec3; rest: bo
   if (len < 1e-7) return null;
   const dx = (v.x * dt) / len, dy = (v.y * dt) / len, dz = (v.z * dt) / len;
   const hit = physics.raycastHit(p.x, p.y, p.z, dx, dy, dz, len + def.radius, WORLD_FILTER);
-  if (!hit) {
+  // Thrown hard at a window it goes through the glass (`glass` smashes it, or says it would).
+  const through = !!hit && !!glass && hit.surface === 'glass' && len / dt > THROWING.glassSpeed
+    && glass(hit.collider, { x: p.x + dx * hit.distance, y: p.y + dy * hit.distance, z: p.z + dz * hit.distance }, { x: dx, y: dy, z: dz });
+  if (!hit || through) {
     p.x += dx * len; p.y += dy * len; p.z += dz * len;
     return null;
   }
@@ -163,7 +169,7 @@ export class Explosives {
     for (let i = this.thrown.length - 1; i >= 0; i--) {
       const t = this.thrown[i];
       const def = THROWABLES[t.kind];
-      const hit = flightStep(sim.physics, t, def, dt);
+      const hit = flightStep(sim.physics, t, def, dt, (c, at, d) => sim.smashPane(c, at, d));
       if (t.kind === 'molotov') {
         const z = this.zombieAt(t.pos, def.radius);
         if (z || (hit && hit.speed > THROWING.shatterSpeed) || t.rest || sim.time - t.thrownAt > THROWING.maxFlight) {
@@ -230,6 +236,7 @@ export class Explosives {
     const R = BLAST.radius;
     sim.noise(o, BLAST.noise, by.id);
     sim.emit({ type: 'explosion', id, kind: 'frag', pos: { ...pos }, player: by.id });
+    sim.blastGlass(o, BLAST.glass);
     const force = (d: number) => (d <= BLAST.inner ? 1 : Math.pow(clamp(1 - (d - BLAST.inner) / (R - BLAST.inner), 0, 1), BLAST.falloff));
     const visible = (p: Vec3) => {
       const dx = p.x - o.x, dy = p.y - o.y, dz = p.z - o.z;

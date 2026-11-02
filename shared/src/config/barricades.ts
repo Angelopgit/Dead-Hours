@@ -30,6 +30,48 @@ export const BARRICADE = {
 } as const;
 
 /**
+ * Survivors vaulting through windows (jump at one in reach): the pane smashes if it is still in,
+ * boards stop them. Ground-storey windows land on the floor; upstairs ones drop to the ground.
+ */
+export const VAULT = {
+  /** Smallest window a survivor gets through (bathroom slits are too small). */
+  minWidth: 0.9,
+  minHeight: 1.0,
+  /** Furthest the survivor's centre can be from the middle of the wall (m), and the nearest. */
+  reach: 1.35,
+  near: 0.15,
+  /** Past the window's edge a survivor still counts as in front of it (m). */
+  side: 0.2,
+  /** Highest a sill can be above the feet (m), and lowest below them. */
+  maxRise: 1.65,
+  minRise: -0.5,
+  /** Seconds: onto the sill, across it, and down the other side. */
+  upTime: 0.22,
+  overTime: 0.28,
+  downTime: 0.18,
+  /** Where the survivor's centre crosses the sill and lands, from the middle of the wall (m). */
+  clear: 0.56,
+  land: [0.62, 0.95, 1.3] as readonly number[],
+  /** Deepest the far side's floor can be under the sill and still be stepped down to (m); deeper is a drop. */
+  maxStep: 1.7,
+  /** Deepest drop out of a window (upstairs to the ground is about 4.5 m). */
+  maxDrop: 6.5,
+  /** Speed carried out of the vault (m/s): on along the floor, or pushed off the sill into a drop. */
+  exitSpeed: 2.2,
+  dropSpeed: 1.6,
+  /** Heard this far (m): a scramble over the sill, or crashing through the glass. */
+  noise: 9,
+  smashNoise: 18,
+  /** Slack the server allows on reach (latency) (m). */
+  slack: 0.9,
+} as const;
+
+/** Whether a survivor fits through a window. */
+export function isVaultWindow(house: HouseSpec | undefined, w: WindowSpec): boolean {
+  return !!house?.enterable && w.w >= VAULT.minWidth && w.h >= VAULT.minHeight;
+}
+
+/**
  * Whether a window takes boards: a ground-storey window of an enterable building that a zombie
  * could climb through. Bathroom slits and upstairs windows don't.
  */

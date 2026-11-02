@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import {
   BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
   type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
@@ -159,6 +160,12 @@ export class GameSession {
   private rideAskedAt = 0;
   /** Online: when this survivor said a wall threw them (the server's echo of it is not shown twice). */
   private bailSentAt = -Infinity;
+  /** The window this survivor would vault through on [jump], looked up a few times a second. */
+  private vaultChoice: VaultChoice | null = null;
+  private vaultLookT = 0;
+  private readonly porches: Porch[] = porches(NEIGHBORHOOD);
+  /** Online: panes this survivor smashed vaulting through (slot → when), so the server's echo isn't shown twice. */
+  private readonly smashedHere = new Map<number, number>();
   private readonly myBoard: BoardPose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, pop: -1, air: false, push: -1 };
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
@@ -998,9 +1005,15 @@ export class GameSession {
     p.render(dt, alpha);
     if (p.landed) {
       p.landed = false;
-      // On a board the wheels take the landing (the board's own clack plays).
-      this.cam.addTrauma(p.ride ? 0.06 : 0.12);
-      if (!p.ride) audio.footstep(0.8, this.indoors);
+      // On a board the wheels take the landing (the board's own clack plays). A drop out of an
+      // upstairs window lands hard.
+      this.cam.addTrauma(p.ride ? 0.06 : Math.min(0.45, 0.12 + Math.max(0, p.landAir - 0.35) * 0.6));
+      if (!p.ride) audio.footstep(Math.min(1, 0.8 + p.landAir * 0.3), this.indoors);
+    }
+    if (p.vaultLanded) {
+      p.vaultLanded = false;
+      this.cam.addTrauma(0.08);
+      audio.footstep(0.9, this.indoors);
     }
     this.updateRide(dt);
 
@@ -1229,7 +1242,7 @@ export class GameSession {
     if (input.held('inventory')) this.inventory.show(this.ui, this.me, this.timerText());
     else this.inventory.hide();
 
-    this.handleInteraction();
+    this.handleInteraction(dt);
   }
 
   /** Intents for this fixed step (the Phase 4 client sends these as messages). */
@@ -1470,7 +1483,7 @@ export class GameSession {
     }
   }
 
-  private handleInteraction(): void {
+  private handleInteraction(dt: number): void {
     if (this.keepReviving()) return;
     // On a skateboard [interact] steps off (nothing else is in reach from the deck).
     if (this.player.ride) {
@@ -1478,12 +1491,23 @@ export class GameSession {
       if (this.input.pressed('interact')) this.leaveBoard(false);
       return;
     }
+    // [jump] at a window in front goes through it.
+    const vault = this.lookForVault(dt);
+    if (this.input.pressed('jump') && vault) {
+      if (vault.plan) {
+        this.vaultThrough(vault.plan);
+        return;
+      }
+      this.hud.feedLine(vault.block === 'boarded' ? 'THE WINDOW IS BOARDED UP' : 'NO ROOM TO CLIMB THROUGH');
+    }
     const best = this.pickInteraction();
     const slot = this.workableSlot();
     // An opening in reach is boarded up from here unless something else is what the crosshair is on.
     const own = slot && (!best || (best.kind === 'door' && slot.kind === 'door' && best.door!.body.index === slot.ref)) ? slot : null;
     if (this.updateWork(own)) return;
-    const key = (a: Action) => actionLabel(a) || (a === 'barricade' ? 'BOARD' : 'USE');
+    const key = (a: Action) => actionLabel(a) || (a === 'barricade' ? 'BOARD' : a === 'jump' ? 'JUMP' : 'USE');
+    const plan = vault?.plan ?? null;
+    const vaultText = plan ? (plan.smash ? 'SMASH THROUGH THE WINDOW' : plan.land ? 'VAULT THROUGH THE WINDOW' : 'JUMP OUT OF THE WINDOW') : '';
     if (own) {
       const what = own.kind === 'door' ? 'DOOR' : 'WINDOW';
       const count = `${own.boards}/${own.max}`;
@@ -1492,12 +1516,13 @@ export class GameSession {
         return;
       }
       if (!best) {
-        this.hud.setPrompt('barricade', `HOLD TO BOARD UP THE ${what}${own.kind === 'window' && !own.glass ? ' · GLASS SMASHED' : ''}`);
+        const out = plan && vault?.slot === own ? ` · ${key('jump').toUpperCase()} ${plan.smash ? 'SMASH THROUGH' : 'VAULT OUT'}` : '';
+        this.hud.setPrompt('barricade', `HOLD TO BOARD UP THE ${what}${own.kind === 'window' && !own.glass ? ' · GLASS SMASHED' : ''}${out}`);
         return;
       }
     }
     if (!best) {
-      this.hud.setPrompt(null);
+      this.hud.setPrompt(plan ? 'jump' : null, vaultText);
       return;
     }
     if (best.kind === 'revive') {
@@ -1552,6 +1577,60 @@ export class GameSession {
     } else {
       this.sim.use(this.myId, best.it!.id);
     }
+  }
+
+  // ------------------------------------------------------------------ vaulting through windows
+
+  /**
+   * The window in front of this survivor that [jump] would take them through (or why not), looked
+   * up a few times a second and at once when [jump] is pressed. "In front" is the way they move,
+   * or where the camera looks when standing still.
+   */
+  private lookForVault(dt: number): VaultChoice | null {
+    const p = this.player;
+    const jump = this.input.pressed('jump');
+    this.vaultLookT -= dt;
+    if (!jump && this.vaultLookT > 0) return this.vaultChoice;
+    this.vaultLookT = 0.1;
+    this.vaultChoice = null;
+    if (!this.me.up || p.ride || p.vault || p.downed || this.work || (!p.grounded && !jump)) return null;
+    const mv = this.input.move;
+    const yaw = this.cam.yaw;
+    let fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    if (Math.hypot(mv.x, mv.y) > 0.3) {
+      const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+      const wx = fx * mv.y + rx * mv.x, wz = fz * mv.y + rz * mv.x;
+      const l = Math.hypot(wx, wz);
+      fx = wx / l;
+      fz = wz / l;
+    }
+    const pos = p.position;
+    this.vaultChoice = findVault(this.physics, this.sim.barricades, { x: pos.x, y: pos.y, z: pos.z }, { x: fx, z: fz }, p.crouching ? PLAYER.crouchHeight : PLAYER.height, this.porches);
+    return this.vaultChoice;
+  }
+
+  /** Over the sill (smashing the glass if it's still in): at once here; the server is told online. */
+  private vaultThrough(plan: VaultPlan): void {
+    const p = this.player;
+    if (this.work) this.sendWork(null);
+    const slot = this.sim.barricades.slots[plan.slot];
+    if (!slot) return;
+    if (this.link) {
+      this.link.act({ a: 'vault', slot: plan.slot });
+      if (plan.smash && this.sim.barricades.breakGlass(slot)) {
+        // Shown now; the server's word on it comes back a moment later and isn't shown twice.
+        this.smashedHere.set(plan.slot, this.netNow);
+        const at = { x: slot.center.x, y: slot.bottom + slot.height * 0.45, z: slot.center.z };
+        this.onEvent({ type: 'glassBroken', slot: plan.slot, pos: at, dir: { x: plan.dir.x, y: 0, z: plan.dir.z } });
+      }
+    } else if (!this.sim.vault(this.myId, plan.slot)) {
+      return;
+    }
+    p.startVault(plan);
+    this.vaultChoice = null;
+    this.hud.setPrompt(null);
+    audio.vault(this.tmpE.set(slot.center.x, slot.bottom + 0.3, slot.center.z));
+    this.input.rumble(plan.smash ? 0.45 : 0.2, plan.smash ? 160 : 90);
   }
 
   // ------------------------------------------------------------------ skateboards
@@ -2024,6 +2103,19 @@ export class GameSession {
         audio.doorPound(v3(e.pos, A));
         this.barricades.hit(e.slot);
         break;
+      case 'vault': {
+        // A zombie climbing over a sill.
+        const slot = this.sim.barricades.slots[e.slot];
+        const z = this.sim.zombie(e.zombie);
+        if (slot) audio.vault(A.set(slot.center.x, slot.bottom + 0.3, slot.center.z), z?.kind === 'brute');
+        break;
+      }
+      case 'playerVault': {
+        if (e.player === this.myId) break;
+        const slot = this.sim.barricades.slots[e.slot];
+        if (slot) audio.vault(A.set(slot.center.x, slot.bottom + 0.3, slot.center.z));
+        break;
+      }
       case 'hammer':
         audio.hammer(v3(e.pos, A));
         break;
@@ -2039,12 +2131,20 @@ export class GameSession {
         break;
       }
       case 'glassBroken': {
+        // This survivor's own vault through it was shown when it started.
+        const mine = this.smashedHere.get(e.slot);
+        if (mine !== undefined && this.link && this.netNow - mine < 3 && this.netNow - mine > 0.001) {
+          this.smashedHere.delete(e.slot);
+          break;
+        }
         v3(e.pos, A);
         audio.glassBreak(A);
         const slot = this.sim.barricades.slots[e.slot];
         if (slot) {
+          // The sash bars break out with it.
           B.set(slot.normal.x, 0, slot.normal.z);
           if (B.dot(C.set(e.dir.x, e.dir.y, e.dir.z)) < 0) B.negate();
+          this.effects.splinters(this.tmpD.set(slot.center.x, slot.center.y, slot.center.z), B, { floor: slot.bottom - 1, amount: 0.5, spread: slot.height * 0.45 });
           for (let i = 0; i < 4; i++) {
             const p = this.tmpD.set(slot.center.x, slot.center.y, slot.center.z);
             p.x += (Math.random() - 0.5) * slot.width * (slot.axis === 'x' ? 0.8 : 0);

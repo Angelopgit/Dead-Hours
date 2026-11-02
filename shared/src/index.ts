@@ -14,6 +14,7 @@ export * from './map/builder';
 export * from './map/colliders';
 export * from './map/maple-hollow';
 export * from './map/oak-street';
+export * from './map/porches';
 export * from './protocol/messages';
 export * from './chat/filter';
 
@@ -31,6 +32,7 @@ export * from './sim/Zombie';
 export * from './sim/Hordes';
 export * from './sim/Lulls';
 export * from './sim/Barricades';
+export * from './sim/Vault';
 export * from './sim/MeleePickups';
 export * from './sim/Raid';
 export * from './sim/Simulation';

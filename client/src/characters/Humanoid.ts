@@ -469,6 +469,9 @@ export class Humanoid {
   ragdoll = false;
   /** On a skateboard (null on foot): the legs stand on the deck instead of walking. */
   skate: SkatePose | null = null;
+  /** Vaulting through a window (1) or not (0): the body tucks low over the sill, knees up. */
+  vault = 0;
+  private vaultW = 0;
   private skateW = 0;
   private readonly lastSkate: SkatePose = { yaw: Math.PI / 2, deck: 0.11, push: -1, lean: 0, air: false, low: false };
   /** +1 regular (left foot forward), -1 goofy. */
@@ -1081,6 +1084,9 @@ export class Humanoid {
 
     if (z && this.crawl > 0.001) this.crawlPose(p, moving, sv);
     if (this.skateW > 0.001) this.skatePose(crouch);
+    this.vaultW += (this.vault - this.vaultW) * (1 - Math.exp(-dt * 16));
+    if (this.vaultW < 0.002 && this.vault === 0) this.vaultW = 0;
+    if (this.vaultW > 0) this.vaultPose(this.vaultW);
 
     // Knocked down: fall onto the back, feet toward the facing direction, arms splayed.
     const d = this.crawl > 0.5 ? 0 : this.down;
@@ -1110,6 +1116,24 @@ export class Humanoid {
     }
     this.lastStepSign = sign;
     if (this.stumps.size) this.syncStumps();
+  }
+
+  /**
+   * Over a window sill: hips down low and turned a little side-on, the chest bent over the sill,
+   * knees drawn up (the leading one higher) so the legs swing through, head up to see the landing.
+   */
+  private vaultPose(w: number): void {
+    const e = w * w * (3 - 2 * w);
+    const L = THREE.MathUtils.lerp;
+    this.hips.position.y = L(this.hips.position.y, 0.5, e);
+    this.hips.rotation.y = L(this.hips.rotation.y, 0.55, e);
+    this.spine.rotation.x = L(this.spine.rotation.x, 0.6, e);
+    this.spine.rotation.y = L(this.spine.rotation.y, -0.45, e);
+    this.legL.upper.rotation.set(L(this.legL.upper.rotation.x, -1.65, e), 0, L(this.legL.upper.rotation.z, 0.12, e));
+    this.legR.upper.rotation.set(L(this.legR.upper.rotation.x, -1.15, e), 0, L(this.legR.upper.rotation.z, -0.05, e));
+    this.legL.lower.rotation.x = L(this.legL.lower.rotation.x, 1.9, e);
+    this.legR.lower.rotation.x = L(this.legR.lower.rotation.x, 1.55, e);
+    this.head.rotation.x = L(this.head.rotation.x, -0.45, e);
   }
 
   /**
@@ -1389,6 +1413,7 @@ export class Humanoid {
     this.ragdoll = false;
     this.skate = null;
     this.skateW = 0;
+    this.vault = this.vaultW = 0;
     this.down = this.downTarget = 0;
     this.stagger = this.staggerTarget = 0;
     this.attack = this.bash = this.scream = -1;

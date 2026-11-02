@@ -8,6 +8,9 @@ import type { Pyro } from '../effects/Pyro';
 import { createThrowableModel, type ThrowableModel } from '../weapons/ThrowableModels';
 import { audio } from '../audio/AudioEngine';
 
+/** The simulation smashes any window pane a throw meets fast enough: the copy here flies on through it too. */
+const throughGlass = (): boolean => true;
+
 interface Flying {
   id: number;
   kind: ThrowKind;
@@ -93,7 +96,8 @@ export class Throwables {
     let landed: { x: number; y: number; z: number } | null = null;
     let t = 0;
     while (n < ARC_POINTS) {
-      const hit = flightStep(this.physics, f, def, ARC_DT);
+      // Thrown hard enough it goes through a window (the simulation smashes the pane).
+      const hit = flightStep(this.physics, f, def, ARC_DT, throughGlass);
       t += ARC_DT;
       put();
       // A Molotov breaks on the first hard knock; a frag's arc shows its first landing.
@@ -201,7 +205,7 @@ export class Throwables {
       // Small steps so it bounces where the simulation's does.
       const steps = Math.max(1, Math.ceil(dt / (1 / 60)));
       for (let i = 0; i < steps; i++) {
-        const hit = flightStep(this.physics, fl.f, def, dt / steps);
+        const hit = flightStep(this.physics, fl.f, def, dt / steps, throughGlass);
         if (hit && fl.kind === 'molotov') fl.f.rest = true;
       }
       const r = fl.model.root;

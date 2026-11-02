@@ -78,6 +78,8 @@ export type SimEvent =
   | { type: 'glassBroken'; slot: number; pos: Vec3; dir: Vec3 }
   /** A zombie climbs in (or out) through a window. */
   | { type: 'vault'; zombie: number; slot: number }
+  /** A survivor vaulting through a window (`smash`: through the glass). */
+  | { type: 'playerVault'; player: string; slot: number; smash: boolean }
   | { type: 'notice'; player: string | null; text: string; sub?: string }
   /**
    * A horde wave: `warning` (it starts at survival second `at`), `surge` (it lasts until `at`),

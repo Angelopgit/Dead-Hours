@@ -21,7 +21,7 @@ import { Raid } from './Raid';
 import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes';
 import { inLull, lullDuration, noLulls, threatAt, type LullState } from './Lulls';
 import { Barricades, type BarricadeSlot } from './Barricades';
-import { BARRICADE } from '../config/barricades';
+import { BARRICADE, VAULT } from '../config/barricades';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { GibPart, HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 import { Explosives } from './Explosives';
@@ -46,6 +46,8 @@ export interface PlayerMotion {
   board?: number;
   /** Kicking along on the skateboard (others see the back foot push). */
   pushing?: boolean;
+  /** Vaulting through a window (others see the body tuck over the sill). */
+  vaulting?: boolean;
 }
 
 export interface PlayerStats {
@@ -456,6 +458,60 @@ export class Simulation {
       this.noise(slot.center, 18, null);
     }
     return this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
+  }
+
+  /**
+   * Smashes the pane a collider is (a blow, a blast, something thrown through it), `dir` the way
+   * the shards go. Returns false when it isn't a window's pane or is already out.
+   */
+  smashPane(collider: RAPIER.Collider, at: Vec3, dir: Vec3, loud = 18): boolean {
+    const slot = this.barricades.forPane(collider.handle);
+    return !!slot && this.smashWindow(slot, at, dir, loud);
+  }
+
+  /** Smashes a window's glass (if it is still in): the shards fly along `dir` and it is heard. */
+  smashWindow(slot: BarricadeSlot, at: Vec3, dir: Vec3, loud = 18): boolean {
+    if (!this.barricades.breakGlass(slot)) return false;
+    this.emit({ type: 'glassBroken', slot: slot.index, pos: { ...at }, dir: { ...dir } });
+    if (loud > 0) this.noise(slot.center, loud, null);
+    return true;
+  }
+
+  /** A blast: every pane within `radius` the blast can see blows out, away from it. */
+  blastGlass(o: Vec3, radius: number): void {
+    for (const s of this.barricades.windows) {
+      if (!s.glass) continue;
+      const c = s.center;
+      const dx = c.x - o.x, dy = c.y - o.y, dz = c.z - o.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > radius || d < 1e-3) continue;
+      const hit = this.physics.raycastHit(o.x, o.y, o.z, dx / d, dy / d, dz / d, d + 0.1);
+      if (hit && hit.collider.handle !== s.pane?.handle && hit.distance < d - 0.15) continue;
+      this.smashWindow(s, c, { x: dx / d, y: dy / d, z: dz / d }, 0);
+    }
+  }
+
+  /**
+   * A survivor vaulting through a window (the browser plans and moves them; see Vault.ts): stops
+   * any boarding, smashes the pane if it is still in, and is heard. Refused through boards, or
+   * from too far away.
+   */
+  vault(id: string, index: number): boolean {
+    const p = this.players.get(id);
+    const s = this.barricades.slots[index];
+    if (!p || !p.up || !s || s.kind !== 'window' || !s.climb || s.boards > 0 || this.phase === 'over' || this.revivingOf(id)) return false;
+    const m = p.motion.pos;
+    const dn = Math.abs((m.x - s.center.x) * s.normal.x + (m.z - s.center.z) * s.normal.z);
+    const la = Math.abs((m.x - s.center.x) * s.normal.z) + Math.abs((m.z - s.center.z) * s.normal.x);
+    const rise = s.bottom - m.y;
+    if (dn > VAULT.reach + VAULT.slack || la > s.width / 2 + VAULT.side + VAULT.slack || rise > VAULT.maxRise + VAULT.slack || rise < VAULT.minRise - VAULT.slack) return false;
+    p.work = null;
+    const side = this.barricades.side(s, m.x, m.z);
+    const dir = { x: -s.normal.x * side, y: 0, z: -s.normal.z * side };
+    const smash = this.smashWindow(s, { x: s.center.x, y: s.bottom + s.height * 0.45, z: s.center.z }, dir, VAULT.smashNoise);
+    if (!smash) this.noise(s.center, VAULT.noise, id);
+    this.emit({ type: 'playerVault', player: id, slot: s.index, smash });
+    return true;
   }
 
   /** A bullet in a closed door: it splinters boards first, then works the latch loose until the door swings in. */
@@ -2381,7 +2437,12 @@ export class Simulation {
       return;
     }
     if (!targets.length) {
-      this.emit({ type: 'melee', player: p.id, stage: 'miss', limb: !!limb });
+      // A swing at a window smashes the glass.
+      const ray = this.meleeRay(p);
+      const g = this.physics.raycastHit(ray.origin.x, ray.origin.y, ray.origin.z, ray.dir.x, ray.dir.y, ray.dir.z, reach + 0.5);
+      const at = g ? { x: ray.origin.x + ray.dir.x * g.distance, y: ray.origin.y + ray.dir.y * g.distance, z: ray.origin.z + ray.dir.z * g.distance } : null;
+      const smashed = !!g && !!at && g.surface === 'glass' && this.smashPane(g.collider, at, ray.dir);
+      this.emit({ type: 'melee', player: p.id, stage: smashed ? 'hit' : 'miss', limb: !!limb });
       return;
     }
     const aim = this.meleeRay(p);

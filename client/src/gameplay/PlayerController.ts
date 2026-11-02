@@ -1,11 +1,14 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, SKATEBOARD, type PlayerMotion } from '@dead-hours/shared';
+import { DOWNED, PLAYER, SKATEBOARD, VAULT, vaultAt, type PlayerMotion, type Vec3, type VaultPlan } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
 import { Humanoid, type HumanoidLook, type SkatePose } from '../characters/Humanoid';
 
 const capsuleHalf = (height: number) => (height - PLAYER.radius * 2) / 2;
+const _vp: Vec3 = { x: 0, y: 0, z: 0 };
+/** Eye height above the feet while tucked over a sill (the head ducks under the top of the window). */
+const VAULT_EYE = 0.95;
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 /** Riding a skateboard: where the deck points, how fast it rolls, the kick and the carve. */
@@ -79,6 +82,12 @@ export class PlayerController {
   kicked = false;
   popped = false;
   private readonly skatePose: SkatePose = { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false };
+  /** Vaulting through a window: the way (Vault.ts), seconds into it, and how tucked the body is (0..1). */
+  vault: { plan: VaultPlan; t: number; tuck: number } | null = null;
+  /** Set when a vault comes down on the far side's floor (the session plays the landing). */
+  vaultLanded = false;
+  /** Seconds in the air before the last landing (how hard it was). */
+  landAir = 0;
   private moveX = 0;
   private moveY = 0;
 
@@ -115,7 +124,56 @@ export class PlayerController {
   }
 
   get eyeHeight(): number {
-    return this.downed ? DOWNED.eyeHeight : this.height - 0.2;
+    if (this.downed) return DOWNED.eyeHeight;
+    const eye = this.height - 0.2;
+    return this.vault ? eye - (eye - VAULT_EYE) * this.vault.tuck : eye;
+  }
+
+  /** Starts vaulting through a window along a plan from findVault (the session has checked it can). */
+  startVault(plan: VaultPlan): void {
+    if (this.dead || this.downed || this.ride || this.vault) return;
+    this.vault = { plan, t: 0, tuck: 0 };
+    this.jumpBuffered = 0;
+    this.coyote = 0;
+    this.sprinting = false;
+    this.intent.set(0, 0, 0);
+    this.grounded = false;
+    this.airTime = 0;
+  }
+
+  /** One fixed step of a vault: the feet follow the plan, nothing collides. */
+  private vaultStep(dt: number): void {
+    const v = this.vault!;
+    v.t += dt;
+    const tuck = vaultAt(v.plan, v.t, _vp);
+    if (tuck === null) {
+      // Over: down on the floor and carrying on, or pushed off the sill into the drop.
+      const p = v.plan;
+      this.place(p.land ?? p.over, dt);
+      this.vault = null;
+      const speed = p.land ? VAULT.exitSpeed : VAULT.dropSpeed;
+      this.intent.set(p.dir.x * speed, 0, p.dir.z * speed);
+      this.grounded = !!p.land;
+      this.coyote = 0;
+      this.airTime = 0;
+      if (p.land) this.vaultLanded = true;
+    } else {
+      v.tuck = tuck;
+      this.place(_vp, dt);
+      this.grounded = false;
+    }
+    const want = Math.atan2(v.plan.dir.x, v.plan.dir.z);
+    const diff = Math.atan2(Math.sin(want - this.facing), Math.cos(want - this.facing));
+    const turned = diff * (1 - Math.exp(-dt * 16));
+    this.facing += turned;
+    this.turnRate = dt > 0 ? turned / dt : 0;
+  }
+
+  /** Moves the capsule's feet straight to a point (no collision), with the velocity it took. */
+  private place(at: Vec3, dt: number): void {
+    if (dt > 0) this.velocity.set((at.x - this.position.x) / dt, (at.y - this.position.y) / dt, (at.z - this.position.z) / dt);
+    this.position.set(at.x, at.y, at.z);
+    this.body.setNextKinematicTranslation({ x: at.x, y: at.y + this.height / 2, z: at.z });
   }
 
   /** Goes down (or gets back up: standing again once there is headroom). */
@@ -136,7 +194,7 @@ export class PlayerController {
    * the pace; from a standstill it points where the camera looks. `cameraYaw` is the camera's.
    */
   mount(board: number, cameraYaw: number): void {
-    if (this.dead || this.downed || this.ride) return;
+    if (this.dead || this.downed || this.ride || this.vault) return;
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     const running = hv > 1.5;
     const heading = running ? Math.atan2(this.velocity.x, this.velocity.z) : cameraYaw + Math.PI;
@@ -197,6 +255,7 @@ export class PlayerController {
       grounded: this.grounded,
       board: this.ride ? wrap(this.ride.heading) : undefined,
       pushing: !!this.ride && this.ride.push >= 0,
+      vaulting: !!this.vault,
     };
   }
 
@@ -245,6 +304,10 @@ export class PlayerController {
     if (this.dead) return;
     this.faceT = Math.max(0, this.faceT - dt);
     this.noSprintT = Math.max(0, this.noSprintT - dt);
+    if (this.vault) {
+      this.vaultStep(dt);
+      return;
+    }
     // Hold-to-crouch with Ctrl/C.
     const wantCrouch = this.crouchHeld || this.downed;
     if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
@@ -315,7 +378,10 @@ export class PlayerController {
     // Only a real fall counts as a landing (camera jolt, thud), not a step off a curb.
     const air = this.airTime;
     this.airTime = this.grounded ? 0 : this.airTime + dt;
-    if (!wasGrounded && this.grounded && air > 0.18) this.landed = true;
+    if (!wasGrounded && this.grounded && air > 0.18) {
+      this.landed = true;
+      this.landAir = air;
+    }
 
     // Facing: aim locks body to camera, otherwise turn toward travel direction. On a skateboard
     // the shoulders sit side-on to the deck, opened a little toward the nose.
@@ -457,6 +523,7 @@ export class PlayerController {
       sp.low = this.crouching;
     }
     c.skate = r ? this.skatePose : null;
+    c.vault = this.vault ? 1 : 0;
     this.character.update(dt, {
       // Standing on the deck: no stride (the skate pose does the legs).
       speed: r ? 0 : hv,
@@ -479,6 +546,7 @@ export class PlayerController {
     this.body.setNextKinematicTranslation(c);
     this.intent.set(0, 0, 0);
     this.velocity.set(0, 0, 0);
+    this.vault = null;
     if (this.ride) this.ride.speed = 0;
   }
 
@@ -498,6 +566,7 @@ export class PlayerController {
     if (this.dead) return;
     this.dead = true;
     this.ride = null;
+    this.vault = null;
     this.clearInput();
     this.sprinting = false;
     this.velocity.set(0, 0, 0);

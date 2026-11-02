@@ -1916,6 +1916,23 @@ export class AudioEngine {
     this.burst(d, t + 0.47, 'bandpass', 450, 1.4, 0.18, 0.002, 0.07);
   }
 
+  /**
+   * Someone (or a zombie, `heavy` for a brute) going over a window sill: hands slapping down on
+   * the sill, clothes dragging across it, a knee knocking the frame, and the shoes scuffing off.
+   */
+  vault(position: THREE.Vector3, heavy = false): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.3, 4);
+    const k = heavy ? 1.4 : 1;
+    this.burst(d, t, 'bandpass', 260 + Math.random() * 60, 1.2, 0.5 * k, 0.002, 0.07);
+    this.burst(d, t + 0.025, 'bandpass', 520, 1.6, 0.18 * k, 0.002, 0.05);
+    this.burst(d, t + 0.06, 'bandpass', 1700 + Math.random() * 500, 0.7, 0.22, 0.05, 0.2);
+    this.tone(d, t + 0.16, 'triangle', 150 * (heavy ? 0.7 : 1), 95, 0.25 * k, 0.002, 0.08);
+    this.burst(d, t + 0.17, 'bandpass', 700, 1.4, 0.2 * k, 0.002, 0.05);
+    this.burst(d, t + 0.3, 'bandpass', 2400, 0.9, 0.12, 0.01, 0.1);
+  }
+
   /** A window pane smashing in. */
   glassBreak(position: THREE.Vector3): void {
     if (!this.ctx) return;

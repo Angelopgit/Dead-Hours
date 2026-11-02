@@ -337,7 +337,8 @@ console.log('Stairwells: no house dressing (trim, frames, roofs) inside a stairw
   const pen = new Proxy({}, { get: () => () => ({ width: 0 }), set: () => true });
   (globalThis as { document?: unknown }).document ??= { createElement: () => ({ width: 0, height: 0, getContext: () => pen }) };
   const meshes: THREE.Mesh[] = [];
-  dressHouses(map, lib, { add: (g: THREE.BufferGeometry) => meshes.push(new THREE.Mesh(g)) } as unknown as StaticBatcher);
+  const add = (g: THREE.BufferGeometry) => meshes.push(new THREE.Mesh(g));
+  dressHouses(map, lib, { add, addPiece: (g: THREE.BufferGeometry) => (add(g), { mesh: null, start: 0, count: 0, saved: null }) } as unknown as StaticBatcher);
   const ray = new THREE.Raycaster();
   const down = new THREE.Vector3(0, -1, 0);
   let n = 0;

@@ -3,8 +3,12 @@ import { STORY, rng, type BarricadeSlot, type Simulation } from '@dead-hours/sha
 import type { LightField } from '../lighting/LightField';
 import { StaticProbe } from '../lighting/Probes';
 import { patchProbe } from '../lighting/BakeShader';
+import { windowBars } from '../environment/Houses';
+import { showPiece } from '../rendering/StaticBatcher';
 
 const PLANK_H = 0.17;
+const _m = new THREE.Matrix4();
+const _s = new THREE.Vector3();
 const PLANK_D = 0.035;
 
 interface SlotView {
@@ -13,31 +17,49 @@ interface SlotView {
   planks: THREE.Mesh[];
   /** Where each plank rests when it is not being pounded on. */
   rest: { y: number; roll: number; slide: number }[];
-  pane: THREE.Mesh | null;
   probe: StaticProbe;
   boards: number;
-  glass: boolean;
   damage: number;
   /** Shudder after a blow (seconds left). */
   shake: number;
 }
 
 /**
- * Boards nailed across the inside of doors and windows, and the panes of the windows that can
- * be smashed. Follows the simulation's barricade state (solo, or the server's copy online).
+ * Boards nailed across the inside of doors and windows, and the glass of every window of the
+ * enterable buildings (one instanced mesh), which goes, frame bars and all, when it is smashed.
+ * Follows the simulation's barricade state (solo, or the server's copy online).
  */
 export class BarricadeView {
   private readonly root = new THREE.Group();
+  /** Board views by slot index (openings that take boards). */
   private readonly views: SlotView[] = [];
+  private readonly boarded: SlotView[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
   private readonly materials: THREE.Material[] = [];
+  private readonly panes: THREE.InstancedMesh;
+  /** Window slots and the glass each pane shows (instance i is windows[i]). */
+  private readonly windows: BarricadeSlot[];
+  private readonly glassShown: boolean[];
 
   constructor(scene: THREE.Scene, sim: Simulation, field: LightField) {
     scene.add(this.root);
     const glass = new THREE.MeshStandardMaterial({ color: 0x9fb4c8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.18, depthWrite: false });
     this.materials.push(glass);
+    this.windows = sim.barricades.windows;
+    this.glassShown = this.windows.map(() => true);
+    const box = new THREE.BoxGeometry(1, 1, 0.02);
+    this.geometries.push(box);
+    this.panes = new THREE.InstancedMesh(box, glass, Math.max(1, this.windows.length));
+    this.panes.count = this.windows.length;
+    this.panes.renderOrder = 2;
+    this.panes.castShadow = this.panes.receiveShadow = false;
+    this.windows.forEach((_, i) => this.placePane(i, true));
+    this.root.add(this.panes);
+    // Frame bars a smashed window lost last time are back in.
+    for (const bars of windowBars) for (const b of bars ?? []) showPiece(b, true);
     const woods = [0x6e5638, 0x5c4630, 0x7a6244, 0x52402c];
     for (const slot of sim.barricades.slots) {
+      if (!sim.barricades.boardable(slot)) continue;
       const group = new THREE.Group();
       group.position.set(slot.center.x, slot.center.y, slot.center.z);
       // Local +X along the wall, +Z into the room.
@@ -71,16 +93,22 @@ export class BarricadeView {
         planks.push(m);
         rest.push({ y, roll, slide });
       }
-      let pane: THREE.Mesh | null = null;
-      if (slot.kind === 'window') {
-        const g = new THREE.BoxGeometry(slot.width, slot.height, 0.02);
-        this.geometries.push(g);
-        pane = new THREE.Mesh(g, glass);
-        pane.renderOrder = 2;
-        group.add(pane);
-      }
-      this.views.push({ slot, group, planks, rest, pane, probe, boards: 0, glass: true, damage: 0, shake: 0 });
+      const view: SlotView = { slot, group, planks, rest, probe, boards: 0, damage: 0, shake: 0 };
+      this.views[slot.index] = view;
+      this.boarded.push(view);
     }
+  }
+
+  /** Shows or hides window `i`'s pane (a zero-size instance when smashed). */
+  private placePane(i: number, shown: boolean): void {
+    const s = this.windows[i];
+    const m = _m.makeRotationY(Math.atan2(-s.normal.x, -s.normal.z));
+    if (shown) m.scale(_s.set(s.width, s.height, 1));
+    else m.scale(_s.set(0, 0, 0));
+    m.setPosition(s.center.x, s.center.y, s.center.z);
+    this.panes.setMatrixAt(i, m);
+    this.panes.instanceMatrix.addUpdateRange(i * 16, 16);
+    this.panes.instanceMatrix.needsUpdate = true;
   }
 
   /** A blow landed on the slot's boards: they shudder. */
@@ -90,12 +118,16 @@ export class BarricadeView {
   }
 
   update(dt: number, camera: THREE.Camera): void {
-    for (const v of this.views) {
+    for (let i = 0; i < this.windows.length; i++) {
+      const s = this.windows[i];
+      if (this.glassShown[i] === s.glass) continue;
+      this.glassShown[i] = s.glass;
+      this.placePane(i, s.glass);
+      // The sash bars break out with the glass.
+      for (const b of windowBars[s.ref] ?? []) showPiece(b, s.glass);
+    }
+    for (const v of this.boarded) {
       const s = v.slot;
-      if (v.pane && v.glass !== s.glass) {
-        v.glass = s.glass;
-        v.pane.visible = s.glass;
-      }
       if (s.boards === 0 && v.boards === 0 && v.shake <= 0) continue;
       if (v.boards !== s.boards) {
         v.boards = s.boards;
@@ -117,11 +149,11 @@ export class BarricadeView {
     }
   }
 
-  /** Nearest slot centre within `maxDist` of a point (among those `ok` allows). */
+  /** Nearest opening that takes boards within `maxDist` of a point (among those `ok` allows). */
   nearest(pos: THREE.Vector3, maxDist: number, ok?: (slot: BarricadeSlot) => boolean): BarricadeSlot | null {
     let best: BarricadeSlot | null = null;
     let bestD = maxDist;
-    for (const v of this.views) {
+    for (const v of this.boarded) {
       const c = v.slot.center;
       const d = Math.hypot(c.x - pos.x, (c.y - pos.y) * 0.5, c.z - pos.z);
       if (d < bestD && (!ok || ok(v.slot))) {
@@ -134,6 +166,8 @@ export class BarricadeView {
 
   dispose(): void {
     this.root.removeFromParent();
+    this.panes.dispose();
+    for (const bars of windowBars) for (const b of bars ?? []) showPiece(b, true);
     for (const g of this.geometries) g.dispose();
     for (const m of this.materials) m.dispose();
   }

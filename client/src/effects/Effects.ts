@@ -468,16 +468,17 @@ export class Effects {
   }
 
   /** Splinters and dust when a door bursts open. */
-  splinters(pos: THREE.Vector3, normal: THREE.Vector3): void {
-    for (let i = 0; i < this.n(18, this.scale(pos)); i++) {
+  splinters(pos: THREE.Vector3, normal: THREE.Vector3, opts: { floor?: number; amount?: number; spread?: number } = {}): void {
+    const amount = opts.amount ?? 1, sp = opts.spread ?? 0.8;
+    for (let i = 0; i < this.n(Math.round(18 * amount), this.scale(pos)); i++) {
       const s = rand(1.5, 4);
       this.emitSoft({
-        x: pos.x + rand(-0.4, 0.4), y: pos.y + rand(-0.8, 0.8), z: pos.z + rand(-0.4, 0.4),
+        x: pos.x + rand(-0.4, 0.4), y: pos.y + rand(-sp, sp), z: pos.z + rand(-0.4, 0.4),
         vx: normal.x * s + rand(-1, 1), vy: rand(0, 2), vz: normal.z * s + rand(-1, 1),
-        life: rand(0.8, 1.4), size: rand(0.02, 0.05), r: 0.4, g: 0.27, b: 0.15, alpha: 1, gravity: 1, drag: 0.5, shape: SHAPE.hard, floor: pos.y - 1.1,
+        life: rand(0.8, 1.4), size: rand(0.02, 0.05), r: 0.4, g: 0.27, b: 0.15, alpha: 1, gravity: 1, drag: 0.5, shape: SHAPE.hard, floor: opts.floor ?? pos.y - 1.1,
       });
     }
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < Math.round(4 * amount); i++) {
       this.emitSoft({ x: pos.x + rand(-0.5, 0.5), y: pos.y + rand(-0.8, 0.6), z: pos.z + rand(-0.5, 0.5), vx: normal.x, vy: 0.2, vz: normal.z, life: 1.5, size: 0.2, size1: 0.9, r: 0.36, g: 0.3, b: 0.24, alpha: 0.3, drag: 2 });
     }
   }

@@ -231,6 +231,28 @@ export class Physics {
     return out;
   }
 
+  /**
+   * Whether an upright capsule `height` tall standing at a point (feet) is clear of the world
+   * (walls, props, door leaves; never characters). `exclude` is left out of the test.
+   */
+  capsuleFree(x: number, feetY: number, z: number, height: number, radius: number, exclude?: RAPIER.Collider | null): boolean {
+    const half = Math.max(0.01, (height - radius * 2) / 2);
+    let free = true;
+    this.world.intersectionsWithShape(
+      { x, y: feetY + height / 2, z }, { x: 0, y: 0, z: 0, w: 1 }, new RAPIER.Capsule(half, radius),
+      () => { free = false; return false; },
+      undefined, WORLD_FILTER, exclude ?? undefined,
+    );
+    return free;
+  }
+
+  /** Distance along a ray to the world, leaving `exclude` out (a pane about to be smashed). */
+  raycastExcept(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, exclude: RAPIER.Collider | null): number | null {
+    const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
+    const hit = this.world.castRay(ray, maxDist, true, undefined, WORLD_FILTER, exclude ?? undefined);
+    return hit ? hit.timeOfImpact : null;
+  }
+
   /** Swept sphere cast (camera collision). Returns distance travelled before contact. */
   sphereCast(
     ox: number, oy: number, oz: number,

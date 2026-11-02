@@ -80,8 +80,10 @@ export interface Snapshot {
   /** [door index, open, target ×1000, ...] */
   d: number[];
   i: number[][];
-  /** Barricades that aren't as the map starts them: [slot, boards, damage ×1000, glass in, ...]. */
+  /** Boarded openings: [slot, boards, damage ×1000, glass in, ...]. */
   b?: number[];
+  /** Smashed window panes: one bit per slot (slot i is bit i % 4 of hex digit i / 4), trailing zeros left off. */
+  g?: string;
   /** The van raid, while it is on: [route, stage, x, z (cm), yaw (mrad), speed (cm/s), door open]. */
   v?: number[];
   /** Raiders (see captureSnapshot). */
@@ -93,12 +95,34 @@ export interface Snapshot {
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
-export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64 } as const;
+export const MOTION_FLAG = { crouching: 1, sprinting: 2, aiming: 4, grounded: 8, trigger: 16, light: 32, pushing: 64, vaulting: 128 } as const;
 
 function flagsOf(m: PlayerMotion, trigger = false): number {
   return (m.crouching ? MOTION_FLAG.crouching : 0) | (m.sprinting ? MOTION_FLAG.sprinting : 0) | (m.aiming ? MOTION_FLAG.aiming : 0)
     | (m.grounded ? MOTION_FLAG.grounded : 0) | (trigger ? MOTION_FLAG.trigger : 0) | (m.light ? MOTION_FLAG.light : 0)
-    | (m.pushing ? MOTION_FLAG.pushing : 0);
+    | (m.pushing ? MOTION_FLAG.pushing : 0) | (m.vaulting ? MOTION_FLAG.vaulting : 0);
+}
+
+/** Smashed panes as a hex bit string (see Snapshot.g). */
+export function packPanes(broken: (i: number) => boolean, count: number): string {
+  let out = '';
+  let end = 0;
+  for (let i = 0; i < count; i += 4) {
+    let n = 0;
+    for (let k = 0; k < 4 && i + k < count; k++) if (broken(i + k)) n |= 1 << k;
+    out += n.toString(16);
+    if (n) end = out.length;
+  }
+  return out.slice(0, end);
+}
+
+/** Calls `fn` for every slot a hex bit string (Snapshot.g) says is smashed. */
+export function unpackPanes(g: string, fn: (i: number) => void): void {
+  for (let d = 0; d < g.length; d++) {
+    const n = parseInt(g[d], 16);
+    if (!n) continue;
+    for (let k = 0; k < 4; k++) if (n & (1 << k)) fn(d * 4 + k);
+  }
 }
 
 /** Captures the world for clients. `facing` is each survivor's body facing (the server keeps it beside the sim). */
@@ -155,13 +179,16 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   }
   const bars: number[] = [];
   for (const b of sim.barricades.slots) {
-    if (b.boards > 0 || (b.kind === 'window' && !b.glass)) bars.push(b.index, b.boards, milli(b.damage), b.glass ? 1 : 0);
+    if (b.boards > 0) bars.push(b.index, b.boards, milli(b.damage), b.glass ? 1 : 0);
   }
+  const slots = sim.barricades.slots;
+  const panes = packPanes((i) => slots[i].kind === 'window' && !slots[i].glass, slots.length);
   const boards: (number | string)[][] = [];
   for (const k of sim.skateboards.boards) boards.push([k.id, cm(k.pos.x), cm(k.pos.y), cm(k.pos.z), milli(k.yaw), k.rider ?? 0, k.look * 2 + (k.flipped ? 1 : 0)]);
   const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars, sk: boards };
   const lull = sim.lull;
   if (lull.count > 0) snap.lu = [lull.count, milli(lull.start), milli(lull.end), milli(lull.paused)];
+  if (panes) snap.g = panes;
   const raid = sim.raid;
   const van = raid.van;
   if (van) snap.v = [van.route, idx(RAID_STAGES, raid.stage), cm(van.pos.x), cm(van.pos.z), milli(van.yaw), cm(van.speed), van.door ? 1 : 0];
@@ -220,6 +247,7 @@ export function unpackMotion(a: unknown): MotionFrame | null {
       aiming: !!(flags & MOTION_FLAG.aiming), grounded: !!(flags & MOTION_FLAG.grounded),
       light: !!(flags & MOTION_FLAG.light),
       pushing: !!(flags & MOTION_FLAG.pushing),
+      vaulting: !!(flags & MOTION_FLAG.vaulting),
       board: n.length === 18 ? clamp(n[17] / 1000, -4, 4) : undefined,
     },
     facing: n[8] / 1000,
@@ -514,6 +542,7 @@ export class Mirror {
         mo.grounded = !!(f & MOTION_FLAG.grounded);
         mo.light = !!(f & MOTION_FLAG.light);
         mo.pushing = !!(f & MOTION_FLAG.pushing);
+        mo.vaulting = !!(f & MOTION_FLAG.vaulting);
         let tr = this.tracks.get(sp.id);
         if (!tr) {
           tr = { prev: { ...pos }, pos: { ...pos }, at: T, span, facing: m[8] / 1000 };
@@ -563,6 +592,13 @@ export class Mirror {
       sim.barricades.remote(slot, bs[i + 1], bs[i + 2] / 1000, bs[i + 3] === 1);
     }
     for (const slot of sim.barricades.slots) if (!listed.has(slot.index) && slot.boards > 0) sim.barricades.remote(slot, 0, 0, slot.glass);
+    // Smashed panes (nobody re-glazes a window: a pane left out keeps what this copy has).
+    if (s.g) {
+      unpackPanes(s.g, (i) => {
+        const slot = sim.barricades.slots[i];
+        if (slot?.glass) sim.barricades.breakGlass(slot);
+      });
+    }
     this.applyRaid(s, T, span);
     const lu = s.lu;
     sim.lull = lu ? { count: lu[0], start: lu[1] / 1000, end: lu[2] / 1000, paused: lu[3] / 1000 } : noLulls();

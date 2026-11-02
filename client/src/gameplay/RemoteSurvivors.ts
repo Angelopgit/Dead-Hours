@@ -169,6 +169,7 @@ export class RemoteSurvivors {
     }
     const ride = deck ? this.skate(r, deck, m, dt) : null;
     b.skate = ride ? ride.pose : null;
+    b.vault = m.vaulting && !p.downed ? 1 : 0;
     b.update(dt, {
       speed: ride ? 0 : hv, crouch: m.crouching ? 1 : 0, aim: m.aiming ? 1 : 0, grounded: m.grounded,
       strafe: ride ? 0 : strafe, moveAngle: ride ? 0 : moveAngle, turn: ride || dt <= 0 ? 0 : turned / dt,

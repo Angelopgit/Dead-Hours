@@ -37,6 +37,8 @@ export const THROWING = {
   fuse: 2.7,
   /** Molotovs break on anything they hit faster than this (m/s); slower they roll and break when they stop. */
   shatterSpeed: 2.2,
+  /** Thrown faster than this (m/s) it goes through a window pane instead of bouncing off. */
+  glassSpeed: 4,
   /** Ammunition crates hand out one of each per use (when there is room); supply drops fill them up. */
   cratePerUse: 1,
   /** In flight longer than this (stuck somewhere) it goes off or breaks anyway. */
@@ -48,6 +50,8 @@ export const BLAST = {
   /** Lethal radius and the core where everything takes full force (m). */
   radius: 8.5,
   inner: 2.4,
+  /** Window panes the blast can see blow out this far (m). */
+  glass: 7,
   /** Damage to zombies at the core (falls off with distance to the radius). */
   damage: 320,
   /** Damage to survivors at the core: the thrower takes all of it, teammates a share. */

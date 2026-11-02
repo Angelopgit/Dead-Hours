@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { STORY, houseTop, isBarricadeWindow, type HouseSpec, type MapDefinition } from '@dead-hours/shared';
+import { STORY, houseTop, porchOf, type HouseSpec, type MapDefinition } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
-import type { StaticBatcher } from '../rendering/StaticBatcher';
+import type { BatchPiece, StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
 
 /** Tessellation for large static faces so baked lighting has vertices to live on. */
@@ -115,6 +115,12 @@ function flatRoof(h: HouseSpec, top: number, lib: MaterialLibrary, batch: Static
   }
 }
 
+/**
+ * The frame bars of each enterable building's windows (by map.windows index), which break out
+ * with the glass when a window is smashed (BarricadeView hides them). Filled by dressHouses.
+ */
+export const windowBars: (BatchPiece[] | undefined)[] = [];
+
 /** Visual dressing for houses: closed-house shells, roofs, trim, windows and doors. */
 export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: StaticBatcher): void {
   const trim = lib.get('trim').material;
@@ -123,10 +129,6 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     color: 0x0d1218, roughness: 0.12, metalness: 0.75, envMapIntensity: 0.6,
   }));
   darkGlass.userData.envMap = true;
-  const clearGlass = lib.custom('glass-clear', () => new THREE.MeshStandardMaterial({
-    color: 0x9fb4c8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.18, depthWrite: false,
-  }));
-  clearGlass.userData.envMap = true;
   const warm = lib.custom('window-warm', () => new THREE.MeshStandardMaterial({
     color: 0x1a120a, emissive: 0xffa456, emissiveIntensity: 1.6, roughness: 0.9,
   }));
@@ -183,12 +185,11 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     }
 
     // Front porch: step and a small roof over a wooden front door.
-    const frontSign = h.facing === 'south' ? 1 : -1;
-    const frontDoor = map.doors.find((d) => d.houseId === h.id && d.exterior && d.outward === frontSign && d.axis === 'x' && (d.style ?? 'wood') === 'wood');
-    if (frontDoor && roofKind === 'gable-x') {
-      const pz = h.z + frontSign * (h.d / 2 + 0.9);
+    const porch = porchOf(map, h);
+    if (porch) {
+      const { door: frontDoor, sign: frontSign, z: pz, roof } = porch;
       batch.add(worldBox(frontDoor.x, 0.12, pz, frontDoor.w + 1.6, 0.24, 1.8, 3, null), lib.get('concrete').material);
-      batch.add(worldBox(frontDoor.x, 2.95, pz - frontSign * 0.05, frontDoor.w + 1.8, 0.12, 1.9, 1, null), trim);
+      batch.add(worldBox(roof.x, roof.y, roof.z, roof.w, 0.12, roof.d, 1, null), trim);
       for (const sx of [-1, 1]) {
         batch.add(worldBox(frontDoor.x + sx * (frontDoor.w / 2 + 0.8), 1.55, pz + frontSign * 0.75, 0.14, 2.7, 0.14, 1, null), trim);
       }
@@ -196,7 +197,8 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
   }
 
   // Windows.
-  for (const w of map.windows) {
+  windowBars.length = 0;
+  map.windows.forEach((w, wi) => {
     const house = map.houses.find((h) => h.id === w.houseId)!;
     const along = w.axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
     const out = w.axis === 'x' ? new THREE.Vector3(0, 0, w.outward) : new THREE.Vector3(w.outward, 0, 0);
@@ -215,24 +217,31 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     batch.add(frameAt(0, -w.h / 2 - 0.04, w.w + ft * 3, 0.08, 0.18, push + 0.03), frame);
     batch.add(frameAt(-w.w / 2 - ft / 2, 0, ft, w.h, 0.1, push), frame);
     batch.add(frameAt(w.w / 2 + ft / 2, 0, ft, w.h, 0.1, push), frame);
+    // The sash bars across the opening: in an enterable building they break out with the glass.
+    const bar = (g: THREE.BufferGeometry, m: THREE.Material) => {
+      if (!house.enterable) {
+        batch.add(g, m, false);
+        return;
+      }
+      (windowBars[wi] ??= []).push(batch.addPiece(g, m, false));
+    };
     if (w.plain) {
-      batch.add(frameAt(0, 0, 0.05, w.h, 0.06, 0), frame, false);
+      bar(frameAt(0, 0, 0.05, w.h, 0.06, 0), frame);
     } else {
-      batch.add(frameAt(0, 0, 0.045, w.h, 0.05, house.enterable ? 0.0 : push - 0.01), trim, false);
-      batch.add(frameAt(0, w.h * 0.08, w.w, 0.045, 0.05, house.enterable ? 0.0 : push - 0.01), trim, false);
+      bar(frameAt(0, 0, 0.045, w.h, 0.05, house.enterable ? 0.0 : push - 0.01), trim);
+      bar(frameAt(0, w.h * 0.08, w.w, 0.045, 0.05, house.enterable ? 0.0 : push - 0.01), trim);
     }
     const glassPush = house.enterable ? 0 : 0.015;
     const pane = frameAt(0, 0, w.w, w.h, 0.02, glassPush);
-    if (house.enterable) {
-      // Panes that can be smashed are drawn by the barricades, which take them out when they break.
-      if (!isBarricadeWindow(house, w)) batch.add(pane, clearGlass, false, false);
-    } else if (w.lit) {
+    // Enterable buildings' panes are drawn by BarricadeView, which takes them out when they break.
+    if (house.enterable) return;
+    if (w.lit) {
       batch.add(pane, (w.x * 7 + w.z * 3) % 2 > 1 ? warm : warmDim, false, false);
       batch.add(frameAt(-w.w * 0.32, 0, w.w * 0.34, w.h, 0.03, glassPush + 0.01), curtain, false);
     } else {
       batch.add(pane, darkGlass, false);
     }
-  }
+  });
 
   // Inside window trim of enterable buildings: casing, a stool to rest on and the apron under it.
   const metalFrame = lib.standard(0x2a2c2e, 0.5, 0.6);

@@ -83,7 +83,9 @@ export type ActMsg =
   /** Throw a grenade or Molotov along the crosshair ray. */
   | { a: 'throw'; kind: 'frag' | 'molotov'; o: Vec3; d: Vec3 }
   /** Hop on skateboard `id`; -1 steps off (`bail`: thrown off by a wall), leaving it at `at` (where the rider's browser put it) pointing `yaw`. */
-  | { a: 'board'; id: number; at?: Vec3; yaw?: number; bail?: boolean };
+  | { a: 'board'; id: number; at?: Vec3; yaw?: number; bail?: boolean }
+  /** Vaulting through window slot `slot` (the browser moves the survivor; a pane still in smashes). */
+  | { a: 'vault'; slot: number };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

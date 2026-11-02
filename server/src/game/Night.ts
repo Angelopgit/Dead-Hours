@@ -193,6 +193,8 @@ export class Night {
       const len = Math.hypot(to.x - from.x, by - ay, to.z - from.z);
       const hit = this.physics.raycast(from.x, ay, from.z, (to.x - from.x) / len, (by - ay) / len, (to.z - from.z) / len, len, WALLS);
       if (hit !== null && hit < len - 0.05) ok = false;
+      // Boards aren't solid to the physics: nobody gets through a boarded-up window.
+      else if (this.sim.barricades.crossesBoards(from, to)) ok = false;
     }
     if (!ok) {
       x.correcting = vec(from);
@@ -279,6 +281,9 @@ export class Night {
         if (d && p.up && !sim.doorLocked(d.index) && Math.hypot(d.center.x - e.x, d.center.y - e.y, d.center.z - e.z) < 2.6) d.toggle(p.motion.pos.x, p.motion.pos.z);
         break;
       }
+      case 'vault':
+        if (Number.isInteger(m.slot)) sim.vault(id, m.slot);
+        break;
       case 'barricade':
         if (m.k === 'stop' || !Number.isInteger(m.slot)) p.work = null;
         else if (m.k === 'board' || m.k === 'pry') sim.barricade(id, m.slot, m.k);
