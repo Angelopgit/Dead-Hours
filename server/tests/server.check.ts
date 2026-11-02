@@ -17,7 +17,7 @@ import {
   C2S, DOWNED, Mirror, PLAYER, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
   type BeginMsg, type ChatLine, type IceConfig, type LobbyMsg, type OverMsg, type RtcIn, type SimEvent, type Snapshot,
   type TalkMsg, type Vec3,
-  decodeBuild, defaultBuild, encodeBuild, encodeLoadout, decodeLoadout, runXp,
+  decodeBuild, defaultBuild, encodeBuild, encodeLoadout, decodeLoadout, runXp, WEAPONS,
 } from '@dead-hours/shared';
 import { TURN_TTL, iceConfig } from '../src/net/ice';
 
@@ -574,6 +574,19 @@ try {
   await sleep(300);
   check(cr.events.filter((e) => e.type === 'refit').length === 1, 'refits of guns not carried, or malformed ones, do nothing');
   await cr.room.leave();
+
+  // The sidearm comes from the join: the akimbo pair goes through, anything else is the M17.
+  for (const [ask, want] of [['akimbo', 'akimbo'], ['lmg', 'pistol'], [42, 'pistol']] as const) {
+    const sa = new Player('Sidearm', c.key);
+    sa.attach(await client.create('survival', { ...sa.options, secondary: ask, private: true }));
+    await until(() => !!sa.lobby);
+    sa.room.send(C2S.start);
+    await until(() => sa.snaps.length > 2);
+    const w = sa.snaps.at(-1)!.p.find((p) => p.id === sa.room.sessionId)?.w ?? [];
+    check(w[8] === WEAPONS[want].magazine && w[9] === WEAPONS[want].startReserve,
+      `a join asking for ${JSON.stringify(ask)} as the sidearm gets the ${want} (${w[8]}/${w[9]} rounds)`);
+    await sa.room.leave();
+  }
 
   section('Sign-in accounts');
   const providers = (await api('/api/auth/providers')).body?.providers;

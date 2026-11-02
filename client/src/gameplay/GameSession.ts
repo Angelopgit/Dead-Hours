@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, isMelee, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, isMelee, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
@@ -218,7 +218,8 @@ export class GameSession {
   private lastHurtDir = new THREE.Vector3(0, 0, 1);
   private ragdoll: Ragdoll | null = null;
   private readonly sights = new Map<string, Sight | null>();
-  private dropped: Dropped | null = null;
+  /** The guns that fell from the hands at death (both of an akimbo pair). */
+  private dropped: Dropped[] = [];
   private deathT = 0;
   private deathYaw = 0;
   private readonly tablePose = { px: 0, py: 0, pz: 0, tx: 0, ty: 0, tz: 0 };
@@ -290,8 +291,9 @@ export class GameSession {
     this.myId = online ? online.link.id : 'p1';
     const profile = settings.value.profile;
     const primary = (PRIMARY_WEAPONS as string[]).includes(profile.primary) ? (profile.primary as WeaponId) : 'ar';
+    const secondary = (SECONDARY_WEAPONS as string[]).includes(profile.secondary) ? (profile.secondary as WeaponId) : 'pistol';
     const look = sanitizeAppearance(profile.appearance);
-    this.me = this.sim.addPlayer(this.myId, profile.name, primary, 'pistol', { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look), account.loadout);
+    this.me = this.sim.addPlayer(this.myId, profile.name, primary, secondary, { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look), account.loadout);
     this.mirror = online ? new Mirror(this.sim, this.myId) : null;
     this.remotes = online ? new RemoteSurvivors(engine.scene, physics, field, ui, this.myId) : null;
 
@@ -1462,11 +1464,12 @@ export class GameSession {
   /** Muzzle flash, report, recoil and the spent case for this survivor's own shot. */
   private shotFeedback(weapon: WeaponId): void {
     const def = this.me.arsenal.defOf(weapon);
+    // First, so the flash and the case come from the gun of a pair that fired (the rounds left say which).
+    this.weapon.fired(def, this.me.arsenal.weapon.mag);
     const muzzle = this.weapon.muzzleWorld(this.tmpA);
     const dir = this.weapon.muzzleDir(this.tmpB);
     this.effects.muzzle(muzzle, dir, weapon);
     audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor' || weapon === 'wraith');
-    this.weapon.fired(def);
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
     this.cam.addTrauma(0.04 + def.recoil * 0.05);
@@ -1496,6 +1499,10 @@ export class GameSession {
 
   private remoteShot(e: Extract<SimEvent, { type: 'shot' }>): void {
     const r = this.remotes!;
+    const shooter = this.sim.players.get(e.player)?.arsenal;
+    const w = r.weaponOf(e.player);
+    // First, so an akimbo pair's flash, tracers and case come from the gun that fired.
+    w?.fired(shooter ? shooter.defOf(e.weapon) : WEAPONS[e.weapon]);
     const muzzle = r.muzzle(e.player, this.tmpA) ?? v3(e.origin, this.tmpA);
     const dir = r.muzzleDir(e.player, this.tmpB) ?? this.tmpB.set(0, 0, 1);
     this.effects.muzzle(muzzle, dir, e.weapon);
@@ -1503,11 +1510,8 @@ export class GameSession {
       if (e.pellets.length > 1 && i % 3 !== 0) continue;
       this.effects.tracer(muzzle, v3(e.pellets[i].end, this.tmpC));
     }
-    const shooter = this.sim.players.get(e.player)?.arsenal;
     audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor' || e.weapon === 'wraith', e.player);
-    const w = r.weaponOf(e.player);
     if (w) {
-      w.fired(shooter ? shooter.defOf(e.weapon) : WEAPONS[e.weapon]);
       if (e.weapon === 'rpg') return;
       const pos = this.tmpC, d = this.tmpD;
       w.ejectWorld(pos, d);
@@ -2484,12 +2488,13 @@ export class GameSession {
     this.hud.setVisible(false);
     audio.death();
 
-    // The held weapon falls; the survivor goes limp.
-    const held = this.weapon.heldModel;
-    if (held) {
+    // The held weapon falls (both guns of a pair); the survivor goes limp.
+    for (const held of [this.weapon.heldModel, this.weapon.offhandModel]) {
+      if (!held) continue;
       const model = createWeaponModel(held.id, held.build);
       model.root.position.copy(held.root.position);
       model.root.quaternion.copy(held.root.quaternion);
+      model.root.scale.copy(held.root.scale);
       this.engine.scene.add(model.root);
       this.probe.attach(model.materials);
       const at = model.root.position;
@@ -2498,14 +2503,14 @@ export class GameSession {
         new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)),
       );
       const rest = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2).multiply(lie);
-      this.dropped = {
+      this.dropped.push({
         model,
         vel: this.player.velocity.clone().multiplyScalar(0.5).add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 1, (Math.random() - 0.5) * 1.5)),
         spin: new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 8),
         floor: hit !== null ? at.y - hit + 0.035 : this.player.position.y + 0.035,
         rest,
         landed: false,
-      };
+      });
     }
     this.weapon.setVisible(false);
     this.hud.setScope(0);
@@ -2519,8 +2524,11 @@ export class GameSession {
   }
 
   private updateDropped(dt: number): void {
-    const d = this.dropped;
-    if (!d || d.landed) return;
+    for (const d of this.dropped) this.dropOne(d, dt);
+  }
+
+  private dropOne(d: Dropped, dt: number): void {
+    if (d.landed) return;
     const r = d.model.root;
     d.vel.y -= 9.8 * dt;
     r.position.addScaledVector(d.vel, dt);
@@ -2703,11 +2711,11 @@ export class GameSession {
     this.spectateLine.remove();
     this.watching = null;
     this.ragdoll = null;
-    if (this.dropped) {
-      this.dropped.model.dispose();
-      this.dropped.model.root.removeFromParent();
-      this.dropped = null;
+    for (const d of this.dropped) {
+      d.model.dispose();
+      d.model.root.removeFromParent();
     }
+    this.dropped = [];
     // Online the snapshot says so too; until it comes, take the event's word for it.
     const me = this.me;
     if (!me.alive) {
@@ -2918,10 +2926,11 @@ export class GameSession {
     this.rack?.dispose();
     this.weapon.dispose();
     clearSeveredCache();
-    if (this.dropped) {
-      this.dropped.model.dispose();
-      this.dropped.model.root.removeFromParent();
+    for (const d of this.dropped) {
+      d.model.dispose();
+      d.model.root.removeFromParent();
     }
+    this.dropped = [];
     this.player.dispose();
     this.fill.removeFromParent();
     this.fill.dispose();

@@ -169,7 +169,9 @@ const FITTINGS: Partial<Record<WeaponId, Fitting>> = {
   smg: { optic: ['iron', 'dot', 'holo', 'acog'], muzzle: ['none', 'suppressor', 'compensator'], grip: ['none', 'vertical', 'angled', 'laser'], mag: ['standard', 'extended', 'fast'] },
   shotgun: { optic: ['iron', 'dot', 'holo'], muzzle: ['none', 'choke', 'suppressor'], grip: ['none', 'laser'], mag: ['standard', 'extended'] },
   marksman: { optic: ['scope', 'acog', 'dot', 'iron'], muzzle: ['none', 'suppressor', 'compensator'], grip: ['none', 'vertical', 'angled', 'laser'], mag: ['standard', 'extended', 'fast'] },
-  pistol: { optic: ['iron', 'dot'], muzzle: ['none', 'suppressor', 'compensator'], grip: ['none', 'laser'], mag: ['standard', 'extended', 'fast'] },
+  pistol: { optic: ['iron', 'dot', 'holo', 'acog'], muzzle: ['none', 'suppressor', 'compensator'], grip: ['none', 'laser'], mag: ['standard', 'extended', 'fast'] },
+  // Both guns of the pair carry the same build (optic, muzzle, laser, magazines and finish).
+  akimbo: { optic: ['iron', 'dot', 'holo', 'acog'], muzzle: ['none', 'suppressor', 'compensator'], grip: ['none', 'laser'], mag: ['standard', 'extended', 'fast'] },
 };
 
 const NO_FITTING: Fitting = { optic: [], muzzle: [], grip: [], mag: [] };

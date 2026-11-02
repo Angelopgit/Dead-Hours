@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BUILD_SLOTS, fitsOf, type BuildSlot, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
+import { BUILD_SLOTS, WEAPONS, fitsOf, type BuildSlot, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
 
 /** A fitting's spot on screen (CSS pixels inside the rectangle given), for the gunsmith's labels. */
@@ -26,6 +26,8 @@ export class GunsmithStage {
   readonly holder = new THREE.Group();
   private readonly spin = new THREE.Group();
   private model: WeaponModel | null = null;
+  /** The second gun of an akimbo pair, shown behind the first (both carry the same build). */
+  private twin: WeaponModel | null = null;
   private yaw = 0;
   private yawTarget = 0;
   private pitch = 0;
@@ -65,6 +67,15 @@ export class GunsmithStage {
     const m = this.model;
     if (m && m.id === id && m.build && BUILD_SLOTS.every((s) => m.build[s] === build[s])) return;
     const fresh = createWeaponModel(id, build);
+    // A pair: the left-hand gun (mirrored, like the one in the game) set behind the right one and
+    // high enough that the right one's optic still shows against it, barrels the same way.
+    const twin = WEAPONS[id].hold === 'akimbo' ? createWeaponModel(id, build) : null;
+    if (twin) {
+      twin.root.scale.x = -1;
+      twin.root.position.set(0.07, 0.115, -0.035);
+      fresh.root.add(twin.root);
+      fresh.root.updateMatrixWorld(true);
+    }
     // Turn about the middle of the gun, not the grip.
     const box = new THREE.Box3().setFromObject(fresh.root);
     const center = box.getCenter(new THREE.Vector3());
@@ -78,9 +89,12 @@ export class GunsmithStage {
       });
     }
     if (m) m.dispose();
+    this.twin?.dispose();
     this.model = fresh;
+    this.twin = twin;
     this.spin.add(fresh.root);
     this.onMaterials?.(fresh.materials);
+    if (twin) this.onMaterials?.(twin.materials);
   }
 
   /** Pointer handlers for dragging the gun around (attach to whatever element receives the clicks). */
@@ -148,6 +162,8 @@ export class GunsmithStage {
         (o.material as THREE.Material).dispose();
       }
     });
+    this.twin?.dispose();
+    this.twin = null;
     this.model?.dispose();
     this.model = null;
     this.holder.removeFromParent();

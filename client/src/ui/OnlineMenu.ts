@@ -21,7 +21,7 @@ type View = 'browse' | 'host' | 'lobby' | 'full';
 
 function joinOptions() {
   const p = settings.value.profile;
-  return { name: p.name, primary: p.primary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), token: account.key, session: account.session ?? undefined, builds: encodeLoadout(account.loadout) };
+  return { name: p.name, primary: p.primary, secondary: p.secondary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), token: account.key, session: account.session ?? undefined, builds: encodeLoadout(account.loadout) };
 }
 
 /** What a failed join or create means for the player. */

@@ -25,6 +25,8 @@ export interface Survivor {
   id: string;
   name: string;
   primary: WeaponId;
+  /** The sidearm (the M17 when left out). */
+  secondary?: WeaponId;
   appearance: string;
   /** Weapon builds, already checked against `unlocks`. */
   builds: Loadout;
@@ -103,7 +105,7 @@ export class Night {
   addSurvivor(s: Survivor, index: number): { x: number; y: number; z: number; yaw: number } {
     const spawns = NEIGHBORHOOD.playerSpawns;
     const sp = spawns[index % spawns.length];
-    const p = this.sim.addPlayer(s.id, s.name, s.primary, 'pistol', { x: sp.x, y: sp.y, z: sp.z }, sp.yaw, s.appearance, s.builds);
+    const p = this.sim.addPlayer(s.id, s.name, s.primary, s.secondary ?? 'pistol', { x: sp.x, y: sp.y, z: sp.z }, sp.yaw, s.appearance, s.builds);
     this.unlocks.set(s.id, s.unlocks);
     // A capsule zombies bump into, like the one the survivor's own browser moves.
     const w = this.physics.world;

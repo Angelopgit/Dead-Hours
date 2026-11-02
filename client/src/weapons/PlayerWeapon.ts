@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LIMBS, MELEE, THROWING, WEAPONS, defaultBuild, encodeBuild, isMelee, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type ThrowKind, type WeaponDef, type WeaponId } from '@dead-hours/shared';
+import { LIMBS, MELEE, THROWING, WEAPONS, defaultBuild, encodeBuild, isHandgun, isMelee, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type ThrowKind, type WeaponDef, type WeaponId } from '@dead-hours/shared';
 import type { Humanoid } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
@@ -53,8 +53,13 @@ export type WeaponCue = FoleyKind;
 type V3 = [number, number, number];
 interface PoseDef { at: V3; rot?: V3 }
 
-/** Spine-space poses of the weapon's anchor (stock butt for long guns, grip for pistols). */
-export const POSES: Record<'rifle' | 'pistol', Record<'aim' | 'ready' | 'sprint' | 'reload' | 'melee', PoseDef>> = {
+type Hold = 'rifle' | 'pistol' | 'akimbo';
+
+/**
+ * Spine-space poses of the weapon's anchor (stock butt for long guns, grip for pistols). Akimbo is
+ * the right gun of the pair; the left one takes the same poses mirrored (+X is the survivor's left).
+ */
+export const POSES: Record<Hold, Record<'aim' | 'ready' | 'sprint' | 'reload' | 'melee', PoseDef>> = {
   rifle: {
     aim: { at: [-0.12, 0.38, 0.12] },
     ready: { at: [-0.08, 0.4, 0.05], rot: [0.42, 0.5, 0.13] },
@@ -69,7 +74,52 @@ export const POSES: Record<'rifle' | 'pistol', Record<'aim' | 'ready' | 'sprint'
     reload: { at: [-0.04, 0.22, 0.3], rot: [-0.35, 0.2, 0.5] },
     melee: { at: [0.16, 0.12, 0.2], rot: [1.2, 0, 0] },
   },
+  // Both arms out, a gun in each hand a shoulder's width apart.
+  akimbo: {
+    aim: { at: [-0.18, 0.36, 0.42] },
+    ready: { at: [-0.2, 0.15, 0.3], rot: [0.6, 0.04, 0] },
+    sprint: { at: [-0.22, 0.06, 0.08], rot: [1.3, 0, 0] },
+    reload: { at: [-0.15, 0.2, 0.32], rot: [0.25, 0.1, 0] },
+    melee: { at: [-0.2, 0.15, 0.3], rot: [0.6, 0.04, 0] },
+  },
 };
+
+/**
+ * Reloading a pair (spine space, the right gun; the left runs the same mirrored, a beat behind):
+ * both muzzles come up so the empties drop free, each gun goes down to the belt and is pushed onto
+ * a fresh magazine (the right seats at 0.5, the left at 0.62), they come back up and the slides
+ * are released (0.82, 0.86) if they were locked back.
+ */
+const AKIMBO_RELOAD: Record<'right' | 'left', { t: number; at: V3; rot: V3 }[]> = {
+  right: [
+    { t: 0, at: [-0.15, 0.2, 0.33], rot: [0.25, 0.1, 0] },
+    { t: 0.1, at: [-0.13, 0.27, 0.3], rot: [-0.75, 0.25, 0.35] },
+    { t: 0.2, at: [-0.14, 0.25, 0.3], rot: [-0.65, 0.25, 0.3] },
+    { t: 0.38, at: [-0.2, 0.05, 0.22], rot: [0.05, 0.05, 0] },
+    { t: 0.5, at: [-0.2, -0.01, 0.21], rot: [0.08, 0.05, 0] },
+    { t: 0.62, at: [-0.17, 0.12, 0.27], rot: [0.15, 0.08, 0] },
+    { t: 0.82, at: [-0.15, 0.2, 0.33], rot: [0.05, 0.1, 0] },
+    { t: 1, at: [-0.15, 0.2, 0.33], rot: [0.25, 0.1, 0] },
+  ],
+  left: [
+    { t: 0, at: [-0.15, 0.2, 0.33], rot: [0.25, 0.1, 0] },
+    { t: 0.12, at: [-0.13, 0.27, 0.3], rot: [-0.75, 0.25, 0.35] },
+    { t: 0.3, at: [-0.14, 0.25, 0.3], rot: [-0.65, 0.25, 0.3] },
+    { t: 0.5, at: [-0.2, 0.05, 0.22], rot: [0.05, 0.05, 0] },
+    { t: 0.62, at: [-0.2, -0.01, 0.21], rot: [0.08, 0.05, 0] },
+    { t: 0.74, at: [-0.17, 0.12, 0.27], rot: [0.15, 0.08, 0] },
+    { t: 0.86, at: [-0.15, 0.2, 0.33], rot: [0.05, 0.1, 0] },
+    { t: 1, at: [-0.15, 0.2, 0.33], rot: [0.25, 0.1, 0] },
+  ],
+};
+/** Each gun of a pair: when its magazine drops free, when the new one seats, when the slide goes home. */
+export const AKIMBO_TIMES = { right: { drop: 0.12, seat: 0.5, slide: 0.82 }, left: { drop: 0.14, seat: 0.62, slide: 0.86 } } as const;
+
+/**
+ * The left gun of a pair down the sights (camera space: +X right, +Y up, -Z ahead): held out
+ * beside the right gun's sight line, a little low and canted out so the picture stays clear.
+ */
+const OFFHAND_ADS = { at: [-0.2, -0.155, -0.42] as V3, roll: 0.22, toe: 0.02 };
 
 /**
  * Down the sights (first person): which way each elbow goes (the gun's frame turned level: +Z
@@ -78,9 +128,11 @@ export const POSES: Record<'rifle' | 'pistol', Record<'aim' | 'ready' | 'sprint'
  * whether they wrap round under the gun or reach up into the sight picture. Tuned against
  * `npm run check:sights`.
  */
-export const ADS_ARMS: Record<'rifle' | 'pistol', { elbowR: V3; elbowL: V3; palm: number }> = {
+export const ADS_ARMS: Record<Hold, { elbowR: V3; elbowL: V3; palm: number }> = {
   rifle: { elbowR: [-0.73, -0.27, 0.01], elbowL: [0.5, -0.6, -0.62], palm: 0.084 },
   pistol: { elbowR: [-1.4, -1.1, 0.44], elbowL: [0.16, -0.51, 0.13], palm: 0.071 },
+  // Each hand on its own gun: the left elbow hangs out the way the right one does.
+  akimbo: { elbowR: [-1.4, -1.1, 0.44], elbowL: [1.4, -1.1, 0.44], palm: 0.071 },
 };
 
 /** Machete swing keyframes (spine space): grip position and blade orientation. */
@@ -202,6 +254,8 @@ function basis(z: V3, up: V3): THREE.Quaternion {
 const HOLSTERS = {
   back: { pos: new THREE.Vector3(0.09, 0.42, -0.2), quat: basis([-0.45, -0.88, 0], [0, 0, -1]) },
   thigh: { pos: new THREE.Vector3(-0.115, -0.06, -0.02), quat: basis([0, -1, 0], [0, 0, 1]) },
+  /** The left gun of an akimbo pair, on the other thigh. */
+  thighL: { pos: new THREE.Vector3(0.115, -0.06, -0.02), quat: basis([0, -1, 0], [0, 0, 1]) },
   hip: { pos: new THREE.Vector3(0.19, 0.05, -0.08), quat: basis([0.08, -0.9, -0.42], [1, 0, 0]) },
   /** Long melee weapons across the back the other way from a slung rifle, grip over the left shoulder. */
   blade: { pos: new THREE.Vector3(-0.1, 0.4, -0.24), quat: basis([0.42, -0.9, 0], [0, 0, -1]) },
@@ -237,6 +291,15 @@ export class PlayerWeapon {
   private stowW = 0;
   private raised = 0;
   private readonly recoil = { z: 0, vz: 0, pitch: 0, vp: 0, yaw: 0, vy: 0 };
+  /** The left gun of an akimbo pair: its own recoil and slide. */
+  private readonly recoilL = { z: 0, vz: 0, pitch: 0, vp: 0, yaw: 0, vy: 0 };
+  private actionCycleL = -1;
+  /** Akimbo: the gun of the pair that fired last (1 right, -1 left): flash, case and tracer come from it. */
+  private hand: 1 | -1 = -1;
+  /** The left gun of an akimbo pair (same build as the right one, which is the model in `models`). */
+  private offhand: WeaponModel | null = null;
+  private readonly anchorL = new THREE.Vector3();
+  private readonly quatL = new THREE.Quaternion();
   private actionCycle = -1;
   private actionKind: 'pump' | 'slide' = 'pump';
   private lastProgress = 0;
@@ -318,8 +381,29 @@ export class PlayerWeapon {
     return m;
   }
 
+  /** The left gun of an akimbo pair, built (or rebuilt) to match the right one's build. */
+  private ensureOffhand(): WeaponModel | null {
+    const id = this.secondaryId;
+    const want = id && WEAPONS[id].hold === 'akimbo' ? this.builds[id] ?? defaultBuild(id) : null;
+    const off = this.offhand;
+    if (off && (!want || off.id !== id || off.code !== encodeBuild(want))) {
+      off.dispose();
+      this.offhand = null;
+    }
+    if (want && id && !this.offhand) {
+      const m = createWeaponModel(id, want);
+      m.root.name = `weapon:${id}:left`;
+      // Mirrored, so its ejection port and slide catch face out to the left like a left-handed gun's.
+      m.root.scale.x = -1;
+      this.offhand = m;
+      this.scene.add(m.root);
+      this.onMaterials?.(m.materials);
+    }
+    return this.offhand;
+  }
+
   materials(): THREE.Material[] {
-    return [...[...this.models.values()].flatMap((m) => m.materials), this.bandageRoll.material as THREE.Material];
+    return [...[...this.models.values()].flatMap((m) => m.materials), ...(this.offhand?.materials ?? []), this.bandageRoll.material as THREE.Material];
   }
 
   private setLoadout(primary: WeaponId, secondary: WeaponId): void {
@@ -334,11 +418,19 @@ export class PlayerWeapon {
     this.secondaryId = secondary;
     this.ensure(primary);
     this.ensure(secondary);
+    this.ensureOffhand();
   }
 
-  /** A round left the active weapon. */
-  fired(def: WeaponDef): void {
-    const r = this.recoil;
+  /**
+   * A round left the active weapon. An akimbo pair fires its guns in turn: `mag` (the rounds left
+   * after this one) says which, the right gun on odd counts (30 → 29), so the hand matches the
+   * ammunition; without it (someone else's shot) the guns simply alternate.
+   */
+  fired(def: WeaponDef, mag?: number): void {
+    const pair = def.hold === 'akimbo';
+    if (pair) this.hand = mag !== undefined ? (mag % 2 === 1 ? 1 : -1) : this.hand === 1 ? -1 : 1;
+    const left = pair && this.hand === -1;
+    const r = left ? this.recoilL : this.recoil;
     const k = def.recoil;
     r.vz += 1.6 + k * 1.4;
     r.vp += 3.5 + k * 6;
@@ -348,9 +440,12 @@ export class PlayerWeapon {
       this.actionCycle = 0;
       this.actionKind = 'pump';
       this.pumpCues(0);
-    } else if (def.id === 'pistol') {
-      this.actionCycle = 0;
-      this.actionKind = 'slide';
+    } else if (isHandgun(def.id)) {
+      if (left) this.actionCycleL = 0;
+      else {
+        this.actionCycle = 0;
+        this.actionKind = 'slide';
+      }
     }
   }
 
@@ -378,9 +473,19 @@ export class PlayerWeapon {
     return { right: this.rightTarget, left: this.leftTarget };
   }
 
-  /** The gun in the hands (null while they hold a severed arm). */
+  /** The gun in the hands (null while they hold a severed arm); the right one of a pair. */
   get heldModel(): WeaponModel | null {
     return this.held;
+  }
+
+  /** The left gun of an akimbo pair while it is in the hand. */
+  get offhandModel(): WeaponModel | null {
+    return this.held && this.held.id === this.offhand?.id ? this.offhand : null;
+  }
+
+  /** The gun the last round came from (the left of a pair after its shot), or the one in hand. */
+  private get firing(): WeaponModel | null {
+    return this.hand === -1 ? this.offhandModel ?? this.held : this.held;
   }
 
   /** The severed arm in the hands, if any (its torn end drips and splashes). */
@@ -411,23 +516,24 @@ export class PlayerWeapon {
   }
 
   muzzleWorld(out: THREE.Vector3): THREE.Vector3 {
-    const m = this.held;
+    const m = this.firing;
     if (!m) return this.body.armR.end.getWorldPosition(out);
     return m.root.localToWorld(out.copy(m.muzzle));
   }
 
   /** Barrel direction (world). */
   muzzleDir(out: THREE.Vector3): THREE.Vector3 {
-    const m = this.held;
+    const m = this.firing;
     if (!m) return out.set(0, 0, 1);
     return out.set(0, 0, 1).applyQuaternion(m.root.quaternion);
   }
 
   ejectWorld(out: THREE.Vector3, dir: THREE.Vector3): void {
-    const m = this.held;
+    const m = this.firing;
     if (!m) return;
     m.root.localToWorld(out.copy(m.eject));
-    dir.set(-1, 0.6, -0.2).normalize().applyQuaternion(m.root.quaternion);
+    // Cases leave to the right; the left gun of a pair throws them out over its own side.
+    dir.set(m === this.offhand ? 1 : -1, 0.6, -0.2).normalize().applyQuaternion(m.root.quaternion);
   }
 
   /** Call after Humanoid.update (body pose final) and before rendering. */
@@ -438,16 +544,23 @@ export class PlayerWeapon {
       this.builds = s.builds;
       this.ensure(s.primary.id);
       this.ensure(s.secondary.id);
+      this.ensureOffhand();
     }
     this.setLoadout(s.primary.id, s.secondary.id);
     const activeId = s.active === 'primary' ? s.primary.id : s.secondary.id;
     const def = WEAPONS[activeId];
     const model = this.ensure(activeId);
-    const hold = def.hold === 'pistol' ? 'pistol' : 'rifle';
+    const hold: Hold = def.hold === 'pistol' || def.hold === 'akimbo' ? def.hold : 'rifle';
     const poses = POSES[hold];
+    // A pair in the hands: the left gun follows its own copy of every pose (placeOffhand).
+    const off = hold === 'akimbo' ? this.ensureOffhand() : null;
     const progress = s.actionTotal > 0 ? THREE.MathUtils.clamp(1 - s.actionT / s.actionTotal, 0, 1) : 1;
     if (activeId !== this.lastActive) {
-      if (this.lastActive) this.onCue?.('holster', this.lastActive, 0);
+      if (this.lastActive) {
+        this.onCue?.('holster', this.lastActive, 0);
+        // Both guns of a pair go back in their holsters.
+        if (WEAPONS[this.lastActive].hold === 'akimbo') this.onCue?.('holster', this.lastActive, 0.09);
+      }
       this.lastActive = activeId;
     }
     this.cues(s, def, progress);
@@ -502,8 +615,9 @@ export class PlayerWeapon {
     const twistRifle = THREE.MathUtils.lerp(-0.4, -0.55, this.aimW) * (1 - this.sprintW) * (1 - this.stowW) * (1 - this.reloadW * 0.5);
     let twist = hold === 'rifle' ? twistRifle : 0;
     twist *= (1 - this.meleeW) * (1 - this.limbW);
-    // Both hands on a long weapon: the gun goes to its holster for the swing.
-    const away = Math.max(this.limbW, this.meleeTwoW, this.outW);
+    // Both hands on a long weapon, or the melee weapon held out: the gun goes to its holster (the
+    // right gun of a pair for any swing: that hand takes the blade).
+    const away = Math.max(this.limbW, this.meleeTwoW, this.outW, off ? this.meleeW : 0);
 
     body.root.updateMatrixWorld(true);
     const spine = body.spine;
@@ -536,10 +650,11 @@ export class PlayerWeapon {
       this.mix(this.tmpA, this.tmpQ, this.sprintW * (1 - this.aimW));
     }
     if (this.reloadW > 0.001) {
-      this.spinePose(poses.reload, this.tmpA, this.tmpQ);
+      if (off) this.keyPose(AKIMBO_RELOAD.right, s.action === 'reload' ? progress : 1, this.tmpA, this.tmpQ);
+      else this.spinePose(poses.reload, this.tmpA, this.tmpQ);
       this.mix(this.tmpA, this.tmpQ, this.reloadW);
     }
-    if (this.meleeW > 0.001) {
+    if (this.meleeW > 0.001 && !off) {
       this.spinePose(poses.melee, this.tmpA, this.tmpQ);
       this.mix(this.tmpA, this.tmpQ, this.meleeW);
     }
@@ -557,13 +672,7 @@ export class PlayerWeapon {
 
     // Recoil springs (weapon space): kick back, muzzle climb, a little sideways wander.
     const r = this.recoil;
-    const subs = Math.min(12, Math.ceil(dt * 120));
-    const h = dt / Math.max(1, subs);
-    for (let i = 0; i < subs; i++) {
-      r.vz += (-90 * r.z - 14 * r.vz) * h; r.z += r.vz * h;
-      r.vp += (-120 * r.pitch - 16 * r.vp) * h; r.pitch += r.vp * h;
-      r.vy += (-100 * r.yaw - 15 * r.vy) * h; r.yaw += r.vy * h;
-    }
+    spring(r, dt);
     const kickScale = 0.5 + 0.5 * this.aimW;
     this.quat.multiply(this.tmpQ.setFromEuler(this.e.set(-r.pitch * 0.05 * kickScale, r.yaw * 0.03, 0)));
     const rootPos = model.root.position;
@@ -572,11 +681,18 @@ export class PlayerWeapon {
     model.root.quaternion.copy(this.quat);
     model.root.visible = this.shown && !this.hideHeld;
     model.root.updateMatrixWorld(true);
-    body.kick = -r.pitch * 0.012;
+    body.kick = -Math.max(r.pitch, off ? this.recoilL.pitch : 0) * 0.012;
     body.twist = twist + this.swingTwist(s) + this.throwTwist(s, input);
+    if (off) this.placeOffhand(dt, off, s, input, progress, ads, kickScale);
 
-    // Moving parts.
-    this.animateAction(dt, model);
+    // Moving parts (a handgun's slide stays locked back once its gun is empty).
+    const rounds = s.active === 'primary' ? s.primary.mag : s.secondary.mag;
+    if (off) {
+      this.animateAction(dt, model, false, this.slideLocked(s, Math.floor(rounds / 2), AKIMBO_TIMES.right.slide, progress));
+      this.animateAction(dt, off, true, this.slideLocked(s, Math.ceil(rounds / 2), AKIMBO_TIMES.left.slide, progress));
+    } else {
+      this.animateAction(dt, model, false, hold === 'pistol' && this.slideLocked(s, rounds, 0.8, progress));
+    }
 
     // Holstered weapons.
     for (const [id, m] of this.models) {
@@ -586,6 +702,13 @@ export class PlayerWeapon {
       this.holsterPose(WEAPONS[id].slot === 'primary' ? 'back' : 'thigh', m.root.position, m.root.quaternion);
       m.root.updateMatrixWorld(true);
     }
+    const spareL = this.offhand;
+    if (spareL && spareL !== off) {
+      spareL.root.visible = this.shown;
+      this.holsterPose('thighL', spareL.root.position, spareL.root.quaternion);
+      spareL.root.updateMatrixWorld(true);
+      this.animateAction(dt, spareL, true, false);
+    }
     this.held = this.limbW > 0.5 ? null : model;
 
     // Hands.
@@ -594,8 +717,13 @@ export class PlayerWeapon {
     this.poleL.set(0.6, -0.7, -0.1).transformDirection(spineM);
     model.root.localToWorld(this.rightTarget.set(0, 0, 0));
     let leftW = 1;
-    this.leftHand(s, def, model, progress, this.leftTarget);
-    if (s.action === 'idle' || s.action === 'draw') {
+    if (off) {
+      // Each hand on its own gun's grip, the magazines dropping and going in gun by gun.
+      off.root.localToWorld(this.leftTarget.set(0, 0, 0));
+      this.poleL.set(0.6, -0.65, -0.25).transformDirection(spineM);
+      this.akimboMags(s, model, off, progress);
+    } else this.leftHand(s, def, model, progress, this.leftTarget);
+    if ((s.action === 'idle' || s.action === 'draw') && !off) {
       // Pistol sprint frees the support hand; drawing grabs it at the end.
       if (hold === 'pistol') leftW = 1 - this.sprintW;
       if (s.action === 'draw') leftW *= smooth(seg(progress, 0.55, 0.95));
@@ -716,7 +844,7 @@ export class PlayerWeapon {
    * so the palm, not the wrist, is on the grip: the hands wrap round under the gun instead of
    * reaching up across the sights.
    */
-  private shooterArms(model: WeaponModel, hold: 'rifle' | 'pistol', w: number, leftW: number): void {
+  private shooterArms(model: WeaponModel, hold: Hold, w: number, leftW: number): void {
     const arms = ADS_ARMS[hold];
     const body = this.body;
     // Elbows hang the same way however far up or down the gun points.
@@ -782,15 +910,16 @@ export class PlayerWeapon {
     return leftW;
   }
 
-  /** Spine-space keyframes at time `t`, as a world position and rotation. */
-  private keyPose(keys: { t: number; at: V3; rot: V3 }[], t: number, pos: THREE.Vector3, q: THREE.Quaternion): void {
+  /** Spine-space keyframes at time `t` (`mirror`: on the left side, for the left gun of a pair). */
+  private keyPose(keys: { t: number; at: V3; rot: V3 }[], t: number, pos: THREE.Vector3, q: THREE.Quaternion, mirror = false): void {
     let i = 1;
     while (i < keys.length - 1 && t > keys[i].t) i++;
     const a = keys[i - 1], b = keys[i];
     const u = smooth(THREE.MathUtils.clamp((t - a.t) / (b.t - a.t), 0, 1));
-    this.body.spine.localToWorld(pos.set(...a.at).lerp(_ka.set(...b.at), u));
-    q.setFromEuler(this.e.set(...a.rot));
-    _kq.setFromEuler(this.e.set(...b.rot));
+    const m = mirror ? -1 : 1;
+    this.body.spine.localToWorld(pos.set(a.at[0] * m, a.at[1], a.at[2]).lerp(_ka.set(b.at[0] * m, b.at[1], b.at[2]), u));
+    q.setFromEuler(this.e.set(a.rot[0], a.rot[1] * m, a.rot[2] * m));
+    _kq.setFromEuler(this.e.set(b.rot[0], b.rot[1] * m, b.rot[2] * m));
     q.slerp(_kq, u).premultiply(this.spineQ);
   }
 
@@ -804,15 +933,17 @@ export class PlayerWeapon {
     this.quat.slerp(q, w);
   }
 
-  private spinePose(p: PoseDef, pos: THREE.Vector3, q: THREE.Quaternion): void {
-    this.body.spine.localToWorld(pos.set(...p.at));
+  /** A spine-space pose (`mirror`: across to the left side, for the left gun of a pair). */
+  private spinePose(p: PoseDef, pos: THREE.Vector3, q: THREE.Quaternion, mirror = false): void {
+    const m = mirror ? -1 : 1;
+    this.body.spine.localToWorld(pos.set(p.at[0] * m, p.at[1], p.at[2]));
     const r = p.rot ?? [0, 0, 0];
-    q.setFromEuler(this.e.set(r[0], r[1], r[2])).premultiply(this.spineQ);
+    q.setFromEuler(this.e.set(r[0], r[1] * m, r[2] * m)).premultiply(this.spineQ);
   }
 
   private holsterPose(kind: keyof typeof HOLSTERS, pos: THREE.Vector3, q: THREE.Quaternion): void {
     const h = HOLSTERS[kind];
-    const bone = kind === 'back' || kind === 'blade' || kind === 'blade2' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : this.body.hips;
+    const bone = kind === 'back' || kind === 'blade' || kind === 'blade2' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : kind === 'thighL' ? this.body.legL.upper : this.body.hips;
     pos.copy(h.pos);
     // A rifle slung over a backpack rides on top of it.
     if (kind === 'back' || kind === 'blade' || kind === 'blade2') pos.z -= this.body.backDepth;
@@ -914,23 +1045,107 @@ export class PlayerWeapon {
     }
   }
 
-  private animateAction(dt: number, m: WeaponModel): void {
+  /**
+   * Moving parts: the pistol slide cycling after a shot (and held back while `locked`: the gun is
+   * empty), the pump racked. `left`: the left gun of a pair (its own slide cycle).
+   */
+  private animateAction(dt: number, m: WeaponModel, left = false, locked = false): void {
     if (!m.action) return;
     m.action.position.copy(m.actionRest);
-    if (this.actionCycle < 0) return;
-    this.actionCycle += dt;
-    const t = this.actionCycle;
-    if (this.actionKind === 'slide') {
-      // Pistol slide: snaps back and returns.
-      const k = t < 0.03 ? t / 0.03 : 1 - THREE.MathUtils.clamp((t - 0.03) / 0.06, 0, 1);
-      m.action.position.z -= k * 0.035;
-      if (t > 0.1) this.actionCycle = -1;
+    const cycle = left ? this.actionCycleL : this.actionCycle;
+    if (cycle < 0) {
+      if (locked) m.action.position.z -= SLIDE_TRAVEL;
+      return;
+    }
+    const t = cycle + dt;
+    if (left) this.actionCycleL = t;
+    else this.actionCycle = t;
+    if (left || this.actionKind === 'slide') {
+      // Pistol slide: snaps back and returns (or stays back on the last round).
+      const k = t < 0.03 ? t / 0.03 : locked ? 1 : 1 - THREE.MathUtils.clamp((t - 0.03) / 0.06, 0, 1);
+      m.action.position.z -= k * SLIDE_TRAVEL;
+      if (t > 0.1) {
+        if (left) this.actionCycleL = -1;
+        else this.actionCycle = -1;
+      }
       return;
     }
     // Pump: rack back then forward.
     const k = t < 0.12 ? 0 : t < 0.26 ? smooth((t - 0.12) / 0.14) : t < 0.4 ? 1 - smooth((t - 0.26) / 0.14) : 0;
     m.action.position.z -= k * 0.085;
     if (t > 0.42) this.actionCycle = -1;
+  }
+
+  /** A handgun with no rounds left has its slide locked back, until a reload's slide release (`release`, 0..1) sends it home. */
+  private slideLocked(s: HeldState, rounds: number, release: number, p: number): boolean {
+    if (rounds > 0) return false;
+    return !(s.action === 'reload' && p >= release);
+  }
+
+  /**
+   * The left gun of a pair: every pose the right one takes, mirrored to the left side, with its
+   * own aim line, its own recoil, and held out beside the right gun's sight line down the sights.
+   */
+  private placeOffhand(dt: number, off: WeaponModel, s: HeldState, input: HandsInput, p: number, ads: number, kickScale: number): void {
+    const poses = POSES.akimbo;
+    const pos = this.anchorL, q = this.quatL;
+    const mixL = (w: number) => {
+      pos.lerp(this.tmpA, w);
+      q.slerp(this.tmpQ, w);
+    };
+    this.spinePose(poses.ready, pos, q, true);
+    if (this.aimW > 0.001) {
+      this.body.spine.localToWorld(this.tmpA.set(-poses.aim.at[0], poses.aim.at[1], poses.aim.at[2]));
+      const dir = _od.subVectors(input.aimPoint, this.tmpA);
+      if (dir.lengthSq() < 0.25) dir.set(0, 0, 1).applyQuaternion(this.spineQ);
+      dir.normalize();
+      this.tmpQ.setFromRotationMatrix(_om.lookAt(dir, _o0, _oy));
+      mixL(this.aimW);
+    }
+    if (ads > 0.001 && input.eye && input.view) {
+      const o = OFFHAND_ADS;
+      const t = this.time;
+      this.tmpQ.copy(input.view).multiply(FLIP)
+        .multiply(this.e2q(Math.sin(t * 1.1 + 2) * 0.002, o.toe + Math.sin(t * 0.8) * 0.002, -o.roll));
+      this.tmpA.set(...o.at).applyQuaternion(input.view).add(input.eye);
+      mixL(ads);
+    }
+    if (this.sprintW > 0.001) {
+      this.spinePose(poses.sprint, this.tmpA, this.tmpQ, true);
+      mixL(this.sprintW * (1 - this.aimW));
+    }
+    if (this.reloadW > 0.001) {
+      this.keyPose(AKIMBO_RELOAD.left, s.action === 'reload' ? p : 1, this.tmpA, this.tmpQ, true);
+      mixL(this.reloadW);
+    }
+    // Two hands on a long melee weapon, a severed arm or the melee weapon held out: holstered;
+    // otherwise it stays in the left hand.
+    const awayL = Math.max(this.limbW, this.meleeTwoW, this.outW);
+    for (const w of [this.stowW, awayL]) {
+      if (w <= 0.001) continue;
+      this.holsterPose('thighL', this.tmpA, this.tmpQ);
+      mixL(w);
+    }
+    const r = this.recoilL;
+    spring(r, dt);
+    q.multiply(this.tmpQ.setFromEuler(this.e.set(-r.pitch * 0.05 * kickScale, -r.yaw * 0.03, 0)));
+    off.root.position.copy(pos).addScaledVector(this.tmpA.set(0, 0, -1).applyQuaternion(q), r.z * 0.022 * kickScale);
+    off.root.quaternion.copy(q);
+    off.root.visible = this.shown && !this.hideHeld;
+    off.root.updateMatrixWorld(true);
+  }
+
+  /** A pair's magazines: each drops free as its muzzle comes up, and the gun is pushed down onto a fresh one at the belt. */
+  private akimboMags(s: HeldState, right: WeaponModel, left: WeaponModel, p: number): void {
+    for (const [m, side] of [[right, 'right'], [left, 'left']] as const) {
+      if (!m.mag) continue;
+      m.mag.visible = true;
+      m.mag.position.copy(m.magRest);
+      if (s.action !== 'reload') continue;
+      const k = AKIMBO_TIMES[side];
+      if (p > k.drop && p < k.seat - 0.1) m.mag.visible = false;
+      else if (p >= k.seat - 0.1 && p < k.seat) m.mag.position.y -= 0.09 * (1 - smooth(seg(p, k.seat - 0.1, k.seat)));
+    }
   }
 
   /**
@@ -941,7 +1156,11 @@ export class PlayerWeapon {
   private cues(s: HeldState, def: WeaponDef, p: number): void {
     const id = def.id;
     // Taking hold of a severed arm is its own sound, not a gun coming out.
-    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb && !s.meleeOut) this.onCue?.('draw', id, 0);
+    if (s.action === 'draw' && this.lastAction !== 'draw' && !s.limb && !s.meleeOut) {
+      this.onCue?.('draw', id, 0);
+      // A pair: the second gun clears its holster a beat later.
+      if (def.hold === 'akimbo') this.onCue?.('draw', id, 0.09);
+    }
     if (s.action !== 'reload') return;
     const fresh = this.lastAction !== 'reload';
     if (fresh) this.reloadEmpty = (s.active === 'primary' ? s.primary.mag : s.secondary.mag) === 0;
@@ -956,6 +1175,7 @@ export class PlayerWeapon {
   setVisible(v: boolean): void {
     this.shown = v;
     for (const m of this.models.values()) m.root.visible = v;
+    if (this.offhand) this.offhand.root.visible = v;
     if (this.limbModel) this.limbModel.root.visible = v;
     if (!v) for (const m of this.throwModels.values()) m.root.visible = false;
     if (!v) this.bandageRoll.visible = false;
@@ -964,6 +1184,8 @@ export class PlayerWeapon {
   dispose(): void {
     for (const m of this.models.values()) m.dispose();
     this.models.clear();
+    this.offhand?.dispose();
+    this.offhand = null;
     this.limbModel?.dispose();
     this.limbModel = null;
     for (const m of this.throwModels.values()) m.dispose();
@@ -974,6 +1196,21 @@ export class PlayerWeapon {
   }
 }
 
+/** How far a pistol slide travels back (cycling, and locked open on an empty gun). */
+const SLIDE_TRAVEL = 0.035;
+
+/** Steps a gun's recoil springs (weapon space): kick back, muzzle climb, a little sideways wander. */
+function spring(r: { z: number; vz: number; pitch: number; vp: number; yaw: number; vy: number }, dt: number): void {
+  const subs = Math.min(12, Math.ceil(dt * 120));
+  const h = dt / Math.max(1, subs);
+  for (let i = 0; i < subs; i++) {
+    r.vz += (-90 * r.z - 14 * r.vz) * h; r.z += r.vz * h;
+    r.vp += (-120 * r.pitch - 16 * r.vp) * h; r.pitch += r.vp * h;
+    r.vy += (-100 * r.yaw - 15 * r.vy) * h; r.yaw += r.vy * h;
+  }
+}
+
+const _od = new THREE.Vector3(), _o0 = new THREE.Vector3(), _oy = new THREE.Vector3(0, 1, 0), _om = new THREE.Matrix4();
 const _lp = new THREE.Vector3(), _ld = new THREE.Vector3(), _ka = new THREE.Vector3();
 const _lq = new THREE.Quaternion(), _kq = new THREE.Quaternion();
 const _sd = new THREE.Vector3(), _sp = new THREE.Vector3(), _lv = new THREE.Matrix4();

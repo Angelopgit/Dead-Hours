@@ -103,6 +103,8 @@ export type DebugMsg =
 export interface JoinOptions {
   name: string;
   primary: string;
+  /** The sidearm (SECONDARY_WEAPONS: the M17 or the akimbo pair; anything else gets the M17). */
+  secondary?: string;
   /** encodeAppearance() of the survivor's look; the server sanitizes it and shares it. */
   appearance: string;
   /** The browser's player key (saved profile and leaderboard entries) for guests. */

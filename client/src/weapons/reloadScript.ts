@@ -48,6 +48,15 @@ export const RELOAD_STEPS: Record<string, ReloadStep[]> = {
     { cue: 'magOut', at: 0.15 }, { cue: 'magDrop', at: 0.15, delay: 0.42 }, { cue: 'pouchGrab', at: 0.43 },
     { cue: 'magIn', at: 0.66 }, { cue: 'slide', at: 0.8, only: 'empty' },
   ],
+  // Akimbo M17s (PlayerWeapon AKIMBO_TIMES): both muzzles up and both releases pressed, the empties
+  // land at the feet, each gun pushed down onto a fresh magazine at the belt (right, then left), and
+  // from empty both slides released.
+  akimbo: [
+    { cue: 'magOut', at: 0.12 }, { cue: 'magOut', at: 0.15 },
+    { cue: 'magDrop', at: 0.12, delay: 0.42 }, { cue: 'magDrop', at: 0.15, delay: 0.5 },
+    { cue: 'magIn', at: 0.5 }, { cue: 'magIn', at: 0.62 },
+    { cue: 'slide', at: 0.82, only: 'empty' }, { cue: 'slide', at: 0.86, only: 'empty' },
+  ],
   // M870, per shell: fingers on a shell at the carrier, thumbed into the tube as the hand reaches the port.
   shotgun: [{ cue: 'shellGrab', at: 0.12 }, { cue: 'shellIn', at: 0.5 }],
 };

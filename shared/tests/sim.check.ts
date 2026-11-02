@@ -15,6 +15,7 @@ import {
   VAULT, BLAST, findVault, planVault, vaultAt, porches, packPanes, unpackPanes, WORLD_FILTER,
   BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
   levelStart, owns, runXp, sameBuild, sanitizeBuild, sanitizeLoadout, tunedWeapon, unlockTrack, type WeaponBuild, type WeaponId,
+  SECONDARY_WEAPONS, isHandgun,
 } from '../src/index';
 
 let failures = 0;
@@ -2532,7 +2533,7 @@ section('Progression: XP, unlocks and weapon builds');
   let trips = 0;
   for (let i = 0; i < 200; i++) {
     const l: Partial<Record<WeaponId, WeaponBuild>> = {};
-    for (const id of PRIMARY_WEAPONS.concat('pistol')) {
+    for (const id of PRIMARY_WEAPONS.concat(SECONDARY_WEAPONS)) {
       if (rand() < 0.3) continue;
       const b = {} as WeaponBuild;
       for (const slot of BUILD_SLOTS) {
@@ -2585,6 +2586,60 @@ section('Progression: XP, unlocks and weapon builds');
   const mirror = new Mirror(other, 'p1');
   mirror.apply(snap, 0);
   check(other.players.get('p2')?.arsenal.builds.pistol?.skin === 'olive', 'clients take the builds from snapshots');
+  other.dispose();
+  cleanup(sim, body);
+}
+
+section('Akimbo pistols');
+{
+  check(SECONDARY_WEAPONS.includes('akimbo') && WEAPONS.akimbo.slot === 'secondary' && !EXCLUSIVE_WEAPONS.includes('akimbo'),
+    'the akimbo pair is a loadout sidearm, not a supply-drop exclusive');
+  check(buildable('akimbo') && isHandgun('akimbo') && isHandgun('pistol') && !isHandgun('ar'), 'the pair takes builds and counts as a handgun');
+  check(new Arsenal('ar', 'ar').secondary.id === 'pistol' && new Arsenal('ar', 'nope' as WeaponId).secondary.id === 'pistol', 'anything but a sidearm in the sidearm slot gets the M17');
+  const a = new Arsenal('ar', 'akimbo');
+  const ticks: string[] = [];
+  const stepFor = (s: number) => { for (let i = 0; i < Math.round(s / DT); i++) a.step(DT, false, ticks as never); };
+  check(a.secondary.id === 'akimbo' && a.secondary.mag === 30 && a.secondary.reserve === 90, 'the pair carries 30 in the guns and 90 spare');
+  check(a.switchTo('secondary') && a.weapon.id === 'akimbo', 'switching draws both pistols');
+  stepFor(WEAPONS.akimbo.draw + 0.05);
+  check(a.fireState() === 'ok', 'ready after the draw');
+  a.consume();
+  check(a.fireState() === 'busy' && Math.abs(a.cooldown - 0.1) < 0.025, `the next hand fires 0.1 s later (${a.cooldown.toFixed(3)})`);
+  let shots = 1;
+  for (let i = 0; i < Math.round(1 / DT); i++) {
+    if (a.fireState() === 'ok') { a.consume(); shots++; }
+    a.step(DT, false, ticks as never);
+  }
+  check(shots >= 9 && shots <= 12, `about ten rounds a second between the two guns (${shots})`);
+  check(WEAPONS.akimbo.fireRate >= WEAPONS.pistol.fireRate * 1.5 && WEAPONS.akimbo.hipSpread > WEAPONS.pistol.hipSpread,
+    'faster than one M17 but looser from the hip');
+  a.weapon.mag = 0;
+  check(a.startReload() && Math.abs(a.actionTotal - (WEAPONS.akimbo.reloadTime + 0.35)) < 1e-6, 'an empty pair reloads in 2.4 s plus the chambering');
+  stepFor(a.actionTotal + 0.1);
+  check(a.weapon.mag === 30 && a.weapon.reserve === 60, 'both guns come back full');
+
+  const l50 = { level: 50, entitlements: [] as string[] };
+  const kit: WeaponBuild = { optic: 'acog', muzzle: 'suppressor', grip: 'laser', mag: 'extended', skin: 'gold' };
+  const kept = sanitizeBuild('akimbo', kit, l50);
+  check(sameBuild(kept, kit), 'the pair takes a 3x prism, suppressors, lasers, extended magazines and a gold finish');
+  check(sanitizeBuild('akimbo', { ...kit, optic: 'scope', grip: 'vertical', muzzle: 'choke' }, l50).optic === 'iron', 'no rifle scope on a pistol');
+  check(['iron', 'dot', 'holo', 'acog'].every((o) => fitsOf('akimbo', 'optic').some((f) => f.id === o) && fitsOf('pistol', 'optic').some((f) => f.id === o)),
+    'both handguns fit irons, a red dot, a holographic sight and a 3x prism');
+  check(fitsOf('akimbo', 'skin').length === fitsOf('ar', 'skin').length, 'every finish fits the pair');
+  check(tunedWeapon('akimbo', { ...defaultBuild('akimbo'), mag: 'extended' }).magazine === 45, 'extended magazines hold 45 between them');
+  const back = decodeLoadout(encodeLoadout({ akimbo: kit, pistol: { ...defaultBuild('pistol'), optic: 'holo' } }));
+  check(sameBuild(back.akimbo!, kit) && back.pistol?.optic === 'holo', 'akimbo builds survive the wire format');
+
+  const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
+  const p2 = sim.addPlayer('p2', 'Twin', 'ar', 'akimbo', { x: 1, y: 0.15, z: 6 }, 0, '', { akimbo: kit });
+  check(p2.arsenal.secondary.id === 'akimbo' && p2.arsenal.secondary.mag === 45, 'a survivor joins with the pair and its build');
+  run(sim, 1);
+  const snap = captureSnapshot(sim, new Map());
+  const other = new Simulation({ physics, map, nav, doors, seed: 8, preparation: 600 });
+  const mirror = new Mirror(other, 'p1');
+  mirror.apply(snap, 0);
+  const copy = other.players.get('p2');
+  check(copy?.arsenal.secondary.id === 'akimbo' && sameBuild(copy.arsenal.builds.akimbo!, kit), 'clients see the pair and its build from snapshots');
   other.dispose();
   cleanup(sim, body);
 }

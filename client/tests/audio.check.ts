@@ -20,6 +20,7 @@ import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMec
 import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
 import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings } from '../src/audio/Recordings';
 import { RELOAD_STEPS, dueCues, reloadTimeline } from '../src/weapons/reloadScript';
+import { AKIMBO_TIMES } from '../src/weapons/PlayerWeapon';
 import { MAX_SHOTS, PER_GUN, RESPACE, RESPACE_MAX, ShotVoices, type ShotVoice } from '../src/audio/ShotVoices';
 
 const SR = 44100;
@@ -96,9 +97,11 @@ console.log('Reloads');
 {
   const before = failures;
   // The hand animation's keyframes (PlayerWeapon.leftHand): where the new magazine seats.
-  const SEAT = { rifle: 0.74, pistol: 0.66 };
+  const SEAT = { rifle: 0.74, pistol: 0.66, akimbo: AKIMBO_TIMES.right.seat };
   const HOME: FoleyKind[] = ['bolt', 'charge', 'slap', 'opRod', 'slide'];
-  for (const id of Object.keys(GUN_SOUNDS)) {
+  // Every gun with its own reload (the akimbo pair is voiced as M17s but reloads its own way).
+  const RELOADING = [...Object.keys(GUN_SOUNDS), 'akimbo'];
+  for (const id of RELOADING) {
     const def = WEAPONS[id as keyof typeof WEAPONS];
     const steps = RELOAD_STEPS[id];
     if (!steps?.length) { fail(`${id}: no reload script`); continue; }
@@ -108,13 +111,23 @@ console.log('Reloads');
       continue;
     }
     const seat = steps.find((st) => st.cue === 'magIn');
-    const want = def.hold === 'pistol' ? SEAT.pistol : SEAT.rifle;
+    const want = def.hold === 'pistol' || def.hold === 'akimbo' ? SEAT[def.hold] : SEAT.rifle;
     if (!seat || Math.abs(seat.at - want) > 0.02) fail(`${id}: the magazine seats at ${seat?.at}, the hand pushes it home at ${want}`);
     const empty = reloadTimeline(id, true, def.reloadTime + 0.35).map((c) => c.cue);
     const tactical = reloadTimeline(id, false, def.reloadTime).map((c) => c.cue);
     if (!empty.some((c) => HOME.includes(c))) fail(`${id}: an empty reload never sends the bolt home`);
     if (tactical.some((c) => HOME.includes(c))) fail(`${id}: a reload with a round chambered works the bolt`);
     if (empty.indexOf('magOut') > empty.indexOf('magIn')) fail(`${id}: the magazine goes in before the old one is out`);
+  }
+  // The pair: two magazines out as the muzzles come up, each seated as its gun is pushed onto it, two slides.
+  {
+    const steps = RELOAD_STEPS.akimbo ?? [];
+    const at = (cue: FoleyKind) => steps.filter((st) => st.cue === cue).map((st) => st.at);
+    const near = (a: number[], b: number[]) => a.length === b.length && a.every((x, k) => Math.abs(x - b[k]) <= 0.03);
+    const T = AKIMBO_TIMES;
+    if (!near(at('magOut'), [T.right.drop, T.left.drop])) fail(`akimbo: magazines out at ${at('magOut')}, the guns drop them at ${T.right.drop}, ${T.left.drop}`);
+    if (!near(at('magIn'), [T.right.seat, T.left.seat])) fail(`akimbo: magazines seat at ${at('magIn')}, the guns are pushed home at ${T.right.seat}, ${T.left.seat}`);
+    if (!near(at('slide'), [T.right.slide, T.left.slide])) fail(`akimbo: slides at ${at('slide')}, released at ${T.right.slide}, ${T.left.slide}`);
   }
   // Played out at 60 fps the way PlayerWeapon does: every hit once, within a frame of the script.
   const play = (id: string, empty: boolean, segments: number[]): { cue: FoleyKind; t: number }[] => {
@@ -132,7 +145,7 @@ console.log('Reloads');
     return heard.sort((a, b) => a.t - b.t);
   };
   let played = 0;
-  for (const id of Object.keys(GUN_SOUNDS)) {
+  for (const id of RELOADING) {
     const def = WEAPONS[id as keyof typeof WEAPONS];
     for (const empty of [true, false]) {
       const per = def.reloadTime / def.magazine;
@@ -143,7 +156,7 @@ console.log('Reloads');
       else played++;
     }
   }
-  if (failures === before) ok(`${Object.keys(GUN_SOUNDS).length} reload scripts on their animations, bolts home only from empty; ${played} reloads cue every hit once and on time`);
+  if (failures === before) ok(`${RELOADING.length} reload scripts on their animations, bolts home only from empty; ${played} reloads cue every hit once and on time`);
 }
 
 console.log('Echo');

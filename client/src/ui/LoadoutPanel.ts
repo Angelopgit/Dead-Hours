@@ -74,24 +74,24 @@ export class LoadoutPanel {
     gsap.fromTo(this.el, { opacity: 0 }, { opacity: 1, duration: 0.35 });
   }
 
-  /** Which primary goes into the night with the survivor (the M17 and machete always do). */
+  /** Which primary and which sidearm (the M17 or the akimbo pair) go into the night (the machete always does). */
   private renderCarry(): void {
-    const cur = settings.value.profile.primary;
     const id = this.gunsmith.current;
     const isPrimary = PRIMARY_WEAPONS.includes(id);
+    const profile = settings.value.profile;
+    const cur = isPrimary ? profile.primary : SECONDARY_WEAPONS.includes(profile.secondary as WeaponId) ? profile.secondary : 'pistol';
+    const what = isPrimary ? 'PRIMARY' : 'SIDEARM';
     this.carry.replaceChildren(
       h('span', { class: 'lbl' }, `${WEAPONS[id].name.toUpperCase()} · ${WEAPONS[id].model}`),
-      isPrimary
-        ? h('button', {
-          class: `creator-btn ${cur === id ? 'primary' : ''}`,
-          onclick: () => {
-            if (cur === id) return;
-            audio.ui('click');
-            settings.update((s) => { s.profile.primary = id; });
-            this.renderCarry();
-          },
-        }, cur === id ? 'CARRIED AS PRIMARY' : 'CARRY AS PRIMARY')
-        : h('span', { class: 'lbl' }, 'SIDEARM · ALWAYS CARRIED'),
+      h('button', {
+        class: `creator-btn ${cur === id ? 'primary' : ''}`,
+        onclick: () => {
+          if (cur === id) return;
+          audio.ui('click');
+          settings.update((s) => { if (isPrimary) s.profile.primary = id; else s.profile.secondary = id; });
+          this.renderCarry();
+        },
+      }, cur === id ? `CARRIED AS ${what}` : `CARRY AS ${what}`),
     );
   }
 

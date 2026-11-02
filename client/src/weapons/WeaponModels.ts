@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { SKINS, defaultBuild, encodeBuild, type BuildSlot, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
+import { SKINS, defaultBuild, encodeBuild, isHandgun, type BuildSlot, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
 
 /**
  * A held weapon: merged low-poly parts with vertex colors (a draw call or two each), plus
@@ -62,6 +62,8 @@ const IRONS: Partial<Record<WeaponId, { eye: V3; fov: number }>> = {
   shotgun: { eye: [0, 0.088, -0.26], fov: 50 },
   marksman: { eye: [0, 0.098, -0.15], fov: 50 },
   pistol: { eye: [0, 0.0885, -0.45], fov: 50 },
+  // The pair: the right gun's sights line up with the eye (the left one is held out beside it).
+  akimbo: { eye: [0, 0.0885, -0.45], fov: 50 },
 };
 
 /**
@@ -74,6 +76,7 @@ const RAILS: Partial<Record<WeaponId, { y: number; z: number; riser: number; onA
   shotgun: { y: 0.0775, z: 0.06, riser: 0.008 },
   marksman: { y: 0.08, z: 0.075, riser: 0 },
   pistol: { y: 0.017, z: -0.035, riser: 0, onAction: true },
+  akimbo: { y: 0.017, z: -0.035, riser: 0, onAction: true },
 };
 
 /** Optic heights above the rail (sight line), zoom and kind. */
@@ -82,11 +85,15 @@ const OPTIC_VIEW: Record<string, { h: number; fov: number; optic: Optic }> = {
   holo: { h: 0.032, fov: 44, optic: 'dot' },
   acog: { h: 0.042, fov: 26, optic: 'dot' },
   scope: { h: 0.055, fov: 14, optic: 'scope' },
-  /** The pistol's mini dot. */
+  /** Handgun optics on the slide: mini dot, enclosed compact holographic, compact prism. */
   mini: { h: 0.024, fov: 48, optic: 'dot' },
+  miniHolo: { h: 0.021, fov: 46, optic: 'dot' },
+  miniPrism: { h: 0.026, fov: 30, optic: 'dot' },
 };
 
-const opticKey = (id: WeaponId, optic: string) => (id === 'pistol' && optic === 'dot' ? 'mini' : optic);
+/** Handguns take slide-sized versions of the rail optics. */
+const HANDGUN_OPTIC: Record<string, string> = { dot: 'mini', holo: 'miniHolo', acog: 'miniPrism' };
+const opticKey = (id: WeaponId, optic: string) => (isHandgun(id) ? HANDGUN_OPTIC[optic] ?? optic : optic);
 
 /** Sights of a weapon with a build fitted (null for blades), without building its model. */
 export function sightOf(id: WeaponId, build: WeaponBuild = defaultBuild(id)): Sight | null {
@@ -641,7 +648,7 @@ function hockey(): Spec {
   };
 }
 
-const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith,
+const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, akimbo: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith,
   katana, katanas: katana, bat, crowbar, wrench, hockey,
 };
 
@@ -692,6 +699,31 @@ function optic(b: Builder, kind: string, y: number, z: number, riser: number): v
         .tube(0.026, z + 0.085, z + 0.135, 0x111214, 0, y + 0.055, 10, 0.033)
         .box(0.025, 0.04, 0.02, BLACK, 0, y + 0.02, z - 0.075)
         .box(0.025, 0.04, 0.02, BLACK, 0, y + 0.02, z + 0.055);
+      break;
+    case 'miniHolo': {
+      // Enclosed compact holographic: a squared-off hood over a short base, the ring reticle in the window.
+      b.box(0.026, 0.008, 0.042, BLACK, 0, y + 0.004, z)
+        .box(0.004, 0.028, 0.042, DARK, 0.013, y + 0.021, z)
+        .box(0.004, 0.028, 0.042, DARK, -0.013, y + 0.021, z)
+        .box(0.03, 0.005, 0.042, DARK, 0, y + 0.0355, z)
+        .box(0.008, 0.012, 0.012, BLACK, 0.017, y + 0.024, z - 0.008);
+      const r = 0.0045, h = y + 0.021, gz = z + 0.012;
+      b.glow(0.0013, 0.0013, 0.0008, 0xff3020, 0, h, gz);
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        b.glow(0.0011, 0.0011, 0.0008, 0xff3020, Math.cos(a) * r, h + Math.sin(a) * r, gz);
+      }
+      break;
+    }
+    case 'miniPrism':
+      // Compact prism: a short open tube on a low mount, a lit chevron inside.
+      b.box(0.022, 0.01, 0.04, BLACK, 0, y + 0.005, z)
+        .box(0.012, 0.006, 0.03, BLACK, 0, y + 0.012, z)
+        .ring(0.0105, 0.003, z - 0.03, z + 0.022, DARK, 0, y + 0.026, 12)
+        .ring(0.0135, 0.0025, z + 0.022, z + 0.044, DARK, 0, y + 0.026, 12)
+        .box(0.008, 0.005, 0.026, 0x2e3a24, 0, y + 0.041, z)
+        .glow(0.0012, 0.0024, 0.0008, 0xff4a1a, 0, y + 0.0245, z + 0.004)
+        .glow(0.0024, 0.0011, 0.0008, 0xff4a1a, 0, y + 0.026, z + 0.004);
       break;
     case 'mini':
       // Pistol dot: a small open window on the slide.
@@ -766,7 +798,7 @@ export function createWeaponModel(id: WeaponId, build: WeaponBuild = defaultBuil
     points.optic = new THREE.Vector3(base[0], base[1] + rail.y + rail.riser + 0.03, base[2] + rail.z);
   }
   points.muzzle = v(spec.muzzle);
-  muzzle[2] += muzzleDevice(body, build.muzzle, spec.muzzle, id === 'pistol');
+  muzzle[2] += muzzleDevice(body, build.muzzle, spec.muzzle, isHandgun(id));
   if (spec.under) {
     const hand = underbarrel(body, build.grip, spec.under, spec.fore);
     if (hand) fore.splice(0, 3, ...hand);
@@ -788,7 +820,7 @@ export function createWeaponModel(id: WeaponId, build: WeaponBuild = defaultBuil
     spec.mag.b.box(0.012, 0.022, 0.012, 0xb8401c, 0, box.min.y - 0.009, (box.min.z + box.max.z) / 2);
   }
   points.mag = spec.mag ? v(spec.mag.at).add(new THREE.Vector3(0, -0.07, 0)) : spec.under ? v(spec.under).add(new THREE.Vector3(0, -0.02, 0.12)) : v(spec.fore);
-  points.skin = id === 'pistol' ? new THREE.Vector3(0, -0.02, 0.045) : v(spec.stock).add(new THREE.Vector3(0, 0, 0.08));
+  points.skin = isHandgun(id) ? new THREE.Vector3(0, -0.02, 0.045) : v(spec.stock).add(new THREE.Vector3(0, 0, 0.08));
 
   const root = new THREE.Group();
   root.name = `weapon:${id}`;

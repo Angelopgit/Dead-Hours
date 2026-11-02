@@ -1,5 +1,5 @@
 import {
-  PRIMARY_WEAPONS, decodeAppearance, decodeLoadout, encodeAppearance, encodeLoadout, sanitizeLoadout, type Loadout, type UnlockState, type WeaponId,
+  PRIMARY_WEAPONS, SECONDARY_WEAPONS, decodeAppearance, decodeLoadout, encodeAppearance, encodeLoadout, sanitizeLoadout, type Loadout, type UnlockState, type WeaponId,
 } from '@dead-hours/shared';
 
 /** A display name: printable, single-spaced, at most 20 characters ('' when nothing is left). */
@@ -16,6 +16,10 @@ export function cleanAppearance(v: unknown): string {
 
 export function cleanPrimary(v: unknown): WeaponId {
   return PRIMARY_WEAPONS.includes(v as WeaponId) ? (v as WeaponId) : 'ar';
+}
+
+export function cleanSecondary(v: unknown): WeaponId {
+  return SECONDARY_WEAPONS.includes(v as WeaponId) ? (v as WeaponId) : 'pistol';
 }
 
 /** A browser's player key: random letters made by the client. */

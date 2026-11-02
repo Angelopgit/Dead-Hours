@@ -8,7 +8,7 @@ import {
 import { Night } from '../game/Night';
 import { claimCode, releaseCode, renewCode } from '../net/codes';
 import { resolveOwner, type Owner } from '../net/auth';
-import { cleanAppearance, cleanBuilds, cleanName, cleanPrimary } from '../net/clean';
+import { cleanAppearance, cleanBuilds, cleanName, cleanPrimary, cleanSecondary } from '../net/clean';
 import { iceConfig } from '../net/ice';
 import { Bucket } from '../net/limit';
 import { gameClosed, gameOpened } from '../net/scale';
@@ -21,6 +21,7 @@ interface Member {
   pid: string;
   name: string;
   primary: WeaponId;
+  secondary: WeaponId;
   appearance: string;
   /** The profile their runs count for: the signed-in account's, else the browser key's (null: not recorded). */
   owner: string | null;
@@ -208,6 +209,7 @@ export class SurvivalRoom extends Room {
       pid,
       name: cleanName(o.name) || 'Survivor',
       primary: cleanPrimary(o.primary),
+      secondary: cleanSecondary(o.secondary),
       appearance: cleanAppearance(o.appearance),
       owner: who?.owner ?? null,
       signedIn: !!who?.account,

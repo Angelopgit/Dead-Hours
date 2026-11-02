@@ -1,6 +1,6 @@
 export type WeaponSlot = 'primary' | 'secondary' | 'melee';
 export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper'
-  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith' | 'katanas';
+  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith' | 'katanas' | 'akimbo';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -22,7 +22,7 @@ export interface WeaponDef {
   range: number;
   auto: boolean;
   /** HUD fire mode label. */
-  mode: 'AUTO' | 'SEMI' | 'PUMP' | 'MELEE';
+  mode: 'AUTO' | 'SEMI' | 'PUMP' | 'MELEE' | 'DUAL';
   /** Zombies hear the shot within this many meters. */
   noise: number;
   /** Seconds to draw the weapon. */
@@ -39,8 +39,8 @@ export interface WeaponDef {
   exclusive?: boolean;
   /** Fires a rocket: it goes off where it hits (a grenade's blast, see BLAST), after `damage` to whatever it struck. */
   explosive?: boolean;
-  /** How the model is held: two-handed long gun, pistol, or blade. */
-  hold: 'rifle' | 'pistol' | 'melee';
+  /** How the model is held: two-handed long gun, pistol, a pistol in each hand, or blade. */
+  hold: 'rifle' | 'pistol' | 'akimbo' | 'melee';
   /** 0..1 summary bars for the loadout screen. */
   stats: { damage: number; fireRate: number; handling: number; range: number };
 }
@@ -95,6 +95,16 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     hipSpread: 2.2, aimSpread: 0.8, recoil: 0.5, range: 50, auto: false,
     mode: 'SEMI', noise: 50, draw: 0.35, penetration: 0, maxReserve: 105, hold: 'pistol',
     stats: { damage: 0.4, fireRate: 0.5, handling: 0.85, range: 0.45 },
+  },
+  // Two M17s, one in each hand. One trigger pull fires the next gun in turn (right, left, right...),
+  // so the pair puts rounds out twice as fast as one; the magazine is both guns' rounds together.
+  akimbo: {
+    id: 'akimbo', name: 'Akimbo Pistols', model: 'AKIMBO M17', slot: 'secondary',
+    description: 'An M17 in each hand, fired in turn: twice the rounds and twice the rate, looser groups and a slower two-gun reload.',
+    damage: 24, pellets: 1, fireRate: 600, magazine: 30, startReserve: 90, reloadTime: 2.4,
+    hipSpread: 3.0, aimSpread: 1.15, recoil: 0.42, range: 45, auto: false,
+    mode: 'DUAL', noise: 52, draw: 0.55, penetration: 0, maxReserve: 150, hold: 'akimbo',
+    stats: { damage: 0.4, fireRate: 0.8, handling: 0.6, range: 0.4 },
   },
   machete: {
     id: 'machete', name: 'Machete', model: 'Machete', slot: 'melee',
@@ -156,9 +166,13 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 
 
 export const PRIMARY_WEAPONS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman'];
-export const SECONDARY_WEAPONS: WeaponId[] = ['pistol'];
+/** Sidearms: one is carried (picked in the armory). */
+export const SECONDARY_WEAPONS: WeaponId[] = ['pistol', 'akimbo'];
 /** Primaries that only come out of supply drops. */
 export const EXCLUSIVE_WEAPONS: WeaponId[] = ['lmg', 'battle', 'sniper', 'rpg', 'wraith'];
+
+/** Handguns (one or a pair): the M17's sights, optics and fittings. */
+export const isHandgun = (id: WeaponId): boolean => WEAPONS[id]?.hold === 'pistol' || WEAPONS[id]?.hold === 'akimbo';
 
 /** Hit zones on a zombie and their damage multipliers. */
 export type HitZone = 'head' | 'torso' | 'armL' | 'armR' | 'legL' | 'legR';

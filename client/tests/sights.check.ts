@@ -13,7 +13,7 @@
  * and women, bare hands and bulky gloves and sleeves, looking level, down and up.
  */
 import * as THREE from 'three';
-import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, WEAPONS, buildable, defaultBuild, fitsOf, type Appearance, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
+import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, WEAPONS, buildable, defaultBuild, fitsOf, isHandgun, type Appearance, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
 import { Humanoid, survivorLook } from '../src/characters/Humanoid';
 import { PlayerWeapon, type HeldState } from '../src/weapons/PlayerWeapon';
 import { ThirdPersonCamera } from '../src/gameplay/ThirdPersonCamera';
@@ -67,7 +67,7 @@ const PITCHES = [0, -0.6, 0.5];
 
 type Case = { id: WeaponId; build: WeaponBuild; label: string };
 const CASES: Case[] = [];
-for (const id of ['ar', 'smg', 'shotgun', 'marksman', 'pistol'] as WeaponId[]) {
+for (const id of ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'akimbo'] as WeaponId[]) {
   for (const optic of fitsOf(id, 'optic')) {
     for (const grip of fitsOf(id, 'grip')) {
       CASES.push({ id, build: { ...defaultBuild(id), optic: optic.id, grip: grip.id }, label: `${id} ${optic.id}${grip.id !== 'none' ? ` + ${grip.id} grip` : ''}` });
@@ -171,8 +171,10 @@ function boneTags(mesh: THREE.SkinnedMesh): Uint8Array {
   for (let t = 0; t < count; t++) out[t] = si.getX(idx ? idx.getX(t * 3) : t * 3);
   return out;
 }
-/** Map letters per bone (BONE order in rig.ts): hips, spine, head, left arm upper/lower, right arm upper/lower, legs. */
-const BONE_CH = 'tsHlLrRgggg';
+/** Map letters per bone (BONE order in rig.ts): hips, spine, head, left arm upper/lower, right arm upper/lower, legs; O the left gun of a pair. */
+const BONE_CH = 'tsHlLrRggggO';
+/** Tag of the left gun of an akimbo pair: it must stay out of the right gun's sight picture like a hand. */
+const OFFHAND_TAG = 11;
 
 /** World-space triangle soup of a mesh (skinned meshes posed as they are now). */
 function triangles(mesh: THREE.Mesh): Float32Array {
@@ -194,7 +196,7 @@ function triangles(mesh: THREE.Mesh): Float32Array {
   return out;
 }
 
-interface Pose { body: Float32Array; tags: Uint8Array; gun: Float32Array[]; scoped: boolean; handgun: boolean; camera: THREE.PerspectiveCamera }
+interface Pose { body: Float32Array; tags: Uint8Array; gun: Float32Array[]; offhand: Float32Array[]; scoped: boolean; handgun: boolean; camera: THREE.PerspectiveCamera }
 interface Seen { window: number; above: number; nearest: number; gunAtEye: number; map: string }
 
 /** Aims for a second and a half at 60 fps (everything settles) and takes the final pose. */
@@ -229,7 +231,10 @@ function aim(c: Case, look: Appearance, pitch: number): Pose {
   const scoped = model().sight?.optic === 'scope';
   const gun: Float32Array[] = [];
   if (!scoped) model().root.traverse((o) => { if ((o as THREE.Mesh).isMesh) gun.push(triangles(o as THREE.Mesh)); });
-  const pose = { body: triangles(h.mesh), tags: boneTags(h.mesh), gun, scoped, handgun: WEAPONS[c.id].hold === 'pistol', camera: camera.clone() };
+  // The left gun of a pair counts as an obstruction: only the right gun's sights are looked down.
+  const offhand: Float32Array[] = [];
+  weapon.offhandModel?.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) offhand.push(triangles(o as THREE.Mesh)); });
+  const pose = { body: triangles(h.mesh), tags: boneTags(h.mesh), gun, offhand, scoped, handgun: isHandgun(c.id), camera: camera.clone() };
   weapon.dispose();
   return pose;
 }
@@ -244,6 +249,7 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
   const W = Math.round(ROWS * aspect);
   const body = new Depth(W, ROWS);
   body.draw(p.body, vp, true, p.tags);
+  for (const g of p.offhand) body.draw(g, vp, false, new Uint8Array(g.length / 9).fill(OFFHAND_TAG));
   const gun = new Depth(W, ROWS);
   for (const g of p.gun) gun.draw(g, vp, false);
   const R = p.scoped ? LENS : WINDOW;

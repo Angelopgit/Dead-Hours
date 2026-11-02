@@ -12,6 +12,11 @@ import { RECORDED_FILES } from './recordedFiles';
 import { weather } from '../environment/Weather';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
+/** Guns voiced by another's sounds: the akimbo pair is two M17s. */
+const SOUND_OF: Record<string, string> = { akimbo: 'pistol' };
+/** The GUN_SOUNDS / recordings entry a weapon is heard as ('ar' for anything unknown). */
+const soundOf = (weapon: string): string => (GUN_SOUNDS[weapon] ? weapon : SOUND_OF[weapon] ?? 'ar');
+
 const SHOT_TAKES = 4;
 const FOLEY_TAKES = 2;
 /** Takes rendered of each melee weapon's swing, blow (light and heavy each) and pickup. */
@@ -1262,7 +1267,7 @@ export class AudioEngine {
   gunshot(weapon: string, position: THREE.Vector3, local: boolean, bullets?: Vec3[], suppressed = false, owner?: string): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
-    const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
+    const id = soundOf(weapon);
     const gun = GUN_SOUNDS[id];
     const L = this.listenerPos;
     const here = this.here;
@@ -1433,7 +1438,7 @@ export class AudioEngine {
     // A dropped magazine lands at the feet, about 1.1 m under the hand.
     const at = kind === 'magDrop' ? _foleyAt.set(position.x, position.y - 1.1, position.z) : position;
     if (!own && at.distanceTo(this.listenerPos) > FOLEY_RANGE) return;
-    const id = GUN_SOUNDS[weapon] ? weapon : 'ar';
+    const id = soundOf(weapon);
     const voice = RECORDED_HANDLING[id]?.[kind];
     const take = voice ? this.recording(voice.set) : null;
     const buffer = take ?? this.foleyBuffer(kind, id, Math.floor(Math.random() * FOLEY_TAKES));
