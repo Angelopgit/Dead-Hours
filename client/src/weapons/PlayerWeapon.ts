@@ -101,6 +101,26 @@ const KATANA_SWING: Key[] = [
   { t: 1, at: [-0.06, 0.24, 0.26], rot: [-0.55, 0.05, 0], twist: 0 },
 ];
 
+/**
+ * Dual katanas, the right blade's cut (one hand): held low and out in a guard, flicked up over
+ * the shoulder and drawn hard across. The left blade cuts the mirror of it, the two in turn.
+ */
+const DUAL_SWING: Key[] = [
+  { t: 0, at: [-0.22, 0.18, 0.26], rot: [0.1, -0.25, 0], twist: 0 },
+  { t: 0.22, at: [-0.32, 0.56, 0.02], rot: [-2.2, 0.4, 0.1], twist: -0.4 },
+  { t: 0.34, at: [0.02, 0.32, 0.46], rot: [0.2, 0.95, 1.3], twist: 0.45 },
+  { t: 0.55, at: [0.22, 0.1, 0.28], rot: [1.0, 1.15, 1.35], twist: 0.4 },
+  { t: 1, at: [-0.22, 0.18, 0.26], rot: [0.1, -0.25, 0], twist: 0 },
+];
+/** The same moves for the other hand: across the body's middle the other way. */
+const mirrorKeys = (keys: Key[]): Key[] => keys.map((k) => ({
+  t: k.t, at: [-k.at[0], k.at[1], k.at[2]], rot: [k.rot[0], -k.rot[1], -k.rot[2]], twist: -k.twist,
+}));
+const DUAL_SWING_L = mirrorKeys(DUAL_SWING);
+/** The blade not cutting waits in guard. */
+const DUAL_GUARD_R: Key[] = [DUAL_SWING[0], { ...DUAL_SWING[0], t: 1 }];
+const DUAL_GUARD_L = mirrorKeys(DUAL_GUARD_R);
+
 /** Crowbar and wrench: one hand, raised high behind the head, brought straight down. */
 const TOOL_SWING: Key[] = [
   { t: 0, at: [-0.2, 0.25, 0.14], rot: [0.55, 0, 0], twist: 0 },
@@ -136,6 +156,8 @@ const STYLES: Record<MeleeStyle, { keys: Key[]; impact: number; twoHands: boolea
   katana: { keys: KATANA_SWING, impact: 0.28, twoHands: true, holster: 'blade' },
   club: { keys: CLUB_SWING, impact: LIMBS.windup / LIMBS.duration, twoHands: true, holster: 'blade' },
   tool: { keys: TOOL_SWING, impact: 0.3, twoHands: false, holster: 'hip' },
+  // A blade in each hand: the gun is put away and both are out for the swing.
+  dual: { keys: DUAL_SWING, impact: 0.3, twoHands: true, holster: 'blade' },
 };
 
 /** Swing progress 0..1 to keyframe time, so the weapon's impact key lands on its windup. */
@@ -181,6 +203,8 @@ const HOLSTERS = {
   hip: { pos: new THREE.Vector3(0.19, 0.05, -0.08), quat: basis([0.08, -0.9, -0.42], [1, 0, 0]) },
   /** Long melee weapons across the back the other way from a slung rifle, grip over the left shoulder. */
   blade: { pos: new THREE.Vector3(-0.1, 0.4, -0.24), quat: basis([0.42, -0.9, 0], [0, 0, -1]) },
+  /** The second of a pair of katanas, crossed over the first (grip over the other shoulder). */
+  blade2: { pos: new THREE.Vector3(0.1, 0.4, -0.25), quat: basis([-0.42, -0.9, 0], [0, 0, -1]) },
 };
 
 const smooth = (t: number) => t * t * (3 - 2 * t);
@@ -204,6 +228,8 @@ export class PlayerWeapon {
   /** The gun put away for a two-handed swing (katana, bat, hockey stick). */
   private meleeTwoW = 0;
   private meleeShown: MeleeId = 'machete';
+  /** Dual katanas: the left blade cuts this swing (they take turns). */
+  private dualLeft = true;
   private stowW = 0;
   private raised = 0;
   private readonly recoil = { z: 0, vz: 0, pitch: 0, vp: 0, yaw: 0, vy: 0 };
@@ -427,15 +453,25 @@ export class PlayerWeapon {
     this.syncLimb(limb);
     const meleeId = this.meleeOf(s);
     if (meleeId !== this.meleeShown) {
-      const old = this.models.get(this.meleeShown);
-      if (old && this.meleeShown !== 'machete') {
+      // Put away what was carried (a pair's second blade is the 'katana' model: kept if one stays).
+      const gone: MeleeId[] = this.meleeShown === 'katanas' ? ['katanas', 'katana'] : [this.meleeShown];
+      for (const id of gone) {
+        const old = this.models.get(id);
+        if (!old || id === 'machete' || id === meleeId || (id === 'katana' && meleeId === 'katanas')) continue;
         old.dispose();
-        this.models.delete(this.meleeShown);
+        this.models.delete(id);
       }
       this.meleeShown = meleeId;
     }
     const meleeModel = this.ensure(meleeId);
     const style = STYLES[MELEE[meleeId].style];
+    const dual = meleeId === 'katanas';
+    // The off hand's blade of a pair.
+    const offModel = dual ? this.ensure('katana') : null;
+    // Each new swing of a pair is cut by the other hand.
+    if (dual && s.action === 'melee' && s.meleeWith !== 'limb' && (this.lastAction !== 'melee' || 1 - s.actionT / Math.max(0.01, s.actionTotal) < this.lastProgress - 0.3)) {
+      this.dualLeft = !this.dualLeft;
+    }
 
     // Blend weights.
     const ease = (cur: number, target: number, rate: number) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
@@ -562,7 +598,20 @@ export class PlayerWeapon {
     const spare = this.models.get('machete');
     if (spare && spare !== meleeModel) spare.root.visible = false;
     meleeModel.root.visible = this.shown;
-    if (s.action === 'melee' && !clubbing) {
+    if (offModel) offModel.root.visible = this.shown;
+    if (s.action === 'melee' && !clubbing && offModel) {
+      // A blade in each hand: one cuts while the other waits in guard; each hand on its own grip.
+      const t = swingClock(progress, meleeId);
+      this.keyPose(this.dualLeft ? DUAL_GUARD_R : DUAL_SWING, t, meleeModel.root.position, meleeModel.root.quaternion);
+      this.keyPose(this.dualLeft ? DUAL_SWING_L : DUAL_GUARD_L, t, offModel.root.position, offModel.root.quaternion);
+      meleeModel.root.updateMatrixWorld(true);
+      offModel.root.updateMatrixWorld(true);
+      meleeModel.root.localToWorld(this.rightTarget.set(0, 0, 0));
+      offModel.root.localToWorld(this.leftTarget.set(0, 0, 0));
+      this.poleR.set(-0.8, -0.4, -0.4).transformDirection(spineM);
+      this.poleL.set(0.8, -0.4, -0.4).transformDirection(spineM);
+      leftW = 1;
+    } else if (s.action === 'melee' && !clubbing) {
       this.keyPose(style.keys, swingClock(progress, meleeId), meleeModel.root.position, meleeModel.root.quaternion);
       meleeModel.root.updateMatrixWorld(true);
       meleeModel.root.localToWorld(this.rightTarget.set(0, 0, 0));
@@ -576,6 +625,11 @@ export class PlayerWeapon {
     } else {
       this.holsterPose(style.holster, meleeModel.root.position, meleeModel.root.quaternion);
       meleeModel.root.updateMatrixWorld(true);
+      if (offModel) {
+        // Crossed on the back.
+        this.holsterPose('blade2', offModel.root.position, offModel.root.quaternion);
+        offModel.root.updateMatrixWorld(true);
+      }
     }
     if (s.action === 'bandage') {
       // Wrap the left forearm: left arm across the chest, right hand circling it.
@@ -725,10 +779,10 @@ export class PlayerWeapon {
 
   private holsterPose(kind: keyof typeof HOLSTERS, pos: THREE.Vector3, q: THREE.Quaternion): void {
     const h = HOLSTERS[kind];
-    const bone = kind === 'back' || kind === 'blade' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : this.body.hips;
+    const bone = kind === 'back' || kind === 'blade' || kind === 'blade2' ? this.body.spine : kind === 'thigh' ? this.body.legR.upper : this.body.hips;
     pos.copy(h.pos);
     // A rifle slung over a backpack rides on top of it.
-    if (kind === 'back' || kind === 'blade') pos.z -= this.body.backDepth;
+    if (kind === 'back' || kind === 'blade' || kind === 'blade2') pos.z -= this.body.backDepth;
     bone.localToWorld(pos);
     bone.getWorldQuaternion(q).multiply(h.quat);
   }
@@ -738,7 +792,7 @@ export class PlayerWeapon {
     const club = s.meleeWith === 'limb';
     const p = THREE.MathUtils.clamp(1 - s.actionT / s.actionTotal, 0, 1);
     const id = this.meleeOf(s);
-    const keys = club ? LIMB_SWING : STYLES[MELEE[id].style].keys;
+    const keys = club ? LIMB_SWING : id === 'katanas' && this.dualLeft ? DUAL_SWING_L : STYLES[MELEE[id].style].keys;
     const t = club ? p * LIMBS.duration : swingClock(p, id);
     for (let i = 1; i < keys.length; i++) {
       if (t <= keys[i].t) {

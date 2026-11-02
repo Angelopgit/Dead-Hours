@@ -1,6 +1,6 @@
 export type WeaponSlot = 'primary' | 'secondary' | 'melee';
 export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper'
-  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith';
+  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith' | 'katanas';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -151,6 +151,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   crowbar: found('crowbar', 'Crowbar', 'Cast iron. Caves skulls in.', { damage: 0.7, fireRate: 0.25, handling: 0.6, range: 0.07 }),
   wrench: found('wrench', 'Pipe Wrench', 'Short and quick, devastating to the head.', { damage: 0.55, fireRate: 0.35, handling: 0.8, range: 0.05 }),
   hockey: found('hockey', 'Hockey Stick', 'Longest reach: sweeps the dead off their feet.', { damage: 0.45, fireRate: 0.3, handling: 0.7, range: 0.12 }),
+  katanas: found('katanas', 'Dual Katanas', 'A blade in each hand, cutting in turn: fast, wide and merciless.', { damage: 0.8, fireRate: 0.5, handling: 0.8, range: 0.1 }),
 };
 
 

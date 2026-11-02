@@ -642,7 +642,7 @@ function hockey(): Spec {
 }
 
 const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith,
-  katana, bat, crowbar, wrench, hockey,
+  katana, katanas: katana, bat, crowbar, wrench, hockey,
 };
 
 const v = (a: V3) => new THREE.Vector3(...a);

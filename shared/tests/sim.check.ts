@@ -2226,6 +2226,71 @@ section('Found melee weapons');
   check(theirs.length === sim.placedMelee.length && theirs.every((it) => isMelee(it.weapon!) && sim.interactables[it.id].weapon === it.weapon), 'the weapons on the floor show on every screen');
   copy.dispose();
 
+  // Dual katanas: a second katana goes in the other hand.
+  {
+    for (const zz of [...sim.zombies]) zz.removeBody();
+    sim.zombies.length = 0;
+    sp.arsenal.meleeId = 'katana';
+    const [k1, k2, k3] = sim.placedMelee;
+    k1.weapon = k2.weapon = 'katana';
+    k3.weapon = 'bat';
+    const n0 = sim.placedMelee.length;
+    standBy(k1);
+    sim.drain();
+    check(sim.use('p1', k1.id) && sp.arsenal.meleeId === 'katanas' && k1.supply === 0, 'a second katana picked up: one in each hand');
+    let dev = sim.drain();
+    check(dev.some((e) => e.type === 'meleeTaken' && e.weapon === 'katanas' && e.swapped === null) && sim.placedMelee.length === n0 - 1, 'nothing is left behind for it (the first katana stays in the other hand)');
+    standBy(k2);
+    check(!sim.use('p1', k2.id) && k2.supply === 1 && sp.arsenal.meleeId === 'katanas', 'a third katana is refused: both hands are full');
+    check(sim.drain().some((e) => e.type === 'notice' && /BOTH HANDS/.test(e.text)), 'and the survivor is told why');
+    sim.setMotion('p1', { pos: standAt });
+    body.moveTo(standAt);
+    run(sim, 0.8);
+    const d = swingWith('katanas', 'walker');
+    const dh = d.got.find((e) => e.type === 'zombieHit');
+    check(d.ok && Math.abs(d.dealt - MELEE.katanas.damage) < 0.5 && !!dh && dh.type === 'zombieHit' && dh.weapon === 'katanas', `each cut of the pair deals ${MELEE.katanas.damage} and is reported as the katanas`);
+    check(MELEE.katanas.duration < MELEE.katana.duration && MELEE.katanas.windup < MELEE.katana.windup && MELEE.katanas.arc > MELEE.katana.arc, 'the pair cuts quicker and wider than one katana');
+    const dc = swingWith('katanas', 'brute', 'armL');
+    check(dc.got.some((e) => e.type === 'limbSevered' && e.melee) && dc.zz.arms.armL !== 'intact', 'one cut of the pair takes a brute\'s arm off');
+    // Online.
+    const snap2 = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+    const copy2 = new Simulation({ physics, map, nav, doors, seed: 3 });
+    new Mirror(copy2, 'someone-else').apply(snap2, 10);
+    check(copy2.players.get('p1')?.arsenal.meleeId === 'katanas', 'a remote survivor\'s copy holds both katanas');
+    copy2.dispose();
+    // Swapping the pair for another weapon puts both katanas down where it lay.
+    for (const zz of [...sim.zombies]) zz.removeBody();
+    sim.zombies.length = 0;
+    sp.arsenal.meleeId = 'katanas';
+    const n1 = sim.placedMelee.length;
+    standBy(k3);
+    sim.drain();
+    check(sim.use('p1', k3.id) && sp.arsenal.meleeId === 'bat', 'the pair swapped for a bat');
+    dev = sim.drain();
+    const laid = sim.placedMelee.filter((it) => it.weapon === 'katana' && Math.hypot(it.pos.x - k3.pos.x, it.pos.z - k3.pos.z) < 1.2 && it.id > k3.id);
+    check(laid.length === 2 && sim.placedMelee.length === n1 + 1 && dev.some((e) => e.type === 'meleeTaken' && e.swapped === 'katanas'), 'both katanas are left side by side where the bat lay');
+    // Some katanas turn up as a pair.
+    const saved = sim.placedMelee;
+    for (const it of saved) it.supply = 0;
+    let pairs = 0, apart = true;
+    for (let i = 0; i < 60; i++) {
+      for (const it of sim.placedMelee) it.supply = 0;
+      sim.placeMelee(false, 'katana');
+      const now = sim.placedMelee;
+      if (now.length === 2) {
+        pairs++;
+        apart &&= now.every((it) => it.weapon === 'katana' && it.room === now[0].room) && Math.hypot(now[0].pos.x - now[1].pos.x, now[0].pos.z - now[1].pos.z) < 1.2;
+      }
+    }
+    for (const it of sim.placedMelee) it.supply = 0;
+    for (const it of saved) it.supply = 1;
+    check(pairs > 10 && pairs < 45 && apart, `a katana now and then lies with its pair beside it (${pairs} of 60)`);
+    sp.arsenal.meleeId = 'hockey';
+    sim.setMotion('p1', { pos: standAt });
+    body.moveTo(standAt);
+    run(sim, 0.1);
+  }
+
   // Dying leaves it on the floor.
   for (const zz of [...sim.zombies]) zz.removeBody();
   sim.zombies.length = 0;

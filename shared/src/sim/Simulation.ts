@@ -1651,9 +1651,30 @@ export class Simulation {
       const pool = room.walled > 0 && tries < 16 ? room.walled : room.nodes.length;
       const pos = this.nav.nodePos(room.nodes[Math.floor(this.pickRand() * pool)]);
       if (placed.some((it) => Math.hypot(it.pos.x - pos.x, it.pos.z - pos.z) < 1.2 && Math.abs(it.pos.y - P.lift - pos.y) < 1)) continue;
-      return this.layMelee(id, pos, room.key);
+      const it = this.layMelee(id, pos, room.key);
+      // Sometimes a katana has its pair beside it: pick up both and fight with one in each hand.
+      if (id === 'katana' && placed.length + 1 < P.maxPlaced && this.pickRand() < P.pairChance) {
+        const near = room.nodes.filter((n) => {
+          const d = Math.hypot(this.nav.nodeX(n) - pos.x, this.nav.nodeZ(n) - pos.z);
+          return d > 0.4 && d < 1.1 && Math.abs(this.nav.nodeY[n] - pos.y) < 0.2;
+        });
+        if (near.length) this.layMelee('katana', this.nav.nodePos(near[Math.floor(this.pickRand() * near.length)]), room.key);
+      }
+      return it;
     }
     return null;
+  }
+
+  /** Lays a carried weapon down at `floor`; a pair of katanas goes down as two, side by side. */
+  private layCarried(weapon: MeleeId, floor: Vec3, room?: string): void {
+    if (weapon !== 'katanas') {
+      this.layMelee(weapon, floor, room);
+      return;
+    }
+    this.layMelee('katana', floor, room);
+    const n = this.nav.nodeAt(floor.x + 0.6, floor.y + 0.1, floor.z, 0.8);
+    const beside = n >= 0 && Math.abs(this.nav.nodeY[n] - floor.y) < 0.3 ? this.nav.nodePos(n) : { x: floor.x + 0.3, y: floor.y, z: floor.z + 0.3 };
+    this.layMelee('katana', beside, room);
   }
 
   /** A found weapon lying at `floor` (its reach point sits a little above it). */
@@ -1671,18 +1692,24 @@ export class Simulation {
     const a = p.arsenal;
     const weapon = it.weapon;
     if (it.supply <= 0 || !weapon || !isMelee(weapon) || a.action === 'melee' || a.action === 'bandage') return false;
-    if (a.meleeId === weapon) {
+    if (a.meleeId === 'katanas' && weapon === 'katana') {
+      this.emit({ type: 'notice', player: p.id, text: 'BOTH HANDS ALREADY HOLD A KATANA' });
+      return false;
+    }
+    if (a.meleeId === weapon && weapon !== 'katana') {
       this.emit({ type: 'notice', player: p.id, text: `YOU ALREADY CARRY A ${WEAPONS[weapon].model}` });
       return false;
     }
-    const swapped = a.meleeId === 'machete' ? null : a.meleeId;
+    // A second katana goes in the other hand.
+    const next: MeleeId = weapon === 'katana' && a.meleeId === 'katana' ? 'katanas' : weapon;
+    const swapped = a.meleeId === 'machete' || next === 'katanas' ? null : a.meleeId;
     it.supply = 0;
-    a.meleeId = weapon;
+    a.meleeId = next;
     const floor = { x: it.pos.x, y: it.pos.y - MELEE_PICKUPS.lift, z: it.pos.z };
-    if (swapped) this.layMelee(swapped, floor, it.room);
+    if (swapped) this.layCarried(swapped, floor, it.room);
     else this.pickupTaken();
-    this.emit({ type: 'meleeTaken', player: p.id, item: it.id, weapon, swapped, pos: floor });
-    this.emit({ type: 'pickup', player: p.id, item: 'weapon', amount: 1, source: it.id, weapon });
+    this.emit({ type: 'meleeTaken', player: p.id, item: it.id, weapon: next, swapped, pos: floor });
+    this.emit({ type: 'pickup', player: p.id, item: 'weapon', amount: 1, source: it.id, weapon: next });
     return true;
   }
 
@@ -1693,7 +1720,7 @@ export class Simulation {
     const m = p.motion.pos;
     const n = this.nav.nodeAt(m.x, m.y + 0.1, m.z, 1.5);
     const floor = n >= 0 ? this.nav.nodePos(n) : { x: m.x, y: m.y, z: m.z };
-    this.layMelee(a.meleeId, floor);
+    this.layCarried(a.meleeId, floor);
     a.meleeId = 'machete';
   }
 

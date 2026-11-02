@@ -75,6 +75,12 @@ const VOICES: Record<MeleeId, Voice> = {
     modes: [[2870, 0.09, 0.55], [5230, 0.06, 0.45], [8100, 0.04, 0.3], [11200, 0.025, 0.15]], ring: 0.45,
     thump: 0.4, bone: 0.4,
   },
+  // Two blades cutting in turn: a shorter, tighter hiss each, the same clean edge.
+  katanas: {
+    whoosh: 2750, q: 4.6, swingLen: 0.26, whistle: 0.65, cut: 1, clean: 1,
+    modes: [[2870, 0.08, 0.55], [5230, 0.055, 0.45], [8100, 0.036, 0.3], [11200, 0.022, 0.15]], ring: 0.42,
+    thump: 0.35, bone: 0.4,
+  },
   bat: {
     whoosh: 620, q: 1.3, swingLen: 0.46, whistle: 0, cut: 0, clean: 0,
     modes: [[410, 0.035, 0.7], [1180, 0.022, 0.5], [2330, 0.014, 0.35], [3600, 0.008, 0.2]], ring: 0.85,
@@ -269,10 +275,12 @@ export function renderMeleePickup(weapon: MeleeId, sr: number, seed: number): Fl
   const v = VOICES[weapon];
   const r = rng(seed);
   const out = new Float32Array(Math.round(sr * 0.5));
-  if (weapon === 'katana') {
+  if (weapon === 'katana' || weapon === 'katanas') {
     // A blade drawn an inch from its collar: the long bright ring of a good edge.
     noise(out, sr, 0, 'bandpass', 4200, 6200, 4, 0.35, 0.03, 0.06, r, 0.3);
     modes(out, sr, 0.05, [[3140, 0.35, 0.5], [5870, 0.22, 0.35], [8200, 0.14, 0.2]], 0.55, r);
+    // The second blade: the two edges kissing, a slightly sharper ring just after.
+    if (weapon === 'katanas') modes(out, sr, 0.12, [[3420, 0.3, 0.5], [6310, 0.2, 0.35], [8900, 0.12, 0.2]], 0.45, r);
   } else {
     // Scraped up off the floor.
     noise(out, sr, 0, 'bandpass', v.cut > 0.5 || v.ring > 0.6 ? 3000 : 1400, 2200, 2.5, 0.35, 0.02, 0.05, r, 0.5);

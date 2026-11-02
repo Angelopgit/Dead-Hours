@@ -1,10 +1,12 @@
 import type { WeaponId } from './weapons';
 
 /** Melee weapons: the machete every survivor starts with, and the ones found lying around indoors. */
-export type MeleeId = 'machete' | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey';
+export type MeleeId = 'machete' | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey'
+  /** Two katanas, one in each hand (pick up a second katana while carrying one). */
+  | 'katanas';
 
 /** How a weapon is swung (the animation and the whoosh): one-handed chop, two-handed cut, bat swing, overhead tool blow. */
-export type MeleeStyle = 'blade' | 'katana' | 'club' | 'tool';
+export type MeleeStyle = 'blade' | 'katana' | 'club' | 'tool' | 'dual';
 
 /** What it is made of (what a hit sounds like). */
 export type MeleeMaterial = 'steel' | 'katana' | 'wood' | 'iron' | 'composite';
@@ -65,6 +67,12 @@ export const MELEE: Record<MeleeId, MeleeDef> = {
     id: 'wrench', damage: 48, windup: 0.2, duration: 0.56, reach: 1.85, arc: 1.15, targets: 1, share: 0,
     head: 2.3, knockback: 2.8, sever: 0, noise: 7, style: 'tool', material: 'iron', recover: 0.6,
   },
+  // A blade in each hand, struck in turn: quicker than one katana, each cut a little lighter,
+  // sweeping wider and taking limbs off just as clean.
+  katanas: {
+    id: 'katanas', damage: 66, windup: 0.14, duration: 0.44, reach: 2.4, arc: 2.0, targets: 3, share: 0.75,
+    head: 1.6, knockback: 1.6, sever: 2.8, noise: 4, style: 'dual', material: 'katana', recover: 0.45,
+  },
   hockey: {
     id: 'hockey', damage: 40, windup: 0.22, duration: 0.64, reach: 2.65, arc: 1.95, targets: 3, share: 0.8,
     head: 1.5, knockback: 4.8, sever: 0, noise: 7, style: 'club', material: 'composite', recover: 0.7,
@@ -85,6 +93,8 @@ export type MeleeRoom = 'bedroom' | 'basement' | 'store';
 export const MELEE_PICKUPS = {
   /** Never more than this many lying on the map at once. */
   maxPlaced: 7,
+  /** A katana put down has this chance of a second one lying beside it (a pair to dual wield). */
+  pairChance: 0.45,
   /** At most this many in one room (the store is bigger: two). */
   perRoom: { bedroom: 1, basement: 1, store: 2 } as Record<MeleeRoom, number>,
   /** A taken one is replaced somewhere else after this long (seconds, random in the range). */

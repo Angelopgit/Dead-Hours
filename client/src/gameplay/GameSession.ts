@@ -1542,7 +1542,10 @@ export class GameSession {
     else if (best.kind === 'melee') {
       const mine = this.me.arsenal.meleeId;
       const what = WEAPONS[best.it!.weapon ?? 'machete'].model;
-      this.hud.setPrompt('interact', mine === 'machete' ? `PICK UP ${what}` : `SWAP ${WEAPONS[mine].model} FOR ${what}`);
+      const pair = best.it!.weapon === 'katana' && mine === 'katana';
+      this.hud.setPrompt('interact', pair ? 'PICK UP SECOND KATANA · DUAL WIELD'
+        : best.it!.weapon === 'katana' && mine === 'katanas' ? 'BOTH HANDS HOLD A KATANA'
+        : mine === 'machete' ? `PICK UP ${what}` : `SWAP ${WEAPONS[mine].model} FOR ${what}`);
     }
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'board') this.hud.setPrompt('interact', 'RIDE THE SKATEBOARD');
@@ -2010,7 +2013,9 @@ export class GameSession {
         v3(e.pos, A);
         audio.meleePickup(e.weapon, A);
         if (e.player !== this.myId) break;
-        if (!this.meleeHinted) {
+        if (e.weapon === 'katanas') {
+          this.hud.notify('DUAL KATANAS', `${actionLabel('melee') || 'MELEE'} TO SWING · THE BLADES CUT IN TURN`, 3.2);
+        } else if (!this.meleeHinted) {
           this.meleeHinted = true;
           this.hud.notify(`${WEAPONS[e.weapon].model} IN HAND`, `${actionLabel('melee') || 'MELEE'} TO SWING · IT REPLACES YOUR MACHETE`, 3.2);
         }

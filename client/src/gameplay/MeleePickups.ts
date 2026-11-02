@@ -18,6 +18,8 @@ interface View {
 const LIE: Record<MeleeId, { y: number; roll: number; tip: [number, number, number] }> = {
   machete: { y: 0.012, roll: Math.PI / 2, tip: [0, 0.01, 0.5] },
   katana: { y: 0.042, roll: Math.PI / 2, tip: [0, 0.03, 0.72] },
+  // Never lies as a pair (the sim lays two single katanas), kept for completeness.
+  katanas: { y: 0.042, roll: Math.PI / 2, tip: [0, 0.03, 0.72] },
   bat: { y: 0.034, roll: 0, tip: [0, 0.03, 0.6] },
   crowbar: { y: 0.016, roll: -Math.PI / 2, tip: [0, 0.08, 0.48] },
   wrench: { y: 0.017, roll: -Math.PI / 2, tip: [0, 0.07, 0.3] },
