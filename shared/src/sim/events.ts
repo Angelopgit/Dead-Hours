@@ -24,7 +24,8 @@ export type SimEvent =
   | { type: 'phase'; phase: SimPhase }
   | { type: 'shot'; player: string; weapon: WeaponId; origin: Vec3; pellets: PelletTrace[] }
   | { type: 'dryFire'; player: string; weapon: WeaponId }
-  | { type: 'impact'; pos: Vec3; normal: Vec3; surface: Surface; dir: Vec3 }
+  /** `door`: the wooden door leaf it struck (the round went on through unless it stopped there). */
+  | { type: 'impact'; pos: Vec3; normal: Vec3; surface: Surface; dir: Vec3; door?: number }
   | {
     type: 'zombieHit'; zombie: number; zone: HitZone; pos: Vec3; dir: Vec3; damage: number; killed: boolean; by: string; melee: boolean;
     exit: { pos: Vec3; normal: Vec3 } | null;

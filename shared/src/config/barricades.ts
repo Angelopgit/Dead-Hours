@@ -1,5 +1,23 @@
 import type { HouseSpec, WindowSpec } from '../types/world';
 
+/**
+ * Wooden door leaves: rounds go through them (weaker on the far side), and blows, bullets and
+ * blasts knock pieces out of them until only the frame of stiles and rails is left.
+ */
+export const DOOR_WOOD = {
+  /** Share of a round's damage left after going through a leaf. */
+  pass: 0.6,
+  /** Rounds meeting the face flatter than this (cosine) glance off instead. */
+  minCos: 0.2,
+  /** Pounding (in door strain: it bursts at 1) that knocks the next piece out. */
+  perPiece: 0.3,
+  /** Most pieces a leaf loses. */
+  pieces: 7,
+  /** Strain a blast puts on a door it can see: this at the blast, nothing at `blastRadius` (m). */
+  blast: 2,
+  blastRadius: 5,
+} as const;
+
 /** Boarding up homes: how long it takes, how much pounding boards soak, and which openings take them. */
 export const BARRICADE = {
   /** Most boards across a door, and across a window. */

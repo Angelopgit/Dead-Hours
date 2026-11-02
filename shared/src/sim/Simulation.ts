@@ -22,7 +22,7 @@ import { Raid } from './Raid';
 import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes';
 import { inLull, lullDuration, noLulls, threatAt, type LullState } from './Lulls';
 import { Barricades, type BarricadeSlot } from './Barricades';
-import { BARRICADE, VAULT } from '../config/barricades';
+import { BARRICADE, DOOR_WOOD, VAULT } from '../config/barricades';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
 import type { GibPart, HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 import { Explosives } from './Explosives';
@@ -211,6 +211,14 @@ export interface SimOptions {
 /** Bullet damage that bursts a closed door open (an AR round is about 30). */
 const COMBAT_DOOR_HP = 420;
 
+/** A wooden door leaf a round went through: where it met the face, and how far along. */
+interface DoorPass {
+  door: DoorBody;
+  t: number;
+  pos: Vec3;
+  normal: Vec3;
+}
+
 const FALLOFF = (def: WeaponDef, t: number): number => {
   const r = def.range;
   if (t <= r * COMBAT.falloffStart) return 1;
@@ -300,6 +308,7 @@ export class Simulation {
   /** Boards on the doors and windows of the homes. */
   readonly barricades: Barricades;
   private readonly doorByCollider = new Map<number, DoorBody>();
+  private readonly tmpFacing = { x: 0, z: 1 };
   /** Grenades and Molotovs in the air, and fires burning. */
   readonly explosives: Explosives;
   /** Skateboards lying about, and who is riding which. */
@@ -874,7 +883,9 @@ export class Simulation {
     const maxD = def.range * COMBAT.maxRangeFactor;
     // From a car the rounds leave through its windows, never into its own doors.
     const own = this.vehicles.bodyOf(p.id);
-    const world = this.castThrough(o, d, maxD, own);
+    // Rounds go on through wooden door leaves (rockets burst on them).
+    const doors: DoorPass[] | null = def.explosive ? null : [];
+    const world = this.castBullet(o, d, maxD, doors, own);
     const worldD = world ? world.distance : maxD;
     const hits: { z: Zombie; zone: HitZone; t: number; along: number }[] = [];
     for (const z of this.zombies) {
@@ -898,36 +909,85 @@ export class Simulation {
     const tx = o.x + d.x * firstT - eye.x, ty = o.y + d.y * firstT - eye.y, tz = o.z + d.z * firstT - eye.z;
     const L = Math.hypot(tx, ty, tz);
     if (L > 0.6) {
-      const ob = this.castThrough(eye, { x: tx / L, y: ty / L, z: tz / L }, L - 0.25, own);
+      const ob = this.castBullet(eye, { x: tx / L, y: ty / L, z: tz / L }, L - 0.25, doors && [], own);
       if (ob) {
         const pos = { x: eye.x + (tx / L) * ob.distance, y: eye.y + (ty / L) * ob.distance, z: eye.z + (tz / L) * ob.distance };
-        this.emit({ type: 'impact', pos, normal: { x: ob.nx, y: ob.ny, z: ob.nz }, surface: ob.surface, dir: { x: tx / L, y: ty / L, z: tz / L } });
+        const door = this.doorByCollider.get(ob.collider.handle);
+        this.emit({ type: 'impact', pos, normal: { x: ob.nx, y: ob.ny, z: ob.nz }, surface: ob.surface, dir: { x: tx / L, y: ty / L, z: tz / L }, ...(door?.wooden ? { door: door.index } : {}) });
         return { end: pos, hit: 'world' };
       }
     }
 
+    // Each door it went through takes the round's punch (and a hole) and weakens it.
+    let passed = 0;
+    const through = (t: number): number => {
+      for (; doors && passed < doors.length && doors[passed].t < t; passed++) {
+        const g = doors[passed];
+        this.emit({ type: 'impact', pos: g.pos, normal: g.normal, surface: 'wood', dir: { ...d }, door: g.door.index });
+        this.shootDoor(g.door, def.damage * FALLOFF(def, g.t) * Math.pow(DOOR_WOOD.pass, passed), eye);
+      }
+      return Math.pow(DOOR_WOOD.pass, passed);
+    };
     let pierced = 0;
     for (const h of hits) {
       if (raider && raider.t < h.t) break;
       const pos = { x: o.x + d.x * h.t, y: o.y + d.y * h.t, z: o.z + d.z * h.t };
-      const dmg = def.damage * ZONE_MULTIPLIER[h.zone] * FALLOFF(def, h.t) * Math.pow(0.6, pierced);
+      const dmg = def.damage * ZONE_MULTIPLIER[h.zone] * FALLOFF(def, h.t) * Math.pow(0.6, pierced) * through(h.t);
       this.hitZombie(p, h.z, dmg, h.zone, pos, d, false, def.pellets > 1 ? 0.5 : 1, { along: h.along, armTally: dmg, gun: def.id, dist: h.t });
       pierced++;
       if (pierced > def.penetration) return { end: pos, hit: 'zombie' };
     }
     if (raider) {
       const pos = { x: o.x + d.x * raider.t, y: o.y + d.y * raider.t, z: o.z + d.z * raider.t };
-      this.raid.hit(p, raider.r, def.damage * FALLOFF(def, raider.t) * Math.pow(0.6, pierced), raider.zone, pos, d);
+      this.raid.hit(p, raider.r, def.damage * FALLOFF(def, raider.t) * Math.pow(0.6, pierced) * through(raider.t), raider.zone, pos, d);
       return { end: pos, hit: 'zombie' };
     }
+    const kept = through(worldD);
     if (world) {
       const pos = { x: o.x + d.x * world.distance, y: o.y + d.y * world.distance, z: o.z + d.z * world.distance };
-      this.emit({ type: 'impact', pos, normal: { x: world.nx, y: world.ny, z: world.nz }, surface: world.surface, dir: { ...d } });
       const door = this.doorByCollider.get(world.collider.handle);
-      if (door) this.shootDoor(door, def.damage * FALLOFF(def, world.distance), eye);
+      this.emit({ type: 'impact', pos, normal: { x: world.nx, y: world.ny, z: world.nz }, surface: world.surface, dir: { ...d }, ...(door?.wooden ? { door: door.index } : {}) });
+      if (door) this.shootDoor(door, def.damage * FALLOFF(def, world.distance) * kept, eye);
       return { end: pos, hit: 'world' };
     }
     return { end: { x: o.x + d.x * maxD, y: o.y + d.y * maxD, z: o.z + d.z * maxD }, hit: 'none' };
+  }
+
+  /**
+   * castThrough for a round: it also goes on through wooden door leaves it meets face on, each
+   * noted in `doors` (null: doors stop it). Distances are from `o`; `exclude` is the shooter's car.
+   */
+  castBullet(o: Vec3, d: Vec3, maxD: number, doors: DoorPass[] | null, exclude: RAPIER.RigidBody | null = null): RayHit | null {
+    let s = 0;
+    for (let i = 0; i < 4; i++) {
+      const hit = this.castThrough({ x: o.x + d.x * s, y: o.y + d.y * s, z: o.z + d.z * s }, d, maxD - s, exclude);
+      if (!hit) return null;
+      hit.distance += s;
+      const door = doors ? this.doorByCollider.get(hit.collider.handle) : undefined;
+      if (!door || !door.wooden || doors!.length >= 3) return hit;
+      // Face on only: along the leaf's edge it is solid wood all the way.
+      const f = door.facing(this.tmpFacing);
+      const cos = Math.abs(hit.nx * d.x + hit.ny * d.y + hit.nz * d.z);
+      if (Math.abs(hit.nx * f.x + hit.nz * f.z) < 0.9 || cos < DOOR_WOOD.minCos) return hit;
+      doors!.push({ door, t: hit.distance, pos: { x: o.x + d.x * hit.distance, y: o.y + d.y * hit.distance, z: o.z + d.z * hit.distance }, normal: { x: hit.nx, y: hit.ny, z: hit.nz } });
+      s = hit.distance + door.thickness / cos + 0.02;
+    }
+    return this.physics.raycastHit(o.x + d.x * s, o.y + d.y * s, o.z + d.z * s, d.x, d.y, d.z, Math.max(0, maxD - s), undefined, exclude);
+  }
+
+  /** A blast shakes every closed door it can see: boards soak it first, wood splinters, latches give. */
+  blastDoors(o: Vec3): void {
+    const R = DOOR_WOOD.blastRadius;
+    for (const door of this.doors) {
+      if (!door || door.open) continue;
+      const c = door.center;
+      const dx = c.x - o.x, dy = c.y - o.y, dz = c.z - o.z;
+      const dist = Math.hypot(dx, dy, dz);
+      if (dist > R || dist < 1e-3) continue;
+      const hit = this.physics.raycastHit(o.x, o.y, o.z, dx / dist, dy / dist, dz / dist, dist + 0.2);
+      if (hit && hit.collider.handle !== door.collider.handle) continue;
+      if (this.poundDoor(door, DOOR_WOOD.blast * (1 - dist / R), o.x, o.z)) this.emit({ type: 'doorForced', door: door.index, pos: { ...door.center } });
+    }
   }
 
   /**

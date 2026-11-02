@@ -82,6 +82,8 @@ export interface Snapshot {
   l: (number | string)[][];
   /** [door index, open, target ×1000, ...] */
   d: number[];
+  /** Wooden doors with pieces knocked out: [door, pieces]... (left out when none are). */
+  dw?: number[];
   i: number[][];
   /** Boarded openings: [slot, boards, damage ×1000, glass in, ...]. */
   b?: number[];
@@ -182,6 +184,8 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   }
   const doors: number[] = [];
   for (const d of sim.doors) if (d) doors.push(d.index, d.open ? 1 : 0, milli(d.targetAngle));
+  const wear: number[] = [];
+  for (const d of sim.doors) if (d && d.pieces > 0) wear.push(d.index, d.pieces);
   const items: number[][] = [];
   for (const it of sim.interactables) {
     if (!it) continue;
@@ -211,6 +215,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
     ]);
   }
   if (cars.length) snap.vh = cars;
+  if (wear.length) snap.dw = wear;
   const raid = sim.raid;
   const van = raid.van;
   if (van) snap.v = [van.route, idx(RAID_STAGES, raid.stage), cm(van.pos.x), cm(van.pos.z), milli(van.yaw), cm(van.speed), van.door ? 1 : 0];
@@ -674,6 +679,12 @@ export class Mirror {
       const d = sim.doors[s.d[i]];
       if (!d || (this.doorHold.get(d.index) ?? -Infinity) > now) continue;
       d.remote(s.d[i + 1] === 1, s.d[i + 2] / 1000);
+    }
+    const dw = s.dw ?? [];
+    for (const d of sim.doors) if (d) d.pieces = 0;
+    for (let i = 0; i + 1 < dw.length; i += 2) {
+      const d = sim.doors[dw[i]];
+      if (d) d.pieces = dw[i + 1];
     }
 
     // Boards and broken panes; slots left out are back as the map starts them (nobody re-glazes a window, but boards come off).

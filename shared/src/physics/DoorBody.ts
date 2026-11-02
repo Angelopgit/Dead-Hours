@@ -1,5 +1,6 @@
 import { RAPIER, GROUP, groups, type Physics } from './Physics';
 import { STORY } from '../map/builder';
+import { DOOR_WOOD } from '../config/barricades';
 import type { DoorSpec, MapDefinition } from '../types/world';
 
 /** A closed (or closing) leaf blocks everyone. */
@@ -31,11 +32,18 @@ export class DoorBody {
   readonly thickness: number;
   /** Accumulated pounding, 0..1. The door bursts open at 1 (barricades extend this in Phase 6). */
   strain = 0;
+  /** A wooden leaf: rounds go through it and blows knock pieces out of it (see DOOR_WOOD). */
+  readonly wooden: boolean;
+  /** Every blow it has taken this night (strain eases off when it is shut again; this doesn't). */
+  wear = 0;
+  /** Pieces knocked out of the leaf so far (clients take it from snapshots). */
+  pieces = 0;
   /** Set when the state changes so observers (sound, visuals) can react. */
   changed = false;
 
   constructor(readonly index: number, readonly spec: DoorSpec, physics: Physics) {
     this.rollup = spec.style === 'rollup';
+    this.wooden = !this.rollup && spec.style !== 'glass';
     const floor = spec.floorY ?? STORY.slab;
     const ax = spec.axis === 'x' ? 1 : 0, az = spec.axis === 'x' ? 0 : 1;
     this.hinge = { x: spec.x - ax * spec.w / 2, y: floor, z: spec.z - az * spec.w / 2 };
@@ -106,14 +114,31 @@ export class DoorBody {
     this.target = target;
   }
 
-  /** Zombie pounding. Returns true when the door gives way. */
+  /** Zombie pounding (bullets and blasts too). Returns true when the door gives way. */
   pound(amount: number, fromX: number, fromZ: number): boolean {
     if (this.open) return false;
     this.strain += amount;
+    this.wearDown(amount);
     if (this.strain < 1) return false;
     this.strain = 0;
+    // Bursting in splits at least one more piece off.
+    if (this.wooden) this.wearDown(Math.max(0, (this.pieces + 1) * DOOR_WOOD.perPiece - this.wear));
     this.setOpen(true, fromX, fromZ);
     return true;
+  }
+
+  private wearDown(amount: number): void {
+    if (!this.wooden) return;
+    this.wear += amount;
+    this.pieces = Math.min(DOOR_WOOD.pieces, Math.floor(this.wear / DOOR_WOOD.perPiece + 1e-6));
+  }
+
+  /** Which way the leaf's faces point now (hinged leaves turn with the swing). */
+  facing(out: { x: number; z: number }): { x: number; z: number } {
+    const yaw = this.baseYaw + (this.rollup ? 0 : this.angle);
+    out.x = Math.sin(yaw);
+    out.z = Math.cos(yaw);
+    return out;
   }
 
   /** True when the leaf is mostly out of the opening. */
@@ -139,6 +164,8 @@ export class DoorBody {
     this.target = 0;
     this.angle = 0;
     this.strain = 0;
+    this.wear = 0;
+    this.pieces = 0;
     this.collider.setCollisionGroups(CLOSED_GROUPS);
     this.body.setTranslation({ x: this.hinge.x, y: this.hinge.y, z: this.hinge.z }, true);
     this.body.setRotation(this.quat(this.baseYaw), true);

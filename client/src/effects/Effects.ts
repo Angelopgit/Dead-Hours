@@ -7,6 +7,7 @@ import { DECAL, DecalBatch } from './Decals';
 import { Casings } from './Casings';
 import { SmokeWisps } from './Smoke';
 import { FleshChunks, type ChunkKind } from './Chunks';
+import { WoodDebris } from './WoodDebris';
 
 export type Gore = 'off' | 'reduced' | 'full';
 
@@ -66,6 +67,7 @@ export class Effects {
   onChunkLand: ((pos: THREE.Vector3, strength: number, kind: ChunkKind) => void) | null = null;
   private readonly tmp2 = new THREE.Vector3();
   private readonly tmp3 = new THREE.Vector3();
+  readonly wood: WoodDebris;
   private readonly light = new THREE.PointLight(0xffb066, 0, 10, 2);
   private lightT = 0;
   private lightPower = 0;
@@ -87,8 +89,13 @@ export class Effects {
     this.casings = new Casings(56);
     // A little brighter than the explosions' smoke ambient, so a thin wisp still reads at night.
     this.smoke = new SmokeWisps(220, new THREE.Color(0.2, 0.21, 0.24));
+    this.wood = new WoodDebris(64);
+    this.wood.floorAt = (x, y, z) => {
+      const d = physics.raycast(x, y, z, 0, -1, 0, 4);
+      return d === null ? null : y - d;
+    };
     this.chunks = new FleshChunks(physics);
-    this.root.add(this.decals.mesh, this.soft.mesh, this.glow.mesh, this.casings.mesh, this.smoke.mesh, this.chunks.mesh);
+    this.root.add(this.decals.mesh, this.soft.mesh, this.glow.mesh, this.casings.mesh, this.smoke.mesh, this.chunks.mesh, this.wood.mesh);
     this.chunks.onLand = (pos, strength, kind, normal) => {
       // Wet pieces leave a mark where they first come down; bone just clatters.
       if (this.gore !== 'off' && kind !== 'bone' && (strength > 0.15 || Math.random() < 0.5) && !this.isMoving?.(pos, normal)) {
@@ -646,6 +653,7 @@ export class Effects {
     this.casings.clear();
     this.smoke.clear();
     this.chunks.clear();
+    this.wood.clear();
     this.light.intensity = 0;
   }
 
@@ -657,6 +665,7 @@ export class Effects {
     this.casings.update(dt);
     this.smoke.update(dt, camera);
     this.chunks.update(dt);
+    this.wood.update(dt);
     this.lightT -= dt;
     this.light.intensity = this.lightT > 0 ? this.lightPower * 9 * (this.lightT / 0.06) : 0;
   }
@@ -668,6 +677,7 @@ export class Effects {
     this.casings.dispose();
     this.smoke.dispose();
     this.chunks.dispose();
+    this.wood.dispose();
     this.light.removeFromParent();
     this.light.dispose();
     this.root.removeFromParent();

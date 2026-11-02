@@ -237,6 +237,7 @@ export class Explosives {
     sim.noise(o, BLAST.noise, by.id);
     sim.emit({ type: 'explosion', id, kind: 'frag', pos: { ...pos }, player: by.id });
     sim.blastGlass(o, BLAST.glass);
+    sim.blastDoors(o);
     const force = (d: number) => (d <= BLAST.inner ? 1 : Math.pow(clamp(1 - (d - BLAST.inner) / (R - BLAST.inner), 0, 1), BLAST.falloff));
     const visible = (p: Vec3) => {
       const dx = p.x - o.x, dy = p.y - o.y, dz = p.z - o.z;

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, BICYCLE, C2S, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
+  BARRICADE, BICYCLE, C2S, DOOR_WOOD, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -314,6 +314,7 @@ export class GameSession {
     if (online?.begin.late) this.joinedAt = NaN;
     doors.reset();
     for (const b of doors.bodies) if (b) this.doorColliders.add(b.collider.handle);
+    doors.onPiece = (door, k) => this.doorPiece(door, k);
     // Shots echo by the space they're in and are muffled by the walls they come through.
     audio.setAcoustics(new Acoustics(physics));
 
@@ -1463,6 +1464,10 @@ export class GameSession {
     for (const m of link.drain()) {
       if (m.k === 'snap') {
         mirror.apply(m.snap, m.at);
+        if (!this.doorsSettled) {
+          this.doorsSettled = true;
+          this.doors.settle();
+        }
         // Dropped in after the outbreak: it began without us (no siren), and our run counts from now.
         if (Number.isNaN(this.joinedAt)) {
           this.joinedAt = this.sim.phase === 'survival' ? this.sim.phaseTime : 0;
@@ -2507,6 +2512,45 @@ export class GameSession {
   }
 
   /** The opening this survivor could work on from where they stand (inside, within reach), if any. */
+  /**
+   * A round in a wooden door: its hole goes through the leaf, and splinters burst out of the far
+   * face too when it went on through.
+   */
+  private doorHit(index: number, at: THREE.Vector3, normal: THREE.Vector3, dir: THREE.Vector3): void {
+    const door = this.doors.byIndex(index);
+    if (!door) return;
+    door.hole(at, (at.x * 7919 + at.y * 104729 + at.z * 1299709) | 0);
+    const b = door.body;
+    this.doorBlowSide.set(index, b.side(at.x - dir.x, at.z - dir.z));
+    const cos = Math.abs(normal.dot(dir));
+    if (cos < 0.2) return;
+    const out = this.tmpD.copy(at).addScaledVector(dir, b.thickness / cos + 0.005);
+    this.effects.impact(out, this.tmpE.copy(normal).negate(), 'wood', dir);
+  }
+
+  /** Which side of each door the last blow or round came from (+1 outside). */
+  private readonly doorBlowSide = new Map<number, number>();
+  private doorsSettled = false;
+  private readonly tmpFace = { x: 0, z: 1 };
+  private readonly tmpF = new THREE.Vector3();
+
+  /** A piece knocked out of a door: chunks and splinters fly away from the blow, with a crack. */
+  private doorPiece(door: Door, k: number): void {
+    const at = door.pieceAt(k, this.tmpD);
+    const b = door.body;
+    const side = this.doorBlowSide.get(b.index) ?? 1;
+    const f = b.facing(this.tmpFace);
+    // The leaf's face normal turned to point away from where the blow came from.
+    const n = this.tmpE.set(f.x, 0, f.z);
+    if (b.side(at.x + n.x, at.z + n.z) === side) n.negate();
+    const along = this.tmpF.set(n.z, 0, -n.x);
+    const big = k === 2 || k === 4;
+    this.effects.wood.burst(at, n, along, big ? 0.22 : 0.12, big ? 0.22 : 0.14, big ? 9 : 5, big ? 1.2 : 0.9);
+    this.effects.splinters(at, n, { floor: b.hinge.y, amount: big ? 0.8 : 0.5, spread: 0.25 });
+    audio.board(at, 'broken');
+    if (this.player.position.distanceTo(at) < 4) this.cam.addTrauma(0.05);
+  }
+
   private workableSlot(): BarricadeSlot | null {
     if (!this.me.alive) return null;
     const p = this.player.position;
@@ -2677,6 +2721,10 @@ export class GameSession {
     const A = this.tmpA, B = this.tmpB, C = this.tmpC;
     if (e.type === 'shot' && !e.player.startsWith('raider:')) this.shootCorpses(e);
     else if (e.type === 'explosion') this.zombies.blastCorpses(v3(e.pos, A), 7, 1);
+    // A blast knocks pieces out of the doors round it (the pieces show up after): away from it.
+    if (e.type === 'explosion') {
+      for (const d of this.doors.doors) if (d.center.distanceTo(v3(e.pos, A)) < DOOR_WOOD.blastRadius + 1) this.doorBlowSide.set(d.body.index, d.body.side(e.pos.x, e.pos.z));
+    }
     switch (e.type) {
       case 'shot': {
         if (e.player.startsWith('raider:')) {
@@ -2704,6 +2752,7 @@ export class GameSession {
       case 'impact': {
         v3(e.pos, A);
         this.effects.impact(A, v3(e.normal, B), e.surface, v3(e.dir, C));
+        if (e.door !== undefined) this.doorHit(e.door, A, B, C);
         const now = performance.now();
         if (now - this.impactSoundAt > 35) {
           this.impactSoundAt = now;
@@ -2931,6 +2980,8 @@ export class GameSession {
       }
       case 'doorPound': {
         audio.doorPound(v3(e.pos, A));
+        const body = this.doors.byIndex(e.door)?.body;
+        if (body) this.doorBlowSide.set(e.door, body.side(e.pos.x, e.pos.z));
         const slot = this.sim.barricades.forDoor(e.door);
         if (slot && slot.boards > 0) this.barricades.hit(slot.index);
         break;
@@ -3643,6 +3694,7 @@ export class GameSession {
 
   dispose(): void {
     this.abort.abort();
+    this.doors.onPiece = null;
     audio.setAcoustics(null);
     this.link?.voice.setInGame(false);
     this.chatBox?.dispose();

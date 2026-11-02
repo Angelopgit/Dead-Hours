@@ -12,7 +12,7 @@ import {
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, SHAPE_MID, SHAPE_STEPS, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
   BARRICADE, Mirror, NAV_INDOOR, storeyFloors, type BarricadeSlot,
-  VAULT, BLAST, findVault, planVault, vaultAt, porches, packPanes, unpackPanes, WORLD_FILTER,
+  VAULT, BLAST, DOOR_WOOD, ZONE_MULTIPLIER, findVault, planVault, vaultAt, porches, packPanes, unpackPanes, WORLD_FILTER,
   BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
   levelStart, owns, runXp, sameBuild, sanitizeBuild, sanitizeLoadout, tunedWeapon, unlockTrack, type WeaponBuild, type WeaponId,
   SECONDARY_WEAPONS, isHandgun,
@@ -1889,6 +1889,77 @@ const outsideOf = (slot: BarricadeSlot, dist: number): Vec3 => {
   const brokeAt = events.findIndex((e) => e.type === 'barricade' && e.change === 'broken');
   const forcedAt = events.findIndex((e) => e.type === 'doorForced');
   check(brokeAt >= 0 && forcedAt > brokeAt && door.open, `shots splinter the board, then the door swings in (${events.filter((e) => e.type === 'shot').length} shots)`);
+  cleanup(sim, body);
+}
+{
+  // Wooden doors: rounds go on through them (weaker), each leaves its hole, and blows, rounds and
+  // blasts knock pieces out of the leaf; the pieces reach every client in snapshots.
+  const { sim: probe, body: pb } = makeSim({ x: 0, y: 0.15, z: 8 });
+  const dpick = houseSlots(probe, 'house-s', 'door')[0];
+  cleanup(probe, pb);
+  const door = doors[dpick.ref]!;
+  const out = dpick.normal;
+  const stand = nav.nodePos(nav.nodeAt(dpick.center.x + out.x * 3, 0.1, dpick.center.z + out.z * 3, 1.5));
+  let { sim, sp, body } = makeSim({ x: stand.x, y: stand.y + 0.02, z: stand.z });
+  sp.arsenal.aim = 1;
+  run(sim, 0.8);
+  const aimAt = (p: Vec3) => {
+    const e = sp.eye;
+    const dx = p.x - e.x, dy = p.y - e.y, dz = p.z - e.z, l = Math.hypot(dx, dy, dz);
+    return { x: dx / l, y: dy / l, z: dz / l };
+  };
+  check(door.wooden && !door.open && door.pieces === 0 && door.wear === 0, 'the front door starts shut and whole');
+  const z = sim.spawnZombie('walker', { x: dpick.center.x - out.x * 0.8, y: door.hinge.y + 0.02, z: dpick.center.z - out.z * 0.8 }, 'idle');
+  run(sim, 0.1);
+  const hp = z.health;
+  sp.arsenal.primary.mag = 30;
+  sim.fire('p1', sp.eye, aimAt({ x: z.pos.x, y: z.pos.y + 1.25, z: z.pos.z }), true, 11);
+  let res = run(sim, 0.2);
+  const holes = res.events.filter((e) => e.type === 'impact' && e.door === door.index);
+  const hit = res.events.find((e) => e.type === 'zombieHit' && e.zombie === z.id);
+  check(holes.length === 1 && !!hit && z.health < hp && !door.open, 'a round goes through the shut door into the zombie behind it, leaving a hole');
+  const full = hit && hit.type === 'zombieHit' ? WEAPONS.ar.damage * ZONE_MULTIPLIER[hit.zone] : 0;
+  check(!!hit && hit.type === 'zombieHit' && Math.abs(hit.damage - full * DOOR_WOOD.pass) < full * 0.05, `weaker for it (${hit && hit.type === 'zombieHit' ? hit.damage.toFixed(1) : '-'} of ${full.toFixed(1)})`);
+  check(door.wear > 0 && door.strain > 0, 'and the door felt it');
+  // Rounds into the door until it gives: pieces come out of it on the way.
+  z.removeBody();
+  sim.zombies.splice(sim.zombies.indexOf(z), 1);
+  const target = { x: dpick.center.x + (dpick.axis === 'x' ? 0.2 : 0), y: dpick.center.y + 0.3, z: dpick.center.z + (dpick.axis === 'z' ? 0.2 : 0) };
+  const events: SimEvent[] = [];
+  let piecesBefore = 0;
+  for (let i = 0; i < 40 && !door.open; i++) {
+    piecesBefore = door.pieces;
+    sp.arsenal.primary.mag = 30;
+    sim.fire('p1', sp.eye, aimAt(target), true, 60 + i);
+    events.push(...run(sim, 0.2).events);
+  }
+  const shots = events.filter((e) => e.type === 'shot');
+  const through = shots.filter((e) => e.type === 'shot' && door.side(e.pellets[0].end.x, e.pellets[0].end.z) < 0).length;
+  check(door.open && events.some((e) => e.type === 'doorForced'), `rounds force the door in the end (${shots.length} shots)`);
+  check(through >= shots.length - 1, `rounds fly on into the house (${through} of ${shots.length})`);
+  check(events.filter((e) => e.type === 'impact' && e.door === door.index).length >= shots.length - 1, 'every one leaves its hole');
+  check(door.pieces >= 3 && door.pieces > piecesBefore && door.pieces <= DOOR_WOOD.pieces, `pieces come out on the way, and one more as it bursts (${door.pieces})`);
+  // Online: the pieces travel in the snapshot.
+  const snap = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+  const at = snap.dw ? (snap.dw as number[]).indexOf(door.index) : -1;
+  check(at >= 0 && at % 2 === 0 && snap.dw[at + 1] === door.pieces, `snapshots list the pieces gone (${JSON.stringify(snap.dw)})`);
+  const pieces = door.pieces;
+  door.pieces = 0;
+  const copy = new Simulation({ physics, map, nav, doors, seed: 4 });
+  new Mirror(copy, 'p2').apply(snap, 10);
+  check(door.pieces === pieces, 'clients take them');
+  copy.dispose();
+  // Shut again it keeps its holes; a new night mends it.
+  door.setOpen(false, stand.x, stand.z);
+  check(door.pieces === pieces && door.wear > 0, 'a door shut again stays broken');
+  cleanup(sim, body);
+  ({ sim, sp, body } = makeSim({ x: stand.x + out.x * 8, y: stand.y + 0.02, z: stand.z + out.z * 8 }));
+  check(door.pieces === 0 && door.wear === 0, 'and the next night it is whole');
+  // A grenade on the step blows it in.
+  run(sim, 0.5);
+  sim.explosives.explode({ x: dpick.center.x + out.x * 1.2, y: door.hinge.y + 0.05, z: dpick.center.z + out.z * 1.2 }, sp, 1);
+  res = run(sim, 0.3);
+  check(door.open && res.events.some((e) => e.type === 'doorForced' && e.door === door.index) && door.pieces >= 3, `a grenade on the step blows the door in and splinters it (${door.pieces} pieces)`);
   cleanup(sim, body);
 }
 {

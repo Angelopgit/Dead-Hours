@@ -4,6 +4,12 @@ import type { Physics } from '../core/Physics';
 import type { LightField } from '../lighting/LightField';
 import { StaticProbe } from '../lighting/Probes';
 import { patchProbe } from '../lighting/BakeShader';
+import { DoorDamage, pieceCenter } from './DoorDamage';
+
+/** Paint on the wooden leaves (sRGB), and the raised panels' shade of it. */
+const WOOD_PAINT: [number, number, number] = [0x3a, 0x2a, 0x1e];
+const PANEL_PAINT = 0x30231a;
+let plainWood: THREE.DataTexture | null = null;
 
 /**
  * Exterior doors of enterable buildings. Each leaf is a kinematic Rapier body so the
@@ -11,6 +17,8 @@ import { patchProbe } from '../lighting/BakeShader';
  * swing away from whoever opens them; roll-up garage doors slide up into the header.
  * Barricading/reinforcement attaches to these in Phase 6.
  */
+const tmp = new THREE.Vector3();
+
 export class Door {
   readonly pivot = new THREE.Group();
   readonly center: THREE.Vector3;
@@ -20,6 +28,12 @@ export class Door {
   private readonly materials: THREE.MeshStandardMaterial[] = [];
   private probe: StaticProbe | null = null;
   private rollupPanel: THREE.Group | null = null;
+  /** Wooden leaves: the slab's and panels' materials, which show the damage. */
+  private readonly woodMats: THREE.MeshStandardMaterial[] = [];
+  private damage: DoorDamage | null = null;
+  private shownPieces = 0;
+  /** Called for each piece knocked out while the door is shown (not by `settle`). */
+  onPiece: ((door: Door, k: number) => void) | null = null;
 
   constructor(readonly body: DoorBody, parent: THREE.Object3D) {
     const spec = body.spec;
@@ -44,9 +58,25 @@ export class Door {
     const thickness = body.thickness;
 
     if (style === 'wood') {
-      part(new THREE.BoxGeometry(spec.w - 0.04, spec.h - 0.02, thickness), mat(0x3a2a1e, 0.7), spec.w / 2, spec.h / 2, 0);
-      const panel = mat(0x30231a, 0.75);
-      for (const py of [0.55, 1.55]) for (const side of [-1, 1]) part(new THREE.BoxGeometry(spec.w * 0.7, 0.7, 0.02), panel, spec.w / 2, py, side * (thickness / 2 + 0.005));
+      // Slab and panels share one damage texture mapped flat across the leaf (see DoorDamage), so
+      // holes go through them all; until the door is hurt it is a plain one of the paint colour.
+      plainWood ??= DoorDamage.plain(WOOD_PAINT);
+      const base = new THREE.Color().setRGB(WOOD_PAINT[0] / 255, WOOD_PAINT[1] / 255, WOOD_PAINT[2] / 255, THREE.SRGBColorSpace);
+      const shade = new THREE.Color(PANEL_PAINT);
+      const wood = (roughness: number, tint: THREE.Color) => {
+        const m = mat(0xffffff, roughness, 0, { map: plainWood, alphaTest: 0.5, side: THREE.DoubleSide });
+        m.color.copy(tint);
+        this.woodMats.push(m);
+        return m;
+      };
+      const flat = (mesh: THREE.Mesh) => {
+        const pos = mesh.geometry.getAttribute('position'), uv = mesh.geometry.getAttribute('uv');
+        for (let i = 0; i < pos.count; i++) uv.setXY(i, (mesh.position.x + pos.getX(i)) / spec.w, (mesh.position.y + pos.getY(i)) / spec.h);
+        uv.needsUpdate = true;
+      };
+      flat(part(new THREE.BoxGeometry(spec.w - 0.04, spec.h - 0.02, thickness), wood(0.7, new THREE.Color(1, 1, 1)), spec.w / 2, spec.h / 2, 0));
+      const panel = wood(0.75, new THREE.Color(shade.r / base.r, shade.g / base.g, shade.b / base.b));
+      for (const py of [0.55, 1.55]) for (const side of [-1, 1]) flat(part(new THREE.BoxGeometry(spec.w * 0.7, 0.7, 0.02), panel, spec.w / 2, py, side * (thickness / 2 + 0.005)));
       const knob = mat(0x8d7a4a, 0.3, 0.9);
       for (const side of [-1, 1]) part(new THREE.SphereGeometry(0.035, 8, 6), knob, spec.w - 0.12, 1.0, side * 0.06);
     } else if (style === 'glass') {
@@ -103,10 +133,58 @@ export class Door {
     this.body.toggle(from.x, from.z);
   }
 
+  /** A round through the leaf at a point in the world (its hole goes through both faces). */
+  hole(at: THREE.Vector3, seed: number): void {
+    if (!this.woodMats.length) return;
+    this.pivot.updateWorldMatrix(true, false);
+    const p = this.pivot.worldToLocal(tmp.copy(at));
+    if (p.x < 0 || p.x > this.spec.w || p.y < 0 || p.y > this.spec.h) return;
+    this.wreck().hole(p.x, p.y, seed);
+  }
+
+  /** The middle of piece `k` in the world. */
+  pieceAt(k: number, out: THREE.Vector3): THREE.Vector3 {
+    this.pivot.updateWorldMatrix(true, false);
+    return this.pivot.localToWorld(pieceCenter(k, this.spec.w, out));
+  }
+
+  /** Shows the pieces already gone without anything flying (joining a night in progress). */
+  settle(): void {
+    const n = this.woodMats.length ? this.body.pieces : 0;
+    if (n < this.shownPieces) this.mend();
+    for (let k = this.shownPieces; k < n; k++) this.wreck().piece(k, this.body.index);
+    this.shownPieces = n;
+  }
+
+  /** Paint back over every hole (a new night). */
+  mend(): void {
+    this.damage?.clear();
+    this.damage?.flush();
+    this.shownPieces = 0;
+  }
+
+  private wreck(): DoorDamage {
+    if (!this.damage) {
+      this.damage = new DoorDamage(this.spec.w, this.spec.h, WOOD_PAINT);
+      for (const m of this.woodMats) m.map = this.damage.texture;
+    }
+    return this.damage;
+  }
+
   /** Follows the physical leaf; `stepBody` advances it when no simulation owns the doors (menu). */
   update(dt: number, camera: THREE.Camera, stepBody: boolean): void {
     this.probe?.update(camera);
     if (stepBody) this.body.update(dt);
+    const n = this.woodMats.length ? this.body.pieces : 0;
+    if (n !== this.shownPieces) {
+      if (n < this.shownPieces) this.mend();
+      for (let k = this.shownPieces; k < n; k++) {
+        this.wreck().piece(k, this.body.index);
+        this.onPiece?.(this, k);
+      }
+      this.shownPieces = n;
+    }
+    this.damage?.flush();
     const a = this.body.angle;
     if (a === this.shownAngle) return;
     this.shownAngle = a;
@@ -152,9 +230,20 @@ export class DoorSystem {
     return this.doors.find((d) => d.body.index === index);
   }
 
-  /** Closes every door instantly (new session). */
+  /** Closes every door instantly and mends them (new session). */
   reset(): void {
     for (const b of this.bodies) b?.reset();
+    for (const d of this.doors) d.mend();
+  }
+
+  /** Shows every door's missing pieces as they are, quietly (joining a night in progress). */
+  settle(): void {
+    for (const d of this.doors) d.settle();
+  }
+
+  /** Called for each piece knocked out of a door while it is shown. */
+  set onPiece(f: ((door: Door, k: number) => void) | null) {
+    for (const d of this.doors) d.onPiece = f;
   }
 
   update(dt: number, camera: THREE.Camera, stepBodies = true): void {
