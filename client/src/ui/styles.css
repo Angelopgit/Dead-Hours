@@ -201,7 +201,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .crosshair .l, .crosshair .r { width: 7px; height: 1.5px; top: -0.75px; }
 .crosshair .t, .crosshair .b { width: 1.5px; height: 7px; left: -0.75px; }
 .prompt { position: absolute; left: 50%; top: 58%; transform: translateX(-50%); font-size: 0.95em; letter-spacing: 0.25em; color: var(--fg);
-  opacity: 0; transition: opacity 0.2s; text-shadow: 0 1px 6px rgba(0,0,0,0.9); white-space: nowrap; }
+  opacity: 0; transition: opacity 0.2s; text-shadow: 0 1px 6px rgba(0,0,0,0.9);
+  width: max-content; max-width: calc(100vw - 2 * (3vw + var(--comms-w)) - 1em); text-align: center; line-height: 1.4; text-wrap: balance; }
 .prompt .k { display: inline-block; border: 1px solid rgba(255,255,255,0.45); border-radius: 3px; padding: 0.05em 0.45em; margin-right: 0.6em; font-size: 0.9em; }
 .prompt.show { opacity: 1; }
 .waypoint { position: absolute; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 0.35em;
@@ -559,7 +560,11 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
 /* Online in play: who is talking, then the chat lines, in one column over the bottom-left corner (the names
    printed over the chat's top lines). It never takes a click or a touch, only the open chat box does: on a
    phone the move stick sits under it, and a third of the stick's zone went dead once a few lines came in. */
-.comms-hud { position: absolute; left: 3vw; bottom: calc(4vh + 7.5em); width: min(30em, 40vw); z-index: 30; display: flex; flex-direction: column; gap: 0.6em; }
+/* Its width, in px of the HUD's em (an em inside .prompt is a smaller one): the interaction prompt wraps to the
+   band between this column and its mirror on the right, so in a small window (a 960x540 game frame) it no
+   longer prints over the chat lines. 25em keeps the longest prompt on one line from 1280 wide up. */
+#ui-root { --comms-w: min(calc(25 * 14px * var(--ui-scale)), 30vw); }
+.comms-hud { position: absolute; left: 3vw; bottom: calc(4vh + 7.5em); width: var(--comms-w); z-index: 30; display: flex; flex-direction: column; gap: 0.6em; }
 #ui-root > .comms-hud { pointer-events: none; }
 .chat-game { pointer-events: none; }
 .chat-game .chat-log { max-height: 10em; overflow: hidden; background: transparent; border-color: transparent; transition: background 0.2s; }

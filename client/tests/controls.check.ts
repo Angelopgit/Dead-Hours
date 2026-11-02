@@ -107,17 +107,25 @@ check(none === null, 'nothing near: full speed');
 // of the zone once a few lines came in) never reach the stick. Only the open chat box takes them.
 {
   const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
-  const pointer = (sel: string) => {
+  const prop = (sel: string, name: string) => {
     const esc = sel.replace(/[.*+?^${}()|[\]\\>]/g, '\\$&');
-    const rule = css.match(new RegExp(`(?:^|[\\n}])\\s*${esc}\\s*\\{([^}]*)\\}`));
-    return rule?.[1].match(/pointer-events:\s*([a-z]+)/)?.[1] ?? null;
+    // The last rule with exactly this selector that sets the property.
+    const rules = [...css.matchAll(new RegExp(`(?:^|[\\n}])\\s*${esc}\\s*\\{([^}]*)\\}`, 'g'))];
+    const vals = rules.map((r) => r[1].match(new RegExp(`(?:^|[;{\\s])${name}:\\s*([^;]+);`))?.[1].trim()).filter(Boolean);
+    return vals.at(-1) ?? null;
   };
+  const pointer = (sel: string) => prop(sel, 'pointer-events');
   check(pointer('#ui-root > .comms-hud') === 'none', 'touch: the in-game chat column lets touches through to the move stick');
   check(pointer('.chat-game') === 'none', 'touch: closed chat lines let touches through');
   check(pointer('.chat-game.open') === 'auto', 'the open chat box still takes clicks');
   // The opening shot skips on a tap or click on the canvas: its black bars and "TAP TO SKIP" line must
   // let it through (a tap on the line itself, or on a bar, did nothing).
   check(pointer('#ui-root > .letterbox, #ui-root > .skip') === 'none', 'touch: a tap on the intro bars or the skip line skips the opening shot');
+  // In a small window (a 960x540 game frame) the centred interaction prompt ran over the chat column's lines.
+  // The prompt wraps to the band the column leaves in the middle, so both read the column's width from one place.
+  check(prop('.comms-hud', 'width') === 'var(--comms-w)' && /^min\(/.test(prop('#ui-root', '--comms-w') ?? '')
+    && /^calc\(100vw - 2 \* \(3vw \+ var\(--comms-w\)\)/.test(prop('.prompt', 'max-width') ?? ''),
+    'the interaction prompt wraps beside the chat column instead of printing over its lines');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
