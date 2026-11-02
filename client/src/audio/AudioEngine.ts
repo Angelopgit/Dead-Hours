@@ -195,7 +195,7 @@ export class AudioEngine {
   private nextAmbientEvent = 0;
   private nextPulse = 0;
   private time = 0;
-  private readonly spatial: { panner: PannerNode; gain: GainNode; level: () => number }[] = [];
+  private readonly spatial: { panner: PannerNode; gain: GainNode; level: () => number; pos: THREE.Vector3; at: THREE.Vector3 }[] = [];
   private unsub: (() => void) | null = null;
   /** 0..1 musical tension, driven by the survival director from Phase 5. */
   tension = 0;
@@ -854,7 +854,7 @@ export class AudioEngine {
       o.connect(hp).connect(og).connect(gain);
       o.start();
     }
-    this.spatial.push({ panner, gain, level });
+    this.spatial.push({ panner, gain, level, pos: position, at: position.clone() });
   }
 
   update(dt: number, camera: THREE.Camera): void {
@@ -883,7 +883,16 @@ export class AudioEngine {
         L.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);
       }
     }
-    for (const s of this.spatial) s.gain.gain.setTargetAtTime(s.level(), ctx.currentTime, 0.015);
+    for (const s of this.spatial) {
+      s.gain.gain.setTargetAtTime(s.level(), ctx.currentTime, 0.015);
+      // One on something that moves (a car with its hazards on) follows it.
+      if (s.at.distanceToSquared(s.pos) > 0.01) {
+        s.at.copy(s.pos);
+        s.panner.positionX.value = s.pos.x;
+        s.panner.positionY.value = s.pos.y;
+        s.panner.positionZ.value = s.pos.z;
+      }
+    }
     if (this.time > this.nextSpace) {
       this.here = this.spaceOf(p);
       this.nextSpace = this.time + 0.2;
@@ -1152,6 +1161,8 @@ export class AudioEngine {
       if (!left && decoded) break;
       await new Promise<void>((r) => setTimeout(r, left ? 0 : 16));
     }
+    // The cracks' white noise (skateboards, car doors and crashes): made now, not on the first one.
+    if (this.ctx === ctx) this.skateBuffers();
     report();
   }
 
@@ -2876,7 +2887,260 @@ export class AudioEngine {
     this.crack(d, t, 'bandpass', 2200, 0.6, 1.2, 0.35, 0.02);
   }
 
+  // ------------------------------------------------------------------ vehicles
+
+  private readonly engineLoops = new Map<number, {
+    kind: EngineSound['kind'];
+    oscs: OscillatorNode[];
+    rumble: AudioBufferSourceNode;
+    rumbleG: GainNode;
+    gain: GainNode;
+    lp: BiquadFilterNode;
+    panner: PannerNode;
+    horn: OscillatorNode[];
+    hornGain: GainNode;
+    lfo: OscillatorNode | null;
+    rev: number;
+  }>();
+
+  /**
+   * Running engines and sounding horns of the vehicles nearest the listener (the session sends the
+   * nearest few). An engine is a buzz pitched at its firing rate: up through the gears as it
+   * gathers speed (dropping at each change), brighter and louder on the throttle; the armored
+   * truck's diesel growls lower and rougher, a wreck's misfires. Horns: a car's two-tone blare,
+   * the cruiser's wailing siren, the truck's air horn. Whatever leaves the list fades away.
+   */
+  engines(list: readonly EngineSound[]): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const seen = new Set<number>();
+    for (const e of list) {
+      seen.add(e.id);
+      let l = this.engineLoops.get(e.id);
+      if (!l) {
+        const truck = e.kind === 'truck';
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.Q.value = truck ? 2.4 : 1.6;
+        lp.frequency.value = 300;
+        const panner = this.makePanner(e.pos);
+        panner.refDistance = 5;
+        panner.rolloffFactor = 1;
+        panner.maxDistance = 400;
+        lp.connect(gain).connect(panner).connect(this.effects);
+        const send = ctx.createGain();
+        send.gain.value = 0.12;
+        gain.connect(send).connect(this.sends.effects);
+        const oscs = [0, 1, 2].map((i) => {
+          const o = ctx.createOscillator();
+          o.type = i === 1 ? 'square' : i === 2 ? 'sine' : 'sawtooth';
+          const og = ctx.createGain();
+          og.gain.value = [0.42, truck ? 0.16 : 0.1, 0.5][i];
+          o.connect(og).connect(lp);
+          o.start(now);
+          this.free(o, og);
+          return o;
+        });
+        // The block's rough breathing: low noise, more of it on a diesel or a wreck.
+        const rumble = this.noiseSource();
+        const rl = ctx.createBiquadFilter();
+        rl.type = 'bandpass';
+        rl.frequency.value = truck ? 120 : 180;
+        rl.Q.value = 0.8;
+        const rumbleG = ctx.createGain();
+        rumbleG.gain.value = 0;
+        rumble.connect(rl).connect(rumbleG).connect(gain);
+        rumble.start(now, Math.random() * 2);
+        this.free(rumble, rl, rumbleG);
+        // The horn, silent until pressed.
+        const hornGain = ctx.createGain();
+        hornGain.gain.value = 0;
+        const hl = ctx.createBiquadFilter();
+        hl.type = 'lowpass';
+        hl.frequency.value = e.kind === 'police' ? 3200 : 2400;
+        hornGain.connect(hl).connect(panner);
+        let lfo: OscillatorNode | null = null;
+        const horn: OscillatorNode[] = [];
+        if (e.kind === 'police') {
+          // A wail: one tone swept up and down by a slow oscillator.
+          const o = ctx.createOscillator();
+          o.type = 'square';
+          o.frequency.value = 980;
+          lfo = ctx.createOscillator();
+          lfo.frequency.value = 0.42;
+          const depth = ctx.createGain();
+          depth.gain.value = 420;
+          lfo.connect(depth).connect(o.frequency);
+          const og = ctx.createGain();
+          og.gain.value = 0.32;
+          o.connect(og).connect(hornGain);
+          lfo.start(now);
+          o.start(now);
+          this.free(lfo, depth);
+          this.free(o, og);
+          horn.push(o);
+        } else {
+          for (const f of truck ? [208, 262] : [405, 512]) {
+            const o = ctx.createOscillator();
+            o.type = truck ? 'sawtooth' : 'square';
+            o.frequency.value = f;
+            const og = ctx.createGain();
+            og.gain.value = 0.22;
+            o.connect(og).connect(hornGain);
+            o.start(now);
+            this.free(o, og);
+            horn.push(o);
+          }
+        }
+        this.free(horn[0], hornGain, hl, lp, gain, send, panner);
+        l = { kind: e.kind, oscs, rumble, rumbleG, gain, lp, panner, horn, hornGain, lfo, rev: 0 };
+        this.engineLoops.set(e.id, l);
+      }
+      l.panner.positionX.setTargetAtTime(e.pos.x, now, 0.03);
+      l.panner.positionY.setTargetAtTime(e.pos.y + 0.6, now, 0.03);
+      l.panner.positionZ.setTargetAtTime(e.pos.z, now, 0.03);
+      const truck = l.kind === 'truck';
+      const [idle, top] = truck ? [21, 92] : l.kind === 'wreck' ? [24, 150] : [27, 175];
+      // Revs: through four gears with speed, revving in place on the throttle at a standstill.
+      const v = Math.abs(e.speed);
+      const span = Math.max(1, e.top / 4.2);
+      let rev: number;
+      if (v < 0.6) rev = e.throttle ? 0.45 : 0;
+      else {
+        const gear = Math.min(4, Math.floor(v / span));
+        rev = 0.22 + 0.62 * Math.min(1, v / span - gear) + gear * 0.04 + (e.throttle ? 0.06 : 0);
+      }
+      l.rev += (rev - l.rev) * 0.35;
+      const f = idle + (top - idle) * l.rev;
+      // A wreck stumbles now and then.
+      const miss = l.kind === 'wreck' && Math.random() < 0.06 ? 0.7 : 1;
+      l.oscs[0].frequency.setTargetAtTime(f * miss, now, 0.06);
+      l.oscs[1].frequency.setTargetAtTime(f * 2.003, now, 0.06);
+      l.oscs[2].frequency.setTargetAtTime(f * 0.5, now, 0.06);
+      l.lp.frequency.setTargetAtTime(240 + l.rev * 1300 + (e.throttle ? 500 : 0), now, 0.08);
+      l.rumbleG.gain.setTargetAtTime(e.running ? (truck ? 0.9 : l.kind === 'wreck' ? 0.7 : 0.35) * (0.5 + l.rev) : 0, now, 0.1);
+      const level = e.running ? (truck ? 0.55 : 0.4) * (0.55 + 0.45 * l.rev + (e.throttle ? 0.25 : 0)) : 0;
+      l.gain.gain.setTargetAtTime(level, now, e.running ? 0.12 : 0.25);
+      l.hornGain.gain.setTargetAtTime(e.horn ? (l.kind === 'police' ? 0.5 : 0.42) : 0, now, e.horn ? 0.01 : 0.03);
+    }
+    for (const [id, l] of this.engineLoops) {
+      if (seen.has(id)) continue;
+      this.stopEngine(l, now);
+      this.engineLoops.delete(id);
+    }
+  }
+
+  private stopEngine(l: { oscs: OscillatorNode[]; rumble: AudioBufferSourceNode; gain: GainNode; hornGain: GainNode; horn: OscillatorNode[]; lfo: OscillatorNode | null }, now: number): void {
+    l.gain.gain.setTargetAtTime(0, now, 0.15);
+    l.hornGain.gain.setTargetAtTime(0, now, 0.03);
+    for (const o of [...l.oscs, ...l.horn]) o.stop(now + 1);
+    l.lfo?.stop(now + 1);
+    l.rumble.stop(now + 1);
+  }
+
+  /** A car door: the latch, the slam into the frame, the body rocking on its springs. */
+  carDoor(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.25, 3);
+    this.crack(d, t, 'bandpass', 2900, 2.2, 0.7, 0.02);
+    this.tone(d, t + 0.015, 'sine', 120, 55, 0.9, 0.003, 0.16);
+    this.burst(d, t + 0.015, 'lowpass', 520, 0.7, 0.8, 0.002, 0.12);
+    this.crack(d, t + 0.02, 'bandpass', 1300, 1.5, 0.45, 0.06);
+  }
+
+  /** The starter turning the engine over for `seconds` (it catches, or it doesn't). */
+  starter(position: THREE.Vector3, seconds: number): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const d = this.out(position, 0.15, 4);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.linearRampToValueAtTime(175, t + seconds);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 520;
+    bp.Q.value = 1.2;
+    // The compression strokes: the whine labours in a chug about nine times a second.
+    const chug = ctx.createOscillator();
+    chug.type = 'triangle';
+    chug.frequency.setValueAtTime(7.5, t);
+    chug.frequency.linearRampToValueAtTime(10, t + seconds);
+    const depth = ctx.createGain();
+    depth.gain.value = 0.32;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.4, t + 0.05);
+    g.gain.setValueAtTime(0.4, t + Math.max(0.06, seconds - 0.05));
+    g.gain.linearRampToValueAtTime(0, t + seconds + 0.06);
+    chug.connect(depth).connect(g.gain);
+    o.connect(bp).connect(g).connect(d);
+    o.start(t);
+    chug.start(t);
+    o.stop(t + seconds + 0.1);
+    chug.stop(t + seconds + 0.1);
+    this.free(o, bp, g);
+    this.free(chug, depth);
+  }
+
+  /** The engine catching: a rising roar that settles into the idle. */
+  engineCatch(position: THREE.Vector3, truck = false): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.3, 5);
+    const f = truck ? 0.8 : 1;
+    this.tone(d, t, 'sawtooth', 32 * f, 78 * f, 0.5, 0.04, 0.45, 0.2);
+    this.tone(d, t, 'square', 64 * f, 150 * f, 0.08, 0.04, 0.35, 0.2);
+    this.burst(d, t, 'lowpass', 380, 0.9, 0.5, 0.03, 0.4);
+  }
+
+  /** An engine dying (out of gas), or one that won't catch: a few weak, irregular coughs. */
+  sputter(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.25, 4);
+    let at = t;
+    for (let i = 0; i < 5; i++) {
+      const k = 1 - i * 0.17;
+      this.tone(d, at, 'sawtooth', 58 + Math.random() * 10, 34, 0.45 * k, 0.005, 0.14);
+      this.burst(d, at, 'lowpass', 600, 0.8, 0.45 * k, 0.003, 0.09);
+      at += 0.12 + Math.random() * 0.22 + i * 0.05;
+    }
+  }
+
+  /** A vehicle hitting something hard: metal folding, a deep thump, glass going at the worst of it (`strength` m/s lost). */
+  carCrash(position: THREE.Vector3, strength: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const k = Math.min(1, strength / 16);
+    const d = this.out(position, 0.45, 6);
+    this.tone(d, t, 'sine', 95, 38, 0.6 + k * 0.7, 0.003, 0.35);
+    this.burst(d, t, 'lowpass', 900, 0.8, 0.6 + k * 0.8, 0.002, 0.3);
+    for (let i = 0; i < 3 + Math.round(k * 4); i++) {
+      this.burst(d, t + 0.01 + i * 0.03 + Math.random() * 0.02, 'bandpass', 1400 + Math.random() * 2200, 3, 0.35 * (0.5 + k), 0.002, 0.08 + Math.random() * 0.1);
+    }
+    if (k > 0.55) for (let i = 0; i < 7; i++) this.crack(d, t + 0.05 + i * 0.03 + Math.random() * 0.05, 'highpass', 4500 + Math.random() * 3000, 1.5, 0.35, 0.05);
+  }
+
+  /** A body hit by a vehicle: a heavy, dull thump into the bodywork (`strength` 0..1). */
+  carHit(position: THREE.Vector3, strength: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.3, 5);
+    const k = 0.5 + 0.5 * Math.min(1, strength);
+    this.tone(d, t, 'sine', 85, 40, 0.9 * k, 0.003, 0.22);
+    this.burst(d, t, 'lowpass', 650, 0.9, 0.9 * k, 0.002, 0.16);
+    this.burst(d, t + 0.01, 'bandpass', 1700, 2, 0.25 * k, 0.002, 0.06);
+  }
+
   dispose(): void {
+    for (const l of this.engineLoops.values()) this.stopEngine(l, this.ctx?.currentTime ?? 0);
+    this.engineLoops.clear();
     for (const r of this.rotors.values()) r.src.stop();
     this.rotors.clear();
     for (const l of this.fireLoops.values()) l.src.stop();
@@ -2890,6 +3154,20 @@ export class AudioEngine {
     if (this.ctx instanceof AudioContext) void this.ctx.close();
     this.ctx = null;
   }
+}
+
+/** A vehicle the engine sounds follow (see AudioEngine.engines). */
+export interface EngineSound {
+  id: number;
+  pos: THREE.Vector3;
+  kind: 'car' | 'police' | 'wreck' | 'truck';
+  /** The engine runs (the horn sounds without it). */
+  running: boolean;
+  /** Speed (m/s) and the vehicle's top speed (the gears are spread over it). */
+  speed: number;
+  top: number;
+  throttle: boolean;
+  horn: boolean;
 }
 
 export const audio = new AudioEngine();

@@ -1,4 +1,4 @@
-import { RAPIER, GROUP, groups } from '../physics/Physics';
+import { RAPIER, BODY_FILTER, GROUP, groups } from '../physics/Physics';
 import type { DoorBody } from '../physics/DoorBody';
 import { WEAPONS, type HitZone, type WeaponId } from '../config/weapons';
 import { RAID, RAID_ROUTES, raiderAppearance, routeAt, sampleRoute, type RouteSamples } from '../config/raid';
@@ -11,7 +11,7 @@ import type { PelletTrace } from './events';
 import type { PlayerMotion, SimPlayer, Simulation } from './Simulation';
 
 /** Raiders bump into survivors and the world; zombies and raiders pass through each other. */
-const RAIDER_GROUPS = groups(GROUP.zombie, GROUP.static | GROUP.dynamic | GROUP.player);
+const RAIDER_GROUPS = groups(GROUP.zombie, BODY_FILTER | GROUP.player);
 
 export type RaidStage = 'waiting' | 'inbound' | 'arrived' | 'over';
 export type RaiderState = 'deploy' | 'hunt' | 'engage' | 'breach' | 'dead';

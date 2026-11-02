@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, C2S, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
+  encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
-  type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
+  type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type Vehicle, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
@@ -37,6 +38,8 @@ import { LimbView } from '../zombies/LimbView';
 import { BarricadeView } from './BarricadeView';
 import { MeleePickups } from './MeleePickups';
 import { SkateboardView, type BoardPose } from './Skateboards';
+import type { VehicleView } from './VehicleView';
+import { Driving } from './Driving';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
 import { ChatBox } from '../ui/ChatBox';
@@ -47,8 +50,8 @@ import { TouchControls } from '../ui/TouchControls';
 import { AimAssist } from './AimAssist';
 import { GunsmithPanel } from '../ui/GunsmithPanel';
 import { GunsmithStage } from '../weapons/GunsmithStage';
-import { audio } from '../audio/AudioEngine';
-import { ChestLamp, flashlight } from './Flashlight';
+import { audio, type EngineSound } from '../audio/AudioEngine';
+import { ChestLamp, flashlight, type Beam } from './Flashlight';
 import { Acoustics } from '../audio/Acoustics';
 import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
@@ -94,13 +97,14 @@ export interface SessionOptions {
 }
 
 interface Candidate {
-  kind: 'door' | 'limb' | 'revive' | 'board' | Interactable['kind'];
+  kind: 'door' | 'limb' | 'revive' | 'board' | 'vehicle' | Interactable['kind'];
   pos: THREE.Vector3;
   door?: Door;
   it?: Interactable;
   limb?: SimLimb;
   mate?: SimPlayer;
   board?: Skateboard;
+  vehicle?: Vehicle;
   /** How near it counts as (default: straight-line distance from the chest). */
   near?: number;
 }
@@ -173,6 +177,21 @@ export class GameSession {
   /** Tricks landed one after another (each within `streakT` seconds of the last). */
   private streak = 0;
   private streakT = 0;
+  /** The car this survivor drives (null when not at a wheel), and when its next report goes to the server. */
+  private driving: Driving | null = null;
+  private driveT = 0;
+  private carHinted = false;
+  /** Online: where the server let this survivor out of a vehicle (until the session has put them there). */
+  private exitAt: Vec3 | null = null;
+  /** This frame's interpolation between fixed steps (where this survivor's own car is drawn). */
+  private alpha = 0;
+  private readonly seatPos = new THREE.Vector3();
+  private readonly wheelL = new THREE.Vector3();
+  private readonly wheelR = new THREE.Vector3();
+  private readonly beamList: Beam[] = [];
+  /** Engine sounds handed to the audio each frame (the nearest few running vehicles). */
+  private readonly engineSounds: (EngineSound & { d: number })[] = [];
+  private readonly engineList: EngineSound[] = [];
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -266,6 +285,7 @@ export class GameSession {
     private readonly input: Input,
     private readonly physics: Physics,
     private readonly doors: DoorSystem,
+    private readonly vehicleView: VehicleView,
     private readonly field: LightField,
     nav: NavGrid,
     private readonly ui: HTMLElement,
@@ -296,6 +316,9 @@ export class GameSession {
     this.me = this.sim.addPlayer(this.myId, profile.name, primary, secondary, { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look), account.loadout);
     this.mirror = online ? new Mirror(this.sim, this.myId) : null;
     this.remotes = online ? new RemoteSurvivors(engine.scene, physics, field, ui, this.myId) : null;
+    if (this.remotes) this.remotes.seats = vehicleView;
+    // Every vehicle back where the map parks it (the simulation starts them there).
+    vehicleView.reset();
 
     // Survivor, dressed as the profile's character.
     this.player = new PlayerController(physics, spawn, survivorLook(look));
@@ -998,9 +1021,12 @@ export class GameSession {
       if (++this.framesDrawn === 3) this.link.markLoaded();
       this.receive();
     }
+    if (this.link) this.syncSeat();
     let steps = 0;
     while (this.accumulator >= step && steps < 5) {
+      this.shoveFromCars();
       p.fixedUpdate(step, this.cam.yaw);
+      if (this.driving) this.driveStep(step);
       this.sim.setMotion(this.myId, this.myMotion());
       if (this.link) {
         if (this.phase === 'playing') this.sendOnline(step);
@@ -1008,6 +1034,8 @@ export class GameSession {
       } else {
         if (this.phase === 'playing') this.sendIntents(step);
         this.sim.step(step);
+        // In or out of a seat as the simulation says (got in, got out, thrown out going down).
+        this.syncSeat();
         this.doors.update(step, this.engine.camera, false);
       }
       this.physics.step();
@@ -1018,6 +1046,7 @@ export class GameSession {
     if (running && !this.link) for (const e of this.sim.drain()) this.onEvent(e);
     this.syncDowned();
     const alpha = this.accumulator / step;
+    this.alpha = alpha;
     // Frozen while paused: effects, corpses and timers wait too.
     const live = running ? dt : 0;
 
@@ -1030,6 +1059,9 @@ export class GameSession {
       }
     }
 
+    // Vehicles where they are drawn this frame; a survivor in a seat sits where theirs is.
+    this.vehicleView.update(live, this.engine.camera, this.sim.vehicles.list, this.drawAt);
+    this.placeSeated();
     p.render(dt, alpha);
     if (p.landed) {
       p.landed = false;
@@ -1044,6 +1076,7 @@ export class GameSession {
       audio.footstep(0.9, this.indoors);
     }
     this.updateRide(dt);
+    this.updateDriving(dt);
 
     // Camera.
     if (this.phase === 'table') {
@@ -1073,7 +1106,9 @@ export class GameSession {
       // would only glare off the sights an inch from the eye.
       this.fill.intensity = 1.6 * (1 - 0.8 * ads);
       this.hud.setScope(scope);
-      this.weapon.update(dt, a, { aim: a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming });
+      const driver = p.seated?.driver ?? false;
+      const wheel = driver && this.vehicleView.wheelPoints(p.seated!.vehicle, this.wheelL, this.wheelR) ? { left: this.wheelL, right: this.wheelR } : null;
+      this.weapon.update(dt, a, { aim: driver ? 0 : a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming, wheel });
     }
     this.updateLamp(dt);
     this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
@@ -1093,6 +1128,13 @@ export class GameSession {
     }
     // After the other survivors: their boards go under their feet as drawn this frame (not the last).
     this.skates.update(live, this.sim, this.engine.camera, (b) => this.boardPose(b, alpha));
+    // Lights for the other survivors' lamps and the headlights of cars (not this survivor's own:
+    // the flashlight is theirs while they drive), nearest first.
+    this.beamList.length = 0;
+    if (this.remotes) for (const b of this.remotes.beams) this.beamList.push(b);
+    this.vehicleView.beams(this.beamList, this.driving?.vehicle.id ?? -1);
+    flashlight()?.placeRemotes(this.beamList, this.engine.camera.position, live);
+    this.updateEngines(running);
     this.barricades.update(live, this.engine.camera);
     if (this.work) this.work.t += live;
     this.bleedHeldLimb(live);
@@ -1151,7 +1193,7 @@ export class GameSession {
 
   /** The active weapon's sights when aiming should look down them (first person). */
   private adsSight(): Sight | null {
-    if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing') return null;
+    if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing' || this.player.seated?.driver) return null;
     const a = this.me.arsenal;
     if (a.action === 'reload' || a.action === 'draw' || a.limb || a.meleeOut) return null;
     return this.sightFor(a.weapon.id);
@@ -1159,8 +1201,8 @@ export class GameSession {
 
   private get canAim(): boolean {
     const a = this.me.arsenal;
-    // Nothing to aim down while both hands are on a severed arm.
-    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb && !a.meleeOut;
+    // Nothing to aim down while both hands are on a severed arm (or on the wheel).
+    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb && !a.meleeOut && !this.player.seated?.driver;
   }
 
   private fovTo(dt: number, fov: number): void {
@@ -1173,7 +1215,7 @@ export class GameSession {
   /** Where this survivor is and aims, for the simulation and the server (with the light switch). */
   private myMotion(): PlayerMotion {
     const m = this.player.motion(this.cam.yaw, this.cam.pitch);
-    m.light = flashlight()?.on ?? false;
+    m.light = !this.driving && (flashlight()?.on ?? false);
     return m;
   }
 
@@ -1193,6 +1235,13 @@ export class GameSession {
     const torch = flashlight();
     if (!torch) return;
     const alive = this.phase !== 'dead' && this.me.alive;
+    const d = this.driving;
+    if (d && this.vehicleView.headlight(d.vehicle.id, this.tmpTorchAt, this.tmpTorchDir)) {
+      // At the wheel the light is the car's headlights (the chest lamp waits, switched as it was).
+      torch.update(dt, alive && d.lights && d.vehicle.engine, this.tmpTorchAt, this.tmpTorchDir, true);
+      this.lamp.show(0, this.engine.camera);
+      return;
+    }
     const lens = this.lamp.origin(this.tmpTorchAt);
     const want = this.tmpTorchDir;
     if (this.phase === 'playing' || this.phase === 'paused') {
@@ -1217,9 +1266,9 @@ export class GameSession {
       this.openPause();
       return;
     }
-    // Sticks and thumbs get help onto zombies; the mouse never does.
+    // Sticks and thumbs get help onto zombies; the mouse never does (nor anyone at a wheel).
     let friction = 1;
-    if (input.device !== 'mouse') {
+    if (input.device !== 'mouse' && !this.driving) {
       if (input.pressed('aim')) this.assist.aimPressed();
       const moving = input.stickLook || Math.hypot(input.move.x, input.move.y) > 0.2;
       const a = this.assist.update(dt, this.sim, this.cam.aimOrigin, this.cam.aimDir, this.cam.yaw, this.cam.pitch,
@@ -1233,6 +1282,19 @@ export class GameSession {
     p.sampleInput(input, this.cam.yaw);
     const a = this.me.arsenal;
     if (a.action === 'bandage') p.blockSprint(0.1);
+    if (this.driving) {
+      // At the wheel: the pedals, the steering, the handbrake, the horn and the headlights.
+      this.driving.read(input);
+      input.consumeWheel();
+      if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
+        this.chatBox.open();
+        input.clear();
+      }
+      if (input.held('inventory')) this.inventory.show(this.ui, this.me, this.timerText());
+      else this.inventory.hide();
+      this.handleInteraction(dt);
+      return;
+    }
     // The light works on the ground too: a downed survivor's beam helps the others find them.
     if (input.pressed('flashlight')) this.toggleLight();
     if (!this.me.up) {
@@ -1255,18 +1317,21 @@ export class GameSession {
     if (input.pressed('weapon3')) this.wantSlot = 'melee';
     const wheel = input.consumeWheel();
     if (wheel !== 0) {
-      // Primary → secondary → melee weapon in hand → primary (the other way scrolling up).
+      // Primary → secondary → melee weapon in hand → primary (the other way scrolling up); in a
+      // seat there is no room to swing, so only the guns.
       const order = ['primary', 'secondary', 'melee'] as const;
-      const at = a.meleeOut ? 2 : a.active === 'primary' ? 0 : 1;
-      this.wantSlot = order[(at + (wheel > 0 ? 1 : 2)) % 3];
+      const n = p.seated ? 2 : 3;
+      const at = Math.min(n - 1, a.meleeOut ? 2 : a.active === 'primary' ? 0 : 1);
+      this.wantSlot = order[(at + (wheel > 0 ? 1 : n - 1)) % n];
     }
-    if (input.pressed('melee')) this.wantMelee = true;
-    this.throwInput();
+    // In a seat: shoot, reload, bandage; no room to swing or throw.
+    if (input.pressed('melee') && !p.seated) this.wantMelee = true;
+    if (!p.seated) this.throwInput();
     if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
       this.chatBox.open();
       input.clear();
     }
-    if (input.pressed('gunsmith')) {
+    if (input.pressed('gunsmith') && !p.seated) {
       this.openGunsmith(false);
       return;
     }
@@ -1349,7 +1414,16 @@ export class GameSession {
           if (this.sim.phase === 'survival') this.outbreakAnnounced = true;
         }
       }
-      else if (m.k === 'pos') this.player.teleport(m.pos);
+      else if (m.k === 'pos') {
+        if (!this.player.seated) this.player.teleport(m.pos);
+      } else if (m.k === 'vpos') {
+        // The server put this survivor's car back where it last accepted it.
+        const d = this.driving;
+        if (d && d.vehicle.id === m.v[0]) {
+          d.reset({ x: m.v[1] / 100, y: m.v[2] / 100, z: m.v[3] / 100 }, m.v[4] / 1000);
+          d.follow();
+        }
+      }
       else {
         for (const e of m.events) {
           mirror.event(e);
@@ -1537,6 +1611,10 @@ export class GameSession {
   }
 
   private handleInteraction(dt: number): void {
+    if (this.player.seated) {
+      this.seatControls();
+      return;
+    }
     if (this.keepReviving()) return;
     // On a skateboard [interact] steps off (nothing else is in reach from the deck).
     if (this.player.ride) {
@@ -1606,6 +1684,11 @@ export class GameSession {
     }
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'board') this.hud.setPrompt('interact', 'RIDE THE SKATEBOARD');
+    else if (best.kind === 'vehicle') {
+      const v = best.vehicle!;
+      const gas = v.gas <= 0 ? 'NO GAS' : `GAS ${Math.max(1, Math.round(v.gas * 100))}%`;
+      this.hud.setPrompt('interact', `${v.seats[0] === null ? 'DRIVE' : 'GET IN'} THE ${v.def.name} · ${gas}`);
+    }
     else if (best.kind === 'limb') {
       const l = best.limb!;
       const what = LIMB_NAME[l.cut];
@@ -1629,6 +1712,8 @@ export class GameSession {
       this.openTable();
     } else if (best.kind === 'board') {
       this.rideBoard(best.board!);
+    } else if (best.kind === 'vehicle') {
+      this.getIn(best.vehicle!);
     } else if (best.kind === 'limb') {
       if (this.link) this.act({ a: 'grab', limb: best.limb!.id });
       else this.sim.grabLimb(this.myId, best.limb!.id);
@@ -1653,7 +1738,7 @@ export class GameSession {
     if (!jump && this.vaultLookT > 0) return this.vaultChoice;
     this.vaultLookT = 0.1;
     this.vaultChoice = null;
-    if (!this.me.up || p.ride || p.vault || p.downed || this.work || (!p.grounded && !jump)) return null;
+    if (!this.me.up || p.ride || p.vault || p.seated || p.downed || this.work || (!p.grounded && !jump)) return null;
     const mv = this.input.move;
     const yaw = this.cam.yaw;
     let fx = -Math.sin(yaw), fz = -Math.cos(yaw);
@@ -1840,6 +1925,269 @@ export class GameSession {
     return o;
   }
 
+  // ------------------------------------------------------------------ vehicles
+
+  /** Where a vehicle is drawn: this survivor's own car between fixed steps, others gliding between snapshots. */
+  private readonly drawAt = (v: Vehicle, out: Vec3): number | null => {
+    const d = this.driving;
+    if (d && d.vehicle === v) return d.drawn(this.alpha, out);
+    return this.mirror ? this.mirror.vehiclePose(v.id, out) : null;
+  };
+
+  /** Into the seat the simulation (or the server) gave this survivor, or out of the one they left. */
+  private syncSeat(): void {
+    const at = this.me.alive ? this.sim.vehicles.seatOf(this.myId) : null;
+    const p = this.player;
+    const cur = p.seated;
+    if (at) {
+      const [v, seat] = at;
+      if (cur && cur.vehicle === v.id && cur.seat === seat) return;
+      p.sitIn(v.id, seat, seat === 0);
+      this.cam.seat = seat === 0 ? 'driver' : 'passenger';
+      this.cam.seeThrough = this.assist.seeThrough = v.body;
+      this.touch.setSeat(seat === 0 ? 'driver' : 'passenger');
+      this.throws.priming = null;
+      this.driving = seat === 0 ? new Driving(this.physics, this.sim, v) : null;
+      this.driveT = 0;
+      if (this.driving) this.mirror?.dropVehicleTrack(v.id);
+      if (!cur) this.carHint(seat === 0);
+      return;
+    }
+    if (!cur) return;
+    const out = this.exitAt ?? this.me.motion.pos;
+    this.exitAt = null;
+    p.leaveSeat(out);
+    this.cam.seat = null;
+    this.cam.seeThrough = this.assist.seeThrough = null;
+    this.touch.setSeat(null);
+    this.driving = null;
+  }
+
+  /** The first time in a vehicle: how it's driven (or what a passenger can do). */
+  private carHint(driver: boolean): void {
+    if (this.carHinted) return;
+    this.carHinted = true;
+    const d = this.input.device;
+    const k = (a: Action, alt: string) => actionLabel(a) || alt;
+    if (!driver) {
+      this.hud.notify('PASSENGER', d === 'touch' ? 'SHOOT FROM THE WINDOWS · SEAT MOVES OVER · USE GETS OUT' : `SHOOT FROM THE WINDOWS · ${k('barricade', 'G')} CHANGE SEAT · ${k('interact', 'E')} GET OUT`, 4);
+      return;
+    }
+    this.hud.notify('DRIVING · WATCH THE GAS', d === 'touch'
+      ? 'STICK UP GAS · DOWN BRAKE AND REVERSE · SIDEWAYS STEERS · BRAKE BUTTON HANDBRAKE · HORN · USE GETS OUT'
+      : d === 'pad'
+        ? `RT GAS · LT BRAKE · LEFT STICK STEERS · ${k('jump', 'A')} HANDBRAKE · ${k('melee', 'R3')} HORN · ${k('flashlight', '↑')} LIGHTS · ${k('interact', 'RB')} GET OUT`
+        : `${k('forward', 'W')} GAS · ${k('back', 'S')} BRAKE AND REVERSE · ${k('left', 'A')}/${k('right', 'D')} STEER · ${k('jump', 'SPACE')} HANDBRAKE · ${k('melee', 'F')} HORN · ${k('flashlight', 'L')} LIGHTS · ${k('interact', 'E')} GET OUT`,
+      5);
+  }
+
+  /** Puts this survivor on their seat as the vehicle is drawn this frame. */
+  private placeSeated(): void {
+    const s = this.player.seated;
+    if (!s) return;
+    const yaw = this.vehicleView.seatPoint(s.vehicle, s.seat, this.seatPos);
+    const v = this.sim.vehicles.vehicle(s.vehicle);
+    if (yaw === null || !v) return;
+    this.player.seatAt(this.seatPos, yaw, this.driving ? this.driving.body.vel : v.vel);
+  }
+
+  /** One fixed step at the wheel: the car moves here, and where it went is told (the simulation, or the server ~30 times a second). */
+  private driveStep(step: number): void {
+    const d = this.driving!;
+    if (this.phase !== 'playing' || !this.me.up) d.release();
+    d.step(step);
+    if (this.link) {
+      d.follow();
+      this.driveT -= step;
+      if (this.driveT <= 0) {
+        this.driveT += 1 / MOTION_RATE;
+        if (this.driveT < 0) this.driveT = 0;
+        this.link.send(C2S.drive, packDrive(d.report()));
+      }
+    } else {
+      this.sim.drive(this.myId, d.report());
+    }
+  }
+
+  /** Online: the server's word on this survivor's car before anything that depends on where it is (getting out). */
+  private flushDrive(): void {
+    if (this.link && this.driving) {
+      this.link.send(C2S.drive, packDrive(this.driving.report()));
+      this.driveT = 1 / MOTION_RATE;
+    }
+  }
+
+  /**
+   * A car someone drives into this survivor (on foot) pushes them aside: out of its bodywork the
+   * shortest way, as it is drawn. Parked ones are solid to walk into already.
+   */
+  private shoveFromCars(): void {
+    const p = this.player;
+    if (p.seated || !this.me.alive) return;
+    const pos = p.position;
+    const at = this.tmpE;
+    for (const v of this.sim.vehicles.list) {
+      if (!v.touched || Math.abs(v.pos.x - pos.x) > 9 || Math.abs(v.pos.z - pos.z) > 9) continue;
+      const yaw = this.drawAt(v, at) ?? (at.set(v.pos.x, v.pos.y, v.pos.z), v.yaw);
+      if (pos.y > at.y + v.def.low || pos.y + PLAYER.height < at.y + v.def.clear) continue;
+      const c = Math.cos(yaw), sn = Math.sin(yaw);
+      const dx = pos.x - at.x, dz = pos.z - at.z;
+      const lx = dx * c - dz * sn, lz = dx * sn + dz * c;
+      const r = PLAYER.radius + 0.04;
+      const px = v.def.hx + r - Math.abs(lx), pz = v.def.hz + r - Math.abs(lz);
+      if (px <= 0 || pz <= 0) continue;
+      if (px < pz) {
+        const k = lx >= 0 ? px : -px;
+        p.shove(c * k, -sn * k);
+      } else {
+        const k = lz >= 0 ? pz : -pz;
+        p.shove(sn * k, c * k);
+      }
+    }
+  }
+
+  /** Gets into a vehicle in reach (the driver's seat if it's free). */
+  private getIn(v: Vehicle): void {
+    if (this.player.vault) return;
+    if (this.player.ride) this.leaveBoard(false);
+    if (this.link) this.link.act({ a: 'seat', v: v.id });
+    else if (this.sim.enterVehicle(this.myId, v.id)) this.syncSeat();
+  }
+
+  /** In a seat: [interact] gets out (not at speed), [barricade] moves over to the next free seat. */
+  private seatControls(): void {
+    const at = this.sim.vehicles.seatOf(this.myId);
+    if (!at) {
+      this.hud.setPrompt(null);
+      return;
+    }
+    const [v] = at;
+    const speed = Math.abs(this.driving ? this.driving.body.speed : v.speed);
+    const free = v.seats.includes(null);
+    const key = (a: Action, alt: string) => actionLabel(a) || alt;
+    const seatHint = free ? ` · ${key('barricade', 'SEAT')} CHANGE SEAT` : '';
+    if (speed > VEHICLE.exitSpeed) this.hud.setPrompt('interact', `SLOW DOWN TO GET OUT${seatHint}`);
+    else this.hud.setPrompt('interact', `GET OUT${seatHint}`);
+    if (this.input.pressed('barricade') && free) {
+      this.flushDrive();
+      if (this.link) this.link.act({ a: 'seat', v: v.id, s: -1 });
+      else if (this.sim.switchSeat(this.myId)) this.syncSeat();
+    }
+    if (this.input.pressed('interact') && speed <= VEHICLE.exitSpeed) {
+      this.flushDrive();
+      if (this.link) this.link.act({ a: 'seat', v: -1 });
+      else if (this.sim.exitVehicle(this.myId)) this.syncSeat();
+      else this.hud.feedLine('NO ROOM TO GET OUT HERE');
+    }
+  }
+
+  /**
+   * Every frame in a vehicle: hard hits jolt the view (and the controller), the view swings round
+   * behind a moving car unless the driver is looking about, and the HUD shows speed and gas.
+   */
+  private updateDriving(dt: number): void {
+    const p = this.player;
+    const at = this.phase !== 'dead' && this.me.alive ? this.sim.vehicles.seatOf(this.myId) : null;
+    if (!at || !p.seated) {
+      this.hud.setVehicle(null);
+      if (!p.ride) this.cam.rush = 0;
+      return;
+    }
+    const [v, seat] = at;
+    const d = this.driving;
+    const speed = d ? d.body.speed : v.speed;
+    if (d) {
+      if (d.jolt >= VEHICLE.crashSound) {
+        const k = Math.min(1, d.jolt / 20);
+        this.cam.addTrauma(0.2 + k * 0.6);
+        this.input.rumble(0.4 + k * 0.6, 160 + k * 200);
+      }
+      if (d.thud > 0) {
+        this.cam.addTrauma(Math.min(0.25, 0.06 + d.thud * 0.008));
+        this.input.rumble(0.3, 90);
+      }
+      d.jolt = d.thud = 0;
+      if (this.phase === 'playing') this.cam.follow(dt, v.yaw + Math.PI / 2, 2.4 * THREE.MathUtils.smoothstep(Math.abs(speed), 1.5, 6));
+    }
+    this.cam.rush = THREE.MathUtils.smoothstep(Math.abs(speed), 8, 26) * 0.8;
+    const state = v.crank > 0 ? 'STARTING' : v.engine ? (d && !d.lights ? 'LIGHTS OFF' : '') : v.gas <= 0 ? 'OUT OF GAS' : seat === 0 ? 'ENGINE OFF' : '';
+    this.hud.setVehicle({ name: v.def.name, seat: seat === 0 ? 'DRIVING' : 'PASSENGER', mph: Math.abs(speed) * 2.237, gas: v.gas, state });
+  }
+
+  /** Engines running and horns sounding near the listener: the nearest three are heard. */
+  private updateEngines(running: boolean): void {
+    const list = this.engineList;
+    list.length = 0;
+    if (running && this.phase !== 'loading') {
+      const cam = this.engine.camera.position;
+      const vs = this.sim.vehicles.list;
+      while (this.engineSounds.length < vs.length) {
+        this.engineSounds.push({ id: 0, pos: new THREE.Vector3(), kind: 'car', running: false, speed: 0, top: 1, throttle: false, horn: false, d: 0 });
+      }
+      const near: (EngineSound & { d: number })[] = [];
+      for (const v of vs) {
+        const mine = this.driving?.vehicle === v ? this.driving : null;
+        const horn = mine ? mine.horn : (v.input & DRIVE_FLAG.horn) !== 0;
+        if (!v.engine && !horn) continue;
+        const e = this.engineSounds[v.id];
+        if (this.vehicleView.drawnPose(v.id, e.pos) === null) e.pos.set(v.pos.x, v.pos.y, v.pos.z);
+        e.d = e.pos.distanceToSquared(cam);
+        if (e.d > 160 * 160) continue;
+        e.id = v.id;
+        e.kind = v.kind;
+        e.running = v.engine;
+        e.speed = mine ? mine.body.speed : v.speed;
+        e.top = v.def.top;
+        e.throttle = mine ? mine.input.throttle > 0.1 : (v.input & DRIVE_FLAG.throttle) !== 0;
+        e.horn = horn && this.phase !== 'dead';
+        near.push(e);
+      }
+      near.sort((a, b) => a.d - b.d);
+      for (let i = 0; i < near.length && i < 3; i++) list.push(near[i]);
+    }
+    audio.engines(list);
+  }
+
+  /** Something happened to a vehicle: doors, the starter, the engine catching or dying, a crash. */
+  private onVehicle(e: Extract<SimEvent, { type: 'vehicle' }>): void {
+    const v = this.sim.vehicles.vehicle(e.vehicle);
+    const at = this.vehicleView.drawnPose(e.vehicle, this.tmpA) !== null ? this.tmpA : e.pos ? v3(e.pos, this.tmpA) : null;
+    if (!v || !at) return;
+    const mine = e.player === this.myId;
+    const inside = this.player.seated?.vehicle === e.vehicle;
+    switch (e.stage) {
+      case 'in':
+        audio.carDoor(at);
+        break;
+      case 'out':
+      case 'thrown':
+        if (mine && e.pos) this.exitAt = { ...e.pos };
+        audio.carDoor(e.pos ? v3(e.pos, this.tmpB) : at);
+        break;
+      case 'crank':
+        audio.starter(at, v.def.crank);
+        break;
+      case 'start':
+        audio.engineCatch(at, v.kind === 'truck');
+        break;
+      case 'dry':
+        audio.sputter(at);
+        if (mine) this.hud.notify('THE TANK IS DRY', 'THIS ONE WON\'T START · FIND ANOTHER CAR', 2.6, 'danger');
+        break;
+      case 'empty':
+        audio.sputter(at);
+        if (inside) this.hud.notify('OUT OF GAS', 'THE ENGINE DIED · FIND ANOTHER CAR', 2.6, 'danger');
+        break;
+      case 'crash': {
+        const k = e.strength ?? VEHICLE.crashSound;
+        audio.carCrash(at, k);
+        // The driver felt it already; the others in the car feel it now.
+        if (inside && !this.driving) this.cam.addTrauma(Math.min(0.8, 0.15 + k * 0.03));
+        break;
+      }
+    }
+  }
+
   /** The opening this survivor could work on from where they stand (inside, within reach), if any. */
   private workableSlot(): BarricadeSlot | null {
     if (!this.me.alive) return null;
@@ -1897,6 +2245,11 @@ export class GameSession {
     // Skateboards lying in reach count by how near they are underfoot, like things on the floor.
     for (const b of this.sim.skateboards.inReach(this.me)) {
       cands.push({ kind: 'board', pos: new THREE.Vector3(b.pos.x, b.pos.y + 0.1, b.pos.z), board: b, near: Math.hypot(b.pos.x - p.x, b.pos.z - p.z) });
+    }
+    // Vehicles with a seat free: by how near their bodywork is.
+    for (const v of this.sim.vehicles.inReach(this.me)) {
+      const at = this.vehicleView.drawnPose(v.id, this.tmpC) !== null ? this.tmpC : this.tmpC.set(v.pos.x, v.pos.y, v.pos.z);
+      cands.push({ kind: 'vehicle', pos: new THREE.Vector3(at.x, at.y + v.def.low, at.z), vehicle: v, near: outsideBy(v, p.x, p.z) + 0.2 });
     }
     for (const it of this.sim.reachable(this.myId)) {
       if (it.supply <= 0) continue;
@@ -2053,6 +2406,10 @@ export class GameSession {
         } else if (e.weapon) {
           // A melee weapon: the blade's slice or the blunt weapon's crack and crunch.
           audio.meleeHit(e.weapon, A, { kill: e.killed, head: e.zone === 'head', damage: e.damage });
+        } else if (e.vehicle !== undefined) {
+          // Run down: the thump into the bodywork, and what it does to them.
+          audio.carHit(A, Math.min(1, e.damage / 120));
+          audio.flesh(A, { damage: e.damage, head: false, own: e.by === this.myId, melee: true });
         } else {
           audio.flesh(A, { damage: e.damage, head: e.zone === 'head', own: e.by === this.myId, melee: e.melee, power });
         }
@@ -2087,6 +2444,9 @@ export class GameSession {
         }
         break;
       case 'limbDropped':
+        break;
+      case 'vehicle':
+        this.onVehicle(e);
         break;
       case 'skate': {
         // Another rider's flip trick: drawn as they leave the ground (this survivor's own already shows).
@@ -2838,7 +3198,7 @@ export class GameSession {
     hud.setWarning(limb || a.meleeOut ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
     // Dynamic crosshair: gap follows the real spread cone (rolling on a skateboard is smooth).
-    const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : 1);
+    const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : p.seated ? VEHICLE.spreadSpeed : 1);
     const spread = a.spread({ speed: hv, crouching: p.crouching, grounded: p.grounded, aiming: p.aiming });
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
@@ -2846,7 +3206,7 @@ export class GameSession {
     // Down the sights, the sights are the crosshair. Not while the mouse is free either: "CLICK TO
     // CONTINUE" stands in the middle of the screen then, and the crosshair would strike through it.
     this.updateDownPanel();
-    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4);
+    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && a.action !== 'bandage' && this.cam.ads < 0.4 && !p.seated?.driver);
     hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
@@ -2943,6 +3303,9 @@ export class GameSession {
     this.spectateLine.remove();
     this.reconnectLine.remove();
     this.remotes?.dispose();
+    flashlight()?.placeRemotes([], this.engine.camera.position);
+    audio.engines([]);
+    this.vehicleView.reset();
     this.skates.dispose();
     this.inventory.dispose();
     this.engine.canvas.style.cursor = '';

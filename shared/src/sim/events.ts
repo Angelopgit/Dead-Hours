@@ -34,6 +34,8 @@ export type SimEvent =
     weapon?: MeleeId;
     /** The gun the round came from (sizes the blood, meat and sound). */
     gun?: WeaponId;
+    /** Run down by this vehicle. */
+    vehicle?: number;
   }
   | {
     type: 'zombieDied'; zombie: number; zone: HitZone; dir: Vec3; force: number; by: string;
@@ -143,7 +145,16 @@ export type SimEvent =
    * A survivor hopped on a skateboard, stepped off, or was thrown off it (a hit, a wall, going
    * down), or popped a flip trick (`trick`) off an ollie.
    */
-  | { type: 'skate'; player: string; board: number; stage: 'on' | 'off' | 'bail' | 'trick'; pos: Vec3; yaw: number; trick?: SkateTrick };
+  | { type: 'skate'; player: string; board: number; stage: 'on' | 'off' | 'bail' | 'trick'; pos: Vec3; yaw: number; trick?: SkateTrick }
+  /**
+   * Something about a vehicle: a survivor got in (`seat`), moved seats, got out or was thrown out
+   * (`pos`, where they stand now); the starter turned, the engine caught or wouldn't (dry), the tank
+   * ran out; it hit something hard (`strength`, the speed lost, m/s).
+   */
+  | {
+    type: 'vehicle'; vehicle: number; stage: 'in' | 'seat' | 'out' | 'thrown' | 'crank' | 'start' | 'dry' | 'empty' | 'crash';
+    player?: string; seat?: number; pos?: Vec3; strength?: number;
+  };
 
 /** A head or leg blown off a zombie a blast killed (arms come off as real limbs, see limbSevered). */
 export interface GibPart {

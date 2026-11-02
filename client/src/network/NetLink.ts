@@ -12,7 +12,9 @@ import { comms } from './Comms';
 export type Inbound =
   | { k: 'snap'; snap: Snapshot; at: number }
   | { k: 'ev'; events: SimEvent[] }
-  | { k: 'pos'; pos: Vec3 };
+  | { k: 'pos'; pos: Vec3 }
+  /** The server refused where this client drove its car: [vehicle, x, y, z (cm), yaw (mrad)]. */
+  | { k: 'vpos'; v: number[] };
 
 export interface LinkHandlers {
   lobby?: (m: LobbyMsg) => void;
@@ -103,6 +105,9 @@ export class NetLink {
     });
     room.onMessage(S2C.ev, (events: SimEvent[]) => {
       if (this.playing) this.queue.push({ k: 'ev', events });
+    });
+    room.onMessage(S2C.vpos, (v: number[]) => {
+      if (this.playing && Array.isArray(v) && v.length === 5 && v.every((n) => typeof n === 'number' && Number.isFinite(n))) this.queue.push({ k: 'vpos', v });
     });
     room.onMessage(S2C.pos, (pos: Vec3) => {
       if (this.playing) this.queue.push({ k: 'pos', pos });

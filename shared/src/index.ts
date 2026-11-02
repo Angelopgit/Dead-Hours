@@ -42,3 +42,6 @@ export * from './config/throwables';
 export * from './sim/Explosives';
 export * from './config/skateboards';
 export * from './sim/Skateboards';
+export * from './config/vehicles';
+export * from './sim/VehicleDrive';
+export * from './sim/Vehicles';

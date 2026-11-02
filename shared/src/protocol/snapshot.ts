@@ -13,6 +13,8 @@ import { noLulls } from '../sim/Lulls';
 import type { SimEvent, SimPhase } from '../sim/events';
 import { clamp, type Quat, type Vec3 } from '../sim/math';
 import { decodeBuild, defaultBuild, encodeBuild } from '../config/progression';
+import { VEHICLE } from '../config/vehicles';
+import { DRIVE_FLAG, type DriveState } from '../sim/Vehicles';
 
 // Index tables for the wire format (append only: old clients read new numbers otherwise).
 const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'];
@@ -31,6 +33,7 @@ const ZONES: HitZone[] = ['head', 'torso', 'armL', 'armR', 'legL', 'legR'];
 const RAID_STAGES: RaidStage[] = ['waiting', 'inbound', 'arrived', 'over'];
 
 const idx = <T>(table: readonly T[], v: T): number => Math.max(0, table.indexOf(v));
+const _carAt: Vec3 = { x: 0, y: 0, z: 0 };
 const cm = (v: number) => Math.round(v * 100);
 const mm = (v: number) => Math.round(v * 1000);
 const milli = (v: number) => Math.round(v * 1000);
@@ -92,6 +95,11 @@ export interface Snapshot {
   sk?: (number | string)[][];
   /** Lulls, once the first has begun: [count, start, end, paused (survival ms)] (see Lulls.ts). */
   lu?: number[];
+  /**
+   * Vehicles anyone has moved or sat in (the rest are as the map and the seed leave them):
+   * [id, x, y, z (cm), yaw (mrad), vx, vz, speed (cm/s), steer (mrad), gas (‰), DRIVE_FLAG bits, then each seat's survivor id or 0].
+   */
+  vh?: (number | string)[][];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -189,6 +197,16 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   const lull = sim.lull;
   if (lull.count > 0) snap.lu = [lull.count, milli(lull.start), milli(lull.end), milli(lull.paused)];
   if (panes) snap.g = panes;
+  const cars: (number | string)[][] = [];
+  for (const v of sim.vehicles.list) {
+    if (!v.touched) continue;
+    const flags = v.input | (v.engine ? DRIVE_FLAG.engine : 0) | (v.crank > 0 ? DRIVE_FLAG.cranking : 0);
+    cars.push([
+      v.id, cm(v.pos.x), cm(v.pos.y), cm(v.pos.z), milli(v.yaw), cm(v.vel.x), cm(v.vel.z), cm(v.speed), milli(v.steer), milli(v.gas), flags,
+      ...v.seats.map((id) => id ?? 0),
+    ]);
+  }
+  if (cars.length) snap.vh = cars;
   const raid = sim.raid;
   const van = raid.van;
   if (van) snap.v = [van.route, idx(RAID_STAGES, raid.stage), cm(van.pos.x), cm(van.pos.z), milli(van.yaw), cm(van.speed), van.door ? 1 : 0];
@@ -257,6 +275,33 @@ export function unpackMotion(a: unknown): MotionFrame | null {
   };
 }
 
+/** [vehicle, x, y, z (mm), yaw (mrad), vx, vz, speed (cm/s), steer (mrad), DRIVE_FLAG bits, speed lost in a crash (cm/s)] */
+export function packDrive(d: DriveState): number[] {
+  return [
+    d.vehicle, mm(d.pos.x), mm(d.pos.y), mm(d.pos.z), milli(Math.atan2(Math.sin(d.yaw), Math.cos(d.yaw))),
+    cm(d.vel.x), cm(d.vel.z), cm(d.speed), milli(d.steer), d.input, cm(d.crash),
+  ];
+}
+
+/** Reads a drive message, or null when it is malformed. */
+export function unpackDrive(a: unknown): DriveState | null {
+  if (!Array.isArray(a) || a.length !== 11) return null;
+  for (const v of a) if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > 1e7) return null;
+  const n = a as number[];
+  if (!Number.isInteger(n[0]) || n[0] < 0) return null;
+  const top = VEHICLE.maxSpeed * 1.5;
+  return {
+    vehicle: n[0],
+    pos: { x: n[1] / 1000, y: n[2] / 1000, z: n[3] / 1000 },
+    yaw: clamp(n[4] / 1000, -4, 4),
+    vel: { x: clamp(n[5] / 100, -top, top), y: 0, z: clamp(n[6] / 100, -top, top) },
+    speed: clamp(n[7] / 100, -top, top),
+    steer: clamp(n[8] / 1000, -1, 1),
+    input: n[9] | 0,
+    crash: clamp(n[10] / 100, 0, top),
+  };
+}
+
 // ------------------------------------------------------------------ the client's copy
 
 /** Where a remote survivor is drawn from and heading to (positions rebased on every snapshot). */
@@ -266,6 +311,16 @@ interface Track {
   at: number;
   span: number;
   facing: number;
+}
+
+/** The same for a vehicle someone else drives, with its heading. */
+interface CarTrack {
+  prev: Vec3;
+  pos: Vec3;
+  prevYaw: number;
+  yaw: number;
+  at: number;
+  span: number;
 }
 
 function nlerp(a: Quat, b: Quat, u: number, out: Quat): Quat {
@@ -297,6 +352,7 @@ export class Mirror {
   private readonly doorHold = new Map<number, number>();
   private readonly boardHold = new Map<number, number>();
   private readonly tracks = new Map<string, Track>();
+  private readonly carTracks = new Map<number, CarTrack>();
   private readonly held = new Map<number, HeldLimb>();
   /** Each survivor's weapons and builds as last applied (snapshots repeat them). */
   private readonly buildSeen = new Map<string, string>();
@@ -372,9 +428,35 @@ export class Mirror {
     return tr.facing;
   }
 
+  /**
+   * Where a vehicle is drawn now (gliding between snapshots), and its heading; null for one
+   * nobody has moved, or the one this client drives (both are where the copy has them).
+   */
+  vehiclePose(id: number, out: Vec3): number | null {
+    const tr = this.carTracks.get(id);
+    if (!tr) return null;
+    const u = clamp((this.sim.time - (tr.at - tr.span)) / tr.span, 0, 1);
+    out.x = tr.prev.x + (tr.pos.x - tr.prev.x) * u;
+    out.y = tr.prev.y + (tr.pos.y - tr.prev.y) * u;
+    out.z = tr.prev.z + (tr.pos.z - tr.prev.z) * u;
+    return tr.prevYaw + Math.atan2(Math.sin(tr.yaw - tr.prevYaw), Math.cos(tr.yaw - tr.prevYaw)) * u;
+  }
+
+  /** Forgets how a vehicle was gliding (this client took the wheel, or was put back by the server). */
+  dropVehicleTrack(id: number): void {
+    this.carTracks.delete(id);
+  }
+
   /** Moves every zombie's collision capsule to where it is drawn (the local survivor bumps into them). */
   updateBodies(): void {
     const t = this.sim.time;
+    // Vehicles others drive: their bodies follow where they are drawn.
+    for (const id of this.carTracks.keys()) {
+      const v = this.sim.vehicles.vehicle(id);
+      const yaw = v ? this.vehiclePose(id, _carAt) : null;
+      if (!v || yaw === null) continue;
+      this.sim.vehicles.bodyTo(v, _carAt, yaw);
+    }
     for (const r of this.sim.raid.raiders) {
       if (!r.body || !r.alive) continue;
       const u = clamp((t - (r.updatedAt - r.lastDt)) / Math.max(1e-4, r.lastDt), 0, 1);
@@ -617,6 +699,38 @@ export class Mirror {
       if (sk.boards.length > s.sk.length) sk.boards.length = s.sk.length;
     }
 
+    // Vehicles (older servers send none: the copy keeps them as the map and the seed leave them).
+    for (const r of s.vh ?? []) {
+      const id = r[0] as number;
+      const v = sim.vehicles.vehicle(id);
+      if (!v) continue;
+      const n = r as number[];
+      const seats: (string | null)[] = [];
+      for (let i = 11; i < r.length; i++) seats.push(typeof r[i] === 'string' && r[i] ? (r[i] as string) : null);
+      // The car this client drives moves itself; the server's word on it only counts after a correction.
+      const mine = seats[0] === this.me;
+      const pos = { x: n[1] / 100, y: n[2] / 100, z: n[3] / 100 };
+      const yaw = n[4] / 1000;
+      if (!mine) {
+        let tr = this.carTracks.get(id);
+        if (!tr) {
+          tr = { prev: { ...pos }, pos: { ...pos }, prevYaw: yaw, yaw, at: T, span };
+          this.carTracks.set(id, tr);
+        } else {
+          const u = clamp((T - (tr.at - tr.span)) / tr.span, 0, 1);
+          tr.prev.x += (tr.pos.x - tr.prev.x) * u;
+          tr.prev.y += (tr.pos.y - tr.prev.y) * u;
+          tr.prev.z += (tr.pos.z - tr.prev.z) * u;
+          tr.prevYaw += Math.atan2(Math.sin(tr.yaw - tr.prevYaw), Math.cos(tr.yaw - tr.prevYaw)) * u;
+          tr.pos = pos;
+          tr.yaw = yaw;
+          tr.at = T + span;
+          tr.span = span;
+        }
+      } else this.carTracks.delete(id);
+      sim.vehicles.remote(id, !mine, pos, yaw, { x: n[5] / 100, y: 0, z: n[6] / 100 }, n[7] / 100, n[8] / 1000, n[9] / 1000, n[10], seats);
+    }
+
     // Ammunition crates, first aid, weapon tables, landed supply crates.
     for (const r of s.i) {
       const id = r[0];
@@ -765,6 +879,9 @@ export class Mirror {
           b.yaw = e.yaw;
         }
       }
+    } else if (e.type === 'vehicle') {
+      // Who sits where shows at once.
+      sim.vehicles.heard(e);
     } else if (e.type === 'glassBroken') {
       // At once, so the client's own shots and sight lines go through the empty frame.
       const slot = sim.barricades.slots[e.slot];

@@ -1,5 +1,7 @@
 import { RAPIER, GROUP, groups, type Physics } from '../physics/Physics';
 import type { MapDefinition } from '../types/world';
+import { propColliders } from '../map/colliders';
+import { isDrivable } from '../config/vehicles';
 import type { Vec3 } from './math';
 
 /**
@@ -464,140 +466,155 @@ export function* buildNavGrid(physics: Physics, map: MapDefinition): Generator<n
   const rot = { x: 0, y: 0, z: 0, w: 1 };
   const down = { x: 0, y: -1, z: 0 };
   const ray = new R.Ray({ x: 0, y: 0, z: 0 }, down);
-  world.step();
-
-  const colStart = new Int32Array(cols * rows + 1);
-  const ys: number[] = [];
-  const indoor: boolean[] = [];
-  const floorsAt: number[] = [];
-  for (let iz = 0; iz < rows; iz++) {
-    const cz = z0 + (iz + 0.5) * NAV.cell;
-    for (let ix = 0; ix < cols; ix++) {
-      const cx = x0 + (ix + 0.5) * NAV.cell;
-      colStart[iz * cols + ix] = ys.length;
-      floorsAt.length = 0;
-      let top: number = NAV.castTop;
-      let roofAbove = false;
-      for (let guard = 0; guard < 16 && top > NAV.minFloor; guard++) {
-        ray.origin = { x: cx, y: top, z: cz };
-        const hit = world.castRayAndGetNormal(ray, top - NAV.minFloor, true, undefined, staticOnly);
-        if (!hit) break;
-        const y = top - hit.timeOfImpact;
-        if (hit.timeOfImpact > 0 && hit.normal.y > 0.7) floorsAt.push(y, roofAbove ? 1 : 0);
-        roofAbove = true;
-        if (physics.isGround(hit.collider)) break;
-        // Step through the solid to its underside and keep looking for floors below.
-        ray.origin = { x: cx, y: y - 0.002, z: cz };
-        const exit = world.castRay(ray, y - NAV.minFloor, false, undefined, staticOnly);
-        if (!exit) break;
-        top = y - 0.002 - exit.timeOfImpact - 0.002;
-      }
-      for (let i = 0; i < floorsAt.length && ys.length - colStart[iz * cols + ix] < NAV.maxLayers; i += 2) {
-        const fy = floorsAt[i];
-        const center = { x: cx, y: fy + (NAV.clearFrom + NAV.clearTo) / 2, z: cz };
-        // (The plural query walks the BVH; the singular one is linear in Rapier 0.14.)
-        let blocked = false;
-        world.intersectionsWithShape(center, rot, box, () => { blocked = true; return false; }, undefined, staticOnly);
-        if (blocked) continue;
-        ys.push(fy);
-        indoor.push(floorsAt[i + 1] === 1);
-      }
+  // The cars where they are parked when the night starts count as solid here: zombies path round
+  // them (a car driven away leaves a gap they skirt; one parked somewhere new they slide along).
+  // The grid is then the same as when cars were scenery, so cached grids stay good.
+  const parked = world.createRigidBody(R.RigidBodyDesc.fixed());
+  for (const p of map.props) {
+    if (!isDrivable(p)) continue;
+    for (const c of propColliders(p)) {
+      const q = { x: 0, y: Math.sin(c.rotY / 2), z: 0, w: Math.cos(c.rotY / 2) };
+      world.createCollider(R.ColliderDesc.cuboid(c.hx, c.hy, c.hz).setTranslation(c.x, c.y, c.z).setRotation(q).setCollisionGroups(groups(GROUP.static, 0xffff)), parked);
     }
-    if (iz % 25 === 0) yield (iz / rows) * 0.9;
   }
-  colStart[cols * rows] = ys.length;
-  const n = ys.length;
-  const nodeY = Float32Array.from(ys);
-  const flags = new Uint8Array(n);
-  for (let i = 0; i < n; i++) if (indoor[i]) flags[i] |= NAV_INDOOR;
-  const links = new Int32Array(n * 8).fill(-1);
+  world.step();
+  try {
 
-  const nearestIn = (c: number, y: number): number => {
-    let best = -1;
-    let bestD: number = NAV.maxStep;
-    for (let i = colStart[c]; i < colStart[c + 1]; i++) {
-      const d = Math.abs(nodeY[i] - y);
-      if (d <= bestD) {
-        bestD = d;
-        best = i;
+    const colStart = new Int32Array(cols * rows + 1);
+    const ys: number[] = [];
+    const indoor: boolean[] = [];
+    const floorsAt: number[] = [];
+    for (let iz = 0; iz < rows; iz++) {
+      const cz = z0 + (iz + 0.5) * NAV.cell;
+      for (let ix = 0; ix < cols; ix++) {
+        const cx = x0 + (ix + 0.5) * NAV.cell;
+        colStart[iz * cols + ix] = ys.length;
+        floorsAt.length = 0;
+        let top: number = NAV.castTop;
+        let roofAbove = false;
+        for (let guard = 0; guard < 16 && top > NAV.minFloor; guard++) {
+          ray.origin = { x: cx, y: top, z: cz };
+          const hit = world.castRayAndGetNormal(ray, top - NAV.minFloor, true, undefined, staticOnly);
+          if (!hit) break;
+          const y = top - hit.timeOfImpact;
+          if (hit.timeOfImpact > 0 && hit.normal.y > 0.7) floorsAt.push(y, roofAbove ? 1 : 0);
+          roofAbove = true;
+          if (physics.isGround(hit.collider)) break;
+          // Step through the solid to its underside and keep looking for floors below.
+          ray.origin = { x: cx, y: y - 0.002, z: cz };
+          const exit = world.castRay(ray, y - NAV.minFloor, false, undefined, staticOnly);
+          if (!exit) break;
+          top = y - 0.002 - exit.timeOfImpact - 0.002;
+        }
+        for (let i = 0; i < floorsAt.length && ys.length - colStart[iz * cols + ix] < NAV.maxLayers; i += 2) {
+          const fy = floorsAt[i];
+          const center = { x: cx, y: fy + (NAV.clearFrom + NAV.clearTo) / 2, z: cz };
+          // (The plural query walks the BVH; the singular one is linear in Rapier 0.14.)
+          let blocked = false;
+          world.intersectionsWithShape(center, rot, box, () => { blocked = true; return false; }, undefined, staticOnly);
+          if (blocked) continue;
+          ys.push(fy);
+          indoor.push(floorsAt[i + 1] === 1);
+        }
       }
+      if (iz % 25 === 0) yield (iz / rows) * 0.9;
     }
-    return best;
-  };
-  for (let iz = 0; iz < rows; iz++) {
-    for (let ix = 0; ix < cols; ix++) {
-      const c = iz * cols + ix;
+    colStart[cols * rows] = ys.length;
+    const n = ys.length;
+    const nodeY = Float32Array.from(ys);
+    const flags = new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (indoor[i]) flags[i] |= NAV_INDOOR;
+    const links = new Int32Array(n * 8).fill(-1);
+
+    const nearestIn = (c: number, y: number): number => {
+      let best = -1;
+      let bestD: number = NAV.maxStep;
       for (let i = colStart[c]; i < colStart[c + 1]; i++) {
-        for (let d = 0; d < 4; d++) {
-          const nx = ix + DX[d], nz = iz + DZ[d];
-          if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue;
-          links[i * 8 + d] = nearestIn(nz * cols + nx, nodeY[i]);
+        const d = Math.abs(nodeY[i] - y);
+        if (d <= bestD) {
+          bestD = d;
+          best = i;
+        }
+      }
+      return best;
+    };
+    for (let iz = 0; iz < rows; iz++) {
+      for (let ix = 0; ix < cols; ix++) {
+        const c = iz * cols + ix;
+        for (let i = colStart[c]; i < colStart[c + 1]; i++) {
+          for (let d = 0; d < 4; d++) {
+            const nx = ix + DX[d], nz = iz + DZ[d];
+            if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue;
+            links[i * 8 + d] = nearestIn(nz * cols + nx, nodeY[i]);
+          }
         }
       }
     }
-  }
-  // Diagonals only where both orthogonal steps connect (no corner cutting).
-  for (let i = 0; i < n; i++) {
-    for (let d = 4; d < 8; d++) {
-      const ox = DX[d], oz = DZ[d];
-      const a = links[i * 8 + (ox > 0 ? 0 : 2)];
-      const b = links[i * 8 + (oz > 0 ? 1 : 3)];
-      if (a < 0 || b < 0) continue;
-      const viaA = links[a * 8 + (oz > 0 ? 1 : 3)];
-      const viaB = links[b * 8 + (ox > 0 ? 0 : 2)];
-      if (viaA >= 0 && viaA === viaB) links[i * 8 + d] = viaA;
-    }
-  }
-  yield 0.95;
-
-  // Reachability: flood from the player spawns; roofs, car tops and sealed rooms drop out.
-  const nav = new NavGrid({ cols, rows, x0, z0, colStart, nodeY, flags, door: new Int16Array(n).fill(-1), links });
-  const queue = new Int32Array(n);
-  let qh = 0, qt = 0;
-  for (const s of map.playerSpawns) {
-    const ix = Math.floor((s.x - x0) / NAV.cell), iz = Math.floor((s.z - z0) / NAV.cell);
-    const c = iz * cols + ix;
-    for (let i = colStart[c]; i < colStart[c + 1]; i++) {
-      if (Math.abs(nodeY[i] - s.y) < 0.6 && !(flags[i] & NAV_REACHABLE)) {
-        flags[i] |= NAV_REACHABLE;
-        queue[qt++] = i;
+    // Diagonals only where both orthogonal steps connect (no corner cutting).
+    for (let i = 0; i < n; i++) {
+      for (let d = 4; d < 8; d++) {
+        const ox = DX[d], oz = DZ[d];
+        const a = links[i * 8 + (ox > 0 ? 0 : 2)];
+        const b = links[i * 8 + (oz > 0 ? 1 : 3)];
+        if (a < 0 || b < 0) continue;
+        const viaA = links[a * 8 + (oz > 0 ? 1 : 3)];
+        const viaB = links[b * 8 + (ox > 0 ? 0 : 2)];
+        if (viaA >= 0 && viaA === viaB) links[i * 8 + d] = viaA;
       }
     }
-  }
-  while (qh < qt) {
-    const cur = queue[qh++];
-    for (let d = 0; d < 8; d++) {
-      const nb = links[cur * 8 + d];
-      if (nb < 0 || flags[nb] & NAV_REACHABLE) continue;
-      flags[nb] |= NAV_REACHABLE;
-      queue[qt++] = nb;
-    }
-  }
-  for (let i = 0; i < n; i++) {
-    let open = 0;
-    for (let d = 0; d < 8; d++) if (links[i * 8 + d] >= 0) open++;
-    if (open < 8) flags[i] |= NAV_NEAR_WALL;
-  }
+    yield 0.95;
 
-  // Door cells: the opening plus a little on each side.
-  map.doors.forEach((dspec, index) => {
-    const alongX = dspec.axis === 'x';
-    const hw = dspec.w / 2 + 0.05;
-    const depth = 0.55;
-    const xa = alongX ? dspec.x - hw : dspec.x - depth, xb = alongX ? dspec.x + hw : dspec.x + depth;
-    const za = alongX ? dspec.z - depth : dspec.z - hw, zb = alongX ? dspec.z + depth : dspec.z + hw;
-    const floor = dspec.floorY ?? 0.3;
-    for (let z = za; z <= zb; z += NAV.cell * 0.5) {
-      for (let x = xa; x <= xb; x += NAV.cell * 0.5) {
-        const ix = Math.floor((x - x0) / NAV.cell), iz = Math.floor((z - z0) / NAV.cell);
-        if (ix < 0 || iz < 0 || ix >= cols || iz >= rows) continue;
-        const c = iz * cols + ix;
-        for (let i = colStart[c]; i < colStart[c + 1]; i++) if (Math.abs(nodeY[i] - floor) < 0.5) nav.door[i] = index;
+    // Reachability: flood from the player spawns; roofs, car tops and sealed rooms drop out.
+    const nav = new NavGrid({ cols, rows, x0, z0, colStart, nodeY, flags, door: new Int16Array(n).fill(-1), links });
+    const queue = new Int32Array(n);
+    let qh = 0, qt = 0;
+    for (const s of map.playerSpawns) {
+      const ix = Math.floor((s.x - x0) / NAV.cell), iz = Math.floor((s.z - z0) / NAV.cell);
+      const c = iz * cols + ix;
+      for (let i = colStart[c]; i < colStart[c + 1]; i++) {
+        if (Math.abs(nodeY[i] - s.y) < 0.6 && !(flags[i] & NAV_REACHABLE)) {
+          flags[i] |= NAV_REACHABLE;
+          queue[qt++] = i;
+        }
       }
     }
-  });
-  yield 1;
-  return nav;
+    while (qh < qt) {
+      const cur = queue[qh++];
+      for (let d = 0; d < 8; d++) {
+        const nb = links[cur * 8 + d];
+        if (nb < 0 || flags[nb] & NAV_REACHABLE) continue;
+        flags[nb] |= NAV_REACHABLE;
+        queue[qt++] = nb;
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      let open = 0;
+      for (let d = 0; d < 8; d++) if (links[i * 8 + d] >= 0) open++;
+      if (open < 8) flags[i] |= NAV_NEAR_WALL;
+    }
+
+    // Door cells: the opening plus a little on each side.
+    map.doors.forEach((dspec, index) => {
+      const alongX = dspec.axis === 'x';
+      const hw = dspec.w / 2 + 0.05;
+      const depth = 0.55;
+      const xa = alongX ? dspec.x - hw : dspec.x - depth, xb = alongX ? dspec.x + hw : dspec.x + depth;
+      const za = alongX ? dspec.z - depth : dspec.z - hw, zb = alongX ? dspec.z + depth : dspec.z + hw;
+      const floor = dspec.floorY ?? 0.3;
+      for (let z = za; z <= zb; z += NAV.cell * 0.5) {
+        for (let x = xa; x <= xb; x += NAV.cell * 0.5) {
+          const ix = Math.floor((x - x0) / NAV.cell), iz = Math.floor((z - z0) / NAV.cell);
+          if (ix < 0 || iz < 0 || ix >= cols || iz >= rows) continue;
+          const c = iz * cols + ix;
+          for (let i = colStart[c]; i < colStart[c + 1]; i++) if (Math.abs(nodeY[i] - floor) < 0.5) nav.door[i] = index;
+        }
+      }
+    });
+    yield 1;
+    return nav;
+  } finally {
+    world.removeRigidBody(parked);
+  }
 }
 
 export function buildNavGridSync(physics: Physics, map: MapDefinition): NavGrid {

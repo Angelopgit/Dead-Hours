@@ -77,6 +77,8 @@ export class Input {
   captureNext: ((code: string) => void) | null = null;
   /** Analog movement from a stick or thumb (x right, y forward, length ≤ 1); keys add to it. */
   readonly move = { x: 0, y: 0 };
+  /** How far the controller's triggers are pulled, 0..1 (driving: throttle and brake). */
+  readonly triggers = { l: 0, r: 0 };
   private padMove = { x: 0, y: 0 };
   private touchMove = { x: 0, y: 0 };
   /** Turning from a stick or thumb this frame (radians), which aim assist may bend. */
@@ -221,6 +223,7 @@ export class Input {
   poll(dt: number): void {
     const pad = this.gamepad();
     this.stickLook = this.turnX !== 0 || this.turnY !== 0;
+    this.triggers.l = this.triggers.r = 0;
     if (pad) this.readPad(pad, dt);
     const kx = this.held('right') ? 1 : 0, kxn = this.held('left') ? 1 : 0;
     const ky = this.held('forward') ? 1 : 0, kyn = this.held('back') ? 1 : 0;
@@ -257,6 +260,8 @@ export class Input {
     }
 
     if (edge(B.START)) this.pauseWanted = true;
+    this.triggers.l = pad.buttons[B.LT]?.value ?? 0;
+    this.triggers.r = pad.buttons[B.RT]?.value ?? 0;
     for (const [action, i] of PAD_ACTIONS) if (now[i] !== this.down.has(`Pad:${action}`)) this.virtual('Pad', action, now[i]);
     // Y swaps between the two weapons, as the mouse wheel does.
     if (edge(B.Y)) this.swapWeapon();

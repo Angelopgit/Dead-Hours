@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Physics } from '../core/Physics';
+import type { Physics, RAPIER } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
 import { LOOK_BEND } from '../characters/Humanoid';
@@ -48,6 +48,15 @@ export class ThirdPersonCamera {
   /** Recoil climb still to be recovered (radians). */
   private recover = 0;
   private recoverYaw = 0;
+  /**
+   * In a vehicle: 'driver' pulls back into a chase view over the roof, 'passenger' sits a little
+   * higher and further out over the shoulder. Null on foot.
+   */
+  seat: 'driver' | 'passenger' | null = null;
+  private seatBlend = 0;
+  private driveBlend = 0;
+  /** A body the camera and the crosshair see through (the vehicle the survivor sits in). */
+  seeThrough: RAPIER.RigidBody | null = null;
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly physics: Physics) {}
 
@@ -134,9 +143,14 @@ export class ThirdPersonCamera {
     }
 
     const a = this.aimBlend;
-    const dist = THREE.MathUtils.lerp(this.distance, 1.35, a);
-    const side = THREE.MathUtils.lerp(0.62, 0.55, a) * this.shoulderSmoothed;
-    const up = THREE.MathUtils.lerp(0.12, 0.08, a);
+    const k = 1 - Math.exp(-dt * 5);
+    this.seatBlend += ((this.seat ? 1 : 0) - this.seatBlend) * k;
+    this.driveBlend += ((this.seat === 'driver' ? 1 : 0) - this.driveBlend) * k;
+    const sb = this.seatBlend, db = this.driveBlend;
+    // Seated: further out (the car's own bulk is in the way otherwise), the driver well back over the roof.
+    const dist = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.distance, 3.6, sb), 1.35, a) + db * 2.8 * (1 - a);
+    const side = THREE.MathUtils.lerp(0.62, 0.55, a) * this.shoulderSmoothed * (1 - db);
+    const up = THREE.MathUtils.lerp(0.12, 0.08, a) + sb * 0.32 * (1 - a) + db * 0.75;
 
     const rot = new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ');
     const q = new THREE.Quaternion().setFromEuler(rot);
@@ -149,16 +163,20 @@ export class ThirdPersonCamera {
     const sideDir = right.clone().multiplyScalar(Math.sign(side) || 1);
     const sideLen = Math.abs(side);
     const r = 0.18;
-    const sideHit = this.physics.sphereCast(origin.x, origin.y, origin.z, sideDir.x, sideDir.y, sideDir.z, r, sideLen);
-    const shoulderPt = origin.clone().addScaledVector(sideDir, sideHit !== null ? Math.max(0, sideHit - 0.02) : sideLen).addScaledVector(upV, up);
-    const backHit = this.physics.sphereCast(shoulderPt.x, shoulderPt.y, shoulderPt.z, back.x, back.y, back.z, r, dist);
+    const own = this.seeThrough;
+    const sideHit = sideLen > 1e-3 ? this.physics.sphereCast(origin.x, origin.y, origin.z, sideDir.x, sideDir.y, sideDir.z, r, sideLen, own) : null;
+    const shoulderPt = origin.clone().addScaledVector(sideDir, sideHit !== null ? Math.max(0, sideHit - 0.02) : sideLen);
+    // Rising over the roof: only as far as the ceiling allows (a car parked in a garage).
+    const upHit = up > 0.2 ? this.physics.sphereCast(shoulderPt.x, shoulderPt.y, shoulderPt.z, 0, 1, 0, r, up, own) : null;
+    shoulderPt.addScaledVector(upV, upHit !== null ? Math.max(0, upHit - 0.02) : up);
+    const backHit = this.physics.sphereCast(shoulderPt.x, shoulderPt.y, shoulderPt.z, back.x, back.y, back.z, r, dist, own);
     const backDist = backHit !== null ? Math.max(0.15, backHit - 0.02) : dist;
     const camPos = shoulderPt.addScaledVector(back, backDist);
 
     // First person: the survivor's eyes sit 14 cm above the camera pivot, at the front of the
     // face, cheek on the stock; crouching leans the head forward and keeps it higher than the
     // shortened collider suggests.
-    const crouch = Math.max(0, 1.6 - eyeHeight);
+    const crouch = this.seat ? 0 : Math.max(0, 1.6 - eyeHeight);
     const fwdFlat = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.eye.copy(this.smoothPivot).addScaledVector(fwdFlat, 0.1 + crouch * 0.25).addScaledVector(right, 0.03);
     this.eye.y += 0.14 + crouch * 0.3;
@@ -207,7 +225,7 @@ export class ThirdPersonCamera {
     // Crosshair target.
     const o = this.aimOrigin;
     const fwd = this.aimDir;
-    const hit = this.physics.raycast(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, 200);
+    const hit = this.physics.raycast(o.x, o.y, o.z, fwd.x, fwd.y, fwd.z, 200, undefined, this.seeThrough);
     this.aimPoint.copy(o).addScaledVector(fwd, hit ?? 200);
   }
 

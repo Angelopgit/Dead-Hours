@@ -3,7 +3,7 @@ import type { MapDefinition } from '@dead-hours/shared';
 import type { LightField } from './LightField';
 
 /** Bump when the bake math changes so cached results are discarded. */
-export const BAKE_VERSION = 8;
+export const BAKE_VERSION = 9;
 
 /** Ground lightmap: covers the play area and a few meters past its edges at 0.5 m per texel. */
 export const GROUND_BAKE = { texel: 0.5, margin: 3 } as const;

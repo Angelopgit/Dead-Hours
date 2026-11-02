@@ -1,4 +1,5 @@
-import { RAPIER, GROUP, groups } from '../physics/Physics';
+import { RAPIER, BODY_FILTER, GROUP, groups } from '../physics/Physics';
+import { VEHICLE } from '../config/vehicles';
 import { SPECIALS, ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
 import { LEGS, LIMBS, type ArmCut, type ArmState, type ArmZone, type LegCut, type LegState, type LegZone } from '../config/limbs';
@@ -10,8 +11,8 @@ import { WINDOW_LINK_BASE } from './Barricades';
 import { angleDiff, clamp, dist2D, rng, v3, type Vec3 } from './math';
 import type { SimPlayer, Simulation } from './Simulation';
 
-/** Zombies collide with the world, doors and players, but steer around each other. */
-export const ZOMBIE_GROUPS = groups(GROUP.zombie, GROUP.static | GROUP.dynamic | GROUP.player);
+/** Zombies collide with the world, doors, vehicles and players, but steer around each other. */
+export const ZOMBIE_GROUPS = groups(GROUP.zombie, BODY_FILTER | GROUP.player);
 /** Highest ledge a zombie steps up onto (m): door thresholds, porch steps, stairs. */
 export const ZOMBIE_STEP = 0.4;
 
@@ -267,6 +268,16 @@ export class Zombie {
     const hl = Math.hypot(dir.x, dir.z) || 1;
     this.push.x = (dir.x / hl) * speed;
     this.push.z = (dir.z / hl) * speed;
+  }
+
+  /** Moved straight over by (dx, dz), body and all (pushed out of a car's bodywork). */
+  nudge(dx: number, dz: number): void {
+    this.pos.x += dx;
+    this.pos.z += dz;
+    const t = this.body.translation();
+    const to = { x: t.x + dx, y: t.y, z: t.z + dz };
+    this.body.setTranslation(to, true);
+    this.body.setNextKinematicTranslation(to);
   }
 
   /** Catches fire (or keeps burning) until `until`. */
@@ -633,9 +644,12 @@ export class Zombie {
             if (d < this.attackRange + 0.5 && ang < 1.25 && Math.abs(tp.y - this.pos.y) < 1.2 && (clear === null || clear > d - 0.4)) {
               // Missing arms claw less; with none left it can only bite.
               const reach = (1 - LIMBS.attackLoss * this.armsLost) * (this.crawling ? LEGS.damage : 1);
-              const dmg = Math.round((this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0])) * reach)
+              let dmg = Math.round((this.def.damage[0] + this.rand() * (this.def.damage[1] - this.def.damage[0])) * reach)
                 + (this.burning ? FIRE.burningSwipe : 0);
-              sim.damagePlayer(target, dmg, this.pos);
+              // Through a car window: half the swipe gets in, and none while the car is going.
+              const car = sim.vehicles.seatOf(target.id)?.[0];
+              if (car) dmg = Math.abs(car.speed) > VEHICLE.clawSpeed ? 0 : Math.round(dmg * VEHICLE.clawScale);
+              if (dmg > 0) sim.damagePlayer(target, dmg, this.pos);
             }
           }
         }

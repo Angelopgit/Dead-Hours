@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { propColliders } from '../map/colliders';
+import { isDrivable } from '../config/vehicles';
 import { subtractRects } from '../map/builder';
 import type { MapDefinition, MaterialKey, PropKind } from '../types/world';
 
@@ -14,6 +15,10 @@ export const GROUP = {
   zombie: 0x0008,
   /** Loose body parts: they land on the world and doors, but bullets, sight lines and characters ignore them. */
   debris: 0x0010,
+  /** A drivable vehicle's lower body (doors, hood, trunk): stops bullets, sight lines and bodies. */
+  vehicle: 0x0020,
+  /** The cabin over it (glass and roof): only bodies bump into it; rounds and sight go through. */
+  cabin: 0x0040,
 } as const;
 
 export function groups(member: number, filter: number): number {
@@ -62,8 +67,11 @@ export interface RayHit {
   collider: RAPIER.Collider;
 }
 
-/** Filter for bullets and sight lines: the static world and door leaves, never characters. */
-export const WORLD_FILTER = groups(0xffff, GROUP.static | GROUP.dynamic);
+/** Filter for bullets and sight lines: the static world, door leaves and vehicle bodies, never characters. */
+export const WORLD_FILTER = groups(0xffff, GROUP.static | GROUP.dynamic | GROUP.vehicle);
+
+/** What survivors and zombies walk into: the world, doors, each other, and vehicles (bodywork and cabin). */
+export const BODY_FILTER = GROUP.static | GROUP.dynamic | GROUP.vehicle | GROUP.cabin;
 
 /**
  * Rapier world built from the shared map definition. The client and the server construct the
@@ -114,6 +122,8 @@ export class Physics {
     }
 
     for (const p of map.props) {
+      // Vehicles that can be driven get moving bodies of their own (sim/Vehicles).
+      if (isDrivable(p)) continue;
       for (const b of propColliders(p)) {
         const q = { x: 0, y: Math.sin(b.rotY / 2), z: 0, w: Math.cos(b.rotY / 2) };
         add(RAPIER.ColliderDesc.cuboid(b.hx, b.hy, b.hz).setTranslation(b.x, b.y, b.z).setRotation(q), propSurface(p.kind));
@@ -189,9 +199,10 @@ export class Physics {
     dx: number, dy: number, dz: number,
     maxDist: number,
     filter = WORLD_FILTER,
+    exclude?: RAPIER.RigidBody | null,
   ): number | null {
     const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
-    const hit = this.world.castRay(ray, maxDist, true, undefined, filter);
+    const hit = this.world.castRay(ray, maxDist, true, undefined, filter, undefined, exclude ?? undefined);
     return hit ? hit.timeOfImpact : null;
   }
 
@@ -201,9 +212,10 @@ export class Physics {
     dx: number, dy: number, dz: number,
     maxDist: number,
     filter = WORLD_FILTER,
+    exclude?: RAPIER.RigidBody | null,
   ): RayHit | null {
     const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
-    const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filter);
+    const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filter, undefined, exclude ?? undefined);
     if (!hit) return null;
     const d = hit.timeOfImpact;
     let surface = this.surfaces.get(hit.collider.handle) ?? 'concrete';
@@ -253,17 +265,18 @@ export class Physics {
     return hit ? hit.timeOfImpact : null;
   }
 
-  /** Swept sphere cast (camera collision). Returns distance travelled before contact. */
+  /** Swept sphere cast (camera collision). Returns distance travelled before contact. `exclude`: a body to see through (the car you sit in). */
   sphereCast(
     ox: number, oy: number, oz: number,
     dx: number, dy: number, dz: number,
     radius: number,
     maxDist: number,
+    exclude?: RAPIER.RigidBody | null,
   ): number | null {
     const shape = new RAPIER.Ball(radius);
     const hit = this.world.castShape(
       { x: ox, y: oy, z: oz }, { x: 0, y: 0, z: 0, w: 1 }, { x: dx, y: dy, z: dz },
-      shape, 0, maxDist, true, undefined, WORLD_FILTER,
+      shape, 0, maxDist, true, undefined, WORLD_FILTER, undefined, exclude ?? undefined,
     );
     return hit ? hit.time_of_impact : null;
   }

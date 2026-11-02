@@ -14,6 +14,8 @@ const ANGLE = 0.36;
 /** Other survivors' lights: a little shorter, and no shadows. */
 const REMOTE_INTENSITY = 85;
 const REMOTE_RANGE = 26;
+/** A vehicle's headlights (one light for the pair): wider and brighter, a little further. */
+export const HEADLIGHT = { angle: 0.52, power: 120, range: 34 } as const;
 /**
  * Shadow casters nearer the lamp than this stay out of its shadow map: the survivor's own gun,
  * arms and melee weapon pass in front of a chest light and would print themselves into the beam.
@@ -117,23 +119,30 @@ export class Flashlight {
     return this.lvl;
   }
 
-  /** active: in play and alive. origin/dir: where the light sits and points. */
-  update(dt: number, active: boolean, origin: THREE.Vector3, dir: THREE.Vector3): void {
+  /**
+   * active: in play and alive. origin/dir: where the light sits and points. `head`: driving, the
+   * light is the car's headlights (wider, brighter, and `active` alone says whether they're on).
+   */
+  update(dt: number, active: boolean, origin: THREE.Vector3, dir: THREE.Vector3, head = false): void {
     const was = this.lvl;
-    this.lvl = fade(this.lvl, active && this.on, dt);
+    this.lvl = fade(this.lvl, active && (head || this.on), dt);
+    const l = this.light;
+    l.angle = head ? HEADLIGHT.angle : ANGLE;
+    l.distance = head ? HEADLIGHT.range : RANGE;
+    const candela = head ? HEADLIGHT.power : INTENSITY;
     if (this.lvl > 0.001) {
-      const want = beamPower(this.physics, this.light, INTENSITY, origin, dir);
+      const want = beamPower(this.physics, this.light, candela, origin, dir);
       // Just switched on: straight to the right power, no flash on the wall first.
       this.dim = was > 0.001 ? adapt(this.dim, want, dt) : want;
     }
-    this.light.intensity = INTENSITY * this.lvl * this.dim;
+    this.light.intensity = candela * this.lvl * this.dim;
     // Hiding a light would change the light count and recompile every material: dim it instead,
     // and stop redrawing its shadow map while it is off.
     this.light.shadow.autoUpdate = this.lvl > 0.001;
     aim(this.light, origin, dir);
     const u = weatherUniforms;
     u.uTorchPos.value.set(origin.x, origin.y, origin.z, this.lvl > 0.01 ? 1 : 0);
-    u.uTorchDir.value.set(dir.x, dir.y, dir.z, Math.cos(ANGLE));
+    u.uTorchDir.value.set(dir.x, dir.y, dir.z, Math.cos(l.angle));
     const c = this.light.color;
     u.uTorchCol.value.set(c.r, c.g, c.b).multiplyScalar(this.light.intensity * 0.25);
   }
@@ -150,11 +159,15 @@ export class Flashlight {
         held.push(null);
         continue;
       }
-      const want = beamPower(this.physics, l, REMOTE_INTENSITY, b.origin, b.dir);
+      const head = !!b.head;
+      l.angle = head ? HEADLIGHT.angle : ANGLE;
+      l.distance = head ? HEADLIGHT.range : REMOTE_RANGE;
+      const candela = head ? HEADLIGHT.power : REMOTE_INTENSITY;
+      const want = beamPower(this.physics, l, candela, b.origin, b.dir);
       // A lamp that just got a light: straight to the right power.
       b.dim = this.held.includes(b) ? adapt(b.dim, want, dt) : want;
       held.push(b);
-      l.intensity = REMOTE_INTENSITY * b.level * b.dim;
+      l.intensity = candela * b.level * b.dim;
       aim(l, b.origin, b.dir);
     }
     this.held = held;
@@ -168,6 +181,8 @@ export interface Beam {
   level: number;
   /** How far the pool has turned it down for what is close in front of it (1 = full power). */
   dim: number;
+  /** A vehicle's headlights, not a hand lamp (see HEADLIGHT). */
+  head?: boolean;
 }
 
 /** A click on, a short fade off. */

@@ -55,6 +55,8 @@ export class TouchControls {
   private readonly abort = new AbortController();
   private shown = false;
   private readonly unsub: () => void;
+  /** In a vehicle: at the wheel (JUMP is the handbrake, MELEE the horn) or a passenger. */
+  private seat: 'driver' | 'passenger' | null = null;
 
   constructor(private readonly input: Input, online: boolean) {
     this.knob = this.base.firstElementChild as HTMLElement;
@@ -106,6 +108,8 @@ export class TouchControls {
         return;
       }
       const action = def.action;
+      // At the wheel the handbrake and the horn are held, not tapped.
+      const mode: Mode = this.seat === 'driver' && (action === 'jump' || action === 'melee') ? 'hold' : def.mode;
       // Aim follows the player's hold/toggle choice; in hold mode a tap latches it on screens.
       const latch = def.mode === 'latch' && !(action === 'aim' && settings.value.controls.aimMode === 'toggle');
       if (latch) {
@@ -124,7 +128,7 @@ export class TouchControls {
         b.classList.remove('on');
         this.lookers.delete(e.pointerId);
       };
-      if (def.mode === 'tap') {
+      if (mode === 'tap') {
         // Held for at least one frame so the game sees the press.
         setTimeout(up, 60);
         return;
@@ -205,6 +209,33 @@ export class TouchControls {
     this.shown = on;
     this.el.classList.toggle('hidden', !on);
     if (!on) this.reset();
+  }
+
+  /** Relabels the buttons for a seat in a vehicle (null: back on foot). */
+  setSeat(seat: 'driver' | 'passenger' | null): void {
+    if (seat === this.seat) return;
+    // Aim and crouch latched on foot are let go (the stick stays under the thumb).
+    for (const a of this.latched) {
+      this.input.virtual('Touch', a, false);
+      this.buttons.get(a)?.classList.remove('on');
+    }
+    this.latched.clear();
+    this.seat = seat;
+    this.el.classList.toggle('seated', !!seat);
+    this.el.classList.toggle('driving', seat === 'driver');
+    this.el.classList.toggle('passenger', seat === 'passenger');
+    const label = (action: string, text: string) => {
+      const b = this.buttons.get(action);
+      if (b) {
+        b.textContent = text;
+        b.setAttribute('aria-label', text);
+      }
+    };
+    const def = (action: string) => BUTTONS.find((d) => d.action === action)!.label;
+    label('jump', seat === 'driver' ? 'BRAKE' : def('jump'));
+    label('melee', seat === 'driver' ? 'HORN' : def('melee'));
+    this.buttons.get('melee')?.classList.toggle('horn', seat === 'driver');
+    label('barricade', seat ? 'SEAT' : def('barricade'));
   }
 
   /** Shows whether the flashlight is on (its button glows). */

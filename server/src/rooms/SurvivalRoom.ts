@@ -143,6 +143,11 @@ export class SurvivalRoom extends Room {
       const back = this.night.motion(c.sessionId, msg);
       if (back) c.send(S2C.pos, back);
     });
+    this.onMessage(C2S.drive, (c, msg: unknown) => {
+      if (this.status !== 'playing' || !this.night) return;
+      const back = this.night.drive(c.sessionId, msg);
+      if (back) c.send(S2C.vpos, back);
+    });
     this.onMessage(C2S.act, (c, msg: unknown) => {
       if (this.status === 'playing') this.night?.act(c.sessionId, msg);
     });

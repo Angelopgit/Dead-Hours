@@ -9,6 +9,7 @@ import { settings } from './Settings';
 import { Neighborhood } from '../environment/Neighborhood';
 import { DoorSystem } from '../gameplay/Doors';
 import { MenuCinematic } from '../gameplay/MenuCinematic';
+import { VehicleView } from '../gameplay/VehicleView';
 import { GameSession } from '../gameplay/GameSession';
 import type { NetLink } from '../network/NetLink';
 import { MainMenu } from '../ui/MainMenu';
@@ -50,6 +51,8 @@ export class Game {
   private exposure!: AutoExposure;
   private nav!: NavGrid;
   private flashlight!: Flashlight;
+  /** Every drivable vehicle as drawn (parked in the menu, wherever the night takes them). */
+  private vehicles!: VehicleView;
   private readonly ui = document.getElementById('ui-root')!;
 
   async boot(): Promise<void> {
@@ -68,6 +71,8 @@ export class Game {
       const next = `${text} ${Math.round(f * 100)}%`;
       if (label && next !== lastLabel) label.textContent = lastLabel = next;
     });
+    // The vehicles' own meshes and probes (before the environment map is handed out: their paint reflects it).
+    this.vehicles = new VehicleView(this.engine.scene, this.world.props.vehicles, this.field);
     this.world.buildEnvironment(this.engine.renderer);
     this.exposure = new AutoExposure(this.field);
     this.doors = new DoorSystem(NEIGHBORHOOD, this.physics, this.world.root);
@@ -244,7 +249,7 @@ export class Game {
 
   private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean, online?: { link: NetLink; begin: BeginMsg }): GameSession {
     return new GameSession(
-      this.engine, this.input, this.physics, this.doors, this.field, this.nav, this.ui,
+      this.engine, this.input, this.physics, this.doors, this.vehicles, this.field, this.nav, this.ui,
       () => void this.quitToMenu(), () => void this.retry(), pose,
       { skipIntro, online, onLobby: online ? () => void this.backToLobby() : undefined },
     );
@@ -338,6 +343,7 @@ export class Game {
       this.input.uiNav = true;
       this.menuCine.update(dt);
       this.doors.update(dt, this.engine.camera);
+      this.vehicles.update(dt, this.engine.camera, null, null);
       this.flashlight.update(dt, false, this.engine.camera.position, this.tmpDir.set(0, 0, -1));
       this.tmpFocus.copy(this.menuCine.focus);
     } else {

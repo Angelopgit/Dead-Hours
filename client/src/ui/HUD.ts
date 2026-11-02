@@ -84,6 +84,14 @@ export class HUD {
   private warningText = '';
   private lastReadout = '';
   private gap = -1;
+  /** In a vehicle: its name and seat, speed, the gas left (bottom middle). */
+  private readonly car: HTMLElement;
+  private readonly carName: HTMLElement;
+  private readonly carSpeed: HTMLElement;
+  private readonly carGas: HTMLElement;
+  private readonly carGasText: HTMLElement;
+  private readonly carState: HTMLElement;
+  private carKey = '';
 
   constructor(name: string) {
     this.fill = h('div', { class: 'fill', style: 'width:100%' });
@@ -127,6 +135,16 @@ export class HUD {
     this.fragLine = h('div', { class: 'w-heal w-throw' });
     this.molotovLine = h('div', { class: 'w-heal w-throw' });
     this.lightLine = h('div', { class: 'w-heal w-throw w-light' });
+    this.carName = h('div', { class: 'car-name' });
+    this.carSpeed = h('span', { class: 'car-mph' }, '0');
+    this.carGas = h('i');
+    this.carGasText = h('span', {}, '');
+    this.carState = h('div', { class: 'car-state' });
+    this.car = h('div', { class: 'car-panel', style: 'display:none' },
+      this.carName,
+      h('div', { class: 'car-speed' }, this.carSpeed, h('small', {}, 'MPH')),
+      h('div', { class: 'car-gas' }, h('b', {}, 'GAS'), h('div', { class: 'gbar' }, this.carGas), this.carGasText),
+      this.carState);
     this.el = h('div', { class: 'hud' },
       this.scope,
       this.arcs,
@@ -156,6 +174,7 @@ export class HUD {
         this.molotovLine,
         this.lightLine,
       ),
+      this.car,
       this.fps,
     );
     this.setSpread(0);
@@ -353,6 +372,25 @@ export class HUD {
     this.waypoint.classList.toggle('edge', offscreen);
     this.waypoint.style.setProperty('--wp-angle', `${angle.toFixed(3)}rad`);
     if (this.waypointText.textContent !== text) this.waypointText.textContent = text;
+  }
+
+  /**
+   * The vehicle this survivor sits in (null on foot): what it is and where they sit, how fast it
+   * goes, the gas gauge, and what the engine is doing.
+   */
+  setVehicle(v: { name: string; seat: string; mph: number; gas: number; state: string } | null): void {
+    const key = v ? `${v.name}|${v.seat}|${Math.round(v.mph)}|${Math.round(v.gas * 100)}|${v.state}` : '';
+    if (key === this.carKey) return;
+    this.carKey = key;
+    this.car.style.display = v ? '' : 'none';
+    if (!v) return;
+    this.carName.textContent = `${v.name} · ${v.seat}`;
+    this.carSpeed.textContent = String(Math.round(v.mph));
+    const pct = Math.max(0, Math.min(100, Math.round(v.gas * 100)));
+    this.carGas.style.width = `${pct}%`;
+    this.carGas.parentElement!.classList.toggle('low', pct <= 10);
+    this.carGasText.textContent = pct <= 0 ? 'EMPTY' : `${pct}%`;
+    this.carState.textContent = v.state;
   }
 
   /** Frame rate (and the round trip to the server online), when the setting shows them. */

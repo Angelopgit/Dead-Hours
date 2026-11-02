@@ -1,5 +1,5 @@
 import {
-  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion,
+  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion, unpackDrive,
   BUILD_SLOTS, decodeBuild, sanitizeBuild,
   type ActMsg, type DebugMsg, type DoorBody, type Loadout, type Physics, type SimEvent, type Snapshot, type UnlockState, type Vec3,
   type WeaponBuild, type WeaponId, type ZombieKind,
@@ -52,6 +52,10 @@ interface Extra {
   /** Last simulation time they were on a skateboard, and popped a trick on one. */
   boardAt: number;
   trickAt: number;
+  /** Driving: distance the car may still cover (banked like `budget`), and where the server put it back after a refused move. */
+  carBudget: number;
+  carCorrecting: { id: number; pos: Vec3 } | null;
+  carCorrectedAt: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
@@ -120,6 +124,7 @@ export class Night {
       facing: sp.yaw + Math.PI, trigger: false, aimO: eye, aimD: { x: -Math.sin(sp.yaw), y: 0, z: -Math.cos(sp.yaw) },
       press: 0, pressO: eye, pressD: { x: 0, y: 0, z: -1 }, budget: MAX_SPEED * BANK, climb: MAX_CLIMB * BANK,
       correcting: null, correctedAt: 0, boardAt: -Infinity, trickAt: -Infinity, body, collider,
+      carBudget: 0, carCorrecting: null, carCorrectedAt: 0,
     });
     this.facing.set(s.id, sp.yaw + Math.PI);
     return { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw };
@@ -172,6 +177,19 @@ export class Night {
     const x = this.extras.get(id);
     const f = unpackMotion(raw);
     if (!p || !x || !f || !p.alive) return null;
+    if (this.sim.vehicles.seatOf(id)) {
+      // In a seat the car carries them: only where they look and aim counts.
+      const m = f.motion;
+      Object.assign(p.motion, { yaw: m.yaw, pitch: m.pitch, aiming: m.aiming, light: m.light });
+      x.facing = f.facing;
+      this.facing.set(id, f.facing);
+      x.trigger = f.trigger;
+      x.aimO = f.aimOrigin;
+      x.aimD = f.aimDir;
+      x.correcting = null;
+      x.budget = MAX_SPEED * BANK;
+      return null;
+    }
     const from = p.motion.pos;
     const to = f.motion.pos;
     if (x.correcting) {
@@ -214,6 +232,56 @@ export class Night {
     x.aimO = f.aimOrigin;
     x.aimD = f.aimDir;
     return null;
+  }
+
+  /**
+   * Where a driver's browser says their car is. Returns where to put it back (stopped) when the
+   * move is refused: faster than that car goes, through a wall, off the map.
+   */
+  drive(id: string, raw: unknown): number[] | null {
+    const p = this.sim.players.get(id);
+    const x = this.extras.get(id);
+    const d = unpackDrive(raw);
+    const v = d ? this.sim.vehicles.driven(id) : null;
+    if (!p || !x || !d || !v || v.id !== d.vehicle || !p.up) return null;
+    const to = d.pos;
+    const back = (): number[] => [v.id, Math.round(v.pos.x * 100), Math.round(v.pos.y * 100), Math.round(v.pos.z * 100), Math.round(v.yaw * 1000)];
+    if (x.carCorrecting) {
+      const c = x.carCorrecting.pos;
+      if (x.carCorrecting.id === v.id && Math.hypot(to.x - c.x, to.z - c.z) > 1.5) {
+        if (this.sim.time - x.carCorrectedAt > 2) {
+          x.carCorrectedAt = this.sim.time;
+          return back();
+        }
+        return null;
+      }
+      x.carCorrecting = null;
+      x.carBudget = this.carSpeed(v) * BANK;
+    }
+    const from = v.pos;
+    const edge = NEIGHBORHOOD.bounds, m = 1;
+    const dh = Math.hypot(to.x - from.x, to.z - from.z);
+    let ok = to.x > edge.x0 + m && to.x < edge.x1 - m && to.z > edge.z0 + m && to.z < edge.z1 - m && Math.abs(to.y - from.y) < 1.2 && dh <= x.carBudget + 0.1;
+    if (ok && dh > 0.02) {
+      const y = Math.max(from.y, to.y) + v.def.low * 0.6;
+      const hit = this.physics.raycast(from.x, y, from.z, (to.x - from.x) / dh, 0, (to.z - from.z) / dh, dh, WALLS);
+      if (hit !== null && hit < dh - 0.05) ok = false;
+    }
+    if (!ok) {
+      v.speed = 0;
+      v.vel.x = v.vel.z = 0;
+      x.carCorrecting = { id: v.id, pos: vec(from) };
+      x.carCorrectedAt = this.sim.time;
+      return back();
+    }
+    x.carBudget -= dh;
+    this.sim.drive(id, d);
+    return null;
+  }
+
+  /** Fastest a car may be moved (its top speed, with slack for timing). */
+  private carSpeed(v: { def: { top: number } }): number {
+    return v.def.top * 1.25 + 3;
   }
 
   /** One thing a survivor does; the simulation checks whether they can. */
@@ -283,6 +351,15 @@ export class Night {
         if (!isSkateTrick(m.kind) || m.kind === 'ollie' || sim.time - x.trickAt < SKATEBOARD.trickEvery) break;
         if (sim.skateTrick(id, m.kind)) x.trickAt = sim.time;
         break;
+      case 'seat':
+        if (!Number.isInteger(m.v)) break;
+        if (m.v < 0) sim.exitVehicle(id);
+        else if (m.s === -1) sim.switchSeat(id);
+        else if (sim.enterVehicle(id, m.v, Number.isInteger(m.s) ? m.s : undefined)) {
+          const v = sim.vehicles.driven(id);
+          if (v) x.carBudget = this.carSpeed(v) * BANK;
+        }
+        break;
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;
         const e = p.eye;
@@ -337,6 +414,14 @@ export class Night {
       for (const e of this.sim.drain()) {
         events.push(e);
         if (e.type === 'playerRespawned') this.respawned(e.player);
+        // Out of a car: they stand by its door now, and moves from the seat are dropped until the client is there.
+        if (e.type === 'vehicle' && (e.stage === 'out' || e.stage === 'thrown') && e.player && e.pos) {
+          const x = this.extras.get(e.player);
+          if (x) {
+            x.correcting = vec(e.pos);
+            x.correctedAt = this.sim.time;
+          }
+        }
       }
       if (snap) due = true;
       for (const id of this.gods) {
@@ -377,9 +462,16 @@ export class Night {
     const sim = this.sim;
     for (const [id, x] of this.extras) {
       const p = sim.players.get(id);
+      const seat = p ? sim.vehicles.seatOf(id) : null;
       if (!p || !p.alive) {
         x.collider.setEnabled(false);
         continue;
+      }
+      // In a car the car's body is what the dead bump into.
+      if (x.collider.isEnabled() === !!seat) x.collider.setEnabled(!seat);
+      if (seat && seat[1] === 0) {
+        const cs = this.carSpeed(seat[0]);
+        x.carBudget = Math.min(cs * BANK, x.carBudget + cs * STEP);
       }
       const max = this.maxSpeed(id, x);
       x.budget = Math.min(max * BANK, x.budget + max * STEP);

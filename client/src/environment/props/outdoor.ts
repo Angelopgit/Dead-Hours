@@ -133,6 +133,11 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
     const rubber = k.mat(0x111111, 0.9);
     for (const wx of [-2.2, -1.0, 2.2]) for (const wz of [-1.05, 1.05]) k.cyl(0.5, 0.5, 0.36, 12, rubber, wx, 0.5, wz, { rx: Math.PI / 2 });
     k.box(0.08, 0.2, 2.2, k.mat(0x3a3a3a, 0.4, 0.8), 3.14, 0.7, 0);
+    // Lamps: a pair of headlights in the bumper, tail lights low on the back doors.
+    for (const sz of [-0.82, 0.82]) {
+      k.box(0.05, 0.16, 0.3, k.mat(0x9aa0a6, 0.2, 0.5), 3.13, 1.02, sz).userData.lamp = 'head';
+      k.box(0.05, 0.14, 0.24, k.glow(0x5a0805, 0.6), -3.07, 1.0, sz, { cast: false }).userData.lamp = 'tail';
+    }
   },
   boardSign(k) {
     const legs = k.mat(0x3a3a3a, 0.6, 0.5);

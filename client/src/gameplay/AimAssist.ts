@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Simulation } from '@dead-hours/shared';
-import type { Physics } from '../core/Physics';
+import type { Physics, RAPIER } from '../core/Physics';
 import type { AimAssist as Level } from '../core/Settings';
 
 const RANGE = 45;
@@ -21,6 +21,8 @@ const STRENGTH: Record<Level, number> = { off: 0, low: 0.55, standard: 1 };
 export class AimAssist {
   private snapT = 0;
   private readonly to = new THREE.Vector3();
+  /** A body the line of sight passes through (the vehicle the survivor sits in). */
+  seeThrough: RAPIER.RigidBody | null = null;
 
   constructor(private readonly physics: Physics) {}
 
@@ -57,7 +59,7 @@ export class AimAssist {
     }
     if (best === Infinity) return null;
     this.to.set(bx, by, bz).divideScalar(bd);
-    const hit = this.physics.raycast(origin.x, origin.y, origin.z, this.to.x, this.to.y, this.to.z, bd);
+    const hit = this.physics.raycast(origin.x, origin.y, origin.z, this.to.x, this.to.y, this.to.z, bd, undefined, this.seeThrough);
     if (hit !== null && hit < bd - 0.6) return null;
 
     const near = 1 - Math.max(0, best) / cone;

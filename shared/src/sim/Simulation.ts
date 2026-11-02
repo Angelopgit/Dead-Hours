@@ -28,6 +28,8 @@ import type { GibPart, HeliFlight, PelletTrace, SimEvent, SimPhase } from './eve
 import { Explosives } from './Explosives';
 import { Skateboards } from './Skateboards';
 import { SKATEBOARD, type SkateTrick } from '../config/skateboards';
+import { Vehicles, type DriveState } from './Vehicles';
+import { VEHICLE } from '../config/vehicles';
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -298,6 +300,8 @@ export class Simulation {
   readonly explosives: Explosives;
   /** Skateboards lying about, and who is riding which. */
   readonly skateboards: Skateboards;
+  /** Every drivable car, cruiser, wreck and the armored truck (sim/Vehicles). */
+  readonly vehicles: Vehicles;
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -331,6 +335,8 @@ export class Simulation {
       if (f & NAV_REACHABLE && !(f & NAV_INDOOR)) nodes.push(i);
     }
     this.outdoorNodes = Int32Array.from(nodes);
+    // Before the boards: none is laid on a car roof.
+    this.vehicles = new Vehicles(this, opts.seed ?? 1);
     this.skateboards = new Skateboards(this, opts.seed ?? 1, this.outdoorNodes);
 
     let id = 0;
@@ -379,6 +385,7 @@ export class Simulation {
       this.dropMelee(p);
       this.skateboards.hopOff(p, 'off');
     }
+    this.vehicles.forget(id);
     this.players.delete(id);
     this.stopRevive(id);
     // The last one standing left: nobody is coming for the downed.
@@ -458,15 +465,15 @@ export class Simulation {
    * A ray for bullets: window panes it meets shatter and it carries on through the empty frame.
    * Returns what finally stops it.
    */
-  castThrough(o: Vec3, d: Vec3, maxD: number): RayHit | null {
+  castThrough(o: Vec3, d: Vec3, maxD: number, exclude: RAPIER.RigidBody | null = null): RayHit | null {
     for (let i = 0; i < 4; i++) {
-      const hit = this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
+      const hit = this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD, undefined, exclude);
       const slot = hit ? this.barricades.forPane(hit.collider.handle) : undefined;
       if (!hit || !slot || !this.barricades.breakGlass(slot)) return hit;
       this.emit({ type: 'glassBroken', slot: slot.index, pos: { x: o.x + d.x * hit.distance, y: o.y + d.y * hit.distance, z: o.z + d.z * hit.distance }, dir: { ...d } });
       this.noise(slot.center, 18, null);
     }
-    return this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD);
+    return this.physics.raycastHit(o.x, o.y, o.z, d.x, d.y, d.z, maxD, undefined, exclude);
   }
 
   /**
@@ -508,7 +515,7 @@ export class Simulation {
   vault(id: string, index: number): boolean {
     const p = this.players.get(id);
     const s = this.barricades.slots[index];
-    if (!p || !p.up || !s || s.kind !== 'window' || !s.climb || s.boards > 0 || this.phase === 'over' || this.revivingOf(id)) return false;
+    if (!p || !p.up || !s || s.kind !== 'window' || !s.climb || s.boards > 0 || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id)) return false;
     const m = p.motion.pos;
     const dn = Math.abs((m.x - s.center.x) * s.normal.x + (m.z - s.center.z) * s.normal.z);
     const la = Math.abs((m.x - s.center.x) * s.normal.z) + Math.abs((m.z - s.center.z) * s.normal.x);
@@ -535,7 +542,7 @@ export class Simulation {
 
   /** Whether a survivor can work on a slot from where they stand: inside, on its storey, within reach. */
   canWork(p: SimPlayer, slot: BarricadeSlot): boolean {
-    if (!p.up || this.revivingOf(p.id)) return false;
+    if (!p.up || this.revivingOf(p.id) || this.vehicles.seatOf(p.id)) return false;
     // Through a floor is out of reach, however close: the basement under a window, the room over it.
     if (Math.abs(p.motion.pos.y - slot.floor) > BARRICADE.floorReach) return false;
     const e = p.eye, c = slot.center;
@@ -661,6 +668,7 @@ export class Simulation {
     if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
     this.dropLimb(p, false);
     this.skateboards.hopOff(p, 'bail');
+    this.vehicles.eject(p);
     this.stopRevive(p.id);
     this.emit({ type: 'playerDowned', player: p.id, bleed: p.bleed, last: p.downs >= DOWNED.maxDowns });
   }
@@ -679,6 +687,7 @@ export class Simulation {
     this.dropLimb(p, false);
     this.dropMelee(p);
     this.skateboards.hopOff(p, 'bail');
+    this.vehicles.eject(p);
     this.stopRevive(p.id);
     this.emit({ type: 'playerDied', player: p.id });
     if (wipe) this.checkWipe();
@@ -737,6 +746,7 @@ export class Simulation {
   }
 
   inReviveReach(p: SimPlayer, t: SimPlayer): boolean {
+    if (this.vehicles.seatOf(p.id)) return false;
     return dist2D(p.motion.pos, t.motion.pos) < DOWNED.reviveRange && Math.abs(p.motion.pos.y - t.motion.pos.y) < 1.4;
   }
 
@@ -789,6 +799,8 @@ export class Simulation {
   fire(id: string, origin: Vec3, dir: Vec3, pressed: boolean, seed: number): 'fired' | 'dry' | 'busy' {
     const p = this.players.get(id);
     if (!p || !p.up || this.phase === 'over' || this.revivingOf(id)) return 'busy';
+    // The driver's hands are on the wheel.
+    if (this.vehicles.driven(id)) return 'busy';
     const a = p.arsenal;
     // With an arm in hand the trigger finger swings it instead.
     if (a.limb) return pressed && this.melee(id, { origin, dir }) ? 'fired' : 'busy';
@@ -812,7 +824,9 @@ export class Simulation {
     let o = origin;
     if (!(Math.hypot(origin.x - eye.x, origin.y - eye.y, origin.z - eye.z) <= COMBAT.maxOriginOffset)) o = eye;
     // Rolling on a skateboard is smooth: only part of the speed shakes the aim.
-    const speed = this.skateboards.ridden(id) ? p.speed * SKATEBOARD.spreadSpeed : p.speed;
+    // Riding is smooth: only part of the speed of a skateboard or a car shakes the aim.
+    const seat = this.vehicles.seatOf(id);
+    const speed = seat ? Math.abs(seat[0].speed) * VEHICLE.spreadSpeed : this.skateboards.ridden(id) ? p.speed * SKATEBOARD.spreadSpeed : p.speed;
     const spread = a.spread({ speed, crouching: p.motion.crouching, grounded: p.motion.grounded, aiming: p.motion.aiming });
     a.consume();
     p.stats.shotsFired++;
@@ -844,7 +858,9 @@ export class Simulation {
 
   private traceRound(p: SimPlayer, o: Vec3, d: Vec3, def: WeaponDef): PelletTrace {
     const maxD = def.range * COMBAT.maxRangeFactor;
-    const world = this.castThrough(o, d, maxD);
+    // From a car the rounds leave through its windows, never into its own doors.
+    const own = this.vehicles.bodyOf(p.id);
+    const world = this.castThrough(o, d, maxD, own);
     const worldD = world ? world.distance : maxD;
     const hits: { z: Zombie; zone: HitZone; t: number; along: number }[] = [];
     for (const z of this.zombies) {
@@ -868,7 +884,7 @@ export class Simulation {
     const tx = o.x + d.x * firstT - eye.x, ty = o.y + d.y * firstT - eye.y, tz = o.z + d.z * firstT - eye.z;
     const L = Math.hypot(tx, ty, tz);
     if (L > 0.6) {
-      const ob = this.castThrough(eye, { x: tx / L, y: ty / L, z: tz / L }, L - 0.25);
+      const ob = this.castThrough(eye, { x: tx / L, y: ty / L, z: tz / L }, L - 0.25, own);
       if (ob) {
         const pos = { x: eye.x + (tx / L) * ob.distance, y: eye.y + (ty / L) * ob.distance, z: eye.z + (tz / L) * ob.distance };
         this.emit({ type: 'impact', pos, normal: { x: ob.nx, y: ob.ny, z: ob.nz }, surface: ob.surface, dir: { x: tx / L, y: ty / L, z: tz / L } });
@@ -915,6 +931,8 @@ export class Simulation {
       /** A round from this gun, fired from `dist` metres (throws, shoves and head pops by GORE). */
       gun?: WeaponId;
       dist?: number;
+      /** Run down by this vehicle. */
+      vehicle?: number;
     } = {},
   ): void {
     if (!z.alive) return;
@@ -957,7 +975,7 @@ export class Simulation {
     let exit: { pos: Vec3; normal: Vec3 } | null = null;
     const back = this.physics.raycastHit(pos.x, pos.y, pos.z, dir.x, dir.y, dir.z, 2.6);
     if (back) exit = { pos: { x: pos.x + dir.x * back.distance, y: pos.y + dir.y * back.distance, z: pos.z + dir.z * back.distance }, normal: { x: back.nx, y: back.ny, z: back.nz } };
-    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}), ...(opts.weapon ? { weapon: opts.weapon } : {}), ...(gun ? { gun } : {}) });
+    this.emit({ type: 'zombieHit', zombie: z.id, zone, pos, dir: { ...dir }, damage: dealt, killed, by: p.id, melee, exit, ...(opts.limb !== undefined ? { limb: opts.limb } : {}), ...(opts.weapon ? { weapon: opts.weapon } : {}), ...(gun ? { gun } : {}), ...(opts.vehicle !== undefined ? { vehicle: opts.vehicle } : {}) });
     // Enough punishment and the arm comes off: near the shoulder the whole arm, lower down the forearm.
     if ((zone === 'armL' || zone === 'armR') && z.canLose(zone)) {
       z.armDamage[zone] += opts.armTally ?? damage;
@@ -1104,8 +1122,9 @@ export class Simulation {
     const p = this.players.get(id);
     if (!p || !p.up) return false;
     if (slot === 'melee') {
-      // The melee weapon held out in place of the gun (with an arm in hand, the arm is the club).
-      if (p.arsenal.limb) return false;
+      // The melee weapon held out in place of the gun (with an arm in hand, the arm is the club;
+      // in a seat there is no room to swing it).
+      if (p.arsenal.limb || this.vehicles.seatOf(id)) return false;
       const reloading = p.arsenal.action === 'reload';
       const weaponBefore = p.arsenal.weapon.id;
       if (!p.arsenal.drawMelee()) return false;
@@ -1132,7 +1151,7 @@ export class Simulation {
    */
   melee(id: string, aim?: { origin: Vec3; dir: Vec3 }): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up || this.phase === 'over' || this.revivingOf(id)) return false;
+    if (!p || !p.up || this.phase === 'over' || this.revivingOf(id) || this.vehicles.seatOf(id)) return false;
     const reloading = p.arsenal.action === 'reload';
     if (!p.arsenal.startMelee()) return false;
     p.meleeAim = null;
@@ -1153,7 +1172,7 @@ export class Simulation {
    */
   throwItem(id: string, kind: ThrowKind, aim: { origin: Vec3; dir: Vec3 }): boolean {
     const p = this.players.get(id);
-    if (!p || !p.alive || this.phase === 'over' || !THROWABLES[kind]) return false;
+    if (!p || !p.alive || this.phase === 'over' || !THROWABLES[kind] || this.vehicles.seatOf(id)) return false;
     const dl = Math.hypot(aim.dir.x, aim.dir.y, aim.dir.z);
     if (!(dl > 0.5)) return false;
     const reloading = p.arsenal.action === 'reload';
@@ -1180,7 +1199,7 @@ export class Simulation {
 
   bandage(id: string): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up || p.bandages <= 0 || p.health >= PLAYER.maxHealth || this.revivingOf(id)) return false;
+    if (!p || !p.up || p.bandages <= 0 || p.health >= PLAYER.maxHealth || this.revivingOf(id) || this.vehicles.driven(id)) return false;
     if (p.arsenal.action === 'melee' || p.arsenal.action === 'bandage') return false;
     // Both hands are needed for the dressing: the arm goes down at your feet.
     this.dropLimb(p, false);
@@ -1192,7 +1211,7 @@ export class Simulation {
   /** Whether an interactable is within a player's reach. */
   inReach(id: string, it: Interactable): boolean {
     const p = this.players.get(id);
-    if (!p || !p.up) return false;
+    if (!p || !p.up || this.vehicles.seatOf(id)) return false;
     const c = p.chest;
     return Math.hypot(it.pos.x - c.x, (it.pos.y - c.y) * 1.5, it.pos.z - c.z) < it.range;
   }
@@ -1214,7 +1233,34 @@ export class Simulation {
   /** Hops onto a skateboard lying in reach. */
   rideBoard(id: string, board: number): boolean {
     const p = this.players.get(id);
-    return !!p && this.phase !== 'over' && this.skateboards.ride(p, board);
+    return !!p && this.phase !== 'over' && !this.vehicles.seatOf(id) && this.skateboards.ride(p, board);
+  }
+
+  /** Gets into vehicle `vehicle` (a seat of choice, or the wheel if free, or the nearest free seat). */
+  enterVehicle(id: string, vehicle: number, seat?: number): boolean {
+    const p = this.players.get(id);
+    if (!p || this.phase === 'over' || this.revivingOf(id) || !this.vehicles.enter(p, vehicle, seat)) return false;
+    // No room to swing in a seat: a melee weapon held out goes away for the gun.
+    if (p.arsenal.meleeOut) this.switchWeapon(id, p.arsenal.active);
+    return true;
+  }
+
+  /** Gets out of the vehicle they sit in (not while it is moving fast, nor with every door blocked). */
+  exitVehicle(id: string): boolean {
+    const p = this.players.get(id);
+    return !!p && this.vehicles.exit(p);
+  }
+
+  /** Moves to the next free seat of the vehicle they sit in. */
+  switchSeat(id: string): boolean {
+    const p = this.players.get(id);
+    return !!p && this.vehicles.switchSeat(p);
+  }
+
+  /** Where the driver's browser says their car is (see Vehicles.drive). */
+  drive(id: string, d: DriveState): boolean {
+    const p = this.players.get(id);
+    return !!p && this.vehicles.drive(p, d);
   }
 
   /**
@@ -1487,7 +1533,7 @@ export class Simulation {
         .setDensity(mass / volume)
         .setFriction(0.9)
         .setRestitution(0.12)
-        .setCollisionGroups(groups(GROUP.debris, GROUP.static | GROUP.dynamic | GROUP.debris)),
+        .setCollisionGroups(groups(GROUP.debris, GROUP.static | GROUP.dynamic | GROUP.vehicle | GROUP.cabin | GROUP.debris)),
       body,
     );
     return body;
@@ -1519,7 +1565,7 @@ export class Simulation {
   limbInReach(id: string, l: SimLimb): boolean {
     const p = this.players.get(id);
     // (A network client's copy of the world has no body for it: lying loose is enough.)
-    if (!p || !p.up || l.holder) return false;
+    if (!p || !p.up || l.holder || this.vehicles.seatOf(id)) return false;
     const m = p.motion.pos;
     const dy = l.pos.y - m.y;
     if (dy < -0.6 || dy > LIMBS.reachHeight) return false;
@@ -1818,8 +1864,9 @@ export class Simulation {
       for (const p of alive) nearest = Math.min(nearest, dist2D(p.motion.pos, pos));
       if (nearest < minD || nearest > maxD) continue;
       if (this.inSight(pos, alive)) continue;
-      // Not inside a crowd.
+      // Not inside a crowd, nor in a car somebody parked there.
       if (this.zombies.some((z) => dist2D(z.pos, pos) < 2)) continue;
+      if (this.vehicles.inside(pos.x, pos.z, 0.6)) continue;
       return { x: pos.x, y: pos.y + 0.02, z: pos.z };
     }
     return null;
@@ -1919,6 +1966,7 @@ export class Simulation {
   /** Removes every zombie body and the shared zombie controller from the physics world. */
   dispose(): void {
     this.raid.dispose();
+    this.vehicles.dispose();
     for (const d of this.drops) if (d.body) this.physics.world.removeRigidBody(d.body);
     for (const l of this.limbs) if (l.body) this.physics.world.removeRigidBody(l.body);
     this.limbs.length = 0;
@@ -1972,6 +2020,7 @@ export class Simulation {
     this.updateLimbs();
     if (this.phase !== 'over') this.stepDowned(dt);
     this.skateboards.step(dt);
+    this.vehicles.step(dt);
     if (this.phase !== 'over') this.runPickups();
 
     const ticks: ArsenalTick[] = [];
@@ -1985,7 +2034,7 @@ export class Simulation {
       // On a skateboard the wheels make the noise instead (Skateboards.step).
       const speed = p.speed;
       p.footstepT -= dt;
-      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded && !this.skateboards.ridden(p.id)) {
+      if (p.footstepT <= 0 && speed > 0.8 && p.motion.grounded && !this.skateboards.ridden(p.id) && !this.vehicles.seatOf(p.id)) {
         const radius = p.motion.crouching ? 1.2 : speed > 4.5 ? 11 : 4.5;
         this.noise(p.motion.pos, radius, p.id);
         p.footstepT = speed > 4.5 ? 0.35 : 0.55;

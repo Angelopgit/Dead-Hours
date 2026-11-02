@@ -35,6 +35,8 @@ export const C2S = {
   rtc: 'rtc',
   /** The lasting player ids this player blocks (string[]): no chat or voice either way. */
   blocks: 'blocks',
+  /** In play, ~30 times a second while driving: packDrive() of where the car is and what the pedals do. */
+  drive: 'drive',
 } as const;
 
 /** Server → client messages. */
@@ -52,6 +54,8 @@ export const S2C = {
   pong: 'pong',
   /** The server refused a move (too fast, through a wall): the survivor is put back here. */
   pos: 'pos',
+  /** The server refused a car's move: [vehicle, x, y, z (cm), yaw (mrad)], where it is put back, stopped. */
+  vpos: 'vpos',
   /** Something the player should be told (only the host can start, ...). */
   notice: 'notice',
   /** A line of text chat (ChatLine). */
@@ -88,7 +92,9 @@ export type ActMsg =
   /** Vaulting through window slot `slot` (the browser moves the survivor; a pane still in smashes). */
   | { a: 'vault'; slot: number }
   /** Popped a flip trick off an ollie on the board (the others see it). */
-  | { a: 'trick'; kind: SkateTrick };
+  | { a: 'trick'; kind: SkateTrick }
+  /** Get into vehicle `v` (seat `s`, or the driver's seat if free, else the nearest); `v` -1 gets out; `s` -1 moves to the next free seat. */
+  | { a: 'seat'; v: number; s?: number };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

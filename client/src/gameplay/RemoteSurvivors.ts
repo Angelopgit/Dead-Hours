@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, decodeAppearance, type Mirror, type SimPlayer, type Simulation, type SkateTrick, type Skateboard } from '@dead-hours/shared';
+import { DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VEHICLE, decodeAppearance, type Mirror, type SimPlayer, type Simulation, type SkateTrick, type Skateboard } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
-import { Humanoid, survivorLook, type SkatePose } from '../characters/Humanoid';
+import { Humanoid, survivorLook, type SeatPose, type SkatePose } from '../characters/Humanoid';
 import { trickProgress, type BoardPose } from './Skateboards';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
@@ -32,6 +32,8 @@ interface Remote {
   ride: RemoteRide | null;
   /** A flip trick the server said they popped, waiting (seconds left) for them to leave the ground. */
   trickWait: { kind: SkateTrick; t: number } | null;
+  /** In a vehicle: the seat pose (hips the way the seat faces). */
+  seat: SeatPose;
 }
 
 interface RemoteRide {
@@ -48,6 +50,14 @@ interface RemoteRide {
 }
 
 const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3(), _want = new THREE.Vector3();
+const _wl = new THREE.Vector3(), _wr = new THREE.Vector3();
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** Where vehicles' seats and steering wheels are drawn (the session's VehicleView). */
+export interface SeatSource {
+  seatPoint(id: number, seat: number, out: THREE.Vector3): number | null;
+  wheelPoints(id: number, left: THREE.Vector3, right: THREE.Vector3): boolean;
+}
 
 /**
  * The other survivors in an online game: each one's own character in their own look, carrying
@@ -57,8 +67,11 @@ const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vecto
 export class RemoteSurvivors {
   private readonly remotes = new Map<string, Remote>();
   private readonly tags = h('div', { class: 'name-tags' });
-  private readonly beams: Beam[] = [];
+  /** Their lamps' beams this frame (the session hands them to the flashlight pool with the headlights). */
+  readonly beams: Beam[] = [];
   gore = true;
+  /** Where survivors sitting in vehicles go. */
+  seats: SeatSource | null = null;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -90,7 +103,7 @@ export class RemoteSurvivors {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0, dim: 1 },
-      ride: null, trickWait: null,
+      ride: null, trickWait: null, seat: { yaw: 0 },
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w, inS) => audio.foley(cue, this.hand(r, _q), w, inS);
@@ -109,7 +122,8 @@ export class RemoteSurvivors {
         r = this.create(p);
         this.remotes.set(p.id, r);
       }
-      this.animate(r, p, dt, mirror, camera, sim.skateboards.ridden(p.id));
+      const seat = sim.vehicles.seatOf(p.id);
+      if (!seat || !this.seated(r, p, dt, camera, seat[0].id, seat[1])) this.animate(r, p, dt, mirror, camera, sim.skateboards.ridden(p.id));
     }
     for (const [id, r] of this.remotes) {
       if (sim.players.has(id)) continue;
@@ -118,7 +132,46 @@ export class RemoteSurvivors {
     }
     this.beams.length = 0;
     for (const r of this.remotes.values()) this.beams.push(r.beam);
-    flashlight()?.placeRemotes(this.beams, camera.position, dt);
+  }
+
+  /**
+   * Someone sitting in a vehicle: on its seat as the vehicle is drawn, the hips the way the seat
+   * faces; at the wheel their hands are on it and they look down the road, a passenger turns to
+   * aim out of the windows. False when the vehicle can't be drawn (then they're drawn as usual).
+   */
+  private seated(r: Remote, p: SimPlayer, dt: number, camera: THREE.PerspectiveCamera, vehicle: number, seat: number): boolean {
+    if (!p.alive || !this.seats) return false;
+    const yaw = this.seats.seatPoint(vehicle, seat, r.pos);
+    if (yaw === null) return false;
+    const b = r.body;
+    const m = p.motion;
+    r.ride = null;
+    b.skate = null;
+    const ahead = yaw + Math.PI / 2;
+    const driver = seat === 0;
+    const facing = driver || !m.aiming ? ahead : m.yaw + Math.PI;
+    r.facing += wrap(facing - r.facing) * (1 - Math.exp(-dt * 14));
+    b.root.position.copy(r.pos);
+    b.root.position.y -= 0.88;
+    b.root.rotation.y = r.facing;
+    r.seat.yaw = wrap(ahead - r.facing);
+    b.seat = r.seat;
+    if (r.downed) {
+      r.downed = false;
+      b.downTarget = 0;
+      r.weapon.setVisible(true);
+    }
+    b.lookPitch += ((m.aiming ? m.pitch : m.pitch * 0.35) - b.lookPitch) * (1 - Math.exp(-dt * 12));
+    b.update(dt, { speed: 0, crouch: 0, aim: m.aiming && !driver ? 1 : 0, grounded: true, strafe: 0, moveAngle: 0, turn: 0 });
+    const cp = Math.cos(m.pitch);
+    const eye = r.pos.y + VEHICLE.seatEye;
+    _aim.set(r.pos.x - Math.sin(m.yaw) * cp * 30, eye + Math.sin(m.pitch) * 30, r.pos.z - Math.cos(m.yaw) * cp * 30);
+    const wheel = driver && this.seats.wheelPoints(vehicle, _wl, _wr) ? { left: _wl, right: _wr } : null;
+    r.weapon.update(dt, p.arsenal, { aim: driver ? 0 : p.arsenal.aim, sprinting: false, aimPoint: _aim, wheel });
+    this.light(r, p, dt, _aim, camera);
+    r.probe.update(dt, r.pos, camera);
+    this.placeTag(r, _q.copy(r.pos).setY(eye + 0.45), camera, p, false);
+    return true;
   }
 
   /**
@@ -145,6 +198,7 @@ export class RemoteSurvivors {
   private animate(r: Remote, p: SimPlayer, dt: number, mirror: Mirror, camera: THREE.PerspectiveCamera, deck: Skateboard | null): void {
     const b = r.body;
     const m = p.motion;
+    b.seat = null;
     if (!p.alive || !deck) r.ride = null;
     // Brought back by a lull: up off the ground where the server put them.
     if (p.alive && r.ragdoll) {

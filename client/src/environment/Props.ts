@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
+import { isDrivable, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
@@ -9,7 +9,7 @@ import { Kit, jitter, type PropBuildResult } from './props/Kit';
 import { INTERIOR } from './props/interior';
 import { OUTDOOR } from './props/outdoor';
 
-export type { PropBuildResult, SoundAnchor, Updatable } from './props/Kit';
+export type { PropBuildResult, SoundAnchor, Updatable, VehicleParts } from './props/Kit';
 
 const CAR_COLORS = [0x3e4a56, 0x5b2f2b, 0x6f6f68, 0x2f3d33, 0x8a8374, 0x1f2328];
 
@@ -96,11 +96,14 @@ export class PropFactory {
   }
 
   build(map: MapDefinition, scene: THREE.Object3D, batch: StaticBatcher): PropBuildResult {
-    const result: PropBuildResult = { dynamic: [], anchors: [], landmarks: {} };
+    const result: PropBuildResult = { dynamic: [], anchors: [], landmarks: {}, vehicles: [] };
     const kit = new Kit(this.lib, result);
     const poles = new Map<number, THREE.Vector3[]>();
+    map.props.forEach((p, index) => {
+      if (isDrivable(p)) this.buildVehicle(kit, p, index, result);
+    });
     for (const p of map.props) {
-      if (p.forest) continue;
+      if (p.forest || isDrivable(p)) continue;
       const root = new THREE.Group();
       root.position.set(p.x, p.y ?? 0, p.z);
       root.rotation.y = p.rotY;
@@ -125,6 +128,28 @@ export class PropFactory {
     const glare = this.glare.build();
     if (glare) scene.add(glare);
     return result;
+  }
+
+  /**
+   * A vehicle that can be driven, built about its own origin (the vehicle view moves it). Sound
+   * anchors and landmarks it registers are at the spot it is parked in when the night starts.
+   */
+  private buildVehicle(kit: Kit, p: PropSpec, index: number, out: PropBuildResult): void {
+    const root = new THREE.Group();
+    const dyn = new THREE.Group();
+    // Parts go on the groups' own frames; the prop keeps its spot for its random looks and its landmarks.
+    kit.begin(p, root, dyn);
+    const anchors = out.anchors.length;
+    const builder = OUTDOOR[p.kind];
+    if (builder) builder(kit);
+    else this.buildStreetProp(kit, out);
+    // Sounds placed where it is parked ride along with it: kept as offsets in its own frame.
+    const c = Math.cos(p.rotY), s = Math.sin(p.rotY);
+    const parts = out.anchors.slice(anchors).map((anchor) => {
+      const dx = anchor.position.x - p.x, dz = anchor.position.z - p.z;
+      return { anchor, offset: new THREE.Vector3(dx * c - dz * s, anchor.position.y - (p.y ?? 0), dx * s + dz * c) };
+    });
+    out.vehicles.push({ prop: index, root, dyn, anchors: parts });
   }
 
   /** A lamp lens that hands its light to the glare as it shrinks on screen. */
@@ -251,10 +276,8 @@ export class PropFactory {
         k.box(0.12, 0.25, 1.9, chrome, -2.22, 0.45, 0);
         for (const wx of [-1.35, 1.35]) for (const wz of [-0.86, 0.86]) k.cyl(0.36, 0.36, 0.26, 10, rubber, wx, 0.36, wz, { rx: Math.PI / 2 });
         const tail = k.glow(0x5a0805, 0.6);
-        k.box(0.05, 0.12, 0.35, tail, -2.24, 0.75, 0.65, { cast: false });
-        k.box(0.05, 0.12, 0.35, tail, -2.24, 0.75, -0.65, { cast: false });
-        k.box(0.05, 0.14, 0.38, k.mat(0x9aa0a6, 0.2, 0.5), 2.24, 0.72, 0.62);
-        k.box(0.05, 0.14, 0.38, k.mat(0x9aa0a6, 0.2, 0.5), 2.24, 0.72, -0.62);
+        for (const tz of [0.65, -0.65]) k.box(0.05, 0.12, 0.35, tail, -2.24, 0.75, tz, { cast: false }).userData.lamp = 'tail';
+        for (const hz of [0.62, -0.62]) k.box(0.05, 0.14, 0.38, k.mat(0x9aa0a6, 0.2, 0.5), 2.24, 0.72, hz).userData.lamp = 'head';
         const door = wreckDoor(p);
         if (door) {
           // Abandoned with a door hanging open: a hole in the body and the door swung out on its hinge.

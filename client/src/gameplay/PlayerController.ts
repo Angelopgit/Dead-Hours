@@ -1,9 +1,12 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
+import { BODY_FILTER, DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
-import { Humanoid, type HumanoidLook, type SkatePose } from '../characters/Humanoid';
+import { Humanoid, type HumanoidLook, type SeatPose, type SkatePose } from '../characters/Humanoid';
+
+/** What a survivor on foot bumps into: the world, doors, vehicles (and their cabins), the dead. */
+const FEET = groups(GROUP.player, BODY_FILTER | GROUP.zombie);
 
 const capsuleHalf = (height: number) => (height - PLAYER.radius * 2) / 2;
 const _vp: Vec3 = { x: 0, y: 0, z: 0 };
@@ -97,6 +100,15 @@ export class PlayerController {
   vaultLanded = false;
   /** Seconds in the air before the last landing (how hard it was). */
   landAir = 0;
+  /**
+   * In a vehicle's seat (null on foot): which one, and whether at the wheel. The session puts the
+   * survivor on the seat every frame (seatAt); the capsule is out of the world meanwhile.
+   */
+  seated: { vehicle: number; seat: number; driver: boolean } | null = null;
+  /** The vehicle's heading as drawn (its yaw: the nose along (cos, -sin)), and its velocity. */
+  private seatYaw = 0;
+  private readonly seatVel = new THREE.Vector3();
+  private readonly seatPose: SeatPose = { yaw: 0 };
   private moveX = 0;
   private moveY = 0;
 
@@ -125,7 +137,7 @@ export class PlayerController {
   private capsuleDesc(height: number): RAPIER.ColliderDesc {
     return RAPIER.ColliderDesc.capsule(capsuleHalf(height), PLAYER.radius)
       .setTranslation(0, 0, 0)
-      .setCollisionGroups(groups(GROUP.player, GROUP.static | GROUP.dynamic | GROUP.zombie));
+      .setCollisionGroups(FEET);
   }
 
   get colliderHandle(): RAPIER.Collider {
@@ -133,6 +145,7 @@ export class PlayerController {
   }
 
   get eyeHeight(): number {
+    if (this.seated) return VEHICLE.seatEye;
     if (this.downed) return DOWNED.eyeHeight;
     const eye = this.height - 0.2;
     return this.vault ? eye - (eye - VAULT_EYE) * this.vault.tuck : eye;
@@ -140,7 +153,7 @@ export class PlayerController {
 
   /** Starts vaulting through a window along a plan from findVault (the session has checked it can). */
   startVault(plan: VaultPlan): void {
-    if (this.dead || this.downed || this.ride || this.vault) return;
+    if (this.dead || this.downed || this.ride || this.vault || this.seated) return;
     this.vault = { plan, t: 0, tuck: 0 };
     this.jumpBuffered = 0;
     this.coyote = 0;
@@ -183,6 +196,70 @@ export class PlayerController {
     if (dt > 0) this.velocity.set((at.x - this.position.x) / dt, (at.y - this.position.y) / dt, (at.z - this.position.z) / dt);
     this.position.set(at.x, at.y, at.z);
     this.body.setNextKinematicTranslation({ x: at.x, y: at.y + this.height / 2, z: at.z });
+  }
+
+  /**
+   * Into a vehicle's seat: off any skateboard, standing height (crouching makes no sense in a
+   * seat), the capsule out of the world (the car's body is what others bump into).
+   */
+  sitIn(vehicle: number, seat: number, driver: boolean): void {
+    this.ride = null;
+    this.vault = null;
+    this.sprinting = false;
+    this.jumpBuffered = 0;
+    if (this.crouching) {
+      const t = this.body.translation();
+      const feet = t.y - this.height / 2;
+      this.physics.world.removeCollider(this.collider, false);
+      this.height = PLAYER.height;
+      this.collider = this.physics.world.createCollider(this.capsuleDesc(PLAYER.height), this.body);
+      this.body.setTranslation({ x: t.x, y: feet + PLAYER.height / 2, z: t.z }, true);
+      this.crouching = false;
+    }
+    this.collider.setEnabled(false);
+    this.intent.set(0, 0, 0);
+    this.grounded = true;
+    this.seated = { vehicle, seat, driver };
+  }
+
+  /** Pushed aside by something moving into them (a car): along the ground, never through a wall. */
+  shove(dx: number, dz: number): void {
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-4 || this.seated || this.dead) return;
+    const t = this.body.translation();
+    const hit = this.physics.raycast(t.x, t.y, t.z, dx / d, 0, dz / d, d + PLAYER.radius, groups(0xffff, GROUP.static | GROUP.dynamic));
+    const go = hit === null ? d : Math.max(0, hit - PLAYER.radius - 0.02);
+    const next = { x: t.x + (dx / d) * go, y: t.y, z: t.z + (dz / d) * go };
+    this.body.setTranslation(next, true);
+    this.body.setNextKinematicTranslation(next);
+    this.position.x = next.x;
+    this.position.z = next.z;
+  }
+
+  /** Out of the seat, standing at `pos` (where the simulation let them out). */
+  leaveSeat(pos: { x: number; y: number; z: number }): void {
+    if (!this.seated) return;
+    this.seated = null;
+    this.character.seat = null;
+    if (!this.dead) this.collider.setEnabled(true);
+    this.teleport(pos);
+    // Stepping out of a rolling car keeps a little of its way.
+    this.intent.set(this.seatVel.x * 0.5, 0, this.seatVel.z * 0.5);
+    this.facing = this.seatYaw + Math.PI / 2;
+  }
+
+  /**
+   * Where the seat is this frame (the cushion, as the vehicle is drawn), which way the vehicle
+   * points and how it moves. The survivor is drawn there and reports it.
+   */
+  seatAt(pos: THREE.Vector3, yaw: number, vel: { x: number; z: number }): void {
+    this.position.copy(pos);
+    this.prevPosition.copy(pos);
+    this.renderPosition.copy(pos);
+    this.seatYaw = yaw;
+    this.seatVel.set(vel.x, 0, vel.z);
+    this.velocity.copy(this.seatVel);
+    this.body.setNextKinematicTranslation({ x: pos.x, y: pos.y + this.height / 2, z: pos.z });
   }
 
   /** Goes down (or gets back up: standing again once there is headroom). */
@@ -260,6 +337,14 @@ export class PlayerController {
 
   /** Current movement state for the simulation (aim, noise, spread). */
   motion(cameraYaw: number, cameraPitch: number): PlayerMotion {
+    if (this.seated) {
+      return {
+        pos: { x: this.position.x, y: this.position.y, z: this.position.z },
+        vel: { x: this.seatVel.x, y: 0, z: this.seatVel.z },
+        yaw: cameraYaw, pitch: cameraPitch, eyeHeight: VEHICLE.seatEye,
+        crouching: false, sprinting: false, aiming: this.aiming && !this.seated.driver, grounded: true, pushing: false,
+      };
+    }
     return {
       pos: { x: this.position.x, y: this.position.y, z: this.position.z },
       vel: { x: this.velocity.x, y: this.velocity.y, z: this.velocity.z },
@@ -321,6 +406,10 @@ export class PlayerController {
     if (this.dead) return;
     this.faceT = Math.max(0, this.faceT - dt);
     this.noSprintT = Math.max(0, this.noSprintT - dt);
+    if (this.seated) {
+      this.seatedStep(dt, cameraYaw);
+      return;
+    }
     if (this.vault) {
       this.vaultStep(dt);
       return;
@@ -377,7 +466,7 @@ export class PlayerController {
     if (this.grounded && this.intent.y < 0) this.intent.y = 0;
 
     const desired = { x: this.intent.x * dt, y: this.intent.y * dt, z: this.intent.z * dt };
-    this.controller.computeColliderMovement(this.collider, desired, undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic | GROUP.zombie));
+    this.controller.computeColliderMovement(this.collider, desired, undefined, FEET);
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
     let grounded = this.controller.computedGrounded();
@@ -421,6 +510,25 @@ export class PlayerController {
   }
   landed = false;
   private airTime = 0;
+
+  /**
+   * A fixed step in a seat: no walking, crouching or jumping. The driver faces down the road; a
+   * passenger turns to where they aim (or shoot), else faces ahead too.
+   */
+  private seatedStep(dt: number, cameraYaw: number): void {
+    const s = this.seated!;
+    this.sprinting = false;
+    if (s.driver) this.aiming = false;
+    this.jumpBuffered = 0;
+    this.intent.set(0, 0, 0);
+    const ahead = this.seatYaw + Math.PI / 2;
+    const toCamera = !s.driver && (this.aiming || this.faceT > 0);
+    const desired = toCamera ? cameraYaw + Math.PI : ahead;
+    const diff = Math.atan2(Math.sin(desired - this.facing), Math.cos(desired - this.facing));
+    const turned = diff * (1 - Math.exp(-dt * (toCamera ? 20 : 14)));
+    this.facing += turned;
+    this.turnRate = 0;
+  }
 
   /**
    * One fixed step of skating: the stick's sideways axis carves (sharp at walking pace, wide at
@@ -523,7 +631,7 @@ export class PlayerController {
       this.physics.world.intersectionsWithShape(
         { x: t.x, y: feet + PLAYER.height / 2 + 0.02, z: t.z }, { x: 0, y: 0, z: 0, w: 1 }, shape,
         () => { blocked = true; return false; },
-        undefined, groups(GROUP.player, GROUP.static | GROUP.dynamic | GROUP.zombie), this.collider,
+        undefined, FEET, this.collider,
       );
       if (blocked) return;
     }
@@ -540,9 +648,10 @@ export class PlayerController {
 
   /** Interpolates the render transform between fixed steps and animates the rig. */
   render(dt: number, alpha: number): void {
-    this.renderPosition.lerpVectors(this.prevPosition, this.position, alpha);
+    if (!this.seated) this.renderPosition.lerpVectors(this.prevPosition, this.position, alpha);
     if (this.dead) return;
     this.character.root.position.copy(this.renderPosition);
+    if (this.seated) this.character.root.position.y -= 0.88;
     this.character.root.rotation.y = this.facing;
     const hv = Math.hypot(this.velocity.x, this.velocity.z);
     const right = new THREE.Vector3(Math.cos(this.facing), 0, -Math.sin(this.facing));
@@ -566,6 +675,13 @@ export class PlayerController {
     }
     c.skate = r ? this.skatePose : null;
     c.vault = this.vault ? 1 : 0;
+    if (this.seated) {
+      this.seatPose.yaw = wrap(this.seatYaw + Math.PI / 2 - this.facing);
+      c.seat = this.seatPose;
+      this.character.update(dt, { speed: 0, crouch: 0, aim: this.aiming ? 1 : 0, grounded: true, strafe: 0, moveAngle: 0, turn: 0 });
+      return;
+    }
+    c.seat = null;
     this.character.update(dt, {
       // Standing on the deck: no stride (the skate pose does the legs).
       speed: r ? 0 : hv,
@@ -609,6 +725,8 @@ export class PlayerController {
     this.dead = true;
     this.ride = null;
     this.vault = null;
+    this.seated = null;
+    this.character.seat = null;
     this.clearInput();
     this.sprinting = false;
     this.velocity.set(0, 0, 0);

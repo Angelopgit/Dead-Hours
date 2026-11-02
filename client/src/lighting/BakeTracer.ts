@@ -1,4 +1,4 @@
-import { propColliders, propOccluders, type MapDefinition, type Rect } from '@dead-hours/shared';
+import { isDrivable, propColliders, propOccluders, type MapDefinition, type Rect } from '@dead-hours/shared';
 
 /**
  * A small CPU ray tracer over the map's static collision (boxes rotated about Y, plus
@@ -34,6 +34,8 @@ export class BakeTracer {
       }
     }
     for (const p of map.props) {
+      // Vehicles can be driven away: they cast no baked shadow (their own draws one under them).
+      if (isDrivable(p)) continue;
       for (const b of propColliders(p)) boxes.push(b.x, b.y, b.z, b.hx, b.hy, b.hz, Math.cos(b.rotY), Math.sin(b.rotY));
       for (const o of propOccluders(p)) spheres.push(o.x, o.y, o.z, o.r);
     }

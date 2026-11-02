@@ -14,11 +14,28 @@ export interface SoundAnchor {
   level: () => number;
 }
 
+/**
+ * A drivable vehicle's parts, built in its own frame (origin on the road under its middle, nose
+ * along +X) and left out of the static batch: the vehicle view merges and moves them.
+ */
+export interface VehicleParts {
+  /** Index of the prop in the map. */
+  prop: number;
+  /** Static parts (headlight lenses tagged userData.lamp = 'head', tail lights 'tail'). */
+  root: THREE.Group;
+  /** Animated parts (police strobes, hazard flashers and their lights). */
+  dyn: THREE.Group;
+  /** Sound sources on it (a hazard alarm), at their offsets from its origin. */
+  anchors: { anchor: SoundAnchor; offset: THREE.Vector3 }[];
+}
+
 export interface PropBuildResult {
   dynamic: Updatable[];
   anchors: SoundAnchor[];
   /** Ground-level positions of emissive roadside lights (used by the menu camera framing). */
   landmarks: { policeCar?: THREE.Vector3; wreck?: THREE.Vector3; flicker?: THREE.Vector3 };
+  /** Every drivable vehicle, by vehicle id (the order of the drivable props in the map). */
+  vehicles: VehicleParts[];
 }
 
 export interface Paint {

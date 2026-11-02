@@ -304,6 +304,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .w-light:not(.none) { color: #e9d9b8; }
 .vitals .name span.low { color: #e2725f; animation: pulse 0.9s ease-in-out infinite; }
 
+/* Vehicle panel (bottom middle): speed and the gas gauge */
+.car-panel { position: absolute; left: 50%; bottom: 4vh; transform: translateX(-50%); text-align: center; text-shadow: 0 1px 8px rgba(0,0,0,0.85); min-width: 13em; }
+.car-name { font-size: 0.64em; letter-spacing: 0.3em; color: var(--fg-dim); white-space: nowrap; }
+.car-speed { font-weight: 300; line-height: 1; margin-top: 0.2em; font-variant-numeric: tabular-nums; }
+.car-mph { font-size: 2.5em; color: #ece6dc; }
+.car-speed small { font-size: 0.62em; letter-spacing: 0.3em; color: var(--fg-faint); margin-left: 0.5em; }
+.car-gas { display: flex; align-items: center; gap: 0.6em; margin-top: 0.45em; font-size: 0.62em; letter-spacing: 0.24em; color: var(--fg-dim); }
+.car-gas b { font-weight: 400; }
+.car-gas span { min-width: 3.6em; text-align: right; font-variant-numeric: tabular-nums; }
+.gbar { flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 1px; overflow: hidden; }
+.gbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.3s; }
+.gbar.low i { background: #e2725f; animation: pulse 0.9s ease-in-out infinite; }
+.car-state { margin-top: 0.4em; font-size: 0.6em; letter-spacing: 0.3em; color: var(--fg-faint); height: 1.2em; }
+
 /* Hit confirmation and damage direction */
 .hitmarker { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; }
 .hitmarker i { position: absolute; left: -1px; top: -4.5px; width: 2px; height: 9px; background: #f2f0ea; box-shadow: 0 0 3px rgba(0,0,0,0.8); }
@@ -648,6 +662,12 @@ body.pad-nav #viewport { cursor: none; }
 .tc-btn.use { --s: 60px; right: calc(178px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(168px * var(--tc-scale)); opacity: 0.45; padding: 4px; }
 .tc-btn.board { --s: 52px; right: calc(252px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(172px * var(--tc-scale)); opacity: 0.45; }
 .tc-btn.use.ready, .tc-btn.board.ready { opacity: 1; border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
+/* In a vehicle: the wheel takes the driver's hands (no gun buttons); nobody crouches or jumps in a seat. */
+.touch-controls.seated .tc-btn.crouch, .touch-controls.seated .tc-btn.melee:not(.horn) { display: none; }
+.touch-controls.driving .tc-btn.fire, .touch-controls.driving .tc-btn.aim, .touch-controls.driving .tc-btn.reload,
+.touch-controls.driving .tc-btn.swap, .touch-controls.driving .tc-btn.heal { display: none; }
+.touch-controls.passenger .tc-btn.jump { display: none; }
+.touch-controls.seated .tc-btn.board { opacity: 1; }
 .tc-btn.heal { --s: 44px; right: calc(28px + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.bag { --s: 44px; right: calc(84px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.light { --s: 44px; right: calc(140px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); font-size: calc(10px * var(--tc-scale)); }
@@ -658,6 +678,7 @@ body.pad-nav #viewport { cursor: none; }
 body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); width: 200px; font-size: 0.85em; }
 body.touch-play .weapon-panel { bottom: auto; top: calc(52px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); right: auto; text-align: left; font-size: 0.75em; }
 body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
+body.touch-play .car-panel { bottom: auto; top: calc(10vh + env(safe-area-inset-top)); font-size: 0.8em; }
 /* The ammo panel starts right under the health bar on a phone: the stance line ("CROUCHED") goes beside the
    name and health, and the serum armor is its teal bar alone (both printed over the gun's slots and name). */
 body.touch-play .vitals .stance { position: absolute; left: calc(100% + 1.4em); top: 0.1em; margin: 0; height: auto; white-space: nowrap; }

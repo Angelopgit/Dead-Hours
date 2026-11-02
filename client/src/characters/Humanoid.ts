@@ -73,6 +73,12 @@ export interface SkatePose {
   spin: number;
 }
 
+/** Sitting in a vehicle (Humanoid.seat): the owner fills this in every frame while seated. */
+export interface SeatPose {
+  /** Which way the seat faces, relative to the body's facing (radians). */
+  yaw: number;
+}
+
 export interface Limb {
   upper: THREE.Bone;
   lower: THREE.Bone;
@@ -490,6 +496,13 @@ export class Humanoid {
   private readonly lastSkate: SkatePose = { yaw: Math.PI / 2, deck: 0.11, push: -1, lean: 0, air: false, low: false, trickU: -1, flip: 0, spin: 0 };
   /** Which side of the deck the toes are on while skating: +1 its left (looking at the nose), -1 its right. */
   skateToe = 1;
+  /**
+   * In a vehicle's seat (null on foot): hips on the cushion facing the way the seat does, thighs
+   * forward, shins down. The owner puts the root 0.88 below the cushion (where the feet would be).
+   */
+  seat: SeatPose | null = null;
+  private seatW = 0;
+  private readonly lastSeat: SeatPose = { yaw: 0 };
   /** +1 regular (left foot forward), -1 goofy. */
   private stance = 1;
   private pushK = 0;
@@ -962,6 +975,14 @@ export class Humanoid {
     this.skateW += ((this.skate ? 1 : 0) - this.skateW) * (1 - Math.exp(-dt * 12));
     if (!this.skate && this.skateW < 0.003) this.skateW = 0;
     if (this.skateW > 0) hipTarget = THREE.MathUtils.lerp(hipTarget, this.skateHip(dt), this.skateW);
+    // Seated, the hips face the way the seat does (turned sideways at most: past that the shoulders turn).
+    if (this.seat) Object.assign(this.lastSeat, this.seat);
+    // In and out at once: the root jumps between the cushion and the road with it.
+    this.seatW = this.seat ? 1 : 0;
+    if (this.seatW > 0) {
+      const sy = Math.atan2(Math.sin(this.lastSeat.yaw), Math.cos(this.lastSeat.yaw));
+      hipTarget = THREE.MathUtils.lerp(hipTarget, THREE.MathUtils.clamp(sy, -1.7, 1.7), this.seatW);
+    }
     this.hipYaw += (hipTarget - this.hipYaw) * (1 - Math.exp(-dt * (this.skateW > 0 ? 12 : 8)));
 
     // Turning on the spot shuffles the feet.
@@ -1109,6 +1130,7 @@ export class Humanoid {
     this.vaultW += (this.vault - this.vaultW) * (1 - Math.exp(-dt * 16));
     if (this.vaultW < 0.002 && this.vault === 0) this.vaultW = 0;
     if (this.vaultW > 0) this.vaultPose(this.vaultW);
+    if (this.seatW > 0.001) this.seatPose();
 
     // Knocked down: fall onto the back, feet toward the facing direction, arms splayed.
     const d = this.crawl > 0.5 ? 0 : this.down;
@@ -1327,6 +1349,19 @@ export class Humanoid {
     this.reach(rear, _sk2, pole, e);
   }
 
+  /** Sitting: hips on the cushion, thighs forward along the seat, shins down to the floor, leaning back a little. */
+  private seatPose(): void {
+    const w = this.seatW;
+    const e = w * w * (3 - 2 * w);
+    const L = THREE.MathUtils.lerp;
+    this.hips.position.y = L(this.hips.position.y, 0.95, e);
+    this.spine.rotation.x -= 0.12 * e;
+    for (const [leg, spread] of [[this.legL, 0.07], [this.legR, -0.07]] as const) {
+      leg.upper.rotation.set(L(leg.upper.rotation.x, -1.5, e), L(leg.upper.rotation.y, 0, e), L(leg.upper.rotation.z, spread, e));
+      leg.lower.rotation.set(L(leg.lower.rotation.x, 1.45, e), 0, 0);
+    }
+  }
+
   /** Shoulder and hip stumps turn with the (collapsed) upper limb, so they flail like the stub they are. */
   private syncStumps(): void {
     for (const arm of ['armL', 'armR'] as const) {
@@ -1448,6 +1483,8 @@ export class Humanoid {
     this.skate = null;
     this.skateW = 0;
     this.vault = this.vaultW = 0;
+    this.seat = null;
+    this.seatW = 0;
     this.down = this.downTarget = 0;
     this.stagger = this.staggerTarget = 0;
     this.attack = this.bash = this.scream = -1;

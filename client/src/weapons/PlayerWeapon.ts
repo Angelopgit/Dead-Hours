@@ -42,6 +42,8 @@ export interface HandsInput {
   view?: THREE.Quaternion;
   /** Holding a grenade or Molotov ready (aiming the throw, local player only). */
   priming?: ThrowKind | null;
+  /** Driving: both hands on the steering wheel at these points (world), the gun put away. */
+  wheel?: { left: THREE.Vector3; right: THREE.Vector3 } | null;
 }
 
 /** Turns camera space (looking down -Z) into weapon space (barrel along +Z). */
@@ -347,6 +349,10 @@ export class PlayerWeapon {
   private throwW = 0;
   /** 0..1 how far the arms have taken the shooter's hold down the sights (shooterArms). */
   private shooterW = 0;
+  /** 0..1 how far the hands have gone to the steering wheel, and where it was last. */
+  private wheelW = 0;
+  private readonly wheelL = new THREE.Vector3();
+  private readonly wheelR = new THREE.Vector3();
 
   constructor(private readonly scene: THREE.Object3D, private readonly body: Humanoid) {
     const g = new THREE.CylinderGeometry(0.03, 0.03, 0.07, 8).rotateZ(Math.PI / 2);
@@ -606,7 +612,14 @@ export class PlayerWeapon {
     // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm,
     // or taking the melee weapon out).
     const drawing = s.action === 'draw' && !limb && !out;
-    const stowTarget = s.action === 'bandage' || throwing ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
+    // At the wheel the gun goes to its holster (driving takes both hands).
+    if (input.wheel) {
+      this.wheelL.copy(input.wheel.left);
+      this.wheelR.copy(input.wheel.right);
+    }
+    this.wheelW = ease(this.wheelW, input.wheel ? 1 : 0, 10);
+    if (this.wheelW < 0.002) this.wheelW = 0;
+    const stowTarget = s.action === 'bandage' || throwing || input.wheel ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
     this.stowW = drawing ? stowTarget : ease(this.stowW, stowTarget, 9);
     // The gun goes over the shoulder (or into the holster) while the hands hold an arm.
     this.limbW = limb || clubbing ? ease(this.limbW, 1, 14) : 0;
@@ -833,6 +846,15 @@ export class PlayerWeapon {
     }
     this.shooterW = ease(this.shooterW, model.sight && s.action === 'idle' && !limb && !throwing ? ads : 0, 20);
     if (this.shooterW > 0.001) this.shooterArms(model, hold, this.shooterW, leftW);
+    if (this.wheelW > 0) {
+      // Hands on the rim, elbows down and out.
+      const k = this.wheelW;
+      this.rightTarget.lerp(this.wheelR, k);
+      this.leftTarget.lerp(this.wheelL, k);
+      leftW += (1 - leftW) * k;
+      this.poleR.lerp(_ld.set(-0.7, -0.7, 0).transformDirection(spineM), k).normalize();
+      this.poleL.lerp(_ld.set(0.7, -0.7, 0).transformDirection(spineM), k).normalize();
+    }
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
     this.lastProgress = progress;
