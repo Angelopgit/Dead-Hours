@@ -1,5 +1,6 @@
 import type { WeaponId } from '../config/weapons';
 import type { Vec3 } from '../sim/math';
+import type { SkateTrick } from '../config/skateboards';
 import type { PlayerStats } from '../sim/Simulation';
 
 /** Room names registered on the Colyseus server. */
@@ -85,7 +86,9 @@ export type ActMsg =
   /** Hop on skateboard `id`; -1 steps off (`bail`: thrown off by a wall), leaving it at `at` (where the rider's browser put it) pointing `yaw`. */
   | { a: 'board'; id: number; at?: Vec3; yaw?: number; bail?: boolean }
   /** Vaulting through window slot `slot` (the browser moves the survivor; a pane still in smashes). */
-  | { a: 'vault'; slot: number };
+  | { a: 'vault'; slot: number }
+  /** Popped a flip trick off an ollie on the board (the others see it). */
+  | { a: 'trick'; kind: SkateTrick };
 
 export type DebugMsg =
   | { cmd: 'skipPreparation' }

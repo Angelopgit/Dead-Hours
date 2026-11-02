@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, SKATEBOARD, VAULT, vaultAt, type PlayerMotion, type Vec3, type VaultPlan } from '@dead-hours/shared';
+import { DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
@@ -26,6 +26,12 @@ export interface Ride {
   lean: number;
   /** Seconds since the ollie popped, or -1. */
   pop: number;
+  /** The flip trick popped with it (null: a plain ollie), seconds since its pop (-1 none), and at the previous fixed step. */
+  trick: SkateTrick | null;
+  trickT: number;
+  prevTrickT: number;
+  /** A trick caught in the air, called out when the wheels touch down. */
+  caught: SkateTrick | null;
   /** Seconds since hopping on. */
   since: number;
   /** Fixed steps in a row something has blocked the deck. */
@@ -81,7 +87,10 @@ export class PlayerController {
   /** Set when the back foot touches down for a kick, and when an ollie pops (sounds). */
   kicked = false;
   popped = false;
-  private readonly skatePose: SkatePose = { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false };
+  /** Set for one frame when a flip trick pops (the others are told), and when one is landed (called out). */
+  tricked: SkateTrick | null = null;
+  landedTrick: SkateTrick | null = null;
+  private readonly skatePose: SkatePose = { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false, trickU: -1, flip: 0, spin: 0 };
   /** Vaulting through a window: the way (Vault.ts), seconds into it, and how tucked the body is (0..1). */
   vault: { plan: VaultPlan; t: number; tuck: number } | null = null;
   /** Set when a vault comes down on the far side's floor (the session plays the landing). */
@@ -200,7 +209,7 @@ export class PlayerController {
     const heading = running ? Math.atan2(this.velocity.x, this.velocity.z) : cameraYaw + Math.PI;
     this.ride = {
       board, heading, prevHeading: heading, speed: running ? Math.min(hv, SKATEBOARD.pushTop) : 0,
-      steer: 0, push: -1, lean: 0, pop: -1, since: 0, blocked: 0,
+      steer: 0, push: -1, lean: 0, pop: -1, trick: null, trickT: -1, prevTrickT: -1, caught: null, since: 0, blocked: 0,
     };
     this.sprinting = false;
     this.bailed = false;
@@ -224,6 +233,14 @@ export class PlayerController {
     this.intent.z = Math.cos(r.heading) * keep;
     const ahead = this.bailed ? 0.1 : 0.3;
     return { pos: { x: this.position.x + Math.sin(r.heading) * ahead, y: this.position.y, z: this.position.z + Math.cos(r.heading) * ahead }, yaw: r.heading };
+  }
+
+  /** How far through its flip trick the board is now, between fixed steps (0 flick .. 1 caught), or -1. */
+  trickU(alpha: number): number {
+    const r = this.ride;
+    if (!r || !r.trick || r.trickT < 0) return -1;
+    const t = r.prevTrickT >= 0 ? r.prevTrickT + (r.trickT - r.prevTrickT) * alpha : r.trickT;
+    return THREE.MathUtils.clamp((t - TRICK_DELAY) / SKATE_TRICKS[r.trick].time, 0, 1);
   }
 
   /** Where the deck points now, between fixed steps. */
@@ -337,7 +354,8 @@ export class PlayerController {
 
     this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
-    // On the board the jump is an ollie (crouched too: that's how it's done).
+    // On the board the jump is an ollie (crouched too: that's how it's done), and with the stick
+    // held to a side or back a flip trick off it.
     if (this.jumpBuffered > 0 && this.coyote > 0 && (!this.crouching || ride) && !this.downed) {
       this.intent.y = ride ? SKATEBOARD.ollie : PLAYER.jumpVelocity;
       this.jumpBuffered = 0;
@@ -346,6 +364,11 @@ export class PlayerController {
       if (ride) {
         ride.pop = 0;
         this.popped = true;
+        const kind = skateTrickFor(this.moveX, this.moveY);
+        ride.caught = null;
+        ride.trick = kind === 'ollie' ? null : kind;
+        ride.trickT = ride.prevTrickT = ride.trick ? 0 : -1;
+        if (ride.trick) this.tricked = ride.trick;
       }
     }
     this.intent.y += PLAYER.gravity * dt;
@@ -442,6 +465,21 @@ export class PlayerController {
       r.pop += dt;
       if (r.pop > 0.7) r.pop = -1;
     }
+    // A flip trick turns through in its time; down on something before the catch (popped onto a
+    // curb), the feet stamp it through at once. Caught, it is called out when the wheels touch down.
+    r.prevTrickT = r.trickT;
+    if (r.trick) {
+      r.trickT += dt * (this.grounded && r.trickT > TRICK_DELAY + 0.06 ? 5 : 1);
+      if (r.trickT >= TRICK_DELAY + SKATE_TRICKS[r.trick].time) {
+        r.caught = r.trick;
+        r.trick = null;
+        r.trickT = r.prevTrickT = -1;
+      }
+    }
+    if (r.caught && this.grounded && !r.trick) {
+      this.landedTrick = r.caught;
+      r.caught = null;
+    }
     this.intent.x = Math.sin(r.heading) * r.speed;
     this.intent.z = Math.cos(r.heading) * r.speed;
   }
@@ -521,6 +559,10 @@ export class PlayerController {
       sp.lean = r.lean;
       sp.air = !this.grounded;
       sp.low = this.crouching;
+      sp.trickU = this.trickU(alpha);
+      const T = r.trick ? SKATE_TRICKS[r.trick] : null;
+      sp.flip = T ? T.flip : 0;
+      sp.spin = T ? T.spin : 0;
     }
     c.skate = r ? this.skatePose : null;
     c.vault = this.vault ? 1 : 0;

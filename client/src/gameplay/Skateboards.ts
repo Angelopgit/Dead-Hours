@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SKATEBOARD, type Skateboard, type Simulation } from '@dead-hours/shared';
+import { SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, type SkateTrick, type Skateboard, type Simulation } from '@dead-hours/shared';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import type { Physics } from '../core/Physics';
@@ -17,7 +17,24 @@ export interface BoardPose {
   air: boolean;
   /** Kick cycle 0..1 while the rider pushes along, or -1. */
   push: number;
+  /** A flip trick in the air and how far through it (0 flick .. 1 caught), else null and -1. */
+  trick: SkateTrick | null;
+  trickU: number;
+  /** Which side of the deck the rider's toes are on: +1 its left (looking at the nose), -1 its right. */
+  toe: number;
 }
+
+/** How far through a flip trick `t` seconds after its pop is: 0 at the flick .. 1 caught; -1 for none. */
+export function trickProgress(kind: SkateTrick | null, t: number): number {
+  if (!kind || t < 0) return -1;
+  const time = SKATE_TRICKS[kind].time;
+  return time > 0 ? THREE.MathUtils.clamp((t - TRICK_DELAY) / time, 0, 1) : -1;
+}
+
+/** How far round a flipping board has turned at `u` through the trick: quick off the flick, slowing for the catch. */
+const turned = (u: number) => 1 - Math.pow(1 - u, 1.6);
+/** The board rising to the tucked feet through a trick (and back down under them for the catch), 0..1. */
+export const trickTuck = (u: number) => THREE.MathUtils.smoothstep(u, 0, 0.22) * (1 - THREE.MathUtils.smoothstep(u, 0.68, 1));
 
 /** Deck graphic (underside) and wheel colour for each look. */
 const LOOKS: { base: number; accent: number; stripe: number; wheel: number }[] = [
@@ -36,6 +53,8 @@ const L = SKATEBOARD.length, W = SKATEBOARD.width, R = SKATEBOARD.wheel;
 const T = 0.012;
 const UNDER = SKATEBOARD.deck - T;
 const TRUCK_Z = 0.19;
+/** A flipping board turns over about this height above the ground under its wheels (the middle of it). */
+const MID = 0.07;
 /** Kicktail rise past this distance from the middle. */
 const KICK_FROM = 0.245;
 /** How high the nose and tail tips rise above the middle of the deck. */
@@ -218,9 +237,17 @@ interface View {
   seam: number;
   surfaceT: number;
   rough: number;
+  /** The flip trick being drawn, the rider's toe side when it was flicked, and how far through it. */
+  trick: SkateTrick | null;
+  trickToe: number;
+  trickU: number;
+  /** 0, or PI once a shove-it has left the board turned round (tail first: the deck is the same both ways). */
+  half: number;
 }
 
 const _q = new THREE.Vector3();
+const _c0 = new THREE.Vector3(), _c1 = new THREE.Vector3();
+const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 
 /**
  * The night's skateboards as the simulation has them: lying about (some flipped over), or under
@@ -264,7 +291,7 @@ export class SkateboardView {
     const v: View = {
       id: b.id, look: b.look, model, probe, pos: new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z), yaw: b.yaw, flip: b.flipped ? 1 : 0,
       ease: 1, rider: b.rider, last: new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z), speed: 0, air: false, airT: 0, push: -1,
-      seam: 1.5, surfaceT: 0, rough: 1,
+      seam: 1.5, surfaceT: 0, rough: 1, trick: null, trickToe: 1, trickU: 0, half: 0,
     };
     this.views.set(b.id, v);
     return v;
@@ -285,7 +312,21 @@ export class SkateboardView {
     v.ease = Math.min(1, v.ease + dt / 0.18);
     const k = v.ease < 1 ? 1 - Math.exp(-dt * 26) : 1;
     const tx = pose ? pose.pos.x : b.pos.x, ty = pose ? pose.pos.y : b.pos.y, tz = pose ? pose.pos.z : b.pos.z;
-    const tyaw = pose ? pose.yaw : b.yaw;
+    // A trick over (caught, or the rider came off mid-air): a half turn left over turns the board round.
+    const kind = pose && pose.trick && pose.trickU >= 0 ? pose.trick : null;
+    if (v.trick && kind !== v.trick) {
+      const spin = SKATE_TRICKS[v.trick].spin;
+      const halves = pose ? spin : Math.round(spin * turned(v.trickU));
+      if (halves % 2) v.half = v.half ? 0 : Math.PI;
+      if (pose) audio.skateCatch(v.pos);
+      v.trick = null;
+    }
+    if (kind && !v.trick) {
+      v.trick = kind;
+      v.trickToe = pose!.toe;
+      audio.skateFlick(v.pos, SKATE_TRICKS[kind].flip !== 0);
+    }
+    const tyaw = (pose ? pose.yaw : b.yaw) + v.half;
     v.pos.x += (tx - v.pos.x) * k;
     v.pos.y += (ty - v.pos.y) * k;
     v.pos.z += (tz - v.pos.z) * k;
@@ -298,12 +339,32 @@ export class SkateboardView {
       pitch = t < 0.08 ? -0.42 * (t / 0.08) : t < 0.3 ? -0.42 * (1 - (t - 0.08) / 0.22) : 0;
     }
     const roll = pose ? -pose.lean * 0.13 : 0;
+    // A flip trick: the board turns over about its length (the top toward the side the foot flicked
+    // off) and/or spins round under the feet (backside: the tail toward the heels), lifted up to the
+    // tucked knees, and comes back under the feet for the catch.
+    let flipRoll = 0, spinYaw = 0, lift = 0;
+    if (v.trick && pose) {
+      const T = SKATE_TRICKS[v.trick];
+      const u = (v.trickU = pose.trickU);
+      const k = turned(u);
+      flipRoll = -v.trickToe * T.flip * Math.PI * 2 * k;
+      spinYaw = v.trickToe * T.spin * Math.PI * k;
+      lift = 0.14 * trickTuck(u);
+    }
     const r = v.model.root;
     // Flipped boards lie on their grip, resting on the nose and tail.
     const flipLift = (SKATEBOARD.deck + KICK_RISE) * v.flip;
-    r.position.set(v.pos.x, v.pos.y - (pose ? 0.015 : 0) + flipLift + Math.max(0, -pitch) * (L / 2 - 0.05) * 0.9, v.pos.z);
+    r.position.set(v.pos.x, v.pos.y - (pose ? 0.015 : 0) + flipLift + Math.max(0, -pitch) * (L / 2 - 0.05) * 0.9 + lift, v.pos.z);
+    // Turned round, the model's nose is the rider's tail: pitch and roll go the other way about its axes.
+    const s = v.half ? -1 : 1;
     r.rotation.order = 'YXZ';
-    r.rotation.set(pitch, v.yaw, roll + Math.PI * v.flip);
+    r.rotation.set(pitch * s, v.yaw + spinYaw, (roll + flipRoll) * s + Math.PI * v.flip);
+    if (flipRoll) {
+      // Over about the middle of the board, not the ground under its wheels.
+      _c0.set(0, MID, 0).applyEuler(_e.set(pitch * s, v.yaw + spinYaw, roll * s));
+      _c1.set(0, MID, 0).applyEuler(r.rotation);
+      r.position.add(_c0).sub(_c1);
+    }
 
     // Wheels spin with the distance rolled along the deck.
     const dx = v.pos.x - v.last.x, dz = v.pos.z - v.last.z;

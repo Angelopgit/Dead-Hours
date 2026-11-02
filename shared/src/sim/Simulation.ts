@@ -26,7 +26,7 @@ import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from
 import type { GibPart, HeliFlight, PelletTrace, SimEvent, SimPhase } from './events';
 import { Explosives } from './Explosives';
 import { Skateboards } from './Skateboards';
-import { SKATEBOARD } from '../config/skateboards';
+import { SKATEBOARD, type SkateTrick } from '../config/skateboards';
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -1175,6 +1175,12 @@ export class Simulation {
   leaveBoard(id: string, at?: Vec3, yaw?: number, bail = false): boolean {
     const p = this.players.get(id);
     return !!p && this.skateboards.hopOff(p, bail ? 'bail' : 'off', at, yaw) !== null;
+  }
+
+  /** Pops a flip trick off an ollie (only for a survivor on a board). */
+  skateTrick(id: string, kind: SkateTrick): boolean {
+    const p = this.players.get(id);
+    return !!p && this.skateboards.trick(p, kind);
   }
 
   /** Uses an ammunition crate or first aid box. */

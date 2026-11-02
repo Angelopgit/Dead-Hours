@@ -755,7 +755,7 @@ export class Mirror {
     } else if (e.type === 'skate') {
       // Who rides what shows at once (a rider thrown off lets go of the board before the next snapshot).
       const b = sim.skateboards.board(e.board);
-      if (b && (e.player !== this.me || e.stage === 'bail')) {
+      if (b && e.stage !== 'trick' && (e.player !== this.me || e.stage === 'bail')) {
         b.rider = e.stage === 'on' ? e.player : null;
         if (e.stage !== 'on') {
           b.pos = { ...e.pos };

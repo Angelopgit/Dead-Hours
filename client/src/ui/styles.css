@@ -220,6 +220,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .notice.danger { color: #e2725f; }
 .notice.rare { color: #e6c35a; }
 .notice.calm { color: #8fcfc0; }
+/* A skateboard trick landed: its name over the crosshair, above the prompt. */
+.trick-call { position: absolute; left: 50%; top: 31%; transform: translateX(-50%); pointer-events: none; text-align: center; white-space: nowrap; }
+.trick-call > div { opacity: 0; font-family: var(--font-display); font-weight: 600; font-style: italic; font-size: 1.7em; letter-spacing: 0.16em;
+  color: #f4ecdc; text-shadow: 0 2px 14px rgba(0,0,0,0.95), 0 0 22px rgba(230, 195, 90, 0.25); }
+.trick-call small { font-size: 0.55em; font-style: normal; letter-spacing: 0.2em; color: #e6c35a; margin-left: 0.6em; }
 .notice small { display: block; font-family: var(--font-body); letter-spacing: 0.25em; font-size: 0.55em; color: var(--fg-dim); margin-top: 0.7em; }
 .vitals { position: absolute; left: 3vw; bottom: 4vh; width: 260px; }
 .vitals .name { font-size: 0.85em; letter-spacing: 0.22em; color: var(--fg-dim); margin-bottom: 0.5em; display: flex; justify-content: space-between; }
@@ -670,6 +675,8 @@ body.touch-play .prompt { top: calc(50% + 36px); width: max-content; white-space
    bar and over each other). */
 body.touch-play .phase-timer { top: calc(62px + env(safe-area-inset-top)); font-size: 0.75em; letter-spacing: 0.26em; }
 body.touch-play .warning { top: calc(80px + env(safe-area-inset-top)); font-size: 0.7em; letter-spacing: 0.32em; }
+/* Between the notices and the crosshair (a phone on its side has no more room above it). */
+body.touch-play .trick-call { top: calc(50% - 56px); font-size: 0.75em; }
 body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size: 1em; line-height: 1.15; }
 /* Set tight, so a long grey line clears the tops of BOARD / USE / SWAP on a 360 px tall phone, and a little
    narrower, so on a 667 px wide one it stays clear of the ammo panel's fire-mode row on the left. */

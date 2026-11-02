@@ -1,5 +1,5 @@
 import {
-  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, unpackMotion,
+  GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion,
   BUILD_SLOTS, decodeBuild, sanitizeBuild,
   type ActMsg, type DebugMsg, type DoorBody, type Loadout, type Physics, type SimEvent, type Snapshot, type UnlockState, type Vec3,
   type WeaponBuild, type WeaponId, type ZombieKind,
@@ -47,8 +47,9 @@ interface Extra {
   /** Put back here after a refused move; moves are ignored until the client is there. */
   correcting: Vec3 | null;
   correctedAt: number;
-  /** Last simulation time they were on a skateboard. */
+  /** Last simulation time they were on a skateboard, and popped a trick on one. */
   boardAt: number;
+  trickAt: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
@@ -116,7 +117,7 @@ export class Night {
     this.extras.set(s.id, {
       facing: sp.yaw + Math.PI, trigger: false, aimO: eye, aimD: { x: -Math.sin(sp.yaw), y: 0, z: -Math.cos(sp.yaw) },
       press: 0, pressO: eye, pressD: { x: 0, y: 0, z: -1 }, budget: MAX_SPEED * BANK, climb: MAX_CLIMB * BANK,
-      correcting: null, correctedAt: 0, boardAt: -Infinity, body, collider,
+      correcting: null, correctedAt: 0, boardAt: -Infinity, trickAt: -Infinity, body, collider,
     });
     this.facing.set(s.id, sp.yaw + Math.PI);
     return { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw };
@@ -274,6 +275,11 @@ export class Night {
         } else {
           sim.leaveBoard(id, isVec(m.at) ? vec(m.at) : undefined, typeof m.yaw === 'number' && Number.isFinite(m.yaw) ? m.yaw : undefined, m.bail === true);
         }
+        break;
+      case 'trick':
+        // One at a time (a trick takes a whole ollie): a client sending more is ignored.
+        if (!isSkateTrick(m.kind) || m.kind === 'ollie' || sim.time - x.trickAt < SKATEBOARD.trickEvery) break;
+        if (sim.skateTrick(id, m.kind)) x.trickAt = sim.time;
         break;
       case 'door': {
         const d = Number.isInteger(m.door) ? this.doors[m.door] : null;

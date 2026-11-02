@@ -81,6 +81,24 @@ function clips(): Clip[] {
       eng.skateRoll(t > 0.4 && t < 3.4 && !air ? [{ id: 0, pos: at, speed: 8, rough: 1 }] : []);
     },
   });
+  // Rolling at 7 m/s: a kickflip (pop, flick, catch, land), then a pop shove-it (the scoop).
+  out.push({
+    name: 'own-kickflip-then-shove-it', seconds: 4,
+    frame: (eng, t, cam) => {
+      const at = new THREE.Vector3(t * 7, 0, 0);
+      chase(cam, at);
+      const k = Math.round(t * FPS);
+      const trick = (from: number, flip: boolean, time: number) => {
+        if (k === Math.round(from * FPS)) eng.skatePop(at);
+        if (k === Math.round((from + 0.05) * FPS)) eng.skateFlick(at, flip);
+        if (k === Math.round((from + 0.05 + time) * FPS)) eng.skateCatch(at);
+        if (k === Math.round((from + 0.51) * FPS)) eng.skateLand(at, 0.85);
+        return t >= from && t < from + 0.51;
+      };
+      const air = trick(0.8, true, 0.36) || trick(2.5, false, 0.32);
+      eng.skateRoll(air ? [] : [{ id: 0, pos: at, speed: 7, rough: 1 }]);
+    },
+  });
   // Someone else rolls past at 9 m/s, 4 m out, while this survivor stands on the sidewalk.
   out.push({
     name: 'other-rider-passes-4m', seconds: 4,

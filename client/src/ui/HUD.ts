@@ -66,6 +66,7 @@ export class HUD {
   private readonly molotovLine: HTMLElement;
   private readonly lightLine: HTMLElement;
   private readonly feed: HTMLElement;
+  private readonly trick: HTMLElement;
   private readonly waypoint: HTMLElement;
   private readonly waypointText: HTMLElement;
   private waypointShown = false;
@@ -101,6 +102,7 @@ export class HUD {
     this.warning = h('div', { class: 'warning' });
     this.arcs = h('div', { class: 'damage-arcs' });
     this.feed = h('div', { class: 'feed' });
+    this.trick = h('div', { class: 'trick-call' });
     this.waypointText = h('span', { class: 'wp-text' });
     this.waypoint = h('div', { class: 'waypoint' }, h('i', { class: 'wp-icon' }), this.waypointText);
     this.wModel = h('div', { class: 'w-model' });
@@ -131,6 +133,7 @@ export class HUD {
       this.timer,
       this.warning,
       this.notice,
+      this.trick,
       this.feed,
       h('div', { class: 'vitals' },
         h('div', { class: 'name' }, h('span', {}, name.toUpperCase()), this.hp),
@@ -303,6 +306,15 @@ export class HUD {
     this.prompt.classList.add('show');
   }
 
+  /** A skateboard trick landed: its name punched up over the crosshair (and how many in a row). */
+  trickCall(name: string, streak = 1): void {
+    const line = h('div', {}, name, streak > 1 ? h('small', {}, `×${streak}`) : '');
+    this.trick.replaceChildren(line);
+    gsap.timeline()
+      .fromTo(line, { opacity: 0, scale: 1.45, y: 6 }, { opacity: 1, scale: 1, y: 0, duration: 0.2, ease: 'back.out(2.2)' })
+      .to(line, { opacity: 0, y: -16, duration: 0.5, delay: 0.85, ease: 'power1.in' });
+  }
+
   /** Top-center contextual message, e.g. location titles or SUPPLY HELICOPTER INBOUND. */
   notify(title: string, sub = '', hold = 2.6, tone: '' | 'danger' | 'rare' | 'calm' = ''): void {
     this.notice.replaceChildren(title, sub ? h('small', {}, sub) : '');
@@ -346,7 +358,7 @@ export class HUD {
 
   dispose(): void {
     gsap.killTweensOf([this.notice, this.fill, this.lag, this.el, this.marker]);
-    for (const c of [...Array.from(this.arcs.children), ...Array.from(this.feed.children)]) gsap.killTweensOf(c);
+    for (const c of [...Array.from(this.arcs.children), ...Array.from(this.feed.children), ...Array.from(this.trick.children)]) gsap.killTweensOf(c);
     this.el.remove();
   }
 }

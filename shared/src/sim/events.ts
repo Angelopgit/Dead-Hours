@@ -5,6 +5,7 @@ import type { MeleeId } from '../config/melee';
 import type { ThrowKind } from '../config/throwables';
 import type { Surface } from '../physics/Physics';
 import type { Vec3 } from './math';
+import type { SkateTrick } from '../config/skateboards';
 
 export type SimPhase = 'preparation' | 'survival' | 'over';
 
@@ -132,8 +133,11 @@ export type SimEvent =
   | { type: 'fire'; id: number; player: string; pos: Vec3; ground: Vec3; patches: [number, number, number, number][]; start: number; end: number }
   /** A zombie caught fire. */
   | { type: 'ignite'; zombie: number }
-  /** A survivor hopped on a skateboard, stepped off, or was thrown off it (a hit, a wall, going down). */
-  | { type: 'skate'; player: string; board: number; stage: 'on' | 'off' | 'bail'; pos: Vec3; yaw: number };
+  /**
+   * A survivor hopped on a skateboard, stepped off, or was thrown off it (a hit, a wall, going
+   * down), or popped a flip trick (`trick`) off an ollie.
+   */
+  | { type: 'skate'; player: string; board: number; stage: 'on' | 'off' | 'bail' | 'trick'; pos: Vec3; yaw: number; trick?: SkateTrick };
 
 /** A head or leg blown off a zombie a blast killed (arms come off as real limbs, see limbSevered). */
 export interface GibPart {

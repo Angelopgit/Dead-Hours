@@ -1,4 +1,4 @@
-import { SKATEBOARD } from '../config/skateboards';
+import { SKATEBOARD, type SkateTrick } from '../config/skateboards';
 import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE } from './NavGrid';
 import { clamp, dist2D, rng, type Vec3 } from './math';
 import type { SimPlayer, Simulation } from './Simulation';
@@ -133,6 +133,14 @@ export class Skateboards {
     this.sim.emit({ type: 'skate', player: p.id, board: b.id, stage: how, pos: { ...b.pos }, yaw: b.yaw });
     if (how === 'bail') this.sim.noise(b.pos, SKATEBOARD.landNoise, p.id);
     return b;
+  }
+
+  /** A rider popped a flip trick: everyone is told, so they see it. */
+  trick(p: SimPlayer, kind: SkateTrick): boolean {
+    const b = this.ridden(p.id);
+    if (!b || !p.up) return false;
+    this.sim.emit({ type: 'skate', player: p.id, board: b.id, stage: 'trick', pos: { ...b.pos }, yaw: b.yaw, trick: kind });
+    return true;
   }
 
   /** A hit this hard throws a rider off. */

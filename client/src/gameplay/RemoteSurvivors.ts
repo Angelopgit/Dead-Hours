@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { DOWNED, PLAYER, SKATEBOARD, decodeAppearance, type Mirror, type SimPlayer, type Simulation, type Skateboard } from '@dead-hours/shared';
+import { DOWNED, PLAYER, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, decodeAppearance, type Mirror, type SimPlayer, type Simulation, type SkateTrick, type Skateboard } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
 import { Humanoid, survivorLook, type SkatePose } from '../characters/Humanoid';
-import type { BoardPose } from './Skateboards';
+import { trickProgress, type BoardPose } from './Skateboards';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
 import { DynamicProbe } from '../lighting/Probes';
@@ -29,7 +29,22 @@ interface Remote {
   lightOn: boolean | null;
   beam: Beam;
   /** On a skateboard: the deck as drawn (yaw eased between snapshots, the kick run here), else null. */
-  ride: { yaw: number; lean: number; push: number; pop: number; air: boolean; pose: SkatePose; board: BoardPose } | null;
+  ride: RemoteRide | null;
+  /** A flip trick the server said they popped, waiting (seconds left) for them to leave the ground. */
+  trickWait: { kind: SkateTrick; t: number } | null;
+}
+
+interface RemoteRide {
+  yaw: number;
+  lean: number;
+  push: number;
+  pop: number;
+  air: boolean;
+  /** The flip trick in the air and seconds since its pop (-1 none). */
+  trick: SkateTrick | null;
+  trickT: number;
+  pose: SkatePose;
+  board: BoardPose;
 }
 
 const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _aim = new THREE.Vector3(), _want = new THREE.Vector3();
@@ -75,7 +90,7 @@ export class RemoteSurvivors {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0, dim: 1 },
-      ride: null,
+      ride: null, trickWait: null,
     };
     body.onFootstep = (l) => audio.footstep(l * 0.9, false, r.pos);
     weapon.onCue = (cue, w, inS) => audio.foley(cue, this.hand(r, _q), w, inS);
@@ -188,13 +203,13 @@ export class RemoteSurvivors {
    * snapshots), leans with how fast it turns, pops up when they leave the ground, and their back
    * foot kicks along while they say they are pushing.
    */
-  private skate(r: Remote, deck: Skateboard, m: SimPlayer['motion'], dt: number): NonNullable<Remote['ride']> {
+  private skate(r: Remote, deck: Skateboard, m: SimPlayer['motion'], dt: number): RemoteRide {
     let s = r.ride;
     if (!s) {
       s = {
-        yaw: deck.yaw, lean: 0, push: -1, pop: -1, air: false,
-        pose: { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false },
-        board: { pos: new THREE.Vector3(), yaw: deck.yaw, lean: 0, pop: -1, air: false, push: -1 },
+        yaw: deck.yaw, lean: 0, push: -1, pop: -1, air: false, trick: null, trickT: -1,
+        pose: { yaw: 0, deck: SKATEBOARD.deck, push: -1, lean: 0, air: false, low: false, trickU: -1, flip: 0, spin: 0 },
+        board: { pos: new THREE.Vector3(), yaw: deck.yaw, lean: 0, pop: -1, air: false, push: -1, trick: null, trickU: -1, toe: 1 },
       };
       r.ride = s;
     }
@@ -211,12 +226,35 @@ export class RemoteSurvivors {
     if (air && !s.air) s.pop = 0;
     else if (s.pop >= 0) s.pop = s.pop + dt > 0.7 ? -1 : s.pop + dt;
     s.air = air;
+    // A flip trick the server told of starts with their pop (it usually comes before their jump
+    // shows: they are drawn a moment behind), or at once, as far through, if they already left the ground.
+    const w = r.trickWait;
+    if (w) {
+      w.t -= dt;
+      if (air && s.pop >= 0 && s.pop < 0.3) {
+        s.trick = w.kind;
+        s.trickT = s.pop;
+        r.trickWait = null;
+      } else if (w.t <= 0) r.trickWait = null;
+    }
+    if (s.trick) {
+      s.trickT += dt * (!air && s.trickT > TRICK_DELAY + 0.06 ? 5 : 1);
+      if (s.trickT >= TRICK_DELAY + SKATE_TRICKS[s.trick].time) {
+        s.trick = null;
+        s.trickT = -1;
+      }
+    }
+    const trickU = trickProgress(s.trick, s.trickT);
+    const T = s.trick ? SKATE_TRICKS[s.trick] : null;
     const pose = s.pose;
     pose.yaw = Math.atan2(Math.sin(s.yaw - r.facing), Math.cos(s.yaw - r.facing));
     pose.push = s.push;
     pose.lean = s.lean;
     pose.air = air;
     pose.low = m.crouching;
+    pose.trickU = trickU;
+    pose.flip = T ? T.flip : 0;
+    pose.spin = T ? T.spin : 0;
     const bp = s.board;
     bp.pos.copy(r.pos);
     bp.yaw = s.yaw;
@@ -224,7 +262,16 @@ export class RemoteSurvivors {
     bp.pop = s.pop;
     bp.air = air;
     bp.push = s.push;
+    bp.trick = s.trick;
+    bp.trickU = trickU;
+    bp.toe = r.body.skateToe;
     return s;
+  }
+
+  /** The server says this survivor popped a flip trick: it plays as they leave the ground. */
+  trick(id: string, kind: SkateTrick): void {
+    const r = this.remotes.get(id);
+    if (r) r.trickWait = { kind, t: 0.8 };
   }
 
   /** Where another survivor's board is drawn (under their feet), or null when they aren't riding one. */

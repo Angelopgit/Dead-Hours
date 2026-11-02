@@ -62,6 +62,14 @@ export interface SkatePose {
   air: boolean;
   /** Crouched low on the deck. */
   low: boolean;
+  /**
+   * A flip trick in the air: how far through it (0 flick .. 1 caught), or -1. `flip` turns of the
+   * board off the toe side (+) or heel side (-) and `spin` half turns (+ backside) say which feet
+   * do what: the front foot flicks a flip, the back foot scoops a shove-it round.
+   */
+  trickU: number;
+  flip: number;
+  spin: number;
 }
 
 export interface Limb {
@@ -478,7 +486,9 @@ export class Humanoid {
   vault = 0;
   private vaultW = 0;
   private skateW = 0;
-  private readonly lastSkate: SkatePose = { yaw: Math.PI / 2, deck: 0.11, push: -1, lean: 0, air: false, low: false };
+  private readonly lastSkate: SkatePose = { yaw: Math.PI / 2, deck: 0.11, push: -1, lean: 0, air: false, low: false, trickU: -1, flip: 0, spin: 0 };
+  /** Which side of the deck the toes are on while skating: +1 its left (looking at the nose), -1 its right. */
+  skateToe = 1;
   /** +1 regular (left foot forward), -1 goofy. */
   private stance = 1;
   private pushK = 0;
@@ -1256,27 +1266,39 @@ export class Humanoid {
     const e = w * w * (3 - 2 * w);
     const sk = this.lastSkate;
     const L = THREE.MathUtils.lerp;
-    const hipsY = sk.deck + 0.84 - crouch * 0.2 - this.pushK * 0.07 - this.airK * 0.12;
+    // A flip trick: the knees tuck right up off the spinning board, the front foot flicking it off
+    // the toe or heel side (or the back foot scooping a shove-it round behind), eyes on the board,
+    // then both feet come down onto the grip to catch it.
+    const u = sk.trickU;
+    let tuck = 0, flick = 0, scoop = 0;
+    if (u >= 0) {
+      tuck = THREE.MathUtils.smoothstep(u, 0, 0.22) * (1 - THREE.MathUtils.smoothstep(u, 0.68, 1));
+      if (sk.flip) flick = Math.sin(Math.PI * Math.min(1, u / 0.42));
+      if (sk.spin) scoop = Math.sin(Math.PI * Math.min(1, u / 0.36));
+    }
+    const hipsY = sk.deck + 0.84 - crouch * 0.2 - this.pushK * 0.07 - this.airK * 0.12 - tuck * 0.05;
     // Board axes in the root's space: forward (nose) and its left side.
     const bx = Math.sin(sk.yaw), bz = Math.cos(sk.yaw);
     const sx = Math.cos(sk.yaw), sz = -Math.sin(sk.yaw);
     this.hips.position.y = L(this.hips.position.y, hipsY, e);
     // A little forward over the deck, and the shoulders leaning in toward the middle of a carve.
-    this.spine.rotation.x += (0.1 * (1 - crouch) + sz * this.leanK * 0.16) * e;
+    this.spine.rotation.x += (0.1 * (1 - crouch) + sz * this.leanK * 0.16 + tuck * 0.24) * e;
     this.spine.rotation.z -= sx * this.leanK * 0.16 * e;
     // Looking down the street over the front shoulder (aiming, the head follows the gun).
     const ahead = THREE.MathUtils.clamp(Math.atan2(Math.sin(sk.yaw), Math.cos(sk.yaw)), -1.6, 1.6) * 0.55;
     this.head.rotation.y += ahead * (1 - this.smoothed.aim) * e;
+    this.head.rotation.x += tuck * 0.38 * (1 - this.smoothed.aim) * e;
     this.root.updateMatrixWorld(true);
     // The toe side: the side of the board the hips face.
     const fx = Math.sin(this.hipYaw), fz = Math.cos(this.hipYaw);
     const toe = fx * sx + fz * sz >= 0 ? 1 : -1;
+    this.skateToe = toe;
     const ankle = sk.deck + 0.035;
     const front = this.stance > 0 ? this.legL : this.legR;
     const rear = this.stance > 0 ? this.legR : this.legL;
     const put = (out: THREE.Vector3, along: number, side: number, y: number) =>
       out.set(bx * along + sx * side * toe, y, bz * along + sz * side * toe);
-    put(_sk1, 0.2, 0.015, ankle + this.airK * 0.02);
+    put(_sk1, 0.2 + flick * 0.15, 0.015 + sk.flip * flick * 0.21, ankle + this.airK * 0.02 + tuck * 0.3 + flick * 0.05);
     // Back foot: on the tail, or the kick (down beside the board ahead, push back along the ground, up onto the tail).
     const p = sk.push;
     if (p >= 0 && !sk.air) {
@@ -1294,7 +1316,7 @@ export class Humanoid {
       const tl = put(_sk3, -0.21, 0, ankle);
       _sk2.lerpVectors(tl, _sk2, this.pushK);
     } else {
-      put(_sk2, -0.21, 0, ankle + this.airK * 0.03);
+      put(_sk2, -0.21 - scoop * 0.1, -Math.sign(sk.spin) * scoop * 0.14, ankle + this.airK * 0.03 + tuck * 0.28);
     }
     this.root.localToWorld(_sk1);
     this.root.localToWorld(_sk2);
