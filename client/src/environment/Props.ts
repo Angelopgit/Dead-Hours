@@ -3,6 +3,7 @@ import { wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
+import { LampGlare, patchLens } from './LampGlare';
 import { settings } from '../core/Settings';
 import { Kit, jitter, type PropBuildResult } from './props/Kit';
 import { INTERIOR } from './props/interior';
@@ -41,9 +42,14 @@ function tip(kind: PropSpec['kind'], root: THREE.Group): void {
   }
 }
 
+/** Lamp lenses (discs facing down): radius and thickness in metres. */
+const LENS = { street: { r: 0.24, t: 0.04 }, alley: { r: 0.17, t: 0.03 } } as const;
+
 /** Builds every map prop. Static parts merge into the world batch; animated parts stay separate. */
 export class PropFactory {
   readonly foliageUniforms = { uTime: { value: 0 }, uWind: { value: 1 } };
+  /** Soft glares that take over from lamp lenses too thin to draw steadily (see LampGlare). */
+  readonly glare = new LampGlare();
   readonly foliage: THREE.MeshStandardMaterial;
   readonly pine: THREE.MeshStandardMaterial;
   readonly trunk: THREE.MeshStandardMaterial;
@@ -116,7 +122,27 @@ export class PropFactory {
       if (dynamicRoot.children.length) scene.add(dynamicRoot);
     }
     for (const line of poles.values()) this.buildWires(line, batch);
+    const glare = this.glare.build();
+    if (glare) scene.add(glare);
     return result;
+  }
+
+  /** A lamp lens that hands its light to the glare as it shrinks on screen. */
+  private lensMaterial(color: number, intensity: number, lens: { r: number; t: number }): THREE.MeshStandardMaterial {
+    const m = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: color, emissiveIntensity: intensity, roughness: 1 });
+    m.userData.noBake = true;
+    patchLens(m, lens.r, lens.t);
+    return m;
+  }
+
+  private lens(key: string, color: number, intensity: number, lens: { r: number; t: number }): THREE.MeshStandardMaterial {
+    return this.lib.custom(`lens-${key}-${color}-${intensity}`, () => this.lensMaterial(color, intensity, lens));
+  }
+
+  /** Registers the glare for a lens at local (0, y, z) on the current prop. */
+  private addGlare(k: Kit, y: number, z: number, color: number, intensity: number, lens: { r: number; t: number }): number {
+    const pos = new THREE.Vector3(0, y, z).applyAxisAngle(new THREE.Vector3(0, 1, 0), k.p.rotY).add(new THREE.Vector3(k.p.x, k.p.y ?? 0, k.p.z));
+    return this.glare.add(pos, new THREE.Color(color).multiplyScalar(intensity), lens.r, lens.t);
   }
 
   private buildWires(poles: THREE.Vector3[], batch: StaticBatcher): void {
@@ -148,9 +174,10 @@ export class PropFactory {
           break;
         }
         const flicker = !!p.flag;
-        const bulbMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffc27a, emissiveIntensity: 6 });
-        bulbMat.userData.noBake = true;
-        k.cyl(0.24, 0.24, 0.04, 8, bulbMat, 0, 5.84, 1.65, { cast: false, dynamic: flicker });
+        // Steady lamps share one lens (one draw); the failing one dims its own.
+        const bulbMat = flicker ? this.lensMaterial(0xffc27a, 6, LENS.street) : this.lens('street', 0xffc27a, 6, LENS.street);
+        k.cyl(LENS.street.r, LENS.street.r, LENS.street.t, 8, bulbMat, 0, 5.84, 1.65, { cast: false, dynamic: flicker });
+        const glare = this.addGlare(k, 5.84, 1.65, 0xffc27a, 6, LENS.street);
         const coneH = 5.7;
         const coneG = new THREE.ConeGeometry(2.9, coneH, 20, 1, true);
         coneG.translate(0, -coneH / 2, 0);
@@ -187,6 +214,7 @@ export class PropFactory {
             if (settings.value.accessibility.reducedFlashing) level = 0.5 + level * 0.5;
             spot.intensity = 260 * level;
             bulbMat.emissiveIntensity = 6 * level;
+            this.glare.setGain(glare, level);
             coneMat.uniforms.uIntensity.value = level;
           },
         });
@@ -332,7 +360,8 @@ export class PropFactory {
           const metal = k.mat(0x2a2d30, 0.6, 0.5);
           k.box(0.06, 0.06, 1.0, metal, 0, 6.25, 0.5);
           k.cyl(0.16, 0.26, 0.16, 8, metal, 0, 6.15, 0.95);
-          k.cyl(0.17, 0.17, 0.03, 8, k.glow(0xffc27a, 5), 0, 6.06, 0.95, { cast: false });
+          k.cyl(LENS.alley.r, LENS.alley.r, LENS.alley.t, 8, this.lens('alley', 0xffc27a, 5, LENS.alley), 0, 6.06, 0.95, { cast: false });
+          this.addGlare(k, 6.06, 0.95, 0xffc27a, 5, LENS.alley);
         }
         break;
       }

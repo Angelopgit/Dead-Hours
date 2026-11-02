@@ -1,8 +1,12 @@
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 
-/** Most lights the fog scatters at once (the brightest near the camera win). */
-export const FOG_LIGHTS = 12;
+/** Slots for live lights (muzzle flashes, flashlights, fires), on top of the static lamps' own. */
+export const LIVE_FOG_LIGHTS = 4;
+/** Most static lamps the fog can take (high quality); see SceneFXOptions.fogLights. */
+export const FOG_LAMPS = 12;
+/** Most lights the fog scatters at once: the lamps' slots plus the live lights'. */
+export const FOG_LIGHTS = FOG_LAMPS + LIVE_FOG_LIGHTS;
 
 /** A light that scatters in the fog: static lamps from the map, plus live scene lights. */
 export interface FogLight {
@@ -25,6 +29,7 @@ export interface SceneFXOptions {
   /** Volumetric fog resolution as a fraction of the screen (0 = off). */
   fogScale: number;
   fogSteps: number;
+  /** Static lamps the fog takes (live lights get LIVE_FOG_LIGHTS more). */
   fogLights: number;
   /** Camera motion blur taps (0 = off). */
   blurTaps: number;
@@ -402,6 +407,11 @@ export class ScenePass extends Pass {
     return this.opts.fogScale > 0;
   }
 
+  /** Static lamps the fog takes at this quality. */
+  get fogLamps(): number {
+    return Math.min(this.opts.fogLights, FOG_LAMPS);
+  }
+
   configure(o: SceneFXOptions): void {
     const prev = this.opts;
     this.opts = { ...o };
@@ -497,7 +507,7 @@ export class ScenePass extends Pass {
       u.uFrame.value = this.frame;
       u.tCover.value = this.cover;
       u.uCoverRect.value.copy(this.coverRect);
-      const n = Math.min(this.lights.length, this.opts.fogLights, FOG_LIGHTS);
+      const n = Math.min(this.lights.length, FOG_LIGHTS);
       for (let i = 0; i < n; i++) {
         const l = this.lights[i];
         u.uPos.value[i].set(l.pos.x, l.pos.y, l.pos.z, l.range);

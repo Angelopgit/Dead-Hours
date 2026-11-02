@@ -380,7 +380,7 @@ export class Neighborhood {
     u.uWetness.value = weather.wetness;
     u.uRainAmt.value = weather.rain;
     u.uWxWind.value.set(this.atmosphere.wind.x, this.atmosphere.wind.z).multiplyScalar(this.atmosphere.windStrength);
-    updateWetLamps(camera.position);
+    updateWetLamps(camera.position, dt);
     this.rain.update(camera, this.fog.density, this.lighting.flash * (settings.value.accessibility.reducedFlashing ? 0.2 : 1));
     this.propFactory.foliageUniforms.uTime.value = t;
     this.propFactory.foliageUniforms.uWind.value = this.atmosphere.windStrength;

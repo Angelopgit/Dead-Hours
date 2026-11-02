@@ -86,12 +86,15 @@ export class Atmosphere {
       const d = this.wispData[i];
       s.position.x += d.vx * windScale * dt;
       s.position.z += d.vz * dt;
-      const mat = s.material;
-      mat.opacity = d.base * (0.7 + 0.3 * Math.sin(t * 0.3 + d.phase));
       if (s.position.x - focus.x > r) s.position.x -= r * 2;
       if (s.position.x - focus.x < -r) s.position.x += r * 2;
       if (s.position.z - focus.z > r) s.position.z -= r * 2;
       if (s.position.z - focus.z < -r) s.position.z += r * 2;
+      // Wisps wrap from behind to ahead as the survivor moves; fade them out toward the edge so
+      // one never pops into the street ahead (in front of the lamps) when running or skating.
+      const edge = Math.max(Math.abs(s.position.x - focus.x), Math.abs(s.position.z - focus.z)) / r;
+      const mat = s.material;
+      mat.opacity = d.base * (0.7 + 0.3 * Math.sin(t * 0.3 + d.phase)) * (1 - THREE.MathUtils.smoothstep(edge, 0.7, 1));
     });
 
     const leaves = this.leaves!;

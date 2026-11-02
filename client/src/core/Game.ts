@@ -335,7 +335,7 @@ export class Game {
     // thicker in rain), drifting with the wind.
     const fx = this.engine.post.scene;
     if (fx.fogOn && this.world.fogLights) {
-      this.world.fogLights.update(dt, this.engine.scene, this.engine.camera.position, fx.lights, 12);
+      this.world.fogLights.update(dt, this.engine.scene, this.engine.camera.position, fx.lights, fx.fogLamps);
       fx.fogDensity = this.world.fogDensity * (1 + weather.rain * 0.35);
       fx.time = t;
       fx.cover = weatherUniforms.uCover.value;

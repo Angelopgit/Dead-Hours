@@ -50,10 +50,26 @@ export const weatherUniforms = {
 
 let lamps: WetLamp[] = [];
 let lampBudget = WET_LAMPS;
-const order: { lamp: WetLamp; score: number }[] = [];
+/** Per lamp: how far its reflection has faded in (0..1), whether it owns a slot, and its rank score. */
+let weight = new Float32Array(0);
+let holds = new Uint8Array(0);
+let wanted = new Uint8Array(0);
+const held: number[] = [];
+const order: { i: number; score: number }[] = [];
+const lastCam = new THREE.Vector3();
+let placed = false;
+/** Seconds a reflection takes to fade in or out when its lamp gains or loses a slot. */
+const WET_FADE = 0.6;
+/** A lamp already reflected keeps its slot until a rival is this many metres closer. */
+const WET_HOLD = 6;
 
 export function setWetLamps(list: WetLamp[]): void {
   lamps = list;
+  weight = new Float32Array(list.length);
+  holds = new Uint8Array(list.length);
+  wanted = new Uint8Array(list.length);
+  held.length = 0;
+  placed = false;
 }
 
 /** How many lamps wet surfaces reflect (graphics quality). */
@@ -61,22 +77,55 @@ export function setWetLampBudget(n: number): void {
   lampBudget = Math.max(0, Math.min(WET_LAMPS, n));
 }
 
-/** Picks the lamps nearest the camera for this frame's reflections and rain glints. */
-export function updateWetLamps(cam: THREE.Vector3): void {
+/**
+ * Picks the lamps nearest the camera for this frame's reflections and rain glints. Like the fog's
+ * lamps (FogLights), a lamp owns its slot until a rival is clearly closer, and its reflection fades
+ * out before the slot passes on, so streaks on a wet street never blink as the camera moves.
+ */
+export function updateWetLamps(cam: THREE.Vector3, dt: number): void {
+  const cut = !placed || lastCam.distanceTo(cam) > 8;
+  placed = true;
+  lastCam.copy(cam);
+  const step = cut ? 1 : dt / WET_FADE;
   order.length = 0;
-  for (const l of lamps) {
+  for (let i = 0; i < lamps.length; i++) {
+    const l = lamps[i];
     const d = l.pos.distanceTo(cam) - l.range;
     if (d > 45) continue;
-    order.push({ lamp: l, score: d });
+    order.push({ i, score: holds[i] ? d - WET_HOLD : d });
   }
   order.sort((a, b) => a.score - b.score);
-  const n = Math.min(order.length, lampBudget);
+  wanted.fill(0);
+  for (let k = 0; k < Math.min(order.length, lampBudget); k++) wanted[order[k].i] = 1;
+  for (let k = held.length - 1; k >= 0; k--) {
+    const i = held[k];
+    if (wanted[i]) {
+      weight[i] = Math.min(1, weight[i] + step);
+    } else {
+      weight[i] -= step;
+      if (weight[i] <= 0) {
+        weight[i] = 0;
+        holds[i] = 0;
+        held.splice(k, 1);
+      }
+    }
+  }
+  for (const o of order) {
+    if (held.length >= lampBudget) break;
+    if (!wanted[o.i] || holds[o.i]) continue;
+    holds[o.i] = 1;
+    weight[o.i] = Math.min(1, step);
+    held.push(o.i);
+  }
   const u = weatherUniforms;
-  for (let i = 0; i < n; i++) {
-    const l = order[i].lamp;
-    u.uLampPos.value[i].set(l.pos.x, l.pos.y, l.pos.z, l.range);
-    u.uLampCol.value[i].set(l.color.r, l.color.g, l.color.b, l.decay);
-    u.uLampDir.value[i].set(l.dir.x, l.dir.y, l.dir.z, l.cosOuter);
+  const n = Math.min(held.length, WET_LAMPS);
+  for (let k = 0; k < n; k++) {
+    const l = lamps[held[k]];
+    const w = weight[held[k]];
+    const f = w * w * (3 - 2 * w);
+    u.uLampPos.value[k].set(l.pos.x, l.pos.y, l.pos.z, l.range);
+    u.uLampCol.value[k].set(l.color.r * f, l.color.g * f, l.color.b * f, l.decay);
+    u.uLampDir.value[k].set(l.dir.x, l.dir.y, l.dir.z, l.cosOuter);
   }
   u.uLampCount.value = n;
 }
