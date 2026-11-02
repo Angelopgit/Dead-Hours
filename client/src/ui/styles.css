@@ -638,7 +638,11 @@ body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
 body.touch-play .vitals .stance { position: absolute; left: calc(100% + 1.4em); top: 0.1em; margin: 0; height: auto; white-space: nowrap; }
 body.touch-play .vitals .armor { margin-top: 3px; }
 body.touch-play .vitals .armor-label { display: none; }
-body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right)); }
+/* The feed shares the timer's row: it stays right of the centred timer and warning, a little smaller and tighter,
+   and wraps a long line ("SOMEONE ELSE GOT TO THAT SKATEBOARD" ran over the timer on a 640 px wide phone) while
+   four lines still end above SWAP. */
+body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right));
+  max-width: calc(50vw - 126px); text-align: right; font-size: 0.72em; letter-spacing: 0.14em; gap: 0.25em; }
 /* Talking and chat take the bottom-left corner (the ammo panel is up top; they printed over it): three
    lines and the names in a row, so on a 360 px tall phone they stay under the longest prompt, which slides
    left of the buttons there. */
