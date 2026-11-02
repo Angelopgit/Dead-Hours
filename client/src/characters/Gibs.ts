@@ -128,6 +128,20 @@ export class Gibs {
     this.list.push({ root, mesh, stump, vel: vel.clone(), spin, radius: pg.radius * scale, age: 0, resting: false, bleed: 0, part });
   }
 
+  /** A head with its torn neck, for compiling the gibs' shaders before the night (see Preload). */
+  sample(): { root: THREE.Object3D; dispose: () => void } {
+    const pg = partGeometry('walker', 0, 'head');
+    const root = new THREE.Group();
+    const mesh = new THREE.Mesh(pg.geometry, this.skin);
+    mesh.castShadow = true;
+    const stump = new THREE.Mesh(stumpGeometry(0.065, 1, 1), this.gore);
+    root.add(mesh, stump);
+    return { root, dispose: () => {
+      root.removeFromParent();
+      stump.geometry.dispose();
+    } };
+  }
+
   update(dt: number): void {
     if (dt <= 0) return;
     for (let i = this.list.length - 1; i >= 0; i--) {

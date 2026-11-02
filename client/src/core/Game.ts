@@ -18,8 +18,16 @@ import type { LightField } from '../lighting/LightField';
 import { Flashlight, setFlashlight } from '../gameplay/Flashlight';
 import { weather } from '../environment/Weather';
 import { weatherUniforms } from '../lighting/WetShader';
+import { LoadingScreen } from '../ui/LoadingScreen';
+import { compileForPost, compileScene, nextFrame, pinPrograms, uploadTextures } from './Preload';
 
 type State = 'menu' | 'session';
+
+/** The loading screen's line for an online night: the room's name. */
+function lobbyCaption(link: NetLink): string {
+  const name = link.lobby?.name;
+  return name ? `ONLINE · ${name.toUpperCase()}` : 'ONLINE';
+}
 
 /** Top-level orchestrator: boots the world once and switches between menu and play sessions. */
 export class Game {
@@ -34,6 +42,8 @@ export class Game {
   /** The online room the current session is played in. */
   private link: NetLink | null = null;
   private state: State = 'menu';
+  /** The night being got ready behind the loading screen (cleared to abandon it). */
+  private launching: object | null = null;
   private emittersAdded = false;
   private field!: LightField;
   private exposure!: AutoExposure;
@@ -90,7 +100,9 @@ export class Game {
     await pbr;
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);
-    this.engine.renderer.compile(this.engine.scene, this.engine.camera);
+    compileForPost(this.engine.renderer, this.engine.scene, this.engine.camera);
+    // The menu's shaders stay compiled for coming back to it after a night.
+    pinPrograms(this.engine.renderer);
     this.engine.start();
     document.querySelector('.boot')?.remove();
     gsap.to(document.getElementById('fade'), { opacity: 0, duration: 2.2, ease: 'power2.out' });
@@ -134,7 +146,88 @@ export class Game {
     ]);
     const pose = this.menuCine.pose();
     this.menuCine.setActive(false);
-    this.session = this.createSession(pose, false);
+    await this.launched(await this.launch(() => this.createSession(pose, false), 'SOLO'));
+  }
+
+  /**
+   * Gets a night ready behind a loading screen before showing it, so nothing loads mid-fight:
+   * every sound rendered and decoded, the night's scene built, a zombie body of every look made,
+   * every shader the night can need compiled (one of everything it can show stands in front of
+   * the camera meanwhile), every texture on the GPU, and the result kept for later nights. The
+   * page keeps breathing throughout (online, the room's pings are answered), and online the
+   * server only streams the night once it has drawn its first frames after this.
+   * 'stopped': abandoned on the way (left, disconnected); 'failed': the night could not be built.
+   */
+  private async launch(make: () => GameSession, caption: string): Promise<'ready' | 'stopped' | 'failed'> {
+    const token = {};
+    this.launching = token;
+    const stop = () => this.launching !== token;
+    const screen = new LoadingScreen(caption);
+    screen.show();
+    // Nothing draws while shaders compile behind the screen (a draw would wait on them).
+    this.engine.paused = true;
+    // Whatever the menu has compiled since boot stays for coming back to it.
+    pinPrograms(this.engine.renderer);
+    let session: GameSession | null = null;
+    try {
+      // Normally running since the first click; if not, it starts (suspended) so it can decode.
+      this.unlockAudio();
+      await audio.prepare((f) => screen.step('sounds', f));
+      if (stop()) return 'stopped';
+      screen.step('night', 0);
+      await nextFrame();
+      if (stop()) return 'stopped';
+      session = make();
+      screen.step('night', 1);
+      try {
+        await this.warm(session, screen, stop);
+      } catch (e) {
+        // Not fatal: the night still plays, compiling what is missing as it first shows up.
+        console.warn('could not finish getting the night ready', e);
+      }
+      if (stop()) return 'stopped';
+      screen.step('ready', 1);
+      this.session = session;
+      session = null;
+      this.session.start();
+      return 'ready';
+    } catch (e) {
+      console.error('could not build the night', e);
+      return 'failed';
+    } finally {
+      session?.dispose();
+      if (this.launching === token) this.launching = null;
+      this.engine.paused = false;
+      screen.hide();
+    }
+  }
+
+  /** The shaders, bodies and textures part of `launch`. */
+  private async warm(session: GameSession, screen: LoadingScreen, stop: () => boolean): Promise<void> {
+    const putAway = session.prewarm();
+    try {
+      if (stop()) return;
+      const r = this.engine.renderer;
+      await compileScene(r, this.engine.scene, this.engine.camera, this.engine.scene, (f) => screen.step('shaders', f), stop);
+      if (stop()) return;
+      await uploadTextures(r, this.engine.scene, (f) => screen.step('textures', f), stop);
+      if (stop()) return;
+      // Two real frames with everything in view: shadow passes, post-processing, the last uploads.
+      for (let i = 0; i < 2; i++) {
+        this.engine.post.render(1 / 60);
+        await nextFrame();
+      }
+      pinPrograms(r);
+    } finally {
+      putAway();
+    }
+  }
+
+  /** After `launch`: back to the menu unless the night is on (saying so if it failed to load). */
+  private async launched(result: 'ready' | 'stopped' | 'failed', link: NetLink | null = null): Promise<void> {
+    if (result === 'ready' || this.link !== link) return;
+    await this.quitToMenu();
+    if (result === 'failed') this.menu.notice('THE NIGHT FAILED TO LOAD');
   }
 
   private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean, online?: { link: NetLink; begin: BeginMsg }): GameSession {
@@ -167,15 +260,17 @@ export class Game {
       await this.quitToMenu();
       return;
     }
-    this.session = this.createSession(this.menuCine.pose(), true, { link, begin });
+    await this.launched(await this.launch(() => this.createSession(this.menuCine.pose(), true, { link, begin }), lobbyCaption(link)), link);
   }
 
   private async restartOnline(link: NetLink, begin: BeginMsg): Promise<void> {
     if (this.link !== link || !this.session) return;
     const fade = document.getElementById('fade')!;
     await new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.4, onComplete: () => r() }));
+    if (this.link !== link || this.launching) return;
     this.session?.dispose();
-    this.session = this.createSession(this.menuCine.pose(), true, { link, begin });
+    this.session = null;
+    await this.launched(await this.launch(() => this.createSession(this.menuCine.pose(), true, { link, begin }), lobbyCaption(link)), link);
   }
 
   /** After the night: back to the room's lobby (still connected) for the next one. */
@@ -202,11 +297,13 @@ export class Game {
     await new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() }));
     const pose = this.menuCine.pose();
     this.session.dispose();
-    this.session = this.createSession(pose, true);
+    this.session = null;
+    await this.launched(await this.launch(() => this.createSession(pose, true), 'SOLO'));
   }
 
   private async quitToMenu(): Promise<void> {
-    // Leaving a game in progress leaves its room.
+    // Leaving a game in progress leaves its room (and stops getting it ready).
+    this.launching = null;
     this.link?.leave();
     this.link = null;
     const fade = document.getElementById('fade')!;

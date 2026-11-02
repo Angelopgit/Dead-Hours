@@ -556,6 +556,31 @@ export class SupplyDrops {
     scene.add(this.root);
   }
 
+  /**
+   * A helicopter, a crate, a weapon case and a serum kit, for compiling their shaders before the
+   * night (see core/Preload): the first drop would otherwise compile them all mid-fight.
+   */
+  sample(): { root: THREE.Object3D; dispose: () => void } {
+    const o = { x: 0, y: 0, z: 0 };
+    const f: HeliFlight = { from: o, over: o, to: o, start: 0, arrive: 1, release: 2, leave: 3, end: 4, ground: o, land: 3, releaseHeight: 10 };
+    const heli = new Helicopter();
+    const crate = new CrateModel();
+    const wcase = new WeaponCase('ar', f);
+    const kit = new SerumKit(f);
+    const root = new THREE.Group();
+    root.add(heli.root, crate.root, wcase.root, kit.root);
+    crate.root.position.x = 3;
+    wcase.root.position.x = -3;
+    kit.root.position.x = 5;
+    return { root, dispose: () => {
+      root.removeFromParent();
+      heli.dispose();
+      crate.dispose();
+      wcase.dispose();
+      kit.dispose();
+    } };
+  }
+
   /** A helicopter took off for a drop. */
   flight(id: number, f: HeliFlight, weapon: WeaponId | null = null, serum = false): void {
     if (this.drops.has(id)) return;

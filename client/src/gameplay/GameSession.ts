@@ -21,12 +21,13 @@ import { account } from '../network/Account';
 import { survivorLook } from '../characters/Humanoid';
 import { Ragdoll, ZONE_PARTICLES } from '../characters/Ragdoll';
 import { PlayerWeapon } from '../weapons/PlayerWeapon';
-import { clearSeveredCache } from '../characters/Severed';
+import { SeveredArm, clearSeveredCache } from '../characters/Severed';
 import { setZombieDetail } from '../characters/Decay';
 import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../weapons/WeaponModels';
 import { Effects } from '../effects/Effects';
 import { Pyro, type BurnPoint } from '../effects/Pyro';
 import { Throwables } from './Throwables';
+import { createThrowableModel } from '../weapons/ThrowableModels';
 import { clearGibCache } from '../characters/Gibs';
 import { ZombieView } from '../zombies/ZombieView';
 import { RaidView } from './RaidView';
@@ -51,8 +52,12 @@ import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 
-/** 'gunsmith': customizing the guns in the field (the night goes on around the survivor). */
-type Phase = 'intro' | 'playing' | 'paused' | 'table' | 'gunsmith' | 'dead';
+/**
+ * 'loading': built but not yet shown (Game gets it ready behind its loading screen; keys and
+ * clicks do nothing yet). 'gunsmith': customizing the guns in the field (the night goes on
+ * around the survivor).
+ */
+type Phase = 'loading' | 'intro' | 'playing' | 'paused' | 'table' | 'gunsmith' | 'dead';
 
 interface Smith {
   stage: GunsmithStage;
@@ -161,7 +166,9 @@ export class GameSession {
   private table: WeaponTablePanel | null = null;
   private smith: Smith | null = null;
   private results: ResultsScreen | null = null;
-  private phase: Phase = 'intro';
+  private phase: Phase = 'loading';
+  /** Where the camera was when the night was set up (the opening shot starts from it). */
+  private readonly startPose: { position: THREE.Vector3; target: THREE.Vector3 };
   private accumulator = 0;
   private intro: gsap.core.Timeline | null = null;
   private readonly introCam = { px: 0, py: 0, pz: 0, tx: 0, ty: 0, tz: 0 };
@@ -240,7 +247,7 @@ export class GameSession {
     private readonly input: Input,
     private readonly physics: Physics,
     private readonly doors: DoorSystem,
-    field: LightField,
+    private readonly field: LightField,
     nav: NavGrid,
     private readonly ui: HTMLElement,
     private readonly onQuit: () => void,
@@ -371,8 +378,91 @@ export class GameSession {
       this.watching = null;
       this.showResults();
     }, sig);
-    if (opts.skipIntro || online) this.quickStart();
-    else this.runIntro(startPose);
+    this.startPose = startPose;
+  }
+
+  /**
+   * Into the night, once it is ready (Game gets it ready behind its loading screen first): the
+   * opening shot solo, straight into play on a retry or online.
+   */
+  start(): void {
+    if (this.opts.skipIntro || this.opts.online) this.quickStart();
+    else this.runIntro(this.startPose);
+  }
+
+  /**
+   * Before the night is shown: one of everything it can put on screen later (a zombie of every
+   * kind, gibs, severed limbs, every weapon in hand, in a supply case and on the gunsmith's
+   * overlay, grenades and Molotovs, a supply drop, the raiders' van and a raider) stands in front
+   * of the camera, so Game's loading screen compiles their shaders with the rest instead of the
+   * first one of each compiling mid-fight. Returns what takes them away again.
+   */
+  prewarm(): () => void {
+    const cam = this.engine.camera;
+    const at = cam.getWorldDirection(new THREE.Vector3()).setY(0).normalize().multiplyScalar(6).add(cam.position);
+    at.y = this.player.position.y;
+    const stage = new THREE.Group();
+    stage.name = 'prewarm';
+    stage.position.copy(at);
+    this.engine.scene.add(stage);
+    const undo: (() => void)[] = [() => stage.removeFromParent()];
+    const done = () => {
+      for (const f of undo.reverse()) f();
+      undo.length = 0;
+    };
+    try {
+      undo.push(this.zombies.lineUp(at));
+      const place = (root: THREE.Object3D, x: number, z: number) => {
+        root.position.set(x, 0, z);
+        stage.add(root);
+      };
+      const gib = this.zombies.gibs.sample();
+      place(gib.root, -2, 1);
+      undo.push(gib.dispose);
+      // A severed arm lying in the street and one in hand, each lit by its own probe as in play.
+      for (const mode of ['world', 'held'] as const) {
+        const arm = new SeveredArm({ kind: 'walker', look: 0, arm: mode === 'world' ? 'armL' : 'legR', cut: mode === 'world' ? 'elbow' : 'hip', scale: 1 }, mode);
+        if (mode === 'world') new DynamicProbe(this.field).attach(arm.materials);
+        else this.probe.attach(arm.materials);
+        place(arm.root, mode === 'world' ? -1 : -1.5, 1);
+        undo.push(() => arm.dispose());
+      }
+      // Every weapon in hand (lit by the survivor's probe) and in a supply case (unlit by one).
+      let x = -3;
+      for (const id of Object.keys(WEAPONS) as WeaponId[]) {
+        for (const lit of [true, false]) {
+          const m = createWeaponModel(id);
+          if (lit) this.probe.attach(m.materials);
+          place(m.root, (x += 0.25), lit ? 2 : 2.5);
+          undo.push(() => m.dispose());
+        }
+      }
+      for (const kind of ['frag', 'molotov'] as const) {
+        for (const lit of [true, false]) {
+          const m = createThrowableModel(kind);
+          if (lit) this.probe.attach(m.materials);
+          place(m.root, (x += 0.25), 3);
+          undo.push(() => m.dispose());
+        }
+      }
+      const drop = this.drops.sample();
+      place(drop.root, 0, 8);
+      undo.push(drop.dispose);
+      const raid = this.raid.sample();
+      place(raid.root, 6, 6);
+      undo.push(raid.dispose);
+      // The field gunsmith's overlay draws the gun as see-through materials (their own programs).
+      const smith = new GunsmithStage(true);
+      smith.onMaterials = (m) => this.probe.attach(m);
+      smith.show('ar', defaultBuild('ar'));
+      place(smith.holder, 1, 2);
+      undo.push(() => smith.dispose());
+      stage.updateMatrixWorld(true);
+    } catch (e) {
+      done();
+      throw e;
+    }
+    return done;
   }
 
   private applySettings(): void {

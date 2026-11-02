@@ -37,6 +37,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .boot { position: fixed; inset: 0; display: grid; place-items: center; z-index: 60; background: #050608; pointer-events: none;
   font-family: var(--font-display); letter-spacing: 0.5em; color: var(--fg-faint); font-size: 12px; }
 
+/* ── Loading a night ──────────────────────────────────── */
+/* Over the fade and the menu (under the boot card); swallows clicks while the night is got ready. */
+.loading { position: fixed; inset: 0; z-index: 55; background: #050608; pointer-events: auto; display: grid; place-items: end center;
+  padding: 0 1rem max(14vh, calc(env(safe-area-inset-bottom) + 3rem)); font-size: calc(14px * var(--ui-scale));
+  animation: loading-in 0.25s ease-out both; }
+@keyframes loading-in { from { opacity: 0; } }
+.loading-card { width: min(26em, 100%); display: flex; flex-direction: column; gap: 0.7em; }
+.loading-title { font-family: var(--font-display); font-weight: 500; font-size: 1.9em; letter-spacing: 0.32em; color: #ece6dc; }
+.loading-caption { font-family: var(--font-display); font-weight: 300; letter-spacing: 0.28em; color: var(--fg-dim); font-size: 0.85em; margin-bottom: 0.8em; }
+.loading-bar { height: 2px; background: var(--line); overflow: hidden; }
+.loading-fill { height: 100%; background: var(--accent); transform-origin: left center; transform: scaleX(0); transition: transform 0.25s ease-out; }
+.loading-status { font-family: var(--font-display); font-weight: 300; letter-spacing: 0.3em; color: var(--fg-faint); font-size: 0.75em; }
+@media (prefers-reduced-motion: reduce) { .loading, .loading-fill { animation: none; transition: none; } }
+
 /* ── Main menu ────────────────────────────────────────── */
 .menu { position: absolute; inset: 0; pointer-events: none; }
 .menu-shade { position: absolute; inset: 0; pointer-events: none;

@@ -99,6 +99,14 @@ function buildVan(): { root: THREE.Group; door: THREE.Object3D; wheels: THREE.Ob
  * the crew gets out), and each raider as a survivor-built character in their gear, carrying
  * their gun, moving where the simulation says. They fall as ragdolls and lie there a while.
  */
+function freeVan(van: ReturnType<typeof buildVan>): void {
+  van.root.removeFromParent();
+  van.root.traverse((o) => {
+    if (o instanceof THREE.Mesh) o.geometry.dispose();
+  });
+  for (const m of [...van.materials, van.lights]) m.dispose();
+}
+
 export class RaidView {
   private readonly bodies = new Map<string, RaiderBody>();
   private readonly corpses: RaiderBody[] = [];
@@ -280,12 +288,27 @@ export class RaidView {
 
   private removeVan(): void {
     if (!this.van) return;
-    this.van.root.removeFromParent();
-    this.van.root.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.geometry.dispose();
-    });
-    for (const m of [...this.van.materials, this.van.lights]) m.dispose();
+    freeVan(this.van);
     this.van = null;
+  }
+
+  /**
+   * The van (lit like the one on the street) and a raider with a rifle, for compiling their
+   * shaders before the night (see core/Preload): the raid would otherwise compile them mid-fight.
+   */
+  sample(): { root: THREE.Object3D; dispose: () => void } {
+    const van = buildVan();
+    new DynamicProbe(this.field).attach(van.materials);
+    const root = new THREE.Group();
+    root.add(van.root);
+    const raider = this.create({ id: 'sample', appearance: '', pos: { x: 0, y: 0, z: 0 }, facing: 0 } as Raider);
+    raider.body.root.position.x = 3;
+    root.add(raider.body.root);
+    return { root, dispose: () => {
+      root.removeFromParent();
+      freeVan(van);
+      this.free(raider);
+    } };
   }
 
   dispose(): void {

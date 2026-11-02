@@ -182,6 +182,29 @@ export class ZombieView {
     this.poolOf(v.kind, v.look).push({ body: v.body, probe: v.probe });
   }
 
+  /**
+   * Lines one pooled body of each kind up at `at` (the loading screen's warm-up: their shaders
+   * finish compiling and draw once, shadows included, before the night is shown). `warm` has
+   * built them; the returned function puts them back in the pool.
+   */
+  lineUp(at: THREE.Vector3): () => void {
+    const out: { kind: ZombieKind; entry: { body: Humanoid; probe: DynamicProbe } }[] = [];
+    WARM_KINDS.forEach((kind, i) => {
+      const entry = this.acquire(kind, 0);
+      entry.body.root.position.set(at.x + (i - 2) * 0.8, at.y, at.z);
+      entry.body.root.updateMatrixWorld(true);
+      out.push({ kind, entry });
+    });
+    return () => {
+      for (const { kind, entry } of out) {
+        entry.body.root.removeFromParent();
+        entry.body.root.position.set(0, 0, 0);
+        this.poolOf(kind, 0).push(entry);
+      }
+      out.length = 0;
+    };
+  }
+
   get count(): number {
     return this.views.size;
   }

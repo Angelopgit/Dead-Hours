@@ -5,7 +5,7 @@ import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMec
 import { RELOAD_STEPS } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
-import { WEAPONS, type MeleeId } from '@dead-hours/shared';
+import { MELEE, WEAPONS, type MeleeId } from '@dead-hours/shared';
 import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
 import { ShotVoices } from './ShotVoices';
 import { RECORDED_FILES } from './recordedFiles';
@@ -14,6 +14,14 @@ import { weather } from '../environment/Weather';
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 const SHOT_TAKES = 4;
 const FOLEY_TAKES = 2;
+/** Takes rendered of each melee weapon's swing, blow (light and heavy each) and pickup. */
+const MELEE_TAKES = { swing: 3, hit: 4, pickup: 2 };
+const MELEE_IDS = Object.keys(MELEE) as MeleeId[];
+const MELEE_BLOWS = ['light', 'kill', 'head'] as const;
+type MeleeBlow = (typeof MELEE_BLOWS)[number];
+/** How long the background bank renderer may hold a task (ms), and how long `prepare` may. */
+const BANK_SLICE = 4;
+const PREPARE_SLICE = 24;
 /** How hard a shot drives the echo of the space it is fired in. */
 const SEND: Record<Space, number> = { street: 0.4, room: 0.5, hall: 0.5, basement: 0.55 };
 /** A shot inside still sets the street answering faintly through the doors and windows. */
@@ -164,6 +172,12 @@ export class AudioEngine {
   private hrtfAt = 0;
   private readonly bank = new Map<string, AudioBuffer>();
   private bankTimer = 0;
+  /** Bank sounds still to render (see prepareGuns), and how many were queued in all. */
+  private bankJobs: (() => void)[] = [];
+  private bankTotal = 0;
+  /** Recording sets being decoded, and how many have finished (or failed). */
+  private recordingSets = 0;
+  private recordingsDone = 0;
   private readonly listenerPos = new THREE.Vector3();
   /** When each groan now sounding ends. */
   private groaning: number[] = [];
@@ -248,8 +262,8 @@ export class AudioEngine {
       return v;
     };
     this.verbs = { street: verb(), room: verb(), hall: verb(), basement: verb() };
-    this.prepareGuns();
     this.recordingsReady = this.loadRecordings(ctx);
+    this.prepareGuns();
 
     this.startWind();
     this.startRain();
@@ -1055,7 +1069,11 @@ export class AudioEngine {
     return this.sample(key, () => renderCrack(gun.shot.crack || 0.00015, strength, this.ctx!.sampleRate, seedOf(key)));
   }
 
-  /** Renders the gun bank one buffer per task, so startup never stalls a frame for long. */
+  /**
+   * Queues every synthesized sound the game can play (echoes, gun mechanics, cracks, handling,
+   * melee swings and hits, the helicopter) and renders them a few milliseconds per task in the
+   * background; `prepare` finishes the queue before a night so nothing is rendered mid-fight.
+   */
   private prepareGuns(): void {
     const jobs: (() => void)[] = (['street', ...Object.keys(ENCLOSURES) as Enclosure[]] as Space[]).map((s) => () => this.echo(s));
     const later: (() => void)[] = [];
@@ -1072,22 +1090,78 @@ export class AudioEngine {
     for (const [id, kinds] of Object.entries(FOLEY_SET)) {
       for (const kind of kinds) for (let k = 0; k < FOLEY_TAKES; k++) jobs.push(() => this.foleyBuffer(kind, id, k));
     }
-    jobs.push(...later);
+    // Found melee weapons: every take of every swing, blow and pickup.
+    for (const w of MELEE_IDS) {
+      for (let k = 0; k < MELEE_TAKES.swing; k++) jobs.push(() => this.meleeSwingBuffer(w, k));
+      for (const blow of MELEE_BLOWS) for (let k = 0; k < MELEE_TAKES.hit; k++) jobs.push(() => this.meleeHitBuffer(w, blow, k));
+      for (let k = 0; k < MELEE_TAKES.pickup; k++) jobs.push(() => this.meleePickupBuffer(w, k));
+    }
+    jobs.push(() => { this.rotorBuffer ??= this.makeRotorBuffer(); });
+    this.bankJobs = jobs;
+    this.bankTotal = jobs.length;
+    // The stand-in shots wait for the recordings to have had their chance to decode.
+    void this.recordingsReady.then(() => {
+      this.bankJobs.push(...later);
+      this.bankTotal += later.length;
+      this.pumpBank();
+    });
+    this.pumpBank();
+  }
+
+  /** Renders queued bank sounds for up to `budget` ms; returns whether any are left. */
+  private renderBank(budget: number): boolean {
+    const end = performance.now() + budget;
+    while (this.ctx && this.bankJobs.length && performance.now() < end) this.bankJobs.shift()!();
+    return this.bankJobs.length > 0;
+  }
+
+  /** The background renderer: a sliver per task, so the menu never stalls a frame for it. */
+  private pumpBank(): void {
+    if (this.bankTimer) return;
     const run = () => {
-      const job = jobs.shift();
-      if (!job || !this.ctx) return;
-      job();
-      this.bankTimer = window.setTimeout(run, 0);
+      this.bankTimer = 0;
+      if (this.ctx && this.renderBank(BANK_SLICE)) this.bankTimer = window.setTimeout(run, 0);
     };
     this.bankTimer = window.setTimeout(run, 0);
+  }
+
+  /**
+   * Gets every sound ready for a night: the recordings decoded and the whole synthesized bank
+   * rendered (in larger slices than the background does, yielding between them so a loading
+   * screen keeps moving). `onProgress` gets 0..1. Resolves at once if audio isn't running.
+   */
+  async prepare(onProgress?: (f: number) => void): Promise<void> {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const report = () => {
+      const total = this.bankTotal + this.recordingSets;
+      const done = this.bankTotal - this.bankJobs.length + this.recordingsDone;
+      onProgress?.(total > 0 ? Math.min(1, done / total) : 1);
+    };
+    report();
+    let decoded = false;
+    void this.recordingsReady.then(() => { decoded = true; });
+    while (this.ctx === ctx) {
+      const left = this.renderBank(PREPARE_SLICE);
+      report();
+      if (!left && decoded) break;
+      await new Promise<void>((r) => setTimeout(r, left ? 0 : 16));
+    }
+    report();
   }
 
   /** Decodes the recordings; each set is used as soon as it is ready. */
   private async loadRecordings(ctx: BaseAudioContext): Promise<void> {
     const sets = Object.entries(groupRecordings(RECORDED_FILES));
+    this.recordingSets = sets.length;
+    this.recordingsDone = 0;
     const results = await Promise.allSettled(sets.map(async ([set, urls]) => {
-      const takes = await Promise.all(urls.map(async (url) => trimLead(ctx, await ctx.decodeAudioData(await recordingBytes(url)))));
-      if (this.ctx === ctx) this.recorded.set(set, takes);
+      try {
+        const takes = await Promise.all(urls.map(async (url) => trimLead(ctx, await ctx.decodeAudioData(await recordingBytes(url)))));
+        if (this.ctx === ctx) this.recorded.set(set, takes);
+      } finally {
+        this.recordingsDone++;
+      }
     }));
     const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failed.length) console.warn(`${failed.length} recorded sound sets failed to decode; synthesized sounds stand in`, failed[0].reason);
@@ -2087,13 +2161,11 @@ export class AudioEngine {
 
   // ------------------------------------------------------------------ melee weapons (MeleeSynth)
 
-  /** Plays a banked melee buffer: a fresh take each time, pitch nudged so repeats never sound identical. */
-  private meleeBuffer(key: string, takes: number, make: (seed: number) => Float32Array<ArrayBuffer>, position: THREE.Vector3, level: number, reverb: number, ref: number, spread = 0.05): void {
+  /** Plays a banked melee take, pitch nudged so repeats never sound identical. */
+  private meleeBuffer(buffer: AudioBuffer, position: THREE.Vector3, level: number, reverb: number, ref: number, spread = 0.05): void {
     if (!this.ctx) return;
-    const take = Math.floor(Math.random() * takes);
-    const k = `${key}:${take}`;
     const src = this.ctx.createBufferSource();
-    src.buffer = this.sample(k, () => [make(seedOf(k))]);
+    src.buffer = buffer;
     src.playbackRate.value = 1 + (Math.random() * 2 - 1) * spread;
     const d = this.out(position, reverb, ref);
     d.gain.value = level;
@@ -2101,22 +2173,41 @@ export class AudioEngine {
     src.start();
   }
 
+  private meleeSwingBuffer(weapon: MeleeId, take: number): AudioBuffer {
+    const k = `mswing:${weapon}:${take}`;
+    return this.sample(k, () => [renderMeleeSwing(weapon, this.ctx!.sampleRate, seedOf(k))]);
+  }
+
+  /** A blow's take: 'light' (it lives), 'kill' (it drops) or 'head' (the skull gives way). */
+  private meleeHitBuffer(weapon: MeleeId, blow: MeleeBlow, take: number): AudioBuffer {
+    const k = `mhit:${weapon}:${blow}:${take}`;
+    return this.sample(k, () => [renderMeleeHit(weapon, { kill: blow !== 'light', head: blow === 'head' }, this.ctx!.sampleRate, seedOf(k))]);
+  }
+
+  private meleePickupBuffer(weapon: MeleeId, take: number): AudioBuffer {
+    const k = `mpick:${weapon}:${take}`;
+    return this.sample(k, () => [renderMeleePickup(weapon, this.ctx!.sampleRate, seedOf(k))]);
+  }
+
   /** A melee weapon swung through the air (whoosh voiced for the weapon). */
   meleeWhoosh(weapon: MeleeId, position: THREE.Vector3): void {
+    if (!this.ctx) return;
     const heavy = weapon === 'bat' || weapon === 'hockey';
-    this.meleeBuffer(`mswing:${weapon}`, 3, (seed) => renderMeleeSwing(weapon, this.ctx!.sampleRate, seed), position, heavy ? 0.5 : 0.42, 0, 2);
+    this.meleeBuffer(this.meleeSwingBuffer(weapon, Math.floor(Math.random() * MELEE_TAKES.swing)), position, heavy ? 0.5 : 0.42, 0, 2);
   }
 
   /** A melee blow landing on a zombie: blades slice and bite, blunt weapons crack and crunch. */
   meleeHit(weapon: MeleeId, position: THREE.Vector3, hit: { kill: boolean; head: boolean; damage: number }): void {
-    const v = hit.kill || hit.head ? 'heavy' : 'light';
+    if (!this.ctx) return;
     const level = 0.62 + Math.min(0.3, hit.damage / 300);
-    this.meleeBuffer(`mhit:${weapon}:${v}`, 4, (seed) => renderMeleeHit(weapon, { kill: hit.kill, head: hit.head }, this.ctx!.sampleRate, seed), position, level, 0.06, 3.2);
+    const blow: MeleeBlow = hit.head ? 'head' : hit.kill ? 'kill' : 'light';
+    this.meleeBuffer(this.meleeHitBuffer(weapon, blow, Math.floor(Math.random() * MELEE_TAKES.hit)), position, level, 0.06, 3.2);
   }
 
   /** Picking a found melee weapon up. */
   meleePickup(weapon: MeleeId, position: THREE.Vector3): void {
-    this.meleeBuffer(`mpick:${weapon}`, 2, (seed) => renderMeleePickup(weapon, this.ctx!.sampleRate, seed), position, 0.45, 0.04, 2);
+    if (!this.ctx) return;
+    this.meleeBuffer(this.meleePickupBuffer(weapon, Math.floor(Math.random() * MELEE_TAKES.pickup)), position, 0.45, 0.04, 2);
   }
 
   // ------------------------------------------------------------------ explosives
