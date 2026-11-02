@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { paletteColor, type Appearance } from '@dead-hours/shared';
+import { SHAPE_MID, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE } from './rig';
 
 /** Fabric patterns, drawn per pixel by the character material from bind-pose position. */
@@ -380,6 +380,13 @@ interface Body {
   female: boolean;
   /** Hand size (gloves). */
   hand: number;
+  /** Bust depth and spread over the average (the body shape sliders; 1 for men). */
+  bustK: number;
+  bustR: number;
+  /** Hip width over the average, at the hips and the tops of the thighs. */
+  hipW: number;
+  /** How far the glutes round out behind the pelvis (0 for men). */
+  seat: number;
   /** Leg thickness (heavier builds have heavier legs). */
   leg: number;
   /** Sides of each limb's surface. */
@@ -401,13 +408,24 @@ const FEMALE_TORSO: readonly (readonly [number, number])[] = [[-0.2, 0.194], [0.
 /** Torso radius (x, before build scale) at spine-space height y. */
 function torsoR(b: Body, y: number): number {
   if (!b.female) return 0.16 + 0.1 * (y - 0.02);
-  const k = FEMALE_TORSO;
-  if (y <= k[0][0]) return k[0][1];
+  const k = FEMALE_TORSO, hip = hipF(b, y + SPINE_Y);
+  if (y <= k[0][0]) return k[0][1] * hip;
   for (let i = 1; i < k.length; i++) {
-    if (y <= k[i][0]) return k[i - 1][1] + (k[i][1] - k[i - 1][1]) * (y - k[i - 1][0]) / (k[i][0] - k[i - 1][0]);
+    if (y <= k[i][0]) return (k[i - 1][1] + (k[i][1] - k[i - 1][1]) * (y - k[i - 1][0]) / (k[i][0] - k[i - 1][0])) * hip;
   }
   return k[k.length - 1][1];
 }
+
+/**
+ * How far the body shape sliders reach. Bust: depth (x0.55 to x1.45) and spread (x0.88 to
+ * x1.12). Hips: width at the hips and thigh tops (x0.91 to x1.09). Seat: the glutes' depth
+ * behind the pelvis (nearly flat to 3.4 cm). Kept modest on purpose.
+ */
+const SHAPE = { bust: 0.45, bustSpread: 0.12, hips: 0.09, seat: 0.018, seatRange: 0.016 } as const;
+/** The spine bone sits this far above the hips bone (Humanoid): spine-space y + SPINE_Y is hip space. */
+const SPINE_Y = 0.08;
+/** Hip width factor at hip-space height y: none at the waist, all of it from the hips down. */
+const hipF = (b: Body, y: number) => 1 + (b.hipW - 1) * THREE.MathUtils.smoothstep(-y, -0.09, 0.04);
 /** Front-to-back depth over width: a woman's hips are rounder, so coats reaching them get deeper there. */
 const depthK = (b: Body, y: number) => (b.female ? 0.62 + 0.09 * THREE.MathUtils.clamp((0.07 - y) / 0.15, 0, 1) : 0.62);
 const frontZ = (b: Body, y: number) => depthK(b, y) * b.bz * torsoR(b, y);
@@ -433,19 +451,60 @@ function bustBump(b: Body, x: number, y: number): number {
   if (!b.female) return 0;
   let f = 0;
   for (const s of [1, -1]) {
-    const u = (x - s * BUST.x * b.bx) / (BUST.rx * b.bx);
-    const v = (y - BUST.y) / (y > BUST.y ? BUST.up : BUST.down);
+    const u = (x - s * BUST.x * b.bx) / (BUST.rx * b.bx * b.bustR);
+    const v = (y - BUST.y) / ((y > BUST.y ? BUST.up : BUST.down) * b.bustR);
     const w = 1 - u * u - v * v;
     if (w > 0) f = Math.max(f, Math.pow(w, 1.6));
   }
-  return f * BUST.depth * b.bz;
+  return f * BUST.depth * b.bustK * b.bz;
 }
+
+/** Lower edge of the bust (spine space), for tops that must cover it. */
+const bustBottom = (b: Body) => BUST.y - BUST.down * b.bustR;
+
+/**
+ * The glutes, sculpted into the back of the female pelvis (and every layer over it) like the
+ * bust: two rounded swells, hip-space centre SEAT.y, fading up into the small of the back and
+ * curving under at the bottom.
+ */
+const SEAT = { x: 0.066, y: -0.055, rx: 0.088, up: 0.09, down: 0.06 };
+
+/** How far the glutes stand out behind the pelvis at hip-space (x, y). */
+function seatBump(b: Body, x: number, y: number): number {
+  if (!b.female || b.seat <= 0) return 0;
+  const sx = b.bx * b.hipW;
+  let f = 0;
+  for (const s of [1, -1]) {
+    const u = (x - s * SEAT.x * sx) / (SEAT.rx * sx);
+    const v = (y - SEAT.y) / (y > SEAT.y ? SEAT.up : SEAT.down);
+    const w = 1 - u * u - v * v;
+    if (w > 0) f = Math.max(f, Math.pow(w, 1.5));
+  }
+  return f * b.seat;
+}
+
+/** Pelvis width scale with the build (pants, belts). */
+const pelvisK = (b: Body) => 0.97 + (b.bx - 1) * 0.5;
+
+/** Female pelvis half-width (x) at hip-space y: the hips flaring down, rounding under at the bottom. */
+function pelvisR(b: Body, y: number): number {
+  const base = 0.172 + 0.014 * THREE.MathUtils.clamp((0.1 - y) / 0.2, 0, 1);
+  const under = y < -0.1 ? 1 - 0.32 * Math.pow(Math.min(1, (-0.1 - y) / 0.035), 1.4) : 1;
+  return base * under * pelvisK(b) * hipF(b, y);
+}
+/** Front-to-back over side-to-side of the pelvis. */
+const PELVIS_DEPTH = 0.7;
+/** Rows the female pelvis is built from (hip space), top to bottom. */
+const PELVIS_ROWS = [0.1, 0.07, 0.04, 0.01, -0.02, -0.045, -0.07, -0.09, -0.1, -0.112, -0.124, -0.135];
 
 /** Front of the torso at (x, y) without the bust. */
 const torsoZ = (b: Body, x: number, y: number) => frontZ(b, y) * Math.cos(x / (torsoR(b, y) * b.bx));
 
 /** How far forward the chest reaches at (x, y), over the bust. */
 const chestZ = (b: Body, x: number, y: number) => torsoZ(b, x, y) + bustBump(b, x, y);
+
+/** The furthest forward the chest reaches at height y across -w..w (a flat bib or panel there). */
+const chestMax = (b: Body, y: number, w: number) => Math.max(...[-1, -0.5, 0, 0.5, 1].map((t) => chestZ(b, t * w, y)));
 
 /**
  * One layer of the female torso (skin, a shirt, an open jacket) from y0 up to y1, `inf` out from
@@ -454,20 +513,55 @@ const chestZ = (b: Body, x: number, y: number) => torsoZ(b, x, y) + bustBump(b, 
  */
 function femaleLayer(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, gap: number, surf?: Surface, rb0?: number): void {
   const ys = [y0, ...FEMALE_ROWS.filter((y) => y > y0 + 0.008 && y < y1 - 0.008), y1];
-  const tl = TAU - gap, seg = Math.max(4, Math.round(tl / (TAU / 32)));
-  const ring = ys.map((y, i) => {
+  const g = sculpt(ys, gap, gap === 0, 32, (y, i) => {
     const r = i === 0 && rb0 !== undefined ? Math.max(rb0, torsoR(b, y)) : torsoR(b, y);
-    const ax = r * b.bx + inf, az = depthK(b, y) * b.bz * r + inf;
+    return { ax: r * b.bx + inf, az: depthK(b, y) * b.bz * r + inf };
+  }, (x, y, z) => (z > 0 ? z + bustBump(b, x, y) : z - seatBump(b, x, y + SPINE_Y)));
+  sp.put(g, hex, O, O, 1, surf);
+}
+
+/** One layer of the female pelvis (hip space, from y0 up to y1), `inf` out from the body, over the glutes. */
+function pelvisLayer(hp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, surf?: Surface): void {
+  const ys = [y0, ...PELVIS_ROWS.filter((y) => y > y0 + 0.006 && y < y1 - 0.006).reverse(), y1];
+  const g = sculpt(ys, 0, true, b.zombie ? 16 : 24, (y) => {
+    const r = pelvisR(b, y);
+    return { ax: r + inf, az: PELVIS_DEPTH * r + inf };
+  }, (x, y, z) => (z < 0 ? z - seatBump(b, x, y) : z));
+  hp.put(g, hex, O, O, 1, surf);
+}
+
+/**
+ * A surface turned through heights `ys` (bottom to top): each row an ellipse of half-widths
+ * ax, az, then reshaped by `z` (a bust, glutes), open at the front by `gap` radians. Diagonals
+ * mirrored left to right so the facets are symmetric about the middle.
+ */
+function sculpt(
+  ys: readonly number[], gap: number, caps: boolean, around: number,
+  ringOf: (y: number, i: number) => { ax: number; az: number }, zOf: (x: number, y: number, z: number) => number,
+  drape = false,
+): THREE.BufferGeometry {
+  const tl = TAU - gap, seg = Math.max(4, Math.round(tl / (TAU / around)));
+  const ring = ys.map((y, i) => {
+    const { ax, az } = ringOf(y, i);
     const pts: number[][] = [];
     for (let j = 0; j <= seg; j++) {
       const t = gap / 2 + (j / seg) * tl;
       const x = Math.sin(t) * ax;
-      let z = Math.cos(t) * az;
-      if (z > 0) z += bustBump(b, x, y);
-      pts.push([x, y, z]);
+      pts.push([x, y, zOf(x, y, Math.cos(t) * az)]);
     }
     return pts;
   });
+  // Cloth hanging free (a skirt) never comes back in below where it was pushed out (hips,
+  // glutes): from the top row down, each point stays at least as far out as the one above.
+  if (drape) {
+    for (let i = ring.length - 2; i >= 0; i--) {
+      for (let j = 0; j <= seg; j++) {
+        const p = ring[i][j], q = ring[i + 1][j];
+        if (Math.abs(q[0]) > Math.abs(p[0])) p[0] = q[0];
+        if (Math.abs(q[2]) > Math.abs(p[2]) && Math.sign(q[2]) === Math.sign(p[2])) p[2] = q[2];
+      }
+    }
+  }
   const pos: number[] = [];
   const tri = (a: number[], c: number[], d: number[]) => pos.push(...a, ...c, ...d);
   for (let i = 0; i + 1 < ring.length; i++) {
@@ -483,9 +577,9 @@ function femaleLayer(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1:
       }
     }
   }
-  if (gap === 0) {
-    const bot = [0, y0, 0], top = [0, y1, 0];
+  if (caps) {
     const last = ring.length - 1;
+    const bot = [0, ys[0], 0], top = [0, ys[last], 0];
     for (let j = 0; j < seg; j++) {
       tri(bot, ring[0][j + 1], ring[0][j]);
       tri(top, ring[last][j], ring[last][j + 1]);
@@ -494,7 +588,7 @@ function femaleLayer(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1:
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.computeVertexNormals();
-  sp.put(g, hex, O, O, 1, surf);
+  return g;
 }
 
 /** A strap lying down the front of the chest from (x, y1) to (x, y0), `out` off the surface. */
@@ -527,9 +621,14 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
   const build = BUILD[a.build] ?? BUILD.average;
   const g = o.girth ?? 1;
   const female = a.body === 'female';
+  // Shape sliders, -1 to 1 around the average; modest at either end (see SHAPE).
+  const shape = (v: number) => (female ? THREE.MathUtils.clamp((v - SHAPE_MID) / SHAPE_MID, -1, 1) : 0);
+  const bs = shape(a.bust), hs = shape(a.hips), gs = shape(a.glutes);
   const b: Body = {
     bx: build[0] * g, bz: build[1] * g, arm: build[2] * g * (female ? 0.9 : 1), skin: o.skin ?? paletteColor('skin', a.skin),
     female, hand: female ? 0.9 : 1, leg: 1 + (build[0] * g - 1) * 0.6, seg: o.zombie ? 7 : 10,
+    bustK: 1 + SHAPE.bust * bs, bustR: 1 + SHAPE.bustSpread * bs, hipW: 1 + SHAPE.hips * hs,
+    seat: female ? (SHAPE.seat + SHAPE.seatRange * gs) * build[1] * g : 0,
     zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0,
   };
   const kit = (bone: number) => new Kit(sink, bone);
@@ -1410,7 +1509,9 @@ function top(sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): void 
   const under = luminance(main) < 0.35 ? 0xd8d6d0 : 0x2b2d31;
   const plaid: Surface = { pattern: PATTERN.plaid, accent: acc };
   const button = shade(main, 1.35);
-  switch (a.top) {
+  // Kept safe for work: a woman is never drawn bare chested, whatever the look says.
+  const kind = a.top === 'shirtless' && b.female ? 'bikini' : a.top;
+  switch (kind) {
     case 'tee':
       torso(sp, b, main);
       sleeves(kit, b, 'short', main);
@@ -1660,6 +1761,54 @@ function top(sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): void 
       for (const s of [1, -1]) pocket(sp, b, main, s * 0.1 * b.bx, 0.0, 0.08, 0.012, false);
       break;
     }
+    case 'shirtless':
+      // Bare chested (men only, above), a hint of definition: the line under the chest and down the middle.
+      torso(sp, b, b.skin);
+      sleeves(kit, b, 'none', b.skin);
+      navel(sp, b);
+      for (const s of [1, -1]) {
+        const x = s * 0.052 * b.bx, y = 0.37;
+        sp.box(shade(b.skin, 0.9), [0.08 * b.bx, 0.005, 0.004], [x, y, torsoZ(b, x, y) - 0.002], [0, -s * 0.35, s * 0.14]);
+      }
+      sp.box(shade(b.skin, 0.92), [0.004, 0.17, 0.004], [0, 0.27, frontZ(b, 0.27) - 0.0015]);
+      break;
+    case 'bikini': {
+      // A bikini top with full cups on a band under the bust, halter straps up over the shoulders.
+      torso(sp, b, b.skin);
+      navel(sp, b);
+      const y0 = bustBottom(b) - 0.016, y1 = BUST.y + 0.05;
+      shell(sp, b, main, 0.003, y0, y1);
+      shell(sp, b, acc, 0.0055, y0, y0 + 0.014);
+      shell(sp, b, acc, 0.0055, y1 - 0.009, y1 + 0.001);
+      const cy = BUST.y - 0.01;
+      sp.box(acc, [0.012, 0.036, 0.006], [0, cy, chestZ(b, 0, cy) + 0.006]);
+      for (const s of [1, -1]) {
+        const x = s * 0.06 * b.bx;
+        frontStrap(sp, b, acc, x, y1 - 0.004, 0.522, 0.014, 0.004, 4);
+        sp.box(acc, [0.014, 0.012, 0.27 * b.bz], [x, 0.522, 0]);
+        sp.box(acc, [0.014, 0.12, 0.01], [x * 0.8, 0.462, -frontZ(b, 0.462) - 0.004], [0.06, 0, -s * 0.15]);
+      }
+      sleeves(kit, b, 'none', main);
+      break;
+    }
+    case 'swimsuit': {
+      // A one-piece: scoop neck, racer back. Its bottom half is the bikini bottoms, in its color
+      // (see pants); over shorts, a skirt or jeans it tucks in at the waist.
+      torso(sp, b, b.skin);
+      shell(sp, b, main, 0.004, a.pants === 'bikinibottom' ? -0.035 : 0.02, 0.44);
+      shell(sp, b, acc, 0.0065, 0.425, 0.445);
+      straps(sp, b, main, 0.07, 0.03, true);
+      sleeves(kit, b, 'none', main);
+      break;
+    }
+    case 'rashguard':
+      // A fitted long-sleeve swim shirt: contrast band across the chest, cuffs and collar, short zip.
+      torso(sp, b, main);
+      sleeves(kit, b, 'long', main, undefined, acc);
+      shell(sp, b, acc, 0.004, 0.33, 0.37);
+      collarRing(sp, acc);
+      sp.box(shade(acc, 0.7), [0.008, 0.07, 0.004], [0, 0.49, chestZ(b, 0, 0.49) + 0.004]);
+      break;
     default:
       torso(sp, b, main);
       sleeves(kit, b, 'short', main);
@@ -1705,9 +1854,29 @@ function chestSash(sp: Kit, b: Body, hex: number, tilt: number, w: number, out: 
 
 /** A skirt from the hips (hip-space y0 down to y1), flaring from radius r0 to r1. */
 function skirt(hp: Kit, b: Body, hex: number, y0: number, y1: number, r0: number, r1: number, surf?: Surface, seg = 16): void {
-  const bp = (0.97 + (b.bx - 1) * 0.5) * (b.female ? 1.03 : 1);
+  const bp = pelvisK(b) * (b.female ? 1.03 : 1);
   // Open at the hem and lined, so it reads from below too.
-  hp.tube(hex, r0, r1, y0 - y1, [0, (y0 + y1) / 2, 0], O, [bp, 1, 0.8 * bp], seg, surf);
+  if (!b.female) {
+    hp.tube(hex, r0, r1, y0 - y1, [0, (y0 + y1) / 2, 0], O, [bp, 1, 0.8 * bp], seg, surf);
+    return;
+  }
+  // A woman's skirt hangs clear of her hips and glutes whatever their shape (`ease` at least).
+  const ease = 0.008, n = Math.max(6, Math.round((y0 - y1) / 0.03));
+  const ys = Array.from({ length: n + 1 }, (_, i) => y1 + ((y0 - y1) * i) / n);
+  const ringOf = (y: number) => {
+    const r = (r0 + ((r1 - r0) * (y0 - y)) / (y0 - y1)) * bp;
+    const p = y > -0.135 ? pelvisR(b, y) : 0;
+    return { ax: Math.max(r, p + ease), az: Math.max(0.8 * r, PELVIS_DEPTH * p + ease) };
+  };
+  const zOf = (x: number, y: number, z: number) => {
+    if (z >= 0 || y <= -0.135) return z;
+    const ax = pelvisR(b, y), az = PELVIS_DEPTH * ax;
+    if (Math.abs(x) >= ax) return z;
+    const back = -az * Math.sqrt(1 - (x / ax) ** 2) - seatBump(b, x, y);
+    return Math.min(z, back - ease);
+  };
+  hp.put(sculpt(ys, 0, false, seg, ringOf, zOf, true), hex, O, O, 1, surf);
+  hp.put(sculpt(ys, 0, false, seg, ringOf, zOf, true), shade(hex, 0.7), O, O, [-0.985, 1, 0.985], surf);
 }
 
 /**
@@ -1732,29 +1901,60 @@ interface Shins {
 }
 
 function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): Shins {
-  const hex = paletteColor('cloth', a.pantsColor);
-  const bp = 0.97 + (b.bx - 1) * 0.5;
+  // Bikini bottoms under a one-piece are the swimsuit's own bottom half, in its color.
+  const suit = a.top === 'swimsuit' && a.pants === 'bikinibottom';
+  const hex = paletteColor('cloth', suit ? a.topColor : a.pantsColor);
+  const bp = pelvisK(b);
   const F = b.female;
   let surf: Surface | undefined;
   if (a.pants === 'jeans' || a.pants === 'overalls' || a.pants === 'flares' || a.pants === 'denimshorts') surf = { pattern: PATTERN.denim };
   if (a.pants === 'camo') surf = { pattern: PATTERN.camo, accent: mixHex(hex, 0x9a8a62, 0.55) };
   if (a.pants === 'plaidskirt') surf = { pattern: PATTERN.plaid, accent: mixHex(hex, 0x101010, 0.62) };
   const skirted = a.pants === 'skirt' || a.pants === 'plaidskirt';
-  // Bare legs (shorts, skirts) or tights under the plaid skirt.
-  const bare = a.pants === 'shorts' || a.pants === 'denimshorts' || a.pants === 'skirt';
+  const swim = a.pants === 'swimtrunks' || a.pants === 'boardshorts' || a.pants === 'bikinibottom';
+  // Bare legs (shorts, skirts, swimwear) or tights under the plaid skirt.
+  const bare = a.pants === 'shorts' || a.pants === 'denimshorts' || a.pants === 'skirt' || swim;
   const legHex = a.pants === 'plaidskirt' ? 0x1f1d22 : b.skin;
-  // Women's legs: fuller thighs, slimmer knees, calves and ankles.
+  // Women's legs: fuller thighs, slimmer knees, calves and ankles; wider hips fill out the thigh tops.
   const body = F ? 'female' : 'male';
-  const skinUp = ringsFor(b, LEG_UP[body]), skinLo = ringsFor(b, LEG_LO[body]);
+  const thighs = (rings: readonly Ring[]): readonly Ring[] => (!F || b.hipW === 1 ? rings
+    : rings.map(([y, r, z, f]): Ring => [y, r * (1 + (b.hipW - 1) * 1.3 * THREE.MathUtils.clamp((y + 0.3) / 0.33, 0, 1)), z, f]));
+  const skinUp = thighs(ringsFor(b, LEG_UP[body])), skinLo = ringsFor(b, LEG_LO[body]);
   const lk = b.leg;
+  /** The pelvis from hip-space y0 up to y1 (women: shaped over the hips and glutes). */
+  const pelvis = (c: number, y0: number, y1: number, s?: Surface, inf = 0) => {
+    if (F) pelvisLayer(hp, b, c, inf, y0, y1, s);
+    else hp.cyl(c, 0.17 - 0.02 * (0.1 - y1) / 0.2 + inf, 0.17 - 0.02 * (0.1 - y0) / 0.2 + inf, y1 - y0, [0, (y0 + y1) / 2, 0], O, [bp, 1, 0.7 * bp], { seg: 10 }, s);
+  };
+  const bottom = F ? -0.135 : -0.1;
   if (skirted) {
-    hp.cyl(shade(hex, 0.45), 0.16, 0.15, 0.2, [0, 0, 0], O, [bp, 1, 0.7 * bp], { seg: 10 });
-    skirt(hp, b, hex, 0.1, -0.24, 0.172, a.pants === 'plaidskirt' ? 0.25 : 0.235, surf, a.pants === 'plaidskirt' ? 20 : 16);
-    hp.cyl(shade(hex, 0.8), 0.174 * bp * (F ? 1.03 : 1), 0.174 * bp * (F ? 1.03 : 1), 0.03, [0, 0.085, 0], O, [1, 1, 0.8], { seg: 16 }, surf);
+    if (F) pelvisLayer(hp, b, shade(hex, 0.45), -0.004, bottom, 0.1);
+    else hp.cyl(shade(hex, 0.45), 0.16, 0.15, 0.2, [0, 0, 0], O, [bp, 1, 0.7 * bp], { seg: 10 });
+    // Under a dress only the dress's own skirt shows (this one would poke out at the waist).
+    if (a.top !== 'sundress') {
+      skirt(hp, b, hex, 0.1, -0.24, 0.172, a.pants === 'plaidskirt' ? 0.25 : 0.235, surf, a.pants === 'plaidskirt' ? 20 : 16);
+      hp.cyl(shade(hex, 0.8), 0.174 * bp * (F ? 1.03 : 1), 0.174 * bp * (F ? 1.03 : 1), 0.03, [0, 0.085, 0], O, [1, 1, 0.8], { seg: 16 }, surf);
+    }
+  } else if (a.pants === 'bikinibottom') {
+    // Full-coverage briefs, skin above them to the waist, a trim band along the top (all one
+    // piece up to the waist under a swimsuit).
+    if (suit) pelvis(hex, bottom, 0.1);
+    else {
+      pelvis(hex, bottom, 0.05);
+      pelvis(b.skin, 0.05, 0.1);
+      pelvis(shade(hex, 0.78), 0.036, 0.054, undefined, 0.003);
+    }
   } else if (F) {
-    hp.cyl(hex, 0.172, 0.186, 0.2, [0, 0, 0], O, [bp, 1, 0.7 * bp], { seg: 12 }, surf);
+    pelvisLayer(hp, b, hex, 0, bottom, 0.1, surf);
   } else {
     hp.cyl(hex, 0.17, 0.15, 0.2, [0, 0, 0], O, [bp, 1, 0.7 * bp], { seg: 10 }, surf);
+  }
+  if (a.pants === 'swimtrunks' || a.pants === 'boardshorts') {
+    // An elastic or laced waistband, drawstring ends hanging at the front.
+    pelvis(shade(hex, 0.82), 0.07, 0.098, undefined, 0.004);
+    const z = (F ? PELVIS_DEPTH * pelvisR(b, 0.075) : 0.7 * bp * 0.168) + 0.006;
+    for (const x of [0.012, -0.012]) hp.box(0xeeeae0, [0.006, 0.05, 0.004], [x, 0.055, z], [0, 0, x * 8]);
+    if (a.pants === 'boardshorts') hp.box(shade(hex, 0.6), [0.012, 0.06, 0.004], [0, 0.03, z - 0.002]);
   }
   const jog = a.pants === 'joggers';
   const tight = a.pants === 'leggings';
@@ -1771,10 +1971,27 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
     lo.ball(legColor, legs.lo[0][1] * lk * jointK(b), [0, 0, 0], O, legSurf, b.seg, b.zombie ? 3 : 5);
     if (a.pants === 'shorts') {
       up.lathe(hex, over(skinUp, [0.03, -0.08, -0.18, -0.27], 0.013), lk, 0, b.seg, { top: true, bottom: true }, surf);
-      lo.lathe(0xdcdad4, over(skinLo, [-0.33, -0.39, -0.44], 0.005), lk, 0, b.seg, { top: true, bottom: true });
+      if (a.shoes !== 'flipflops') lo.lathe(0xdcdad4, over(skinLo, [-0.33, -0.39, -0.44], 0.005), lk, 0, b.seg, { top: true, bottom: true });
     } else if (a.pants === 'denimshorts') {
       up.lathe(hex, over(skinUp, [0.03, -0.05, -0.105], 0.008), lk, 0, b.seg, { top: true, bottom: true }, surf);
       up.lathe(mixHex(hex, 0xf2efe8, 0.55), over(skinUp, [-0.1, -0.116], 0.0095), lk, 0, b.seg, { top: true, bottom: true });
+    } else if (a.pants === 'bikinibottom') {
+      // The briefs' leg openings, level all round just below the hip.
+      up.lathe(hex, over(skinUp, [0.03, -0.03, -0.072], 0.0035), lk, 0, b.seg, { top: true, bottom: true });
+      if (!suit) up.lathe(shade(hex, 0.78), over(skinUp, [-0.064, -0.074], 0.005), lk, 0, b.seg, { top: true, bottom: true });
+    } else if (a.pants === 'swimtrunks') {
+      // Short, loose swim trunks.
+      up.lathe(hex, over(skinUp, [0.03, -0.06, -0.15], 0.014), lk, 0, b.seg, { top: true, bottom: true });
+      up.lathe(shade(hex, 0.82), over(skinUp, [-0.142, -0.156], 0.0155), lk, 0, b.seg, { top: true, bottom: true });
+    } else if (a.pants === 'boardshorts') {
+      // Long board shorts to just above the knee, a contrast stripe down the outside.
+      up.lathe(hex, over(skinUp, [0.03, -0.1, -0.22, -0.32], 0.017), lk, 0, b.seg, { top: true, bottom: true });
+      const stripe = mixHex(hex, 0xf4f1ea, 0.65), ys = [0.0, -0.08, -0.16, -0.24, -0.31];
+      const at = (y: number) => new THREE.Vector3(s * (ringAt(skinUp, y).r + 0.017) * lk + s * 0.001, y, 0);
+      for (let i = 0; i + 1 < ys.length; i++) {
+        const p0 = at(ys[i]), p1 = at(ys[i + 1]), mid = p0.clone().add(p1).multiplyScalar(0.5);
+        up.putAlong(new THREE.BoxGeometry(0.006, p0.distanceTo(p1) + 0.004, 0.026), stripe, [mid.x, mid.y, mid.z], p1.clone().sub(p0));
+      }
     } else if (jog) {
       lo.lathe(shade(hex, 0.8), over(legs.lo, [-0.395, -0.445], 0.003), lk, 0, b.seg, { top: true, bottom: true }, { pattern: PATTERN.knit });
     }
@@ -1798,7 +2015,11 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   if (!dress && (a.pants === 'joggers' || a.pants === 'leggings')) hp.cyl(shade(hex, 0.8), belt, belt, 0.035, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 }, { pattern: PATTERN.knit });
   if (a.pants === 'overalls') {
     const y0 = 0.02, y1 = 0.3;
-    if (F) sp.box(hex, [0.21 * b.bx, y1 - y0, 0.02], [0, (y0 + y1) / 2, Math.max(frontZ(b, 0.16), chestZ(b, 0, y1)) - 0.004], O, surf);
+    if (F) {
+      // Leaning out from the belly to clear the bust at its top edge.
+      const zb = frontZ(b, y0 + 0.04) + 0.008, zt = Math.max(frontZ(b, 0.16), chestMax(b, y1, 0.1 * b.bx)) - 0.004;
+      sp.box(hex, [0.21 * b.bx, Math.hypot(y1 - y0, zt - zb), 0.02], [0, (y0 + y1) / 2, (zb + zt) / 2], [Math.atan2(zt - zb, y1 - y0), 0, 0], surf);
+    }
     else sp.box(hex, [0.22 * b.bx, y1 - y0, 0.02], [0, (y0 + y1) / 2, frontZ(b, 0.16) - 0.002], [0.05, 0, 0], surf);
     for (const s of [1, -1]) {
       const x = s * 0.075 * b.bx;
@@ -1886,6 +2107,22 @@ function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body, shin: Shins):
         lo.box(shade(hex, 0.6), [0.094, 0.01, 0.236], [0, -0.511, 0.052]);
         lo.box(shade(hex, 1.3), [0.03, 0.008, 0.012], [0, -0.47, 0.115]);
         break;
+      case 'flipflops': {
+        // Bare feet on a thin sole, a thong strap from between the toes over each side of the foot.
+        lo.box(b.skin, [0.082, 0.05, 0.19], [0, -0.474, 0.035]);
+        lo.ball(b.skin, [0.043, 0.024, 0.05], [0, -0.478, 0.125], O, undefined, 8, 5);
+        lo.box(hex, [0.098, 0.014, 0.245], [0, -0.505, 0.05]);
+        lo.box(shade(hex, 0.6), [0.1, 0.006, 0.247], [0, -0.514, 0.05]);
+        const post = new THREE.Vector3(-s * 0.012, -0.452, 0.13);
+        for (const side of [1, -1]) {
+          const pts = [post, new THREE.Vector3(side * 0.036, -0.447, 0.07), new THREE.Vector3(side * 0.045, -0.496, 0.05)];
+          for (let i = 0; i + 1 < pts.length; i++) {
+            const d = pts[i + 1].clone().sub(pts[i]), mid = pts[i].clone().add(pts[i + 1]).multiplyScalar(0.5);
+            lo.putAlong(new THREE.BoxGeometry(0.016, d.length() + 0.004, 0.006), hex, [mid.x, mid.y, mid.z], d);
+          }
+        }
+        break;
+      }
       case 'platforms':
         lo.box(hex, [0.1, 0.06, 0.22], [0, -0.445, 0.05]);
         lo.box(0xeeeae0, [0.108, 0.058, 0.245], [0, -0.497, 0.052]);

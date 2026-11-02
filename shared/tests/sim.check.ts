@@ -9,7 +9,7 @@ import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
   WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, LULLS, hordeAt, hordeStart, lullDuration, lullOpening, threatAt, inLull, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
-  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
+  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, SHAPE_MID, SHAPE_STEPS, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
   BARRICADE, Mirror, NAV_INDOOR, storeyFloors, type BarricadeSlot,
   VAULT, BLAST, findVault, planVault, vaultAt, porches, packPanes, unpackPanes, WORLD_FILTER,
@@ -2409,6 +2409,32 @@ section('Survivor appearance');
   let smokers = 0;
   for (let i = 0; i < 400; i++) if (randomAppearance(rand).smoke !== 'none') smokers++;
   check(smokers > 15 && smokers < 90, `some random survivors smoke, most don't (${smokers}/400)`);
+  // Body shape sliders and swimwear.
+  check(['bikini', 'swimsuit', 'rashguard', 'shirtless'].every((id) => ids('top').includes(id)) && ['swimtrunks', 'boardshorts', 'bikinibottom'].every((id) => ids('pants').includes(id)) && ids('shoes').includes('flipflops'), 'swimwear is in the catalog');
+  check(DEFAULT_APPEARANCE.bust === SHAPE_MID && DEFAULT_FEMALE_APPEARANCE.hips === SHAPE_MID && DEFAULT_APPEARANCE.glutes === SHAPE_MID, 'body shapes start at average');
+  const curvy = sanitizeAppearance({ ...DEFAULT_FEMALE_APPEARANCE, bust: SHAPE_STEPS - 1, hips: 0, glutes: 5 });
+  check(curvy.bust === SHAPE_STEPS - 1 && curvy.hips === 0 && curvy.glutes === 5 && sameLook(decodeAppearance(encodeAppearance(curvy)), curvy), 'body shapes survive the wire');
+  const wild = sanitizeAppearance({ ...DEFAULT_FEMALE_APPEARANCE, bust: SHAPE_STEPS, hips: -1, glutes: 2.5 });
+  check(wild.bust === SHAPE_MID && wild.hips === SHAPE_MID && wild.glutes === SHAPE_MID, 'out-of-range body shapes fall back to average');
+  const preShape = encodeAppearance(curvy).split('.').slice(0, 1 + APPEARANCE_FIELDS.findIndex(([k]) => k === 'bust')).join('.');
+  const preLook = decodeAppearance(preShape);
+  check(preLook.body === 'female' && preLook.bust === SHAPE_MID && preLook.hips === SHAPE_MID && preLook.glutes === SHAPE_MID, 'saves from before the sliders load with an average shape');
+  check(sanitizeAppearance({ ...DEFAULT_FEMALE_APPEARANCE, top: 'shirtless' }).top === 'bikini' && decodeAppearance(encodeAppearance({ ...DEFAULT_FEMALE_APPEARANCE, top: 'shirtless' })).top === 'bikini', 'a woman is never shirtless (bikini top), even from the wire');
+  check(sanitizeAppearance({ ...DEFAULT_APPEARANCE, top: 'shirtless' }).top === 'shirtless', 'a man can go shirtless');
+  let shapesOk = true, shirtless = 0, suits = 0;
+  const varied = new Set<number>();
+  for (let i = 0; i < 400; i++) {
+    const w = randomAppearance(rand, 'female'), m = randomAppearance(rand, 'male');
+    if (m.bust !== SHAPE_MID || m.hips !== SHAPE_MID || m.glutes !== SHAPE_MID) shapesOk = false;
+    for (const v of [w.bust, w.hips, w.glutes]) {
+      if (!Number.isInteger(v) || v < 0 || v >= SHAPE_STEPS) shapesOk = false;
+      varied.add(v);
+    }
+    if (w.top === 'shirtless') shirtless++;
+    if (w.top === 'swimsuit' && w.pants !== 'bikinibottom') suits++;
+  }
+  check(shapesOk && varied.size >= 5, `random women vary in shape (${varied.size} steps seen), random men stay average`);
+  check(shirtless === 0 && suits === 0, 'random women are never shirtless, a swimsuit comes with its bottoms');
 
   const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
   const cowboy = sanitizeAppearance({ ...DEFAULT_APPEARANCE, headwear: 'cowboy', top: 'flannel', eyes: 'fierce', eyeColor: 5 });

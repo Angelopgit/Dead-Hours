@@ -1,17 +1,17 @@
 /**
  * Dev-only outfit lineup: /dev/lineup.html?slot=headwear&view=head renders every item of a slot
  * side by side under studio lights, for checking how pieces fit (`view=head|torso|legs|body`;
- * `base={"body":"female"}` dresses a woman, `items=a,b` picks a few). `slot=zombies` shows walkers,
+ * `base={"body":"female"}` dresses a woman, `items=a,b` picks a few; `slot=bust|hips|glutes` steps a shape slider). `slot=zombies` shows walkers,
  * `slot=specials` screamers and bloaters (`scream=0.5` poses them mid-scream), `slot=crawlers` legless
  * zombies crawling (`speed=1` drags them along, `attack=0.55` mid-lunge). `view=hands` frames the
  * hands, `grime=0.6,0.3` dirties survivors (dirt, blood). Not part of the game build.
  */
 import * as THREE from 'three';
-import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, sanitizeAppearance, type Appearance, type AppearanceSlot } from '@dead-hours/shared';
+import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, SHAPE_LABELS, SHAPE_STEPS, sanitizeAppearance, type Appearance, type AppearanceSlot, type ShapeKey } from '@dead-hours/shared';
 import { Humanoid, survivorLook, zombieLook, zombieLookOf } from '../src/characters/Humanoid';
 
 const q = new URLSearchParams(location.search);
-const slot = (q.get('slot') ?? 'top') as AppearanceSlot | 'zombies' | 'specials' | 'kinds' | 'crawlers';
+const slot = (q.get('slot') ?? 'top') as AppearanceSlot | ShapeKey | 'zombies' | 'specials' | 'kinds' | 'crawlers';
 /** `kinds`: how many hits each zombie has taken (0 fresh, more shows wounds and soaked clothes). */
 const hits = Number(q.get('hits') ?? 0);
 const speed = Number(q.get('speed') ?? 0);
@@ -51,6 +51,8 @@ const looks = slot === 'zombies'
   ? Array.from({ length: 8 }, (_, i) => ({ label: `crawler ${i}`, look: zombieLookOf(i === 6 ? 'brute' : i === 7 ? 'runner' : 'walker', i) }))
   : slot === 'specials'
   ? (['screamer', 'bloater'] as const).flatMap((kind) => Array.from({ length: 4 }, (_, i) => ({ label: `${kind} ${i}`, look: zombieLookOf(kind, i) })))
+  : slot === 'bust' || slot === 'hips' || slot === 'glutes'
+  ? Array.from({ length: SHAPE_STEPS }, (_, i) => ({ label: `${slot} ${SHAPE_LABELS[i]}`, look: survivorLook({ ...base, [slot]: i }) }))
   : (APPEARANCE_ITEMS[slot] as readonly { id: string; label: string }[])
     .filter((it) => !q.get('items') || q.get('items')!.split(',').includes(it.id))
     .map((it) => ({ label: it.label, look: survivorLook({ ...base, [slot]: it.id } as Appearance) }));

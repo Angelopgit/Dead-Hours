@@ -21,9 +21,24 @@ export interface AppearanceItem {
    * this only keeps random survivors and zombies plausible (no bearded women in sundresses).
    */
   lean?: BodyType;
+  /**
+   * Offered to this body type only. "No shirt" is for men: a woman's bare chest is always drawn
+   * as a bikini top (sanitizeAppearance swaps it, and the outfit builder never draws it bare).
+   */
+  only?: BodyType;
 }
 
 export type BodyType = 'male' | 'female';
+
+/**
+ * Body shape sliders (female bodies): bust, hip width, glutes. Each is a step from 0 to
+ * SHAPE_STEPS - 1 with SHAPE_MID the average; the outfit builder keeps the range modest and
+ * every outfit fitted at every step.
+ */
+export const SHAPE_STEPS = 7;
+export const SHAPE_MID = 3;
+export const SHAPE_LABELS = ['−3', '−2', '−1', 'Average', '+1', '+2', '+3'] as const;
+export type ShapeKey = 'bust' | 'hips' | 'glutes';
 
 export const SKIN_TONES = [
   0xf0d0b8, 0xe4b897, 0xd6a27c, 0xc68e67, 0xb07955, 0x9a6444, 0x83512f, 0x6c4128, 0x55311e, 0x3f2417,
@@ -179,6 +194,11 @@ export const APPEARANCE_ITEMS = {
     { id: 'cardigan', label: 'Cardigan', tint: true, accent: 'Undershirt', lean: W },
     { id: 'sundress', label: 'Sundress', tint: true, accent: 'Flowers', lean: W },
     { id: 'peacoat', label: 'Peacoat', tint: true, accent: 'Undershirt', color: 4 },
+    // Swimwear.
+    { id: 'shirtless', label: 'No shirt', lean: M, only: M },
+    { id: 'bikini', label: 'Bikini top', tint: true, accent: 'Trim', color: 19, lean: W },
+    { id: 'swimsuit', label: 'One-piece swimsuit', tint: true, accent: 'Trim', color: 1, lean: W },
+    { id: 'rashguard', label: 'Rash guard', tint: true, accent: 'Panels', color: 4 },
   ],
   pants: [
     { id: 'jeans', label: 'Jeans', tint: true, color: 5 },
@@ -193,6 +213,10 @@ export const APPEARANCE_ITEMS = {
     { id: 'denimshorts', label: 'Denim shorts', tint: true, color: 6, lean: W },
     { id: 'skirt', label: 'Skirt', tint: true, lean: W },
     { id: 'plaidskirt', label: 'Plaid skirt & tights', tint: true, color: 12, lean: W },
+    // Swimwear.
+    { id: 'swimtrunks', label: 'Swim trunks', tint: true, color: 6, lean: M },
+    { id: 'boardshorts', label: 'Board shorts', tint: true, color: 14 },
+    { id: 'bikinibottom', label: 'Bikini bottoms', tint: true, color: 19, lean: W },
   ],
   shoes: [
     { id: 'sneakers', label: 'Sneakers', tint: true },
@@ -204,6 +228,7 @@ export const APPEARANCE_ITEMS = {
     { id: 'heeledboots', label: 'Heeled ankle boots', tint: true, color: 11, lean: W },
     { id: 'flats', label: 'Flats', tint: true, color: 1, lean: W },
     { id: 'platforms', label: 'Platform sneakers', tint: true, color: 2, lean: W },
+    { id: 'flipflops', label: 'Flip-flops', tint: true, color: 6 },
   ],
   gloves: [
     { id: 'none', label: 'None' },
@@ -337,9 +362,13 @@ export interface Appearance {
   makeupColor: number;
   /** Lit and held in the mouth: a cigarette, a joint or a blunt, with a glowing tip and smoke. */
   smoke: ItemId<'smoke'>;
+  /** Body shape steps (0 to SHAPE_STEPS - 1), used by female bodies. */
+  bust: number;
+  hips: number;
+  glutes: number;
 }
 
-type FieldKind = { slot: AppearanceSlot } | { palette: PaletteName };
+type FieldKind = { slot: AppearanceSlot } | { palette: PaletteName } | { steps: number };
 
 /** Every field, in wire order, with the catalog or palette its value indexes. */
 export const APPEARANCE_FIELDS: readonly (readonly [keyof Appearance, FieldKind])[] = [
@@ -359,6 +388,8 @@ export const APPEARANCE_FIELDS: readonly (readonly [keyof Appearance, FieldKind]
   ['body', { slot: 'body' }], ['ears', { slot: 'ears' }], ['makeup', { slot: 'makeup' }], ['makeupColor', { palette: 'makeup' }],
   // Added with smokes: older strings stop before it (none).
   ['smoke', { slot: 'smoke' }],
+  // Added with the body shape sliders: older strings stop before these (average).
+  ['bust', { steps: SHAPE_STEPS }], ['hips', { steps: SHAPE_STEPS }], ['glutes', { steps: SHAPE_STEPS }],
 ];
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -376,6 +407,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   gear: 'none', gearColor: 8,
   body: 'male', ears: 'none', makeup: 'none', makeupColor: 2,
   smoke: 'none',
+  bust: SHAPE_MID, hips: SHAPE_MID, glutes: SHAPE_MID,
 };
 
 /** Where a new female survivor starts (the creator's reset, and switching body type). */
@@ -408,10 +440,12 @@ export function sanitizeAppearance(raw: unknown): Appearance {
     const v = src[key];
     if ('slot' in kind) {
       if (typeof v === 'string' && appearanceItem(kind.slot, v)) out[key] = v;
-    } else if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < PALETTES[kind.palette].length) {
+    } else if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < ('steps' in kind ? kind.steps : PALETTES[kind.palette].length)) {
       out[key] = v;
     }
   }
+  // Kept safe for work: a woman is never shirtless, she wears a bikini top instead.
+  if (out.body === 'female' && out.top === 'shirtless') out.top = 'bikini';
   return out as unknown as Appearance;
 }
 
@@ -462,9 +496,9 @@ export function randomAppearance(rand: () => number = Math.random, body?: BodyTy
   else if (r < 0.44) headwear = pick(ids('headwear', (i) => i.group === HL));
   else if (r < 0.5) headwear = pick(ids('headwear', (i) => i.group === F));
   const hairColor = rand() < 0.88 ? Math.floor(rand() * 11) : Math.floor(rand() * HAIR_COLORS.length);
-  // Skirts and dresses go with bare legs or tights, not under jeans.
-  const top = pick(ids('top'));
-  const pants = top === 'sundress' ? 'skirt' : pick(ids('pants'));
+  // Skirts and dresses go with bare legs or tights, not under jeans; a swimsuit with swim bottoms.
+  const top = pick(ids('top', (i) => !i.only || i.only === sex));
+  const pants = top === 'sundress' ? 'skirt' : top === 'swimsuit' ? 'bikinibottom' : pick(ids('pants'));
   return sanitizeAppearance({
     skin: Math.floor(rand() * SKIN_TONES.length),
     build: pick(ids('build')),
@@ -486,5 +520,15 @@ export function randomAppearance(rand: () => number = Math.random, body?: BodyTy
     makeupColor: Math.floor(rand() * MAKEUP_COLORS.length),
     // Drawn last, so every field before it comes out as it did before smokes existed.
     smoke: maybe('smoke', 0.12),
+    // Mostly near average, now and then toward either end.
+    bust: female ? shapeStep(rand) : SHAPE_MID,
+    hips: female ? shapeStep(rand) : SHAPE_MID,
+    glutes: female ? shapeStep(rand) : SHAPE_MID,
   });
+}
+
+/** A random shape step, bunched around the average. */
+function shapeStep(rand: () => number): number {
+  const t = (rand() + rand() + rand()) / 3;
+  return Math.max(0, Math.min(SHAPE_STEPS - 1, Math.round(t * (SHAPE_STEPS - 1))));
 }

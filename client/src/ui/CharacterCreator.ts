@@ -1,7 +1,7 @@
 import gsap from 'gsap';
 import {
-  APPEARANCE_ITEMS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, PALETTE_LABELS, appearanceItem, randomAppearance, sanitizeAppearance,
-  type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type PaletteName,
+  APPEARANCE_ITEMS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, PALETTE_LABELS, SHAPE_LABELS, SHAPE_STEPS, appearanceItem,
+  randomAppearance, sanitizeAppearance, type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type PaletteName, type ShapeKey,
 } from '@dead-hours/shared';
 import { h } from './dom';
 import { settings } from '../core/Settings';
@@ -12,7 +12,8 @@ type ColorKey = { [K in keyof Appearance]: Appearance[K] extends number ? K : ne
 
 type Section =
   | { kind: 'items'; title: string; slot: AppearanceSlot; groups?: boolean }
-  | { kind: 'colors'; title: string; key: ColorKey; palette: PaletteName; when?: (a: Appearance) => string | false };
+  | { kind: 'colors'; title: string; key: ColorKey; palette: PaletteName; when?: (a: Appearance) => string | false }
+  | { kind: 'shape'; title: string; key: ShapeKey; when: (a: Appearance) => boolean };
 
 interface Tab {
   id: string;
@@ -32,6 +33,10 @@ const BODY_DEFAULTS: Record<BodyType, Appearance> = { male: DEFAULT_APPEARANCE, 
 
 /** Bottoms that go under a dress; anything else switches to a plain skirt (bare legs) when one is put on. */
 const UNDER_DRESS = new Set(['skirt', 'plaidskirt', 'shorts', 'denimshorts', 'leggings']);
+/** Bottoms a one-piece swimsuit can be worn with; anything else switches to its own bottom half. */
+const WITH_SWIMSUIT = new Set(['bikinibottom', 'skirt', 'shorts', 'denimshorts', 'swimtrunks', 'boardshorts']);
+
+const isFemale = (a: Appearance) => a.body === 'female';
 
 /** A slot's color row is shown while the chosen item takes a color, named by what it colors. */
 const tinted = (slot: AppearanceSlot, title = 'Color') => (a: Appearance): string | false => {
@@ -44,6 +49,9 @@ const TABS: Tab[] = [
     { kind: 'items', title: 'Body type', slot: 'body' },
     { kind: 'colors', title: 'Skin tone', key: 'skin', palette: 'skin' },
     { kind: 'items', title: 'Build', slot: 'build' },
+    { kind: 'shape', title: 'Bust', key: 'bust', when: isFemale },
+    { kind: 'shape', title: 'Hips', key: 'hips', when: isFemale },
+    { kind: 'shape', title: 'Glutes', key: 'glutes', when: isFemale },
   ] },
   { id: 'face', label: 'Face', focus: 'head', sections: [
     { kind: 'items', title: 'Eye shape', slot: 'eyes' },
@@ -191,7 +199,9 @@ export class CharacterCreator {
     const out: HTMLElement[] = [h('h3', { class: 'creator-tab-title' }, this.tab.label)];
     for (const s of this.tab.sections) {
       if (s.kind === 'items') out.push(...this.itemSection(s.slot, s.title, !!s.groups));
-      else {
+      else if (s.kind === 'shape') {
+        if (s.when(this.a)) out.push(this.shapeSection(s.key, s.title));
+      } else {
         const title = s.when ? s.when(this.a) : s.title;
         if (title === false) continue;
         out.push(this.colorSection(s.key, s.palette, s.when && title !== 'Color' ? `${s.title} · ${title}` : s.title));
@@ -202,7 +212,8 @@ export class CharacterCreator {
   }
 
   private itemSection(slot: AppearanceSlot, title: string, groups: boolean): HTMLElement[] {
-    const items = APPEARANCE_ITEMS[slot] as readonly AppearanceItem[];
+    // Items for one body type only (no shirt: men) are left out for the other.
+    const items = (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).filter((it) => !it.only || it.only === this.a.body);
     const chip = (it: AppearanceItem) => h('button', {
       class: `creator-chip ${this.a[slot] === it.id ? 'on' : ''}`,
       'aria-pressed': String(this.a[slot] === it.id),
@@ -235,6 +246,27 @@ export class CharacterCreator {
     );
   }
 
+  /**
+   * A body shape slider (bust, hips, glutes): steps either side of average. Dragging updates the
+   * survivor live without rebuilding the panel, so the slider keeps hold of the pointer.
+   */
+  private shapeSection(key: ShapeKey, title: string): HTMLElement {
+    const name = h('span', { class: 'creator-color-name' }, SHAPE_LABELS[this.a[key]] ?? '');
+    const input = h('input', {
+      type: 'range', min: 0, max: SHAPE_STEPS - 1, step: 1, value: this.a[key], 'aria-label': title,
+      'aria-valuetext': SHAPE_LABELS[this.a[key]] ?? '',
+    }) as HTMLInputElement;
+    input.addEventListener('input', () => {
+      const v = Number(input.value);
+      if (v === this.a[key]) return;
+      name.textContent = SHAPE_LABELS[v] ?? '';
+      input.setAttribute('aria-valuetext', SHAPE_LABELS[v] ?? '');
+      audio.ui('hover');
+      this.apply({ ...this.a, [key]: v }, false);
+    });
+    return h('div', { class: 'creator-shape' }, h('h4', {}, title, name), h('div', { class: 'slider' }, input));
+  }
+
   private pick(slot: AppearanceSlot, it: AppearanceItem): void {
     const next = { ...this.a, [slot]: it.id } as Appearance;
     const ck = SLOT_COLOR[slot];
@@ -243,6 +275,8 @@ export class CharacterCreator {
     if (slot === 'body' && this.a.body !== it.id) this.switchBody(next, it.id as BodyType);
     // A dress goes over bare legs (or tights, shorts, leggings), not jeans.
     if (slot === 'top' && it.id === 'sundress' && !UNDER_DRESS.has(next.pants)) next.pants = 'skirt';
+    // A one-piece comes with its own bottom half unless it's worn under shorts or a skirt.
+    if (slot === 'top' && it.id === 'swimsuit' && !WITH_SWIMSUIT.has(next.pants)) next.pants = 'bikinibottom';
     this.apply(next);
   }
 
@@ -254,19 +288,21 @@ export class CharacterCreator {
     const hair = appearanceItem('hair', next.hair);
     const other: BodyType = body === 'female' ? 'male' : 'female';
     if (hair?.lean === other || next.hair === BODY_DEFAULTS[other].hair) next.hair = BODY_DEFAULTS[body].hair;
-    if (body === 'female') next.facialHair = 'none';
-    else next.makeup = 'none';
+    if (body === 'female') {
+      next.facialHair = 'none';
+      if (next.top === 'shirtless') next.top = 'bikini';
+    } else next.makeup = 'none';
   }
 
   private set(key: ColorKey, v: number): void {
     this.apply({ ...this.a, [key]: v });
   }
 
-  private apply(next: Appearance): void {
+  private apply(next: Appearance, rerender = true): void {
     this.a = sanitizeAppearance(next);
     const saved = { ...this.a };
     settings.update((s) => { s.profile.appearance = saved; });
-    this.renderOptions();
+    if (rerender) this.renderOptions();
     // Rebuild the preview once per frame however fast the clicks come.
     cancelAnimationFrame(this.pending);
     this.pending = requestAnimationFrame(() => this.preview.setAppearance(this.a));
