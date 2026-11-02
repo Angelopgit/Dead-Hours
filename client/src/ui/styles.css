@@ -647,6 +647,13 @@ body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size
 /* Set tight, so a long grey line clears the tops of BOARD / USE / SWAP on a 360 px tall phone, and a little
    narrower, so on a 667 px wide one it stays clear of the ammo panel's fire-mode row on the left. */
 body.touch-play .notice small { margin-top: 0.35em; line-height: 1.25; letter-spacing: 0.15em; }
+/* Online on a phone, CONNECTION LOST takes the warning row, small, and the warning steps aside meanwhile (it
+   printed over the timer, the warning and notices). Fallen, WATCHING … TAP HERE FOR RESULTS sits in the
+   bottom-right corner, where the buttons were, clear of the chat (it wrapped onto the chat lines). */
+body.touch-play .spectate.net-lost { top: calc(74px + env(safe-area-inset-top)); padding: 0.3em 1em; font-size: 0.75em; white-space: nowrap; }
+body.touch-play #ui-root:has(> .net-lost) .warning { visibility: hidden; }
+body.touch-play .spectate:not(.net-lost) { left: auto; right: calc(16px + env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom));
+  transform: none; max-width: 50vw; text-align: right; }
 
 /* Phones held upright: the game is played sideways. */
 @media (orientation: portrait) and (pointer: coarse) {
