@@ -29,6 +29,7 @@ export * from './sim/Arsenal';
 export * from './sim/hitzones';
 export * from './sim/Zombie';
 export * from './sim/Hordes';
+export * from './sim/Lulls';
 export * from './sim/Barricades';
 export * from './sim/MeleePickups';
 export * from './sim/Raid';

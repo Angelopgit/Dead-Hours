@@ -9,6 +9,7 @@ import type { Arsenal, ArsenalAction, HeldLimb } from '../sim/Arsenal';
 import type { InteractKind, PlayerMotion, PlayerStats, Simulation } from '../sim/Simulation';
 import { Zombie, type ZombieState } from '../sim/Zombie';
 import { Raider, type RaidStage } from '../sim/Raid';
+import { noLulls } from '../sim/Lulls';
 import type { SimEvent, SimPhase } from '../sim/events';
 import { clamp, type Quat, type Vec3 } from '../sim/math';
 import { decodeBuild, defaultBuild, encodeBuild } from '../config/progression';
@@ -87,6 +88,8 @@ export interface Snapshot {
   r?: number[][];
   /** Skateboards: [id, x, y, z (cm), yaw (mrad), rider id or 0, look × 2 + flipped]. */
   sk?: (number | string)[][];
+  /** Lulls, once the first has begun: [count, start, end, paused (survival ms)] (see Lulls.ts). */
+  lu?: number[];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -157,6 +160,8 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   const boards: (number | string)[][] = [];
   for (const k of sim.skateboards.boards) boards.push([k.id, cm(k.pos.x), cm(k.pos.y), cm(k.pos.z), milli(k.yaw), k.rider ?? 0, k.look * 2 + (k.flipped ? 1 : 0)]);
   const snap: Snapshot = { t: sim.time, ph: idx(PHASES, sim.phase), pt: milli(sim.phaseTime), p: players, z: zombies, l: limbs, d: doors, i: items, b: bars, sk: boards };
+  const lull = sim.lull;
+  if (lull.count > 0) snap.lu = [lull.count, milli(lull.start), milli(lull.end), milli(lull.paused)];
   const raid = sim.raid;
   const van = raid.van;
   if (van) snap.v = [van.route, idx(RAID_STAGES, raid.stage), cm(van.pos.x), cm(van.pos.z), milli(van.yaw), cm(van.speed), van.door ? 1 : 0];
@@ -559,6 +564,8 @@ export class Mirror {
     }
     for (const slot of sim.barricades.slots) if (!listed.has(slot.index) && slot.boards > 0) sim.barricades.remote(slot, 0, 0, slot.glass);
     this.applyRaid(s, T, span);
+    const lu = s.lu;
+    sim.lull = lu ? { count: lu[0], start: lu[1] / 1000, end: lu[2] / 1000, paused: lu[3] / 1000 } : noLulls();
 
     // Skateboards (older servers send none: the copy keeps its own, placed from the same seed).
     if (s.sk) {

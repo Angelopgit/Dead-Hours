@@ -3,7 +3,7 @@ import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
 import { DOWNED, PLAYER } from '../config/player';
-import { HORDES, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
+import { HORDES, LULLS, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
 import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, type LegZone } from '../config/limbs';
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
@@ -19,6 +19,7 @@ import { rayZones, along, type ZoneShape } from './hitzones';
 import { ZOMBIE_STEP, Zombie } from './Zombie';
 import { Raid } from './Raid';
 import { hordeAt, hordeBonus, hordeRunnerBoost, type HordeState } from './Hordes';
+import { inLull, lullDuration, noLulls, threatAt, type LullState } from './Lulls';
 import { Barricades, type BarricadeSlot } from './Barricades';
 import { BARRICADE } from '../config/barricades';
 import { clamp, dist2D, quatFromUp, rng, rotate, v3, type Quat, type Vec3 } from './math';
@@ -78,6 +79,8 @@ export class SimPlayer {
   throwAim: { origin: Vec3; dir: Vec3 } | null = null;
   footstepT = 0;
   diedAt = 0;
+  /** Seconds spent dead earlier this night, before a lull brought them back (not counted as survived). */
+  deadTime = 0;
   /** On the ground at zero health, bleeding out until a teammate gets them up (still `alive`). */
   downed = false;
   /** Seconds of bleeding left while downed. */
@@ -267,6 +270,13 @@ export class Simulation {
   private nextPickupAt = 0;
   /** Where the night is in the horde schedule (see Hordes.ts), as of the last survival step. */
   horde: HordeState = hordeAt(0);
+  /** The night's lulls so far (see Lulls.ts); online clients take it from each snapshot. */
+  lull: LullState = noLulls();
+  /** Threat second the next lull falls due (tests and debugging move it). */
+  lullDue: number = LULLS.every;
+  private lullOpen = false;
+  private lullWarned = false;
+  private lullClearAt = 0;
   /** Bloaters killed and waiting to burst (a blast can set off another: they go in turn). */
   private readonly bursts: { z: Zombie; by: SimPlayer }[] = [];
   private bursting = false;
@@ -962,7 +972,7 @@ export class Simulation {
       if (z.target === target.id && was !== target.id) called++;
     }
     let fresh = 0;
-    if (this.phase === 'survival') {
+    if (this.phase === 'survival' && !this.lulling) {
       let alive = 0, extra = 0;
       for (const z of this.zombies) {
         if (!z.alive) continue;
@@ -1646,6 +1656,19 @@ export class Simulation {
     return this.zombies.find((z) => z.id === id);
   }
 
+  /** Whether any of `alive` has a clear line to head height over `pos` (within 95 m). */
+  private inSight(pos: Vec3, alive: readonly SimPlayer[]): boolean {
+    for (const p of alive) {
+      const e = p.eye;
+      const dx = pos.x - e.x, dy = pos.y + 1.4 - e.y, dz = pos.z - e.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > 95) continue;
+      const hit = this.physics.raycast(e.x, e.y, e.z, dx / d, dy / d, dz / d, d);
+      if (hit === null || hit > d - 0.5) return true;
+    }
+    return false;
+  }
+
   /** Outdoor spot out of every survivor's sight, at a distance band from the nearest one. */
   findSpawnPoint(minD: number = SPAWNING.minDistance, maxD: number = SPAWNING.maxDistance): Vec3 | null {
     const alive = [...this.players.values()].filter((p) => p.alive);
@@ -1656,19 +1679,7 @@ export class Simulation {
       let nearest = Infinity;
       for (const p of alive) nearest = Math.min(nearest, dist2D(p.motion.pos, pos));
       if (nearest < minD || nearest > maxD) continue;
-      let seen = false;
-      for (const p of alive) {
-        const e = p.eye;
-        const dx = pos.x - e.x, dy = pos.y + 1.4 - e.y, dz = pos.z - e.z;
-        const d = Math.hypot(dx, dy, dz);
-        if (d > 95) continue;
-        const hit = this.physics.raycast(e.x, e.y, e.z, dx / d, dy / d, dz / d, d);
-        if (hit === null || hit > d - 0.5) {
-          seen = true;
-          break;
-        }
-      }
-      if (seen) continue;
+      if (this.inSight(pos, alive)) continue;
       // Not inside a crowd.
       if (this.zombies.some((z) => dist2D(z.pos, pos) < 2)) continue;
       return { x: pos.x, y: pos.y + 0.02, z: pos.z };
@@ -1693,15 +1704,36 @@ export class Simulation {
     const s = this.playerScale;
     if (s <= 1) return s;
     const r = SPAWNING.teamRamp;
-    const t = this.phase === 'survival' ? this.phaseTime : 0;
+    const t = this.phase === 'survival' ? this.threatTime : 0;
     return 1 + (s - 1) * (r.start + (1 - r.start) * clamp(t / r.full, 0, 1));
+  }
+
+  /**
+   * Seconds into the night as far as the dead are concerned: survival time with the lulls taken
+   * out (it stands still during one). Spawn growth, the zombie mix, the horde waves and the van
+   * raid run on it, so the fight picks up after a lull where it left off.
+   */
+  get threatTime(): number {
+    return this.phase === 'preparation' ? 0 : threatAt(this.lull, this.phaseTime);
+  }
+
+  /** True while a lull is on: no zombies come, and idle ones out of sight slip away. */
+  get lulling(): boolean {
+    return this.phase === 'survival' && inLull(this.lull, this.phaseTime);
   }
 
   /** Target population for the basic spawner (the Phase 5 director replaces this). */
   get populationTarget(): number {
     if (this.phase !== 'survival') return 0;
-    const solo = SPAWNING.basePopulation + (SPAWNING.growthPerMinute * this.phaseTime) / 60;
-    return Math.min(SPAWNING.maxPopulation, Math.floor(solo * this.teamScale));
+    const solo = SPAWNING.basePopulation + (SPAWNING.growthPerMinute * this.threatTime) / 60;
+    return Math.min(SPAWNING.maxPopulation, Math.floor(solo * this.teamScale * this.lullReturn));
+  }
+
+  /** Share of the target the spawner fills to just after a lull (climbs back to 1, see LULLS.returnTime). */
+  get lullReturn(): number {
+    const l = this.lull;
+    if (l.count === 0 || this.phaseTime < l.end) return 1;
+    return LULLS.returnStart + (1 - LULLS.returnStart) * clamp((this.phaseTime - l.end) / LULLS.returnTime, 0, 1);
   }
 
   /** True while a horde surge is under way. */
@@ -1792,6 +1824,7 @@ export class Simulation {
     } else if (this.phase === 'survival') {
       this.phaseTime += dt;
       this.runHordes();
+      this.runLulls();
       this.runSpawner();
       this.runDrops();
       this.raid.update(dt, zombies);
@@ -1863,6 +1896,10 @@ export class Simulation {
 
   private runSpawner(): void {
     if (this.time < this.spawnAt) return;
+    if (this.lulling) {
+      this.spawnAt = this.time + 1;
+      return;
+    }
     const alive = this.zombies.filter((z) => z.alive).length;
     const target = this.spawnTarget;
     if (alive >= target) {
@@ -1883,7 +1920,7 @@ export class Simulation {
 
   /** Kind of the next spawn: walkers, with runners, brutes, screamers and bloaters mixed in as the night goes on. */
   pickKind(): ZombieKind {
-    const t = this.phaseTime;
+    const t = this.threatTime;
     const share = (m: { from: number; full: number; start: number; end: number }) =>
       t < m.from ? 0 : m.start + (m.end - m.start) * clamp((t - m.from) / (m.full - m.from), 0, 1);
     const r = this.rand();
@@ -1913,9 +1950,13 @@ export class Simulation {
   /** Moves the night through the horde schedule and announces each change of stage. */
   private runHordes(): void {
     const was = this.horde;
-    const now = hordeAt(this.phaseTime);
+    const threat = this.threatTime;
+    const now = hordeAt(threat);
     this.horde = now;
     if (now.stage === was.stage && now.wave === was.wave) return;
+    // The schedule runs on the threat clock; events carry survival seconds (no lull starts while
+    // a siren or surge is on, so the two clocks run together until the time given).
+    const at = (threatSecond: number) => this.phaseTime + (threatSecond - threat);
     // A wave was outlasted (the schedule moved on to the next wave).
     if (now.survived > was.survived) {
       for (let w = was.survived + 1; w <= now.survived; w++) this.emit({ type: 'horde', wave: w, stage: 'over', at: this.phaseTime });
@@ -1923,9 +1964,9 @@ export class Simulation {
       this.spawnAt = Math.max(this.spawnAt, this.time + 1);
     }
     if (now.stage === 'warning') {
-      this.emit({ type: 'horde', wave: now.wave, stage: 'warning', at: now.start });
+      this.emit({ type: 'horde', wave: now.wave, stage: 'warning', at: at(now.start) });
     } else if (now.stage === 'surge') {
-      this.emit({ type: 'horde', wave: now.wave, stage: 'surge', at: now.end });
+      this.emit({ type: 'horde', wave: now.wave, stage: 'surge', at: at(now.end) });
       this.callHorde();
     }
   }
@@ -1948,6 +1989,152 @@ export class Simulation {
       if (best) z.investigate(best, 4);
     }
     this.spawnAt = Math.min(this.spawnAt, this.time);
+  }
+
+  // ---------------------------------------------------------------- lulls (Lulls.ts)
+
+  /**
+   * Downtime: when a lull falls due on the threat clock (and no horde siren or surge, nor the van
+   * raid, is on) the dead fall back for a minute or two; announces its start, the warning before
+   * it ends, and its end.
+   */
+  private runLulls(): void {
+    const l = this.lull;
+    const t = this.phaseTime;
+    if (this.lullOpen) {
+      if (t < l.end) {
+        if (!this.lullWarned && t >= l.end - LULLS.warning) {
+          this.lullWarned = true;
+          this.emit({ type: 'lull', n: l.count, stage: 'ending', at: l.end });
+        }
+        if (this.time >= this.lullClearAt) this.clearForLull();
+        return;
+      }
+      this.lullOpen = false;
+      this.emit({ type: 'lull', n: l.count, stage: 'over', at: l.end });
+      this.spawnAt = Math.max(this.spawnAt, this.time + 1);
+    }
+    const threat = this.threatTime;
+    if (threat < this.lullDue || this.horde.stage !== 'calm') return;
+    // The van raid goes first when it is due, and a lull never comes while raiders are about.
+    if (this.raid.active || (this.raid.stage === 'waiting' && threat >= this.raid.at)) return;
+    if (![...this.players.values()].some((p) => p.alive)) return;
+    this.startLull();
+  }
+
+  /** Starts a lull now (whatever the clock says, for debugging and tests). False if one is on or the night isn't. */
+  startLull(): boolean {
+    if (this.phase !== 'survival' || this.lullOpen) return false;
+    const l = this.lull;
+    const n = l.count + 1;
+    const paused = l.count > 0 ? l.paused + (l.end - l.start) : 0;
+    this.lullDue = this.threatTime + LULLS.every;
+    this.lull = { count: n, start: this.phaseTime, end: this.phaseTime + lullDuration(n), paused };
+    this.lullOpen = true;
+    this.lullWarned = false;
+    const back = this.respawnFallen();
+    this.emit({ type: 'lull', n, stage: 'start', at: this.lull.end, ...(back.length ? { back } : {}) });
+    // The ones on their way stop and mill about; the hunters keep coming.
+    for (const z of this.zombies) {
+      if (z.alive && !z.engaged && (z.state === 'approach' || z.state === 'investigate')) z.wander();
+    }
+    this.clearForLull();
+    // Supplies for the break, unless a drop is already on its way down.
+    if (!this.drops.some((d) => d.stage === 'inbound' || d.stage === 'falling')) {
+      this.nextDropAt = Math.min(this.nextDropAt, this.phaseTime + LULLS.dropAfter);
+    }
+    return true;
+  }
+
+  /**
+   * A lull brings the fallen back: each dead survivor gets up beside a teammate still on their
+   * feet (taking turns when there are several), with full health and a fresh supply of
+   * ammunition. Their stats carry on. Returns who came back.
+   */
+  private respawnFallen(): string[] {
+    const standing = [...this.players.values()].filter((p) => p.up);
+    if (!standing.length) return [];
+    const back: string[] = [];
+    for (const p of this.players.values()) {
+      if (p.alive) continue;
+      const mate = standing[back.length % standing.length];
+      const at = this.spotBeside(mate);
+      // Looking at the teammate they came back to (a camera yaw: forward is -sin, -cos).
+      const dx = mate.motion.pos.x - at.x, dz = mate.motion.pos.z - at.z;
+      this.respawnPlayer(p, at, Math.hypot(dx, dz) > 0.2 ? Math.atan2(-dx, -dz) : mate.motion.yaw);
+      back.push(p.id);
+    }
+    return back;
+  }
+
+  /** Brings a dead survivor back at `at`, facing `yaw` (on their feet, full health, rearmed). */
+  respawnPlayer(p: SimPlayer, at: Vec3, yaw: number): boolean {
+    if (p.alive || this.phase !== 'survival') return false;
+    p.deadTime += Math.max(0, this.time - p.diedAt);
+    p.alive = true;
+    p.downed = false;
+    p.downs = 0;
+    p.bleed = 0;
+    p.health = PLAYER.maxHealth;
+    p.armor = 0;
+    p.reviver = null;
+    p.revive = 0;
+    p.work = null;
+    p.bandages = Math.max(p.bandages, COMBAT.startBandages);
+    p.arsenal.rearm();
+    const m = p.motion;
+    Object.assign(m.pos, at);
+    m.vel.x = m.vel.y = m.vel.z = 0;
+    m.yaw = yaw;
+    m.pitch = 0;
+    m.eyeHeight = PLAYER.eyeHeight;
+    m.crouching = m.sprinting = m.aiming = false;
+    m.grounded = true;
+    this.emit({ type: 'playerRespawned', player: p.id, pos: { ...at }, yaw });
+    return true;
+  }
+
+  /**
+   * A free spot a couple of metres from survivor `p`, on their floor, in plain view of them and
+   * clear of zombies and other survivors (their own spot if there is none).
+   */
+  private spotBeside(p: SimPlayer): Vec3 {
+    const o = p.motion.pos;
+    const eyeY = o.y + 0.9;
+    for (let tries = 0; tries < 30; tries++) {
+      const n = this.nav.randomNear(o.x, o.y + 0.3, o.z, 1.8 + tries * 0.12, this.rand);
+      if (n < 0 || !this.nav.reachable(n)) continue;
+      const q = this.nav.nodePos(n);
+      const d = dist2D(q, o);
+      if (d < 1 || Math.abs(q.y - o.y) > 0.6) continue;
+      if (this.zombies.some((z) => z.alive && dist2D(z.pos, q) < 2.5)) continue;
+      let crowded = false;
+      for (const s of this.players.values()) if (s !== p && s.alive && dist2D(s.motion.pos, q) < 0.9) crowded = true;
+      if (crowded) continue;
+      const dx = q.x - o.x, dy = q.y + 0.9 - eyeY, dz = q.z - o.z;
+      const len = Math.hypot(dx, dy, dz);
+      const hit = this.physics.raycast(o.x, eyeY, o.z, dx / len, dy / len, dz / len, len + 0.4);
+      if (hit !== null && hit < len + 0.35) continue;
+      return { x: q.x, y: q.y + 0.02, z: q.z };
+    }
+    return { ...o };
+  }
+
+  /** During a lull: idle zombies far from every survivor and out of everyone's sight slip away. */
+  private clearForLull(): void {
+    this.lullClearAt = this.time + LULLS.clearEvery;
+    const alive = [...this.players.values()].filter((p) => p.alive);
+    if (!alive.length) return;
+    for (let i = this.zombies.length - 1; i >= 0; i--) {
+      const z = this.zombies[i];
+      if (!z.alive || z.engaged) continue;
+      let nearest = Infinity;
+      for (const p of alive) nearest = Math.min(nearest, dist2D(p.motion.pos, z.pos));
+      if (nearest < LULLS.clearDistance || this.inSight(z.pos, alive)) continue;
+      z.removeBody();
+      this.zombies.splice(i, 1);
+      this.emit({ type: 'zombieRemoved', zombie: z.id });
+    }
   }
 
   // ---------------------------------------------------------------- supply drops

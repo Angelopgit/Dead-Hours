@@ -91,6 +91,7 @@ export type DebugMsg =
   | { cmd: 'supplyDrop'; weapon?: WeaponId; serum?: boolean }
   | { cmd: 'hurt'; amount: number }
   | { cmd: 'raid' }
+  | { cmd: 'lull' }
   /** Health stays full (for slow test clients); 'hurt' still kills. */
   | { cmd: 'god'; on: boolean };
 
@@ -174,6 +175,8 @@ export interface RunResult {
 
 export interface OverMsg {
   results: RunResult[];
+  /** Horde waves the night outlasted (absent from older servers). */
+  hordes?: number;
 }
 
 /** Where a voice goes: to whoever is near (from where the speaker stands) or over the team radio. */

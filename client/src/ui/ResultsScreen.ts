@@ -12,6 +12,8 @@ export interface RunSummary {
   total: number;
   stats: PlayerStats;
   outbreak: boolean;
+  /** Horde waves outlasted while they were in it (worked out from `survived` when absent). */
+  hordes?: number;
 }
 
 /** Places on the boards a run reached. */
@@ -77,9 +79,11 @@ const placeText = (r: RunRanks): string => [
   r.rankKills ? `#${r.rankKills} MOST KILLS` : '',
 ].filter(Boolean).join(' · ');
 
-/** How many horde waves a survival time outlasted, as a line. */
-function hordeLine(survived: number): string {
-  const n = hordeAt(survived).survived;
+/**
+ * How many horde waves were outlasted, as a line: `n` when known, else what a survival time with no
+ * lulls in it would have outlasted.
+ */
+function hordeLine(survived: number, n = hordeAt(survived).survived): string {
   return n === 0 ? 'No horde held off' : n === 1 ? '1 horde held off' : `${n} hordes held off`;
 }
 
@@ -97,7 +101,7 @@ export class ResultsScreen {
       h('div', { class: 'results-main' },
         h('h1', { class: 'title' }, 'YOU DIED'),
         h('div', { class: 'subtitle' }, subtitle ?? (r.outbreak ? 'Maple Hollow belongs to them now.' : 'The outbreak had not even begun.')),
-        h('div', { class: 'results-time' }, 'SURVIVED', h('b', {}, clock(r.survived)), h('div', { class: 'results-hordes' }, hordeLine(r.outbreak ? r.survived : 0)), this.ranks),
+        h('div', { class: 'results-time' }, 'SURVIVED', h('b', {}, clock(r.survived)), h('div', { class: 'results-hordes' }, hordeLine(r.outbreak ? r.survived : 0, r.outbreak ? r.hordes : 0)), this.ranks),
         h('div', { class: 'results-stats' },
           cell('KILLS', String(s.kills)),
           cell('HEADSHOTS', String(s.headshots)),
@@ -161,7 +165,7 @@ export class TeamResults {
     this.el = h('div', { class: 'results', role: 'dialog', 'aria-label': 'Results' },
       h('div', { class: 'results-main team' },
         h('h1', { class: 'title' }, 'NIGHT OVER'),
-        h('div', { class: 'subtitle' }, best > 0 ? `The last of you fell after ${clock(best)}. ${hordeLine(best)}.` : 'None of you saw the outbreak through.'),
+        h('div', { class: 'subtitle' }, best > 0 ? `The last of you fell after ${clock(best)}. ${hordeLine(best, over.hordes)}.` : 'None of you saw the outbreak through.'),
         h('div', { class: 'team-table' }, ...rows),
         this.xp,
         actionList(actions),

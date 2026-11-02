@@ -219,6 +219,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   color: #ece6dc; text-shadow: 0 1px 10px rgba(0,0,0,0.9); white-space: nowrap; }
 .notice.danger { color: #e2725f; }
 .notice.rare { color: #e6c35a; }
+.notice.calm { color: #8fcfc0; }
 .notice small { display: block; font-family: var(--font-body); letter-spacing: 0.25em; font-size: 0.55em; color: var(--fg-dim); margin-top: 0.7em; }
 .vitals { position: absolute; left: 3vw; bottom: 4vh; width: 260px; }
 .vitals .name { font-size: 0.85em; letter-spacing: 0.22em; color: var(--fg-dim); margin-bottom: 0.5em; display: flex; justify-content: space-between; }
@@ -254,6 +255,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .phase-timer { position: absolute; left: 50%; top: 3.2vh; transform: translateX(-50%); font-size: 0.9em; letter-spacing: 0.38em; color: var(--fg-dim);
   text-shadow: 0 1px 8px rgba(0,0,0,0.9); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .phase-timer.urgent { color: #e2725f; animation: pulse 1s ease-in-out infinite; }
+.phase-timer.calm { color: #8fcfc0; }
 .warning { position: absolute; left: 50%; top: 7vh; transform: translateX(-50%); font-size: 0.8em; letter-spacing: 0.5em; color: #e2725f; opacity: 0;
   text-shadow: 0 0 12px rgba(181, 66, 58, 0.6), 0 1px 6px rgba(0,0,0,0.9); white-space: nowrap; transition: opacity 0.3s; }
 .warning.show { opacity: 1; animation: blink 1.4s steps(1) infinite; }

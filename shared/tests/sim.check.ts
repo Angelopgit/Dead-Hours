@@ -7,7 +7,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
-  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, hordeAt, hordeStart, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
+  WEAPONS, NAV_REACHABLE, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, LULLS, hordeAt, hordeStart, lullDuration, lullOpening, threatAt, inLull, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid, type DoorBody,
   type Zombie, type SimLimb, type ZoneShape,
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
@@ -516,6 +516,145 @@ section('Horde waves');
   check(seen.filter((s) => s.startsWith('over')).length === 2 && seen.indexOf('over2') < seen.indexOf('surge3'), `a skipped wave still counts once (${seen.join(' ')})`);
   check(sim.horde.wave === 3 && sim.surging, 'wave 3 surges');
   cleanup(sim, body);
+}
+section('Downtime lulls');
+{
+  // The schedule on its own (no raid): lulls every few minutes of fighting, a minute or two long, never in a wave.
+  check(lullDuration(1) >= 60 && lullDuration(1) <= 120 && lullDuration(20) <= 120 && lullDuration(5) >= lullDuration(2), `each lull lasts 1 to 2 minutes, growing (${[1, 2, 3, 4, 5, 6].map(lullDuration).join(', ')} s)`);
+  let due: number = LULLS.every, paused = 0;
+  const plan: { at: number; threat: number; len: number }[] = [];
+  for (let n = 1; n <= 8; n++) {
+    const threat = lullOpening(due);
+    plan.push({ at: threat + paused, threat, len: lullDuration(n) });
+    paused += lullDuration(n);
+    due = threat + LULLS.every;
+  }
+  const fmt = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`;
+  console.log(`     lulls (survival time, length): ${plan.map((p) => `${fmt(p.at)} ${p.len}s`).join(' · ')}`);
+  check(Math.abs(plan[0].at - LULLS.every) < 1e-9, `the first comes after ${LULLS.every / 60} minutes of fighting`);
+  const fights = plan.slice(1).map((p, i) => p.threat - plan[i].threat);
+  check(fights.every((g) => g >= LULLS.every && g <= LULLS.every + 140), `fighting between lulls: ${fights.map((g) => fmt(g)).join(', ')}`);
+  check(plan.every((p) => hordeAt(p.threat).stage === 'calm'), 'none starts during a horde siren or surge');
+  const l = { count: 1, start: 300, end: 360, paused: 0 };
+  check(threatAt(l, 299) === 299 && threatAt(l, 330) === 300 && threatAt(l, 400) === 340 && inLull(l, 330) && !inLull(l, 360), 'the threat clock stands still through a lull and resumes after');
+
+  // In the simulation.
+  const { sim, sp, body } = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
+  sim.phase = 'survival';
+  sim.phaseTime = 0;
+  run(sim, 0.2);
+  const lulls: string[] = [];
+  const spawned: number[] = [];
+  const removed: number[] = [];
+  let heli = false;
+  let hordeAtSurvival = NaN;
+  const go = (seconds: number) => {
+    for (const e of run(sim, seconds).events) {
+      if (e.type === 'lull') lulls.push(`${e.stage}${e.n}`);
+      if (e.type === 'zombieSpawned') spawned.push(e.zombie);
+      if (e.type === 'zombieRemoved') removed.push(e.zombie);
+      if (e.type === 'heli') heli = true;
+      if (e.type === 'horde' && e.stage === 'warning') hordeAtSurvival = e.at;
+    }
+  };
+  const far = sim.spawnZombie('walker', { x: 60, y: 0.02, z: 8 }, 'approach');
+  const near = sim.spawnZombie('walker', { x: 4.8, y: 0.02, z: -8 }, 'approach');
+  const hunter = sim.spawnZombie('runner', { x: 70, y: 0.02, z: 8 }, 'idle');
+  hunter.summon(sp);
+  sim.phaseTime = LULLS.every - 0.1;
+  go(0.3);
+  check(lulls[0] === 'start1' && sim.lulling, `a lull starts when one is due in a calm (${lulls.join(' ')})`);
+  check(Math.abs(sim.lull.end - sim.lull.start - lullDuration(1)) < 1e-9, `it lasts ${lullDuration(1)} s`);
+  check(!sim.zombies.includes(far) && removed.includes(far.id), 'idle zombies far off and out of sight slip away');
+  check(sim.zombies.includes(near) && near.state !== 'approach', `one close by stays, but stops coming (${near.state})`);
+  check(sim.zombies.includes(hunter) && hunter.engaged, 'one already hunting a survivor keeps coming');
+  const threat = sim.threatTime;
+  spawned.length = 0;
+  go(12);
+  check(spawned.length === 0, `no zombies come during the lull (${spawned.length} in 12 s)`);
+  check(Math.abs(sim.threatTime - threat) < 1e-9 && sim.horde.stage === 'calm', `the threat clock stands still (${threat.toFixed(1)} → ${sim.threatTime.toFixed(1)})`);
+  check(heli, `a supply drop comes ${LULLS.dropAfter} s in`);
+  sim.phaseTime = sim.lull.end - LULLS.warning - 0.05;
+  go(0.2);
+  check(lulls.includes('ending1'), `the end is called ${LULLS.warning} s ahead (${lulls.join(' ')})`);
+  sim.phaseTime = sim.lull.end - 0.05;
+  go(0.2);
+  check(lulls.includes('over1') && !sim.lulling, 'the lull ends');
+  check(Math.abs(sim.threatTime - threat - (sim.phaseTime - sim.lull.end)) < 1e-6, 'and the threat clock runs on from where it stopped');
+  const target = sim.populationTarget;
+  const lean = sim.lullReturn;
+  check(lean < 0.5 && target < Math.floor(SPAWNING.basePopulation + (SPAWNING.growthPerMinute * sim.threatTime) / 60), `the dead come back gradually (${(lean * 100).toFixed(0)}% of the target at first)`);
+  go(2);
+  check(spawned.length > 0, `zombies come again after it (${spawned.length} in 2 s)`);
+  // The horde schedule runs on the threat clock: the next siren comes the lull's length later, and its event says when in survival time.
+  const warnThreat = hordeStart(2) - HORDES.warning;
+  sim.phaseTime = sim.lull.end + (warnThreat - threat) - 0.05;
+  go(0.2);
+  check(Math.abs(hordeAtSurvival - (sim.lull.end + (hordeStart(2) - threat))) < 0.05, `the next siren comes on the threat clock, its event in survival time (${hordeAtSurvival.toFixed(1)} s)`);
+  check(!sim.lulling && sim.lull.count === 1, 'no second lull straight away');
+  // Online: the lull reaches every client in the snapshot, and their threat clock matches.
+  sim.startLull();
+  run(sim, 0.5);
+  const snap = JSON.parse(JSON.stringify(captureSnapshot(sim, new Map())));
+  const copy = new Simulation({ physics, map, nav, doors, seed: 4 });
+  const mirror = new Mirror(copy, 'p2');
+  mirror.apply(snap, 10);
+  check(copy.lull.count === 2 && copy.lulling && Math.abs(copy.threatTime - sim.threatTime) < 0.01, `clients know a lull is on and share the threat clock (${copy.threatTime.toFixed(2)} vs ${sim.threatTime.toFixed(2)})`);
+  copy.dispose();
+  // The van never comes during one: it waits on the threat clock, which stands still.
+  sim.raid.at = sim.threatTime;
+  go(1);
+  check(sim.raid.stage === 'waiting', 'the van waits for the lull to end');
+  sim.phaseTime = sim.lull.end + 0.01;
+  go(0.2);
+  check(sim.raid.active, 'and comes after it');
+  // And none starts while the raid is on.
+  sim.lullDue = sim.threatTime;
+  go(0.5);
+  check(!sim.lulling && sim.lull.count === 2, 'no lull while the van raid is on');
+  sim.raid.dispose();
+  cleanup(sim, body);
+
+  // The fallen come back at the start of a lull, beside a teammate on their feet.
+  const t = makeSim({ x: 4.8, y: 0.32, z: -22.3 });
+  const mate = t.sim.addPlayer('p2', 'P2', 'shotgun', 'pistol', { x: 6.5, y: 0.32, z: -22.3 }, 0);
+  t.sim.phase = 'survival';
+  t.sim.phaseTime = 100;
+  run(t.sim, 0.2);
+  mate.downs = DOWNED.maxDowns;
+  mate.arsenal.primary.reserve = 0;
+  mate.arsenal.primary.mag = 0;
+  const killsBefore = (mate.stats.kills = 7);
+  t.sim.damagePlayer(mate, 500, { x: 0, y: 0, z: 0 });
+  check(!mate.alive, 'a survivor falls for good');
+  run(t.sim, 2);
+  check(t.sim.startLull(), 'a lull starts');
+  const ev = t.sim.drain();
+  const back = ev.find((e) => e.type === 'lull' && e.stage === 'start');
+  const rose = ev.find((e) => e.type === 'playerRespawned');
+  check(mate.alive && mate.up && mate.health === PLAYER.maxHealth, `the fallen survivor is back on their feet with full health (${mate.health})`);
+  check(!!back && back.type === 'lull' && (back.back ?? []).includes('p2') && !!rose && rose.type === 'playerRespawned' && rose.player === 'p2', 'the lull says who came back, and every client hears of it');
+  const d = Math.hypot(mate.motion.pos.x - t.sp.motion.pos.x, mate.motion.pos.z - t.sp.motion.pos.z);
+  check(d >= 1 && d < 6 && Math.abs(mate.motion.pos.y - t.sp.motion.pos.y) < 0.7, `they come back beside their teammate (${d.toFixed(1)} m away, same floor)`);
+  const look = { x: -Math.sin(mate.motion.yaw), z: -Math.cos(mate.motion.yaw) };
+  check(((t.sp.motion.pos.x - mate.motion.pos.x) * look.x + (t.sp.motion.pos.z - mate.motion.pos.z) * look.z) / d > 0.95, 'looking at them');
+  check(mate.arsenal.primary.id === 'shotgun' && mate.arsenal.primary.mag > 0 && mate.arsenal.primary.reserve > 0, 'with the same guns, loaded again');
+  check(mate.downs === 0 && mate.stats.kills === killsBefore && mate.deadTime > 1.9, `downs reset, stats carried on, time dead noted (${mate.deadTime.toFixed(1)} s)`);
+  check(t.sim.players.get('p1')!.alive && t.sim.lull.count === 1, 'nobody else is touched');
+  const snap2 = JSON.parse(JSON.stringify(captureSnapshot(t.sim, new Map())));
+  const copy2 = new Simulation({ physics, map, nav, doors, seed: 4 });
+  copy2.addPlayer('p2', 'P2', 'shotgun', 'pistol', { x: 0, y: 0, z: 0 }, 0).alive = false;
+  new Mirror(copy2, 'p1').apply(snap2, 10);
+  check(copy2.players.get('p2')?.alive === true, 'clients see them alive again');
+  copy2.dispose();
+  // Nobody on their feet to come back to: nobody comes back (the night is over anyway).
+  t.sp.alive = false;
+  mate.alive = false;
+  t.sim.phaseTime = t.sim.lull.end + 1;
+  run(t.sim, 0.1);
+  t.sim.lullDue = 0;
+  check(!t.sim.startLull() || ![...t.sim.players.values()].some((p) => p.alive), 'no one is brought back with nobody standing');
+  cleanup(t.sim, t.body);
 }
 section('Spawns come spread out');
 {

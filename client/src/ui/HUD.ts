@@ -256,12 +256,13 @@ export class HUD {
     this.lightLine.classList.toggle('none', !r.light);
   }
 
-  /** "SURVIVED 18:42" or "OUTBREAK IMMINENT — 00:45". */
-  setTimer(text: string, urgent = false): void {
+  /** "SURVIVED 18:42" or "OUTBREAK IMMINENT — 00:45"; `calm` for downtime. */
+  setTimer(text: string, urgent = false, calm = false): void {
     if (text === this.timerText) return;
     this.timerText = text;
     this.timer.textContent = text;
     this.timer.classList.toggle('urgent', urgent);
+    this.timer.classList.toggle('calm', calm && !urgent);
   }
 
   /** Persistent top-center warning (AMMUNITION CRITICAL), empty to clear. */
@@ -303,10 +304,11 @@ export class HUD {
   }
 
   /** Top-center contextual message, e.g. location titles or SUPPLY HELICOPTER INBOUND. */
-  notify(title: string, sub = '', hold = 2.6, tone: '' | 'danger' | 'rare' = ''): void {
+  notify(title: string, sub = '', hold = 2.6, tone: '' | 'danger' | 'rare' | 'calm' = ''): void {
     this.notice.replaceChildren(title, sub ? h('small', {}, sub) : '');
     this.notice.classList.toggle('danger', tone === 'danger');
     this.notice.classList.toggle('rare', tone === 'rare');
+    this.notice.classList.toggle('calm', tone === 'calm');
     gsap.killTweensOf(this.notice);
     gsap.timeline()
       .fromTo(this.notice, { opacity: 0, letterSpacing: '0.6em' }, { opacity: 1, letterSpacing: '0.4em', duration: 0.9, ease: 'power2.out' })

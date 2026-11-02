@@ -331,7 +331,8 @@ export class SurvivalRoom extends Room {
     const to = building.length ? { except: building } : undefined;
     if (events.length) {
       this.broadcast(S2C.ev, events, to);
-      for (const e of events) if (e.type === 'playerDied') this.record(e.player);
+      // (A death is not written to the boards here: the next lull can bring them back. The run is
+      // recorded when they leave or the night ends.)
     }
     if (snapshot) this.broadcast(S2C.snap, snapshot, to);
     if (night.sim.phase === 'over' || night.allDead) {
@@ -348,9 +349,10 @@ export class SurvivalRoom extends Room {
     const p = night?.sim.players.get(id);
     if (!m || !night || !p || m.run) return;
     const sim = night.sim;
-    // Seconds since the outbreak (or since they dropped in), at the moment they fell (or now, leaving alive).
+    // Seconds since the outbreak (or since they dropped in), at the moment they fell (or now, leaving
+    // alive), less any time spent dead before a lull brought them back.
     const since = p.alive ? 0 : Math.max(0, sim.time - p.diedAt);
-    const survived = sim.phase === 'preparation' ? 0 : Math.max(0, sim.phaseTime - since - m.joinedAt);
+    const survived = sim.phase === 'preparation' ? 0 : Math.max(0, sim.phaseTime - since - m.joinedAt - p.deadTime);
     const stats = { ...p.stats };
     const store = services.store;
     // Gone before the outbreak with nothing done: not a run worth a place on the boards.
@@ -387,7 +389,8 @@ export class SurvivalRoom extends Room {
     }
     results.sort((a, b) => b.survived - a.survived || b.stats.kills - a.stats.kills);
     this.log(`night over: ${results.map((r) => `${r.name} ${Math.round(r.survived)} s ${r.stats.kills} kills`).join(', ') || 'nobody'}`);
-    this.broadcast(S2C.over, { results } satisfies OverMsg);
+    const hordes = this.night?.sim.horde.survived ?? 0;
+    this.broadcast(S2C.over, { results, hordes } satisfies OverMsg);
     this.status = 'lobby';
     for (const m of this.members.values()) m.ready = false;
     this.sendLobby();

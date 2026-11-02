@@ -69,6 +69,8 @@ interface World { sim: Simulation; events: SimEvent[]; run: (s: number, each?: (
 function world(seed: number): World {
   for (const d of doors) d?.reset();
   const sim = new Simulation({ physics, map, nav, doors, seed, preparation: 0.05 });
+  // The clock jumps about here: no downtime lull in the way (lulls are checked in sim.check).
+  sim.lullDue = Infinity;
   const events: SimEvent[] = [];
   const run = (secs: number, each?: () => void) => {
     for (let i = 0; i < Math.round(secs / DT); i++) {

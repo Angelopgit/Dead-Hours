@@ -482,6 +482,17 @@ export class PlayerController {
     if (this.ride) this.ride.speed = 0;
   }
 
+  /** Back on their feet at `pos` (a lull brought them back), the body facing camera yaw `yaw`. */
+  respawn(pos: { x: number; y: number; z: number }, yaw: number): void {
+    this.dead = false;
+    this.setDowned(false);
+    this.ride = null;
+    this.collider.setEnabled(true);
+    this.teleport(pos);
+    this.facing = yaw + Math.PI;
+    this.character.resetPose();
+  }
+
   /** Stops movement and removes the capsule so nothing collides with the fallen survivor. */
   kill(): void {
     if (this.dead) return;

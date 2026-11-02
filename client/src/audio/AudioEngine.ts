@@ -2134,6 +2134,85 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Downtime begins: a low, open chord that swells slowly and settles, the night letting its
+   * breath out. Straight after a wave it comes in under the wave's chord, a moment later.
+   */
+  lullStart(afterWave = false): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime + (afterWave ? 0.9 : 0);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.055, t + 1.4);
+    g.gain.setTargetAtTime(0, t + 2.6, 1.3);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(500, t);
+    lp.frequency.linearRampToValueAtTime(1400, t + 1.6);
+    lp.frequency.linearRampToValueAtTime(600, t + 6);
+    lp.connect(g);
+    g.connect(this.music);
+    g.connect(this.sends.music);
+    // D, A, D, F#: open and major, a little detuned so it breathes.
+    for (const [f, type] of [[146.8, 'sine'], [220.4, 'triangle'], [293.2, 'sine'], [370.4, 'sine']] as [number, OscillatorType][]) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      o.detune.setValueAtTime(-6, t);
+      o.detune.linearRampToValueAtTime(5, t + 7);
+      o.connect(lp);
+      this.free(o);
+      o.start(t);
+      o.stop(t + 8.5);
+    }
+  }
+
+  /** Downtime is ending: three slow low thuds under a dark swell, a warning, not a siren. */
+  lullEnding(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const g = ctx.createGain();
+    g.gain.value = 0.16;
+    g.connect(this.music);
+    g.connect(this.sends.music);
+    for (let i = 0; i < 3; i++) {
+      const at = t + i * 0.85;
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(78, at);
+      o.frequency.exponentialRampToValueAtTime(42, at + 0.35);
+      const e = ctx.createGain();
+      e.gain.setValueAtTime(0, at);
+      e.gain.linearRampToValueAtTime(1 - i * 0.12, at + 0.02);
+      e.gain.exponentialRampToValueAtTime(0.001, at + 0.6);
+      o.connect(e).connect(g);
+      this.free(o, e);
+      o.start(at);
+      o.stop(at + 0.65);
+    }
+    // A minor second, low, rising out of the thuds.
+    const s = ctx.createGain();
+    s.gain.setValueAtTime(0, t);
+    s.gain.linearRampToValueAtTime(0.045, t + 1.8);
+    s.gain.setTargetAtTime(0, t + 2.8, 0.6);
+    s.connect(this.music);
+    s.connect(this.sends.music);
+    for (const f of [98, 103.8]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 380;
+      o.connect(lp).connect(s);
+      this.free(o, lp);
+      o.start(t);
+      o.stop(t + 5.5);
+    }
+  }
+
   /** Death sting. */
   death(): void {
     if (!this.ctx) return;

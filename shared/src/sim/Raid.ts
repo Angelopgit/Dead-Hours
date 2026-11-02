@@ -504,7 +504,7 @@ export class Raid {
   arrivedAt = 0;
   killed = 0;
   private doorCloseAt = 0;
-  /** Survival time it comes at (tests and debugging move it). */
+  /** Threat-clock second it comes at (Simulation.threatTime; tests and debugging move it). */
   at: number = RAID.at;
 
   constructor(private readonly sim: Simulation, seed: number) {
@@ -528,7 +528,8 @@ export class Raid {
   update(dt: number, world: boolean): void {
     const sim = this.sim;
     if (this.stage === 'waiting') {
-      if (sim.phase === 'survival' && sim.phaseTime >= this.at) this.start();
+      // On the threat clock (it stands still during a lull), and never while one is on.
+      if (sim.phase === 'survival' && sim.threatTime >= this.at && !sim.lulling) this.start();
       return;
     }
     if (this.stage === 'inbound') this.drive(dt);

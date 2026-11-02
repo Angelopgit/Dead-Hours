@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, MELEE, Mirror, NEIGHBORHOOD, hordeAt, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
   type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
@@ -216,6 +216,11 @@ export class GameSession {
   private outbreakAnnounced = false;
   /** Online, dropped into a night under way: survival seconds already gone when the first snapshot came (NaN until then). */
   private joinedAt = 0;
+  /** Horde waves already outlasted when this survivor joined (dropped in late). */
+  private joinedHordes = 0;
+  /** Session time the last horde was outlasted (a lull starting with it says so). */
+  private hordeOverAt = -Infinity;
+  private hordeOverWave = 0;
   /** First arm torn off / first picked up: say once what can be done with it. */
   private limbHinted = false;
   private crawlHinted = false;
@@ -1284,6 +1289,7 @@ export class GameSession {
         // Dropped in after the outbreak: it began without us (no siren), and our run counts from now.
         if (Number.isNaN(this.joinedAt)) {
           this.joinedAt = this.sim.phase === 'survival' ? this.sim.phaseTime : 0;
+          this.joinedHordes = this.sim.phase === 'survival' ? hordeAt(this.sim.threatTime).survived : 0;
           if (this.sim.phase === 'survival') this.outbreakAnnounced = true;
         }
       }
@@ -2154,6 +2160,12 @@ export class GameSession {
       case 'horde':
         this.onHorde(e.wave, e.stage, e.at);
         break;
+      case 'lull':
+        this.onLull(e.n, e.stage, e.at, e.back ?? []);
+        break;
+      case 'playerRespawned':
+        if (e.player === this.myId) this.onRespawn(e.pos, e.yaw);
+        break;
       case 'heli':
         this.drops.flight(e.drop, e.flight, e.weapon ?? null, !!e.serum);
         break;
@@ -2270,7 +2282,9 @@ export class GameSession {
     this.phase = 'dead';
     this.shownDown = false;
     this.downPanel.remove();
-    this.survivedAtDeath = this.outbreakAnnounced ? Math.max(0, this.sim.phaseTime - (this.joinedAt || 0)) : 0;
+    this.diedPhaseTime = this.sim.phaseTime;
+    this.survivedAtDeath = this.outbreakAnnounced ? Math.max(0, this.sim.phaseTime - (this.joinedAt || 0) - this.deadFor) : 0;
+    this.hordesAtDeath = this.outbreakAnnounced ? Math.max(0, hordeAt(this.sim.threatTime).survived - this.joinedHordes) : 0;
     this.deathT = 0;
     this.deathYaw = this.cam.yaw;
     this.inventory.hide();
@@ -2368,10 +2382,11 @@ export class GameSession {
   }
 
   private showResults(): void {
-    if (this.results || this.teamResults) return;
+    // (Not if a lull brought them back before the screen was due.)
+    if (this.results || this.teamResults || this.phase !== 'dead') return;
     this.input.releaseLock();
     this.spectateLine.remove();
-    const run = { survived: this.survivedAtDeath, total: this.me.diedAt, stats: { ...this.me.stats }, outbreak: this.outbreakAnnounced };
+    const run = { survived: this.survivedAtDeath, total: this.me.diedAt, stats: { ...this.me.stats }, outbreak: this.outbreakAnnounced, hordes: this.hordesAtDeath };
     if (!this.link) {
       this.results = new ResultsScreen(run, [['RETRY', () => this.onRetry()], ['MAIN MENU', () => this.onQuit()]]);
       this.results.show(this.ui);
@@ -2387,7 +2402,8 @@ export class GameSession {
     const actions: [string, () => void][] = [];
     if (alive.length) actions.push(['WATCH THE OTHERS', () => this.watch()]);
     actions.push(['LEAVE GAME', () => this.onQuit()]);
-    const sub = alive.length === 1 ? `${alive[0].name.toUpperCase()} IS STILL FIGHTING.` : alive.length ? `${alive.length} SURVIVORS ARE STILL FIGHTING.` : 'THE NIGHT IS ENDING.';
+    const back = alive.length ? ' THE NEXT DOWNTIME BRINGS YOU BACK.' : '';
+    const sub = (alive.length === 1 ? `${alive[0].name.toUpperCase()} IS STILL FIGHTING.` : alive.length ? `${alive.length} SURVIVORS ARE STILL FIGHTING.` : 'THE NIGHT IS ENDING.') + back;
     this.results = new ResultsScreen(run, actions, sub);
     this.results.show(this.ui);
   }
@@ -2436,6 +2452,11 @@ export class GameSession {
 
   /** Seconds survived since the outbreak, frozen at death. */
   private survivedAtDeath = 0;
+  /** Seconds spent dead before a lull brought this survivor back (not survived), and when they last fell. */
+  private deadFor = 0;
+  private diedPhaseTime = 0;
+  /** Horde waves outlasted by then. */
+  private hordesAtDeath = 0;
 
   /** Horde waves: the siren ahead of one, the roar when it hits, a breather when it is outlasted. */
   private onHorde(wave: number, stage: 'warning' | 'surge' | 'over', at: number): void {
@@ -2450,7 +2471,73 @@ export class GameSession {
     } else {
       this.hud.notify(`HORDE ${wave} SURVIVED`, `SUPPLY DROP IN ${HORDES.dropAfter} SECONDS`, 3.2);
       audio.hordeOver();
+      this.hordeOverAt = this.sim.time;
+      this.hordeOverWave = wave;
     }
+  }
+
+  /**
+   * Downtime: the dead fall back for a minute or two. Announced when it starts (how long, and what
+   * it is for), warned before it ends, and called when they are coming again.
+   */
+  private onLull(n: number, stage: 'start' | 'ending' | 'over', at: number, back: readonly string[]): void {
+    const mine = back.includes(this.myId);
+    if (!this.me.alive && !mine) return;
+    const left = Math.max(0, at - this.sim.phaseTime);
+    if (stage === 'start') {
+      // Straight after a wave the two go together (the wave's chord has just played).
+      const afterWave = this.sim.time - this.hordeOverAt < 1.5;
+      const why = mine ? 'YOU ARE BACK · ' : afterWave ? `HORDE ${this.hordeOverWave} HELD OFF · ` : 'THE DEAD FALL BACK · ';
+      const fallen = back.filter((id) => id !== this.myId).map((id) => this.sim.players.get(id)?.name.toUpperCase()).filter(Boolean);
+      const rise = fallen.length === 1 ? ` · ${fallen[0]} IS BACK` : fallen.length ? ` · THE FALLEN ARE BACK` : '';
+      this.hud.notify(`DOWNTIME · ${clock(Math.round(left))}`, `${why}REGROUP, GATHER AMMO, HEAL UP${rise}`, 5.5, 'calm');
+      this.hud.feedLine(`Downtime: no zombies coming for ${clock(Math.round(left))}`);
+      for (const name of fallen) this.hud.feedLine(`${name} IS BACK IN THE FIGHT`);
+      if (!back.length && n === 1 && this.sim.players.size > 1) this.hud.feedLine('Every downtime brings back the fallen');
+      audio.lullStart(afterWave);
+    } else if (stage === 'ending') {
+      this.hud.notify('DOWNTIME ENDING', `THE DEAD RETURN IN ${Math.round(left)} SECONDS · GET READY`, 3.4, 'danger');
+      audio.lullEnding();
+    } else {
+      this.hud.notify('THEY ARE COMING BACK', 'DOWNTIME OVER', 2.2, 'danger');
+    }
+  }
+
+  /**
+   * A lull brought this survivor back: off the ground beside a teammate, full health and rearmed
+   * (the server's numbers follow in the next snapshot), the results and spectating put away.
+   */
+  private onRespawn(pos: Vec3, yaw: number): void {
+    if (this.phase !== 'dead') return;
+    this.deadFor += Math.max(0, this.sim.phaseTime - this.diedPhaseTime);
+    this.results?.dispose();
+    this.results = null;
+    this.spectateLine.remove();
+    this.watching = null;
+    this.ragdoll = null;
+    if (this.dropped) {
+      this.dropped.model.dispose();
+      this.dropped.model.root.removeFromParent();
+      this.dropped = null;
+    }
+    // Online the snapshot says so too; until it comes, take the event's word for it.
+    const me = this.me;
+    if (!me.alive) {
+      me.alive = true;
+      me.health = PLAYER.maxHealth;
+      me.downed = false;
+    }
+    this.player.respawn(pos, yaw);
+    this.cam.yaw = yaw;
+    this.cam.snapNext();
+    this.weapon.setVisible(true);
+    this.hud.setVisible(true);
+    this.hurtFlash = 0;
+    this.phase = 'playing';
+    this.input.enabled = true;
+    if (this.input.device === 'mouse') this.input.requestLock();
+    this.promptClick();
+    this.cam.addTrauma(0.1);
   }
 
   // ------------------------------------------------------------------ HUD
@@ -2460,9 +2547,13 @@ export class GameSession {
     if (s.phase === 'preparation') return `OUTBREAK IMMINENT — ${clock(Math.ceil(s.phaseTime))}`;
     const survived = `SURVIVED ${clock(s.phaseTime)}`;
     if (s.phase !== 'survival') return survived;
-    const w = hordeAt(s.phaseTime);
-    if (w.stage === 'surge') return `HORDE ${w.wave} — HOLD OUT ${clock(Math.ceil(w.end - s.phaseTime))}`;
-    return `${survived} · HORDE ${w.wave} IN ${clock(Math.ceil(w.start - s.phaseTime))}`;
+    const lull = lullLeft(s.lull, s.phaseTime);
+    if (lull > 0) return `DOWNTIME — ${clock(Math.ceil(lull))} LEFT · ${survived}`;
+    // The horde schedule runs on the threat clock (it stood still through the lulls).
+    const t = s.threatTime;
+    const w = hordeAt(t);
+    if (w.stage === 'surge') return `HORDE ${w.wave} — HOLD OUT ${clock(Math.ceil(w.end - t))}`;
+    return `${survived} · HORDE ${w.wave} IN ${clock(Math.ceil(w.start - t))}`;
   }
 
   private updateHud(dt: number): void {
@@ -2494,8 +2585,9 @@ export class GameSession {
       light: flashlight()?.on ?? false,
     });
     const s = this.sim;
-    const w = s.phase === 'survival' ? hordeAt(s.phaseTime).stage : 'calm';
-    hud.setTimer(this.timerText(), (s.phase === 'preparation' && s.phaseTime <= 10) || w !== 'calm');
+    const w = s.phase === 'survival' ? hordeAt(s.threatTime).stage : 'calm';
+    const lull = s.phase === 'survival' ? lullLeft(s.lull, s.phaseTime) : 0;
+    hud.setTimer(this.timerText(), (s.phase === 'preparation' && s.phaseTime <= 10) || (lull > 0 ? lull <= LULLS.warning : w !== 'calm'), lull > LULLS.warning);
 
     this.updateWaypoint();
 
@@ -2583,6 +2675,8 @@ export class GameSession {
     god: (on = true) => this.link?.debug({ cmd: 'god', on }),
     /** Sends in the raiders' van now (during the outbreak). */
     raid: () => (this.link ? (this.link.debug({ cmd: 'raid' }), true) : this.sim.callRaid()),
+    /** Starts a downtime lull now (during the outbreak). */
+    lull: () => (this.link ? (this.link.debug({ cmd: 'lull' }), true) : this.sim.startLull()),
   };
 
   dispose(): void {

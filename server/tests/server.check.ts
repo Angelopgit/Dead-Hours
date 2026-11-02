@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, type Room } from 'colyseus.js';
 import {
-  C2S, DOWNED, Mirror, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
+  C2S, DOWNED, Mirror, PLAYER, NEIGHBORHOOD as map, Physics, S2C, Simulation, buildNavGridSync, createDoorBodies, initPhysics, packMotion,
   type BeginMsg, type ChatLine, type IceConfig, type LobbyMsg, type OverMsg, type RtcIn, type SimEvent, type Snapshot,
   type TalkMsg, type Vec3,
   decodeBuild, defaultBuild, encodeBuild, encodeLoadout, decodeLoadout, runXp,
@@ -447,9 +447,43 @@ try {
   pump();
   check(me.up && Math.abs(me.health - DOWNED.reviveHealth) < 0.2 && puppet.players.get(bId)!.stats.revives === 1, 'up again with some health; the revive is counted');
 
-  section('The night ends');
+  section('Brought back by a downtime');
+  const downsOf = () => a.events.filter((e) => e.type === 'playerDowned' && e.player === a.room.sessionId).length;
+  let downs = downsOf();
   a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
-  check(await until(() => a.events.filter((e) => e.type === 'playerDowned' && e.player === a.room.sessionId).length === 2), 'down again');
+  check(await until(() => downsOf() === downs + 1), 'down again');
+  a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
+  check(await until(() => a.events.some((e) => e.type === 'playerDied' && e.player === a.room.sessionId)), 'finished off on the ground');
+  await sleep(150);
+  pump();
+  check(!me.alive, 'snapshots show them dead');
+  b.room.send(C2S.debug, { cmd: 'lull' });
+  check(await until(() => a.events.some((e) => e.type === 'lull' && e.stage === 'start' && (e.back ?? []).includes(a.room.sessionId))), 'a downtime starts, and says who it brought back');
+  const rose = await until(() => a.events.some((e) => e.type === 'playerRespawned' && e.player === a.room.sessionId));
+  check(rose, 'the fallen survivor hears they are back');
+  await sleep(150);
+  pump();
+  const mate = puppet.players.get(bId)!.motion.pos;
+  const gap = Math.hypot(me.motion.pos.x - mate.x, me.motion.pos.z - mate.z);
+  check(me.up && Math.abs(me.health - PLAYER.maxHealth) < 0.2 && gap < 6, `snapshots show them up with full health beside their teammate (${gap.toFixed(1)} m)`);
+  check(puppet.lulling && puppet.lull.count === 1, 'and the downtime on every client');
+  // Their moves count from where they came back.
+  const corrected = a.corrections.length;
+  const walk = { ...me.motion.pos };
+  for (let i = 0; i < 5; i++) {
+    // (Toward the teammate: the spot is in plain view of them.)
+    walk.x += ((mate.x - walk.x) / gap) * 0.08;
+    walk.z += ((mate.z - walk.z) / gap) * 0.08;
+    a.room.send(C2S.motion, motion(walk));
+    await sleep(33);
+  }
+  await sleep(200);
+  check(a.corrections.length === corrected, 'their moves from the new spot are accepted');
+
+  section('The night ends');
+  downs = downsOf();
+  a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
+  check(await until(() => downsOf() === downs + 1), 'down again');
   a.room.send(C2S.debug, { cmd: 'hurt', amount: 500 });
   check(await until(() => a.events.some((e) => e.type === 'playerDied' && e.player === a.room.sessionId)), 'first survivor is finished off on the ground');
   check(!a.over, 'the night goes on while anyone is alive');

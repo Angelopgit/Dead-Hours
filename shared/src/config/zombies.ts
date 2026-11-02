@@ -198,3 +198,36 @@ export const HORDES = {
   /** A supply drop comes this many seconds after a wave is survived (sooner if one is due). */
   dropAfter: 12,
 } as const;
+
+/**
+ * Downtime: after every few minutes of fighting the dead fall back for a minute or two, announced
+ * to everyone, so survivors can regroup, scavenge ammo and patch themselves up. The night's threat
+ * clock (Simulation.threatTime: spawn growth, the zombie mix, horde waves, the van raid) stands
+ * still while one is on, so the fight picks up where it left off. Rules: shared/src/sim/Lulls.ts.
+ */
+export const LULLS = {
+  /**
+   * Fighting seconds (threat clock) before the first lull is due, and from the start of one to the
+   * next being due. One that falls due during a horde's siren or surge waits for the wave to be
+   * over, and one never starts while the van raid is on.
+   */
+  every: 300,
+  /** The first lull's length, `durationGrowth` longer with each one after, up to `maxDuration` (s). */
+  duration: 60,
+  durationGrowth: 15,
+  maxDuration: 120,
+  /** "Downtime ending" goes out this many seconds before the dead come back. */
+  warning: 15,
+  /**
+   * While one is on, idle zombies farther than this from every survivor and out of everyone's
+   * sight slip away (checked every `clearEvery` seconds). Ones already hunting someone keep
+   * coming: the stragglers are the survivors' to deal with.
+   */
+  clearDistance: 40,
+  clearEvery: 1.5,
+  /** Afterwards the spawner climbs back from `returnStart` of its target to all of it over `returnTime` seconds. */
+  returnStart: 0.35,
+  returnTime: 45,
+  /** A supply drop comes this many seconds into each lull (sooner if one is due anyway). */
+  dropAfter: 8,
+} as const;

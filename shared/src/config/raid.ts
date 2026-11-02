@@ -9,7 +9,7 @@ import {
  * hunt the players. Tuning lives here; the event itself is shared/src/sim/Raid.ts.
  */
 export const RAID = {
-  /** Survival seconds before the van comes (once). */
+  /** Seconds of fighting before the van comes, once (the threat clock: it stands still during a lull, see LULLS). */
   at: 420,
   raiders: 5,
   /** What each raider carries, by weight (every crew has at least two kinds). */

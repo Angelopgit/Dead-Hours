@@ -301,6 +301,31 @@ export class Arsenal {
     }
   }
 
+  /**
+   * Back from the dead (a lull, see Simulation.respawnFallen): the same guns, each with at least a
+   * full magazine and its starting reserve, at least the starting grenades and Molotovs, and the
+   * primary drawn.
+   */
+  rearm(): void {
+    for (const w of [this.primary, this.secondary]) {
+      const d = this.defOf(w.id);
+      w.mag = d.magazine;
+      w.reserve = Math.max(w.reserve, d.startReserve);
+    }
+    for (const k of Object.keys(this.throwables) as ThrowKind[]) this.throwables[k] = Math.max(this.throwables[k], THROWABLES[k].start);
+    this.limb = null;
+    this.meleeWith = 'machete';
+    this.releasePending = false;
+    this.meleeHitPending = false;
+    this.interruptedSlot = null;
+    this.cooldown = 0;
+    this.bloom = 0;
+    this.aim = 0;
+    this.active = 'primary';
+    this.action = 'draw';
+    this.actionTotal = this.actionT = this.def.draw;
+  }
+
   /** Adds rounds to a weapon's reserve up to its carry limit; returns how many fit. */
   addReserve(slot: 'primary' | 'secondary', rounds: number): number {
     const w = slot === 'primary' ? this.primary : this.secondary;

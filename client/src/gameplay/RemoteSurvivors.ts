@@ -131,6 +131,15 @@ export class RemoteSurvivors {
     const b = r.body;
     const m = p.motion;
     if (!p.alive || !deck) r.ride = null;
+    // Brought back by a lull: up off the ground where the server put them.
+    if (p.alive && r.ragdoll) {
+      r.ragdoll = null;
+      b.resetPose();
+      r.downed = false;
+      r.weapon.setVisible(true);
+      mirror.playerPose(p.id, _p);
+      r.pos.set(_p.x, _p.y, _p.z);
+    }
     if (!p.alive) {
       if (!r.ragdoll) this.fall(r, p);
       if (!r.ragdoll!.asleep) r.ragdoll!.update(dt);

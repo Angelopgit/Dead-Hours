@@ -84,6 +84,13 @@ export type SimEvent =
    * `over` (outlasted at `at`).
    */
   | { type: 'horde'; wave: number; stage: 'warning' | 'surge' | 'over'; at: number }
+  /**
+   * Downtime (see Lulls.ts): lull `n` `start`s (and ends at survival second `at`; `back`: the dead
+   * it brought back), is `ending` (LULLS.warning seconds left, ends at `at`), or is `over` (at `at`).
+   */
+  | { type: 'lull'; n: number; stage: 'start' | 'ending' | 'over'; at: number; back?: string[] }
+  /** A lull brought a dead survivor back, at `pos` facing `yaw` (on their feet, full health, rearmed). */
+  | { type: 'playerRespawned'; player: string; pos: Vec3; yaw: number }
   | { type: 'heli'; drop: number; flight: HeliFlight; weapon?: WeaponId; serum?: boolean }
   | { type: 'supplyDrop'; drop: number; stage: 'released' | 'landed' | 'empty' | 'weaponTaken' | 'serumTaken' | 'gone'; pos: Vec3 }
   /** An arm came off: `pos` is the cut, `dir` the way the blow was going. */

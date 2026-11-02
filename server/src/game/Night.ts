@@ -296,6 +296,7 @@ export class Night {
     if (m.cmd === 'skipPreparation') this.sim.skipPreparation();
     else if (m.cmd === 'supplyDrop') this.sim.callSupplyDrop(typeof m.weapon === 'string' ? m.weapon : undefined, m.serum === true);
     else if (m.cmd === 'raid') this.sim.callRaid();
+    else if (m.cmd === 'lull') this.sim.startLull();
     else if (m.cmd === 'hurt' && Number.isFinite(m.amount)) this.sim.damagePlayer(p, Math.max(0, m.amount), p.motion.pos);
     else if (m.cmd === 'god') {
       if (m.on) this.gods.add(id);
@@ -320,7 +321,10 @@ export class Night {
       n++;
       const snap = ++this.steps % SNAPSHOT_EVERY === 0;
       this.step(snap);
-      for (const e of this.sim.drain()) events.push(e);
+      for (const e of this.sim.drain()) {
+        events.push(e);
+        if (e.type === 'playerRespawned') this.respawned(e.player);
+      }
       if (snap) due = true;
       for (const id of this.gods) {
         const p = this.sim.players.get(id);
@@ -330,6 +334,23 @@ export class Night {
     if (n === 6) this.acc = 0;
     // Taken after every step this call ran, so it never shows something an event already ended.
     return { events, snapshot: due ? captureSnapshot(this.sim, this.facing) : null };
+  }
+
+  /** A lull brought them back: their body is solid again and their moves count from the new spot. */
+  private respawned(id: string): void {
+    const p = this.sim.players.get(id);
+    const x = this.extras.get(id);
+    if (!p || !x) return;
+    const m = p.motion.pos;
+    x.correcting = null;
+    x.budget = MAX_SPEED * BANK;
+    x.climb = MAX_CLIMB * BANK;
+    x.trigger = false;
+    x.press = 0;
+    x.facing = p.motion.yaw + Math.PI;
+    this.facing.set(id, x.facing);
+    x.body.setTranslation({ x: m.x, y: m.y + PLAYER.height / 2, z: m.z }, true);
+    x.collider.setEnabled(true);
   }
 
   /** How fast this survivor may move now: faster on a skateboard. */
