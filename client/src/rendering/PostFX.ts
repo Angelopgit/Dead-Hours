@@ -6,6 +6,16 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { ScenePass, type SceneFXOptions } from './SceneFX';
 import { createNightLUT, LUT_SIZE } from './ColorLUT';
 
+/** Bloom takes light over this luminance (linear, before exposure). */
+export const BLOOM_THRESHOLD = 0.9;
+/**
+ * ...and eases in over this much more. The stock high pass is a hard cut (0.01 wide), so a texel
+ * just over the threshold bloomed as hard as a lamp bulb: Molotov flames, a burning body, a wet
+ * road and a wall in the flashlight all sit around 1 and smeared glare over the street. Now they
+ * glow faintly; bulbs, muzzle flashes, sparks and blasts (several times over) bloom as before.
+ */
+export const BLOOM_KNEE = 0.5;
+
 /**
  * Final grade in display space: the night color grade (a 3D LUT, see ColorLUT), vignette, film
  * grain and a fade-to-black / damage tint used by gameplay.
@@ -75,7 +85,8 @@ export class PostFX {
     this.scene = new ScenePass(scene, camera);
     this.scene.configure({ aoSamples: 0, fogScale: 0, fogSteps: 0, fogLights: 0, blurTaps: 0, msaa });
     this.composer.addPass(this.scene);
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.55, 0.55, 0.9);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.55, 0.55, BLOOM_THRESHOLD);
+    (this.bloom.highPassUniforms as Record<string, THREE.IUniform<number>>).smoothWidth.value = BLOOM_KNEE;
     // A single NaN/Inf pixel (driver precision edge cases) would smear across the whole bloom
     // mip chain. The high pass runs at half resolution, so read the four full-resolution texels
     // under each output pixel one by one and drop bad ones before any filtering mixes them in:

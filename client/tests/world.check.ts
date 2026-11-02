@@ -12,7 +12,8 @@ import { MAPLE_HOLLOW as map, OAK, PLAYER, propColliders } from '@dead-hours/sha
 import { Physics, initPhysics, RAPIER, GROUP, groups } from '../src/core/Physics';
 import { DoorSystem } from '../src/gameplay/Doors';
 import { Acoustics, type Space } from '../src/audio/Acoustics';
-import { beamPower, falloff, HOTSPOT_FAR, HOTSPOT_NEAR, TRIM_ALBEDO } from '../src/lighting/BeamPower';
+import { beamPower, falloff, HOTSPOT_FAR, HOTSPOT_NEAR, lampPower, TRIM_ALBEDO } from '../src/lighting/BeamPower';
+import { BODY_KNEE, GLOSS_CEIL, GLOSS_KNEE, glossCap, softCeil } from '../src/lighting/GlossCap';
 
 type V = [number, number];
 const DT = 1 / 60;
@@ -310,6 +311,34 @@ console.log('Flashlight lights a room without burning the nearest wall white');
   if (street.power < 1) fail(`down Elm Street the beam is turned down to ${(street.power * 100).toFixed(0)}%`);
   else console.log('  ok   down Elm Street: full power');
   if (!(rows[0][1].power < rows[1][1].power && rows[1][1].power < rows[2][1].power)) fail('nearer walls should turn the beam down further');
+
+  // A Molotov's light (Pyro: 45 cd a metre over the fire, 13 m, decay 2) beside the safehouse's
+  // north wall, and in the middle of Elm Street with no car parked beside it.
+  const fire = new THREE.PointLight(0xffffff, 0, 13, 2);
+  const byWall = new THREE.Vector3(3.5, 0.35 + 1, -24.3);
+  const wallPower = lampPower(phys, fire, 45, byWall);
+  const wallD = phys.raycast(byWall.x, byWall.y, byWall.z, 0, 0, -1, 13) ?? 13;
+  const wallGlow = (45 * wallPower * falloff(wallD, 13, 2) * TRIM_ALBEDO) / Math.PI;
+  const what = `Molotov ${wallD.toFixed(2)} m from a wall: ${(wallPower * 100).toFixed(0)}% power, trim at ${wallGlow.toFixed(2)} (full power ${(wallGlow / wallPower).toFixed(1)})`;
+  if (wallGlow > HOTSPOT_NEAR + 1e-6 || wallPower >= 1) fail(`${what}: brighter than the bloom cap ${HOTSPOT_NEAR}`);
+  else console.log(`  ok   ${what}`);
+  const openPower = lampPower(phys, fire, 45, new THREE.Vector3(25, 1, 0));
+  if (openPower < 1) fail(`a Molotov in the middle of Elm Street is turned down to ${(openPower * 100).toFixed(0)}%`);
+  else console.log('  ok   Molotov in the middle of Elm Street: full power');
+}
+
+console.log('Wet reflections and fire-lit bodies stay under a soft ceiling');
+{
+  const rows = [0.2, GLOSS_KNEE, 0.9, 3, 64].map((x) => [x, glossCap(x)] as const);
+  const rising = rows.every(([, y], i) => i === 0 || y >= rows[i - 1][1]);
+  const line = rows.map(([x, y]) => `${x} -> ${y.toFixed(2)}`).join(', ');
+  if (glossCap(0.2) !== 0.2 || glossCap(64) > GLOSS_CEIL || glossCap(3) < 0.9 || !rising) fail(`gloss cap: ${line}`);
+  else console.log(`  ok   ${line}`);
+  // Bodies: a key light on a white shirt (~0.6) passes untouched; a burning body's own fire (~20) stays near 1.
+  const body = [0.6, 0.9, 20].map((x) => [x, softCeil(x, BODY_KNEE, GLOSS_CEIL)] as const);
+  const bodyLine = body.map(([x, y]) => `${x} -> ${y.toFixed(2)}`).join(', ');
+  if (body[0][1] !== 0.6 || body[1][1] < 0.8 || body[2][1] > GLOSS_CEIL) fail(`body light cap: ${bodyLine}`);
+  else console.log(`  ok   bodies: ${bodyLine}`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');

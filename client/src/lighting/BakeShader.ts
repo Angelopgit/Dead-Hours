@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GROUND_BAND } from './LightBaker';
+import { GLOSS_CAP_GLSL } from './GlossCap';
 
 /** Uniforms shared by every baked static material. */
 export const bakeUniforms = {
@@ -112,7 +113,7 @@ export const PUDDLE_LAMPS = 8;
 /**
  * Puddles mirror the baked lamps around them. Baked light has no specular of its own, so the
  * nearest unoccluded static lamps are added as GGX highlights, widened by the bulb's size so a
- * puddle shows the lamp's reflection where a mirror would.
+ * puddle shows the lamp's reflection where a mirror would, held under the gloss ceiling.
  */
 export function patchPuddle(mat: THREE.Material, lamps: ReflectedLamp[]): void {
   if (mat.userData.puddle || !(mat instanceof THREE.MeshStandardMaterial) || lamps.length === 0) return;
@@ -136,7 +137,8 @@ export function patchPuddle(mat: THREE.Material, lamps: ReflectedLamp[]): void {
         uniform vec3 uLampPos[${n}];
         uniform vec3 uLampCol[${n}];
         uniform vec3 uLampDir[${n}];
-        uniform vec4 uLampFall[${n}];`)
+        uniform vec4 uLampFall[${n}];
+        ${GLOSS_CAP_GLSL}`)
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         {
           vec3 pv = normalize(cameraPosition - vPuddleWorld);
@@ -156,6 +158,8 @@ export function patchPuddle(mat: THREE.Material, lamps: ReflectedLamp[]): void {
             float w = pow2(saturate(1.0 - pow4(d / k.w)));
             reflectedLight.directSpecular += uLampCol[i] * f * (spec * cone * w / pow(max(d, 0.5), k.z));
           }
+          // Mirror-bright, but under a soft ceiling so the bloom doesn't smear it (GlossCap).
+          reflectedLight.directSpecular = glossCap(reflectedLight.directSpecular);
         }`);
   });
 }

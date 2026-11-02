@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GROUND_BAND } from './LightBaker';
+import { GLOSS_CAP_GLSL } from './GlossCap';
 
 /** Top-down cover map for rain: 0.5 m texels, the highest roof or slab over each spot. */
 export const COVER = { texel: 0.5, minHalf: 128, maxH: 16 } as const;
@@ -90,6 +91,7 @@ const WET_COMMON = /* glsl */ `
   uniform vec4 uLampPos[${WET_LAMPS}];
   uniform vec4 uLampCol[${WET_LAMPS}];
   uniform vec4 uLampDir[${WET_LAMPS}];
+  ${GLOSS_CAP_GLSL}
   float wetHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float wetNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -122,7 +124,8 @@ const WET_COMMON = /* glsl */ `
  * from the baked sky visibility, so roofs, roads and lawns soak while rooms, porches and basements
  * stay dry. Wet surfaces darken and turn glossy; low flat spots collect puddles with raindrop
  * ripples; and the nearest outdoor lamps (baked, so they have no specular of their own) are added
- * as GGX highlights, giving the long lamp reflections of a wet street.
+ * as GGX highlights, giving the long lamp reflections of a wet street. Highlights are held under
+ * a soft ceiling (GlossCap) so the reflections don't bloom across the street.
  */
 /**
  * How much of the wet shading is compiled in: none while rain is off (dry materials cost nothing),
@@ -211,6 +214,9 @@ export function patchWet(mat: THREE.Material): void {
             reflectedLight.directSpecular += min(uLampCol[i].rgb * f * (spec * cone * w * wet / pow(max(d, 0.5), uLampCol[i].w)), vec3(64.0));
           }
           #endif
+          // Every light's highlight (these lamps, fires, flashlights, muzzle flashes) held under
+          // a soft ceiling just past the bloom threshold (GlossCap), as the ground soaks.
+          reflectedLight.directSpecular = mix(reflectedLight.directSpecular, glossCap(reflectedLight.directSpecular), smoothstep(0.02, 0.15, wet));
         }`);
   };
 }

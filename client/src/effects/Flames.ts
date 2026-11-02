@@ -53,8 +53,9 @@ const FLAME_FRAG = /* glsl */ `
     // White-yellow at the root, orange through the body, dull red at the tips.
     float temp = clamp(flame * (1.25 - uv.y * 0.85) * vHeat, 0.0, 1.0);
     // Blended over (not added): a field of overlapping tongues stays fire-coloured instead of
-    // summing to white; the hot cores are HDR (>1) so the bloom still makes them glare.
-    vec3 col = fireRamp(temp * 0.92) * 0.4;
+    // summing to white. Only the white-hot roots reach the bloom (luminance ~1, threshold 0.9): a
+    // little glare there, not a white ball over the whole street.
+    vec3 col = fireRamp(temp * 0.92) * 0.22;
     float alpha = clamp(flame * vAlpha * 1.4, 0.0, 1.0);
     #ifdef USE_FOG
       #ifdef FOG_EXP2
@@ -99,7 +100,8 @@ const GLOW_FRAG = /* glsl */ `
     vec4 m = texture2D(tNoise, vUv * 0.9 + vec2(-uTime * 0.11, vSeed * 2.0));
     float edge = 1.0 - smoothstep(0.35, 1.0, r + (n.r - 0.5) * 0.5);
     float heat = edge * (0.45 + m.b * 0.75) * vStrength;
-    vec3 col = fireRamp(heat * 0.8) * edge * 0.26;
+    // Kept under the bloom: the flames above it carry the glare.
+    vec3 col = fireRamp(heat * 0.8) * edge * 0.16;
     #ifdef USE_FOG
       #ifdef FOG_EXP2
         col *= exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
@@ -140,7 +142,7 @@ function batch(capacity: number, vert: string, frag: string, quad: number[], ble
 
 /**
  * Live flames: tongues of fire (upright cards turned to the camera, shaded by scrolling noise
- * into licking, flickering shapes in HDR colour that the bloom turns into glare) and the sheet
+ * into licking, flickering shapes, their white-hot roots just bright enough to glare) and the sheet
  * of burning fuel on the floor under them. Filled from scratch every frame by whoever owns
  * fires: spills, burning zombies, a Molotov's rag.
  */

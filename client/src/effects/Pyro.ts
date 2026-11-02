@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FIRE, BLAST, fireStrength, type FirePatch } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
+import { lampPower } from '../lighting/BeamPower';
 import type { Quality } from '../core/Settings';
 import { ParticleBatch, SHAPE } from './Particles';
 import { VolumeBatch } from './Volume';
@@ -16,6 +17,11 @@ interface LightAsk {
   range: number;
   /** Bigger wins a light when there are more asks than lights. */
   weight: number;
+  /**
+   * A fire that burns on: its intensity without the flicker, which lampPower holds down so the
+   * wall or car beside it doesn't burn white. 0 for a blast's flash, which may blind for an instant.
+   */
+  steady: number;
 }
 
 /** A fire on the ground, as drawn. */
@@ -43,6 +49,15 @@ export interface BurnPoint {
 }
 
 const LIGHTS = 3;
+/**
+ * A fire's light in the volumetric fog: a warm haze round it. At full strength the fog right round
+ * a Molotov came out several times the bloom threshold and the bloom spread it over the street.
+ */
+const FIRE_FOG = 0.3;
+/** A Molotov catching, as a share of a blast's flash: about 120 cd at its height, under 3 fire's worth. */
+const MOLOTOV_FLASH = 0.22;
+/** How fast a fire's light settles to a new power when it moves (1/s). */
+const SETTLE = 6;
 
 /**
  * Explosions and fire: fireballs that cool and erode into rolling smoke, flash and shockwave,
@@ -62,8 +77,12 @@ export class Pyro {
   private ringT = -1;
   private readonly ringMat: THREE.ShaderMaterial;
   private readonly lights: THREE.PointLight[] = [];
+  /** Each light's share of its fire's power (lampPower) and where that fire was. */
+  private readonly power: number[] = [];
+  private readonly lit: THREE.Vector3[] = [];
   private readonly asks: LightAsk[] = [];
-  private readonly flashes: { pos: THREE.Vector3; t: number }[] = [];
+  /** Light flashes: a grenade's blast (`fire` false: it may blind for an instant) or a Molotov catching. */
+  private readonly flashes: { pos: THREE.Vector3; t: number; scale: number; fire: boolean }[] = [];
   private readonly fires = new Map<number, FireView>();
   private burning: BurnPoint[] = [];
   private quality = 1;
@@ -99,6 +118,8 @@ export class Pyro {
       const l = new THREE.PointLight(0xff8a3a, 0, 20, 2);
       l.castShadow = false;
       this.lights.push(l);
+      this.power.push(1);
+      this.lit.push(new THREE.Vector3(Infinity, 0, 0));
       this.root.add(l);
     }
     scene.add(this.root);
@@ -213,7 +234,7 @@ export class Pyro {
     this.ring.visible = true;
     this.decals.add(DECAL.pool, this.tmp.set(ox, fy + 0.01, oz), this.up, rand(2.6, 3.4), 0.1, 0.09, 0.085, 0.95, 160);
     this.decals.add(DECAL.splat, this.tmp.set(ox, fy + 0.012, oz), this.up, rand(1.6, 2.2), 0.06, 0.055, 0.05, 0.9, 160);
-    this.flashes.push({ pos: new THREE.Vector3(ox, oy + 0.6, oz), t: 0 });
+    this.flashes.push({ pos: new THREE.Vector3(ox, oy + 0.6, oz), t: 0, scale: 1, fire: false });
     this.onBlastNear?.(near);
   }
 
@@ -236,7 +257,9 @@ export class Pyro {
         heat: rand(0.75, 0.9), cool: 2.2, erode0: 0.05, erode1: 0.95, drag: 3, lift: 2, floor: ground.y, alpha: 0.9,
       });
     }
-    this.flashes.push({ pos: new THREE.Vector3(ground.x, ground.y + 0.8, ground.z), t: 0.12 });
+    // The fuel catching: a whoosh a few times the fire's own light, not a blast's flash (at blast
+    // strength, ~500 cd for half a second, it lit the fog white across the street).
+    this.flashes.push({ pos: new THREE.Vector3(ground.x, ground.y + 0.8, ground.z), t: 0.12, scale: MOLOTOV_FLASH, fire: true });
   }
 
   /** A Molotov's spill caught: it burns from `start` to `end` (simulation time). */
@@ -279,7 +302,7 @@ export class Pyro {
     if (Math.random() < 0.25 * this.quality) {
       this.smoke.emit({ x: pos.x, y: pos.y + 0.15, z: pos.z, vx: 0, vy: 0.5, vz: 0, life: rand(0.8, 1.4), size: 0.12, size1: 0.5, r: 0.12, g: 0.11, b: 0.1, alpha: 0.45, erode1: 0.8, drag: 1.5, lift: 0.4, glow: 0.5 });
     }
-    this.ask(pos.x, pos.y, pos.z, 1, 0.55, 0.2, 6, 6, 2);
+    this.ask(pos.x, pos.y, pos.z, 1, 0.55, 0.2, 6, 6, 2, 6);
   }
 
   private randDir(minUp: number): THREE.Vector3 {
@@ -290,8 +313,8 @@ export class Pyro {
     return v.normalize();
   }
 
-  private ask(x: number, y: number, z: number, r: number, g: number, b: number, intensity: number, range: number, weight: number): void {
-    this.asks.push({ x, y, z, r, g, b, intensity, range, weight });
+  private ask(x: number, y: number, z: number, r: number, g: number, b: number, intensity: number, range: number, weight: number, steady: number): void {
+    this.asks.push({ x, y, z, r, g, b, intensity, range, weight, steady });
   }
 
   // ------------------------------------------------------------------ frame
@@ -302,18 +325,19 @@ export class Pyro {
     f.begin();
     const t = performance.now() / 1000;
 
-    // Blast flashes: blinding for an instant, then the orange of the fireball, then nothing.
+    // Blast flashes: blinding for an instant, then the orange of the fireball, then nothing. A
+    // Molotov's whoosh is a fire's light (held down near walls and cars, faint in the fog).
     for (let i = this.flashes.length - 1; i >= 0; i--) {
       const fl = this.flashes[i];
       fl.t += dt;
       const k = fl.t;
-      const flash = Math.exp(-k * 22) * 5200 + Math.exp(-k * 4.5) * 900;
+      const flash = (Math.exp(-k * 22) * 5200 + Math.exp(-k * 4.5) * 900) * fl.scale * (this.reducedFlashing ? 0.4 : 1);
       if (k > 1.4) {
         this.flashes.splice(i, 1);
         continue;
       }
       const warm = Math.min(1, k * 6);
-      this.ask(fl.pos.x, fl.pos.y, fl.pos.z, 1, 0.82 - warm * 0.3, 0.6 - warm * 0.45, flash * (this.reducedFlashing ? 0.4 : 1), 38, 100);
+      this.ask(fl.pos.x, fl.pos.y, fl.pos.z, 1, 0.82 - warm * 0.3, 0.6 - warm * 0.45, flash, 38, 100, fl.fire ? flash : 0);
     }
 
     // Spills.
@@ -364,7 +388,7 @@ export class Pyro {
       }
       if (s > 0) {
         const fl = 0.8 + 0.14 * Math.sin(t * 11 + id) + 0.08 * Math.sin(t * 23.7 + id * 3);
-        this.ask(v.centre.x, v.centre.y + 1, v.centre.z, 1, 0.5, 0.16, 45 * s * fl, 13, 20);
+        this.ask(v.centre.x, v.centre.y + 1, v.centre.z, 1, 0.5, 0.16, 45 * s * fl, 13, 20, 45 * s);
       }
     }
 
@@ -385,7 +409,10 @@ export class Pyro {
       const w = s / (1 + d * 0.15);
       bx += b.x * w; by += b.y * w; bz += b.z * w; bw += w;
     }
-    if (bw > 0) this.ask(bx / bw, by / bw + 0.5, bz / bw, 1, 0.5, 0.16, Math.min(90, 25 + this.burning.length * 6), 10, 10);
+    if (bw > 0) {
+      const glow = Math.min(90, 25 + this.burning.length * 6);
+      this.ask(bx / bw, by / bw + 0.5, bz / bw, 1, 0.5, 0.16, glow, 10, 10, glow);
+    }
 
     // Shockwave.
     if (this.ringT >= 0) {
@@ -405,11 +432,14 @@ export class Pyro {
     this.sparks.update(dt);
     this.debris.update(dt);
     f.end(dt);
-    this.placeLights();
+    this.placeLights(dt);
   }
 
-  /** Gives the pooled lights to the asks that matter most from here. */
-  private placeLights(): void {
+  /**
+   * Gives the pooled lights to the asks that matter most from here. A fire's light is held down
+   * near walls, cars and ceilings (lampPower) and kept faint in the fog; a blast's flash isn't.
+   */
+  private placeLights(dt: number): void {
     const c = this.cam;
     const score = (a: LightAsk) => a.weight * a.intensity / (1 + Math.hypot(a.x - c.x, a.y - c.y, a.z - c.z) * 0.2);
     this.asks.sort((a, b) => score(b) - score(a));
@@ -418,12 +448,22 @@ export class Pyro {
       const a = this.asks[i];
       if (!a) {
         l.intensity = 0;
+        this.lit[i].x = Infinity;
         continue;
       }
       l.position.set(a.x, a.y, a.z);
       l.color.setRGB(a.r, a.g, a.b);
-      l.intensity = a.intensity;
       l.distance = a.range;
+      let power = 1;
+      if (a.steady > 0) {
+        power = lampPower(this.physics, l, a.steady, l.position);
+        // The same fire (or a burning body walking on): settle, don't jump.
+        if (this.lit[i].distanceToSquared(l.position) < 2.25) power = this.power[i] + (power - this.power[i]) * (1 - Math.exp(-dt * SETTLE));
+      }
+      this.power[i] = power;
+      this.lit[i].copy(l.position);
+      l.intensity = a.intensity * power;
+      l.userData.fogScale = a.steady > 0 ? FIRE_FOG : 1;
     }
     this.asks.length = 0;
   }

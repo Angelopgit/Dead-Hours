@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { ArmState, ArmZone, HitZone, LegState, LegZone, LimbZone, ZombieKind } from '@dead-hours/shared';
 import { chain } from '../lighting/BakeShader';
+import { BODY_KNEE, GLOSS_CAP_GLSL, GLOSS_CEIL } from '../lighting/GlossCap';
 import { rng, randomAppearance, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE, BONE_COUNT } from './rig';
 import { ARM, EYE_Y, HEAD_K, LEG, SHOULDER_X, dress, eyeParts, type DressResult, type Mutation, type PartSink } from './Outfit';
@@ -302,7 +303,12 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
         #define WN(P_) wNoise(P_)
         #define WN2(P_) wNoise(P_)
         ${SURVIVOR_COMMON}
-        #endif`)
+        #endif
+        ${GLOSS_CAP_GLSL}`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        // A body beside a fire's light (its own, when it burns) stays fire-lit, not white (GlossCap).
+        reflectedLight.directDiffuse = softCeil(reflectedLight.directDiffuse, ${BODY_KNEE.toFixed(3)}, ${GLOSS_CEIL.toFixed(3)});
+        reflectedLight.directSpecular = softCeil(reflectedLight.directSpecular, ${BODY_KNEE.toFixed(3)}, ${GLOSS_CEIL.toFixed(3)});`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float zWet = 0.0;
         // pattern.w = fabric pattern + 8 * surface class.
