@@ -27,8 +27,8 @@ export interface LinkHandlers {
 
 /** Close code of a leave the client asked for (colyseus CloseCode.CONSENTED). */
 const CONSENTED = 4000;
-/** How long to keep trying after a drop (the server holds the place for 20 s). */
-const RECONNECT_FOR = 16;
+/** How long to keep trying after a drop (the server holds the place for 45 s). */
+const RECONNECT_FOR = 40;
 const MAX_QUEUED_SNAPS = 40;
 
 const now = () => performance.now() / 1000;

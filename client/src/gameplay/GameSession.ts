@@ -207,6 +207,8 @@ export class GameSession {
   private readonly raycaster = new THREE.Raycaster();
   private readonly mouse = new THREE.Vector2();
   private outbreakAnnounced = false;
+  /** Online, dropped into a night under way: survival seconds already gone when the first snapshot came (NaN until then). */
+  private joinedAt = 0;
   /** First arm torn off / first picked up: say once what can be done with it. */
   private limbHinted = false;
   private crawlHinted = false;
@@ -248,6 +250,7 @@ export class GameSession {
   ) {
     const online = opts.online ?? null;
     const spawn = online ? online.begin.spawn : NEIGHBORHOOD.playerSpawns[0];
+    if (online?.begin.late) this.joinedAt = NaN;
     doors.reset();
     for (const b of doors.bodies) if (b) this.doorColliders.add(b.collider.handle);
     // Shots echo by the space they're in and are muffled by the walls they come through.
@@ -513,7 +516,8 @@ export class GameSession {
     this.phase = 'playing';
     this.cam.snapNext();
     this.hud.setVisible(true);
-    this.hud.notify('MAPLE HOLLOW', 'THE SAFEHOUSE · 21:47 · GEAR UP BEFORE THEY ARRIVE', 3.2);
+    if (this.opts.online?.begin.late) this.hud.notify('MAPLE HOLLOW', 'YOU JOINED A NIGHT UNDER WAY · FIND YOUR TEAM', 3.6);
+    else this.hud.notify('MAPLE HOLLOW', 'THE SAFEHOUSE · 21:47 · GEAR UP BEFORE THEY ARRIVE', 3.2);
     this.input.enabled = true;
     if (this.input.device === 'mouse') this.input.requestLock();
     this.promptClick();
@@ -1184,7 +1188,14 @@ export class GameSession {
     const link = this.link!;
     const mirror = this.mirror!;
     for (const m of link.drain()) {
-      if (m.k === 'snap') mirror.apply(m.snap, m.at);
+      if (m.k === 'snap') {
+        mirror.apply(m.snap, m.at);
+        // Dropped in after the outbreak: it began without us (no siren), and our run counts from now.
+        if (Number.isNaN(this.joinedAt)) {
+          this.joinedAt = this.sim.phase === 'survival' ? this.sim.phaseTime : 0;
+          if (this.sim.phase === 'survival') this.outbreakAnnounced = true;
+        }
+      }
       else if (m.k === 'pos') this.player.teleport(m.pos);
       else {
         for (const e of m.events) {
@@ -2154,7 +2165,7 @@ export class GameSession {
     this.phase = 'dead';
     this.shownDown = false;
     this.downPanel.remove();
-    this.survivedAtDeath = this.outbreakAnnounced ? this.sim.phaseTime : 0;
+    this.survivedAtDeath = this.outbreakAnnounced ? Math.max(0, this.sim.phaseTime - (this.joinedAt || 0)) : 0;
     this.deathT = 0;
     this.deathYaw = this.cam.yaw;
     this.inventory.hide();

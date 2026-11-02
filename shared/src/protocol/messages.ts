@@ -155,6 +155,8 @@ export interface BeginMsg {
   t: number;
   /** Where this survivor starts (camera yaw). */
   spawn: { x: number; y: number; z: number; yaw: number };
+  /** Joined a night already under way (dropped in from the game list or with the code). */
+  late?: boolean;
 }
 
 /** How one survivor did when the night ended for everyone. */

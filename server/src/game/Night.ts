@@ -131,6 +131,29 @@ export class Night {
     this.sim.removePlayer(id);
   }
 
+  /**
+   * What a survivor who drops in mid-night missed and can't see in a snapshot: supply drops already
+   * flying or on the ground (their helicopter, crate and cases), told as the events that made them.
+   */
+  catchUp(): SimEvent[] {
+    const out: SimEvent[] = [];
+    const sim = this.sim;
+    for (const d of sim.drops) {
+      if (d.stage === 'gone') continue;
+      const f = d.flight;
+      out.push({ type: 'heli', drop: d.id, flight: f, ...(d.weapon ? { weapon: d.weapon } : {}), ...(d.serum ? { serum: true } : {}) });
+      if (d.stage === 'inbound') continue;
+      out.push({ type: 'supplyDrop', drop: d.id, stage: 'released', pos: { x: f.over.x, y: f.ground.y + f.releaseHeight, z: f.over.z } });
+      if (d.stage !== 'landed') continue;
+      out.push({ type: 'supplyDrop', drop: d.id, stage: 'landed', pos: { ...f.ground } });
+      const it = sim.interactables;
+      if (d.interactable >= 0 && (it[d.interactable]?.supply ?? 0) <= 0) out.push({ type: 'supplyDrop', drop: d.id, stage: 'empty', pos: { ...f.ground } });
+      if (d.caseItem >= 0 && (it[d.caseItem]?.supply ?? 0) <= 0) out.push({ type: 'supplyDrop', drop: d.id, stage: 'weaponTaken', pos: { ...it[d.caseItem].pos } });
+      if (d.serumItem >= 0 && (it[d.serumItem]?.supply ?? 0) <= 0) out.push({ type: 'supplyDrop', drop: d.id, stage: 'serumTaken', pos: { ...it[d.serumItem].pos } });
+    }
+    return out;
+  }
+
   /** Everyone still here is dead (the last survivor may have left instead of dying). */
   get allDead(): boolean {
     const ps = [...this.sim.players.values()];

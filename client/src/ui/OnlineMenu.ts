@@ -27,8 +27,9 @@ function joinOptions() {
 /** What a failed join or create means for the player. */
 function reason(e: unknown): string {
   const m = (e instanceof Error ? e.message : String(e ?? '')).toLowerCase();
-  if (m.includes('locked') || m.includes('full')) return 'THAT GAME IS FULL OR ALREADY UNDER WAY';
-  if (m.includes('not found') || m.includes('no rooms') || m.includes('invalid')) return 'THAT GAME IS GONE';
+  if (m.includes('locked') || m.includes('full')) return 'THAT GAME IS FULL (4 OF 4)';
+  if (m.includes('not found') || m.includes('no rooms') || m.includes('invalid') || m.includes('no game')) return 'NO GAME WITH THAT CODE (IT MAY HAVE CLOSED)';
+  if (m.includes('expired')) return 'THE GAME TOOK TOO LONG TO LET YOU IN. TRY AGAIN';
   return 'COULD NOT REACH THE GAME SERVER';
 }
 
@@ -132,12 +133,14 @@ export class OnlineMenu {
   }
 
   private roomRow(r: RoomListing): HTMLElement {
-    const open = r.status === 'lobby' && r.players < r.maxPlayers;
-    const state = r.status === 'playing' ? `PLAYING${r.survived ? ` · ${clock(r.survived)}` : ''}` : r.players >= r.maxPlayers ? 'FULL' : 'IN THE LOBBY';
+    // A night under way can be joined too: the newcomer drops in at the safehouse.
+    const open = r.status !== 'over' && r.players < r.maxPlayers;
+    const playing = r.status === 'playing';
+    const state = playing ? `PLAYING${r.survived ? ` · ${clock(r.survived)}` : ''}` : r.players >= r.maxPlayers ? 'FULL' : 'IN THE LOBBY';
     return h('div', { class: 'room-row' },
       h('div', {}, h('b', {}, r.name.toUpperCase()), h('small', {}, `HOST ${r.host.toUpperCase()} · ${r.players}/${r.maxPlayers} · ${state}`)),
       // Only rooms that can be joined get a button.
-      open ? this.button('JOIN', () => void this.join(() => net.client().joinById(r.roomId, joinOptions()))) : h('span', { class: 'room-state' }, state),
+      open ? this.button(playing ? 'DROP IN' : 'JOIN', () => void this.join(() => net.client().joinById(r.roomId, joinOptions()))) : h('span', { class: 'room-state' }, r.players >= r.maxPlayers ? 'FULL' : state),
     );
   }
 
@@ -148,8 +151,9 @@ export class OnlineMenu {
       return;
     }
     await this.join(async () => {
-      const { roomId } = await net.api<{ roomId: string }>(`/api/code/${code}`).catch(() => {
-        throw new Error('not found');
+      // A wrong code is "not found"; a server that can't be reached says so instead.
+      const { roomId } = await net.api<{ roomId: string }>(`/api/code/${code}`).catch((e: unknown) => {
+        throw (e as { status?: number })?.status === 404 ? new Error('not found') : e;
       });
       return net.client().joinById(roomId, joinOptions());
     });
@@ -205,6 +209,8 @@ export class OnlineMenu {
       this.say('');
       this.attach(new NetLink(room));
     } catch (e) {
+      // The real reason stays in the console for whoever is helping (the line below is the short version).
+      console.warn('[dead-hours] could not join the game:', e);
       if ((e as { code?: unknown } | null)?.code === SERVERS_FULL) {
         this.view = 'full';
         this.say('');
@@ -273,17 +279,21 @@ export class OnlineMenu {
       );
     });
     const waiting = m.players.filter((p) => p.id !== m.host && !p.ready).length;
+    // Back here after falling while the others play on: the next night starts when they are done.
+    const underWay = m.status !== 'lobby';
     const draw = () => this.body.replaceChildren(
       h('h2', {}, m.name.toUpperCase()),
       h('div', { class: 'code-box' }, h('span', {}, m.private ? 'PRIVATE · JOIN CODE' : 'JOIN CODE'), codeEl, copy),
       h('h3', {}, `Survivors ${m.players.length}/${GAME.maxPlayers}`),
       h('div', { class: 'lobby-list' }, ...players),
-      h('div', { class: 'actions' },
+      ...(underWay ? [] : [h('div', { class: 'actions' },
         link.isHost
           ? this.button(waiting ? `START ANYWAY (${waiting} NOT READY)` : 'START THE NIGHT', () => link.start(), 'btn primary')
           : this.button(me?.ready ? 'NOT READY' : 'READY', () => link.setReady(!me?.ready), 'btn primary'),
-      ),
-      h('p', { class: 'lobby-hint' }, link.isHost ? 'Send your friends the code. Everyone plays the survivor and rifle they joined with.' : 'Waiting for the host to start the night.'),
+      )]),
+      h('p', { class: 'lobby-hint' }, underWay
+        ? 'The night is still going for the others. The next one starts from here when it ends.'
+        : link.isHost ? 'Send your friends the code: they can join now or drop in after the night starts. Everyone plays the survivor and rifle they joined with.' : 'Waiting for the host to start the night.'),
       h('h3', {}, 'Chat'),
       ...(this.chatBox ? [this.chatBox.el] : []),
     );

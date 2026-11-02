@@ -33,6 +33,8 @@ interface Member {
   /** Has the night's scene up: snapshots and events go only to loaded clients (no backlog while it builds). */
   loaded: boolean;
   spawn: BeginMsg['spawn'] | null;
+  /** Survival seconds already gone when they dropped into this night (0: there from the start). */
+  joinedAt: number;
   /** This night's run once it ended for them (died or left), and its leaderboard places. */
   run: { survived: number; stats: PlayerStats; ranks: Promise<Ranks | RunOutcome> } | null;
   /** Player ids this player blocks: no chat, voice or negotiation passes between them either way. */
@@ -89,6 +91,13 @@ function cleanSignal(msg: unknown): Omit<RtcIn, 'from'> & { to: string } | null 
 const NO_RANK: Ranks = { rankSurvival: null, rankKills: null };
 
 /**
+ * How long a survivor whose connection dropped mid-night keeps their place (s). A slow machine
+ * that hitches hard, or a phone switching networks, can take a while to come back; 20 s lost
+ * players who would have made it.
+ */
+const HOLD_PLACE = 45;
+
+/**
  * A hosted game: whoever creates it hosts (starts the night; the next to have joined takes
  * over when they leave), friends join with its code or from the game list. The night itself
  * runs here on the server (Night); the room carries the lobby, the messages and the records.
@@ -122,7 +131,11 @@ export class SurvivalRoom extends Room {
     this.onMessage(C2S.start, (c) => this.start(c));
     this.onMessage(C2S.loaded, (c) => {
       const m = this.members.get(c.sessionId);
-      if (m && this.status === 'playing') m.loaded = true;
+      if (!m || this.status !== 'playing' || m.loaded) return;
+      m.loaded = true;
+      // Dropped in late (or slow to load): first what is already going on that a snapshot doesn't carry.
+      const missed = this.night?.catchUp();
+      if (missed?.length) c.send(S2C.ev, missed);
     });
     this.onMessage(C2S.motion, (c, msg: unknown) => {
       if (this.status !== 'playing' || !this.night) return;
@@ -174,7 +187,13 @@ export class SurvivalRoom extends Room {
 
   /** Who is joining: their sign-in session or browser key, looked up before they are let in. */
   async onAuth(_client: Client, o: Partial<JoinOptions>): Promise<Owner | true> {
-    return (await resolveOwner(o.session, o.token)) ?? true;
+    try {
+      return (await resolveOwner(o.session, o.token)) ?? true;
+    } catch (e) {
+      // The profile store not answering must not keep anyone out: they play, unrecorded.
+      console.warn('[dead-hours] could not look up a joining player, letting them in unrecorded:', e);
+      return true;
+    }
   }
 
   async onJoin(client: Client, o: Partial<JoinOptions>, auth?: Owner | true): Promise<void> {
@@ -197,6 +216,7 @@ export class SurvivalRoom extends Room {
       ready: false,
       loaded: false,
       spawn: null,
+      joinedAt: 0,
       run: null,
       blocks: new Set(),
       limits: { chat: new Bucket(CHAT.burst, CHAT.refillSeconds), talk: new Bucket(20, 0.1), rtc: new Bucket(120, 0.05) },
@@ -206,9 +226,26 @@ export class SurvivalRoom extends Room {
     const name = this.members.get(client.sessionId)!.name;
     this.log(`${name} joined (${this.members.size}/${this.maxClients})`);
     client.send(S2C.ice, iceConfig(pid));
-    this.announce(`${name} joined`, client.sessionId);
+    // A night under way: straight into it beside the others (no waiting for the next one).
+    const late = this.status === 'playing' && this.night ? this.dropIn(client, this.members.get(client.sessionId)!) : false;
+    this.announce(late ? `${name} joined the night` : `${name} joined`, client.sessionId);
     this.sendLobby();
     this.updateMeta();
+  }
+
+  /** Puts a player who joined mid-night into it at the safehouse; they load the scene and the stream starts. */
+  private dropIn(client: Client, m: Member): boolean {
+    const night = this.night;
+    if (!night) return false;
+    const sim = night.sim;
+    m.spawn = night.addSurvivor(m, sim.players.size);
+    m.run = null;
+    m.ready = false;
+    m.loaded = false;
+    m.joinedAt = sim.phase === 'survival' ? sim.phaseTime : 0;
+    client.send(S2C.begin, { seed: night.seed, t: night.time, spawn: m.spawn, late: true } satisfies BeginMsg);
+    this.log(`${m.name} dropped into the night at ${Math.floor(m.joinedAt)} s`);
+    return true;
   }
 
   async onLeave(client: Client, consented: boolean): Promise<void> {
@@ -216,9 +253,9 @@ export class SurvivalRoom extends Room {
     if (!this.members.has(id)) return;
     // A dropped connection mid-night gets a short while to come back; the survivor stands still meanwhile.
     if (!consented && this.status === 'playing' && this.night?.sim.players.get(id)?.alive) {
-      this.log(`${this.members.get(id)!.name} lost connection, holding their place for 20 s`);
+      this.log(`${this.members.get(id)!.name} lost connection, holding their place for ${HOLD_PLACE} s`);
       try {
-        await this.allowReconnection(client, 20);
+        await this.allowReconnection(client, HOLD_PLACE);
         this.log(`${this.members.get(id)?.name ?? id} reconnected`);
         return;
       } catch {
@@ -272,10 +309,12 @@ export class SurvivalRoom extends Room {
       m.run = null;
       m.ready = false;
       m.loaded = false;
+      m.joinedAt = 0;
     }
     this.status = 'playing';
     this.log(`night started with ${this.members.size}`);
-    void this.lock();
+    // The room stays open while the night plays: friends can drop in with the code or from the list
+    // (Colyseus still closes it on its own while all four places are taken).
     for (const c of this.clients) {
       const m = this.members.get(c.sessionId);
       if (m?.spawn) c.send(S2C.begin, { seed, t: night.time, spawn: m.spawn } satisfies BeginMsg);
@@ -309,9 +348,9 @@ export class SurvivalRoom extends Room {
     const p = night?.sim.players.get(id);
     if (!m || !night || !p || m.run) return;
     const sim = night.sim;
-    // Seconds since the outbreak, at the moment they fell (or now, leaving alive).
+    // Seconds since the outbreak (or since they dropped in), at the moment they fell (or now, leaving alive).
     const since = p.alive ? 0 : Math.max(0, sim.time - p.diedAt);
-    const survived = sim.phase === 'preparation' ? 0 : Math.max(0, sim.phaseTime - since);
+    const survived = sim.phase === 'preparation' ? 0 : Math.max(0, sim.phaseTime - since - m.joinedAt);
     const stats = { ...p.stats };
     const store = services.store;
     // Gone before the outbreak with nothing done: not a run worth a place on the boards.
@@ -351,7 +390,6 @@ export class SurvivalRoom extends Room {
     this.broadcast(S2C.over, { results } satisfies OverMsg);
     this.status = 'lobby';
     for (const m of this.members.values()) m.ready = false;
-    void this.unlock();
     this.sendLobby();
     this.updateMeta();
   }

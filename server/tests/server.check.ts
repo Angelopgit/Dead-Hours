@@ -261,8 +261,16 @@ try {
   check(await until(() => !!a.begin && !!b.begin), 'both get the begin message');
   check(!!a.begin && !!b.begin && (a.begin.spawn.x !== b.begin.spawn.x || a.begin.spawn.z !== b.begin.spawn.z), 'survivors start at different spawns');
   check(await until(() => a.lobby?.status === 'playing'), 'lobby shows the night under way');
-  const joinLate = await client.joinById(a.room.roomId, { name: 'Late' }).then(() => true, () => false);
-  check(!joinLate, 'nobody joins mid-night');
+  const late = new Player('Late', 'lateKEY_0123456789abcdefg');
+  late.attach(await client.joinById(a.room.roomId, late.options));
+  check(await until(() => !!late.begin), 'a friend can drop into the night under way');
+  check(late.begin?.late === true && late.begin.seed === a.begin!.seed && !a.begin!.late, 'they get the same night, marked as joined late');
+  check(await until(() => late.snaps.length > 0), 'snapshots stream to them once their scene is up');
+  check(late.snaps.at(-1)?.p.length === 3, `they are in the night beside the others (${late.snaps.at(-1)?.p.length})`);
+  check(await until(() => a.chat.some((l) => !!l.sys && l.text === 'Late joined the night')), 'the others are told someone dropped in');
+  check(((await api('/api/rooms')).body ?? []).length === 0, 'a private game stays off the list while it plays');
+  await late.room.leave();
+  check(await until(() => a.lobby?.players.length === 2), 'and they can leave again');
 
   // A's copy of the world.
   await initPhysics();
