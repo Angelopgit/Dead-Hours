@@ -619,6 +619,11 @@ body.pad-nav #viewport { cursor: none; }
 body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); width: 200px; font-size: 0.85em; }
 body.touch-play .weapon-panel { bottom: auto; top: calc(52px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); right: auto; text-align: left; font-size: 0.75em; }
 body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
+/* The ammo panel starts right under the health bar on a phone: the stance line ("CROUCHED") goes beside the
+   name and health, and the serum armor is its teal bar alone (both printed over the gun's slots and name). */
+body.touch-play .vitals .stance { position: absolute; left: calc(100% + 1.4em); top: 0.1em; margin: 0; height: auto; white-space: nowrap; }
+body.touch-play .vitals .armor { margin-top: 3px; }
+body.touch-play .vitals .armor-label { display: none; }
 body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right)); }
 /* Talking and chat take the bottom-left corner (the ammo panel is up top; they printed over it): three
    lines and the names in a row, so on a 360 px tall phone they stay under the longest prompt, which slides
