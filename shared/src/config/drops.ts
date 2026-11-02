@@ -45,6 +45,15 @@ export const SUPPLY_DROPS = {
   caseOffset: 1.15,
   /** Chance that a drop also carries one Lazarus serum (see SERUM), lying on the crate's other side. */
   serumChance: 0.1,
+  /**
+   * Throwables packed in with the ammunition, each rolled on its own per drop: a crate with
+   * grenades hands `fragsPerUse` to everyone who takes from it, one with Molotovs `molotovsPerUse`
+   * (never past what a survivor can carry). Crates without them hand out none.
+   */
+  fragChance: 0.35,
+  molotovChance: 0.25,
+  fragsPerUse: 2,
+  molotovsPerUse: 1,
 } as const;
 
 /**

@@ -854,12 +854,12 @@ section('Exclusive supply drop weapons');
   // helicopters announce. Many short nights of a lone survivor, each run to 12 minutes.
   {
     const S = sim as unknown as { runDrops(): void; nextDropAt: number };
-    let early2 = 0, earlyN = 0, late2 = 0, lateN = 0, nights = 0, nightsWithOne = 0;
+    let early2 = 0, earlyN = 0, late2 = 0, lateN = 0, nights = 0, nightsWithOne = 0, frags = 0, molotovs = 0, nightsWithFrags = 0;
     for (let night = 0; night < 160; night++) {
       for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
       sim.drops.length = 0;
       S.nextDropAt = SUPPLY_DROPS.firstAt;
-      let any = false;
+      let any = false, anyFrag = false;
       for (sim.phaseTime = 0; sim.phaseTime < 720; sim.phaseTime += 1) {
         const before = sim.drops.length;
         S.runDrops();
@@ -867,7 +867,10 @@ section('Exclusive supply drop weapons');
         const d = sim.drops[sim.drops.length - 1];
         if (sim.phaseTime < SUPPLY_DROPS.exclusiveAfter) { earlyN++; if (d.weapon) early2++; } else { lateN++; if (d.weapon) late2++; }
         if (d.weapon) any = true;
+        if (d.frags) { frags++; anyFrag = true; }
+        if (d.molotovs) molotovs++;
       }
+      if (anyFrag) nightsWithFrags++;
       sim.drain();
       nights++;
       if (any) nightsWithOne++;
@@ -878,6 +881,10 @@ section('Exclusive supply drop weapons');
     check(lateN > 500 && late2 / lateN >= 0.09 && late2 / lateN <= 0.16,
       `flown for real: ${late2} of ${lateN} drops after three minutes carried one (${(100 * late2 / lateN).toFixed(1)}%), ${early2} of ${earlyN} before`);
     console.log(`       ${nightsWithOne} of ${nights} twelve-minute nights saw at least one exclusive weapon`);
+    const all = earlyN + lateN;
+    check(Math.abs(frags / all - SUPPLY_DROPS.fragChance) < 0.05 && Math.abs(molotovs / all - SUPPLY_DROPS.molotovChance) < 0.05,
+      `flown for real: grenades in ${(100 * frags / all).toFixed(1)}% of drops, Molotovs in ${(100 * molotovs / all).toFixed(1)}% (more often than any gun)`);
+    console.log(`       ${nightsWithFrags} of ${nights} nights had at least one drop with grenades`);
   }
 
   // A drop forced to carry the .50 cal, flown all the way down.
@@ -921,6 +928,38 @@ section('Exclusive supply drop weapons');
   for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
   cleanup(sim, body);
 }
+section('Grenades and Molotovs in supply drops');
+{
+  const at = { x: 0, y: 0.15, z: 6 };
+  const { sim, sp, body } = makeSim(at, 0.5);
+  run(sim, 1);
+  const clear = () => {
+    for (const z of [...sim.zombies]) z.removeBody();
+    sim.zombies.splice(0, sim.zombies.length);
+    sp.health = PLAYER.maxHealth;
+    return false;
+  };
+  for (const packed of [{ frags: true, molotovs: false }, { frags: false, molotovs: false }]) {
+    clear();
+    const drop = sim.callSupplyDrop();
+    if (!drop) { check(false, 'drop called'); continue; }
+    Object.assign(drop, packed);
+    run(sim, drop.flight.land - sim.time + 0.2, clear);
+    const crate = sim.interactables[drop.interactable];
+    sim.setMotion('p1', { pos: { x: drop.flight.ground.x + 1.3, y: drop.flight.ground.y, z: drop.flight.ground.z } });
+    sp.arsenal.throwables.frag = 0;
+    sp.arsenal.throwables.molotov = 0;
+    sp.arsenal.primary.reserve = 0;
+    const snap = captureSnapshot(sim, new Map()).i.find((r) => r[0] === crate.id);
+    check(sim.use('p1', crate.id) && sp.arsenal.throwables.frag === (packed.frags ? SUPPLY_DROPS.fragsPerUse : 0) && sp.arsenal.throwables.molotov === 0,
+      packed.frags ? `a crate packed with grenades hands out ${SUPPLY_DROPS.fragsPerUse} (and no Molotovs it doesn't have)` : 'a plain crate hands out ammunition only');
+    check(!!snap && (snap[8] & 1) === (packed.frags ? 1 : 0), 'snapshots say what the crate holds');
+    sim.drain();
+  }
+  for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
+  cleanup(sim, body);
+}
+
 section('RPG-7');
 {
   const at = { x: 0, y: 0.15, z: 6 };

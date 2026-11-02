@@ -1550,7 +1550,11 @@ export class GameSession {
     }
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
-    else if (best.kind === 'supply') this.hud.setPrompt('interact', `TAKE UNIVERSAL AMMO · ${best.it!.supply} LEFT`);
+    else if (best.kind === 'supply') {
+      const it = best.it!;
+      const what = ['UNIVERSAL AMMO', it.frags ? 'GRENADES' : '', it.molotovs ? 'MOLOTOVS' : ''].filter(Boolean).join(' + ');
+      this.hud.setPrompt('interact', `TAKE ${what} · ${it.supply} LEFT`);
+    }
     else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()} · ARMOR AGAINST THE DEAD`);
     else if (best.kind === 'melee') {
       const mine = this.me.arsenal.meleeId;

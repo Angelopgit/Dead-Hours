@@ -175,7 +175,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   const items: number[][] = [];
   for (const it of sim.interactables) {
     if (!it) continue;
-    items.push([it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range), it.weapon ? idx(WEAPON_IDS, it.weapon) : -1]);
+    items.push([it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range), it.weapon ? idx(WEAPON_IDS, it.weapon) : -1, (it.frags ? 1 : 0) | (it.molotovs ? 2 : 0)]);
   }
   const bars: number[] = [];
   for (const b of sim.barricades.slots) {
@@ -627,6 +627,8 @@ export class Mirror {
         sim.interactables[id] = { id, kind: ITEM_KINDS[r[1]] ?? 'ammo', pos: { x: r[2] / 100, y: r[3] / 100, z: r[4] / 100 }, supply, range: r[6] / 100 };
         const weapon = r[7] !== undefined && r[7] >= 0 ? WEAPON_IDS[r[7]] : undefined;
         if (weapon) sim.interactables[id].weapon = weapon;
+        if (r[8] & 1) sim.interactables[id].frags = true;
+        if (r[8] & 2) sim.interactables[id].molotovs = true;
       }
     }
   }
@@ -767,7 +769,7 @@ export class Mirror {
       const slot = sim.barricades.slots[e.slot];
       if (slot) sim.barricades.breakGlass(slot);
     } else if (e.type === 'heli') {
-      if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null, weapon: e.weapon ?? null, caseItem: -1, serum: !!e.serum, serumItem: -1 });
+      if (!sim.drops.some((d) => d.id === e.drop)) sim.drops.push({ id: e.drop, flight: e.flight, stage: 'inbound', interactable: -1, body: null, weapon: e.weapon ?? null, caseItem: -1, serum: !!e.serum, serumItem: -1, frags: false, molotovs: false });
     } else if (e.type === 'supplyDrop') {
       const d = sim.drops.find((x) => x.id === e.drop);
       if (!d) return;

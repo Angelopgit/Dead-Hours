@@ -145,6 +145,9 @@ export interface Interactable {
   takenBy?: Map<string, number>;
   /** Weapon cases from a supply drop: the exclusive gun inside. Found melee weapons: which one. */
   weapon?: WeaponId;
+  /** Supply crates: frag grenades and Molotovs packed in with the ammunition. */
+  frags?: boolean;
+  molotovs?: boolean;
   /** Found melee weapons: the room it lies in (one room holds only so many). */
   room?: string;
 }
@@ -163,6 +166,9 @@ export interface SupplyDrop {
   /** A Lazarus serum on the crate's other side (rare), and its interactable (-1 until landed). */
   serum: boolean;
   serumItem: number;
+  /** Grenades and Molotovs packed in the crate. */
+  frags: boolean;
+  molotovs: boolean;
 }
 
 /**
@@ -1214,7 +1220,7 @@ export class Simulation {
       // Universal rounds: whatever the survivor carries, every weapon is filled up.
       const a = p.arsenal;
       const got = a.addReserve('primary', a.defOf(a.primary.id).maxReserve) + a.addReserve('secondary', a.defOf(a.secondary.id).maxReserve)
-        + a.addThrowable('frag', THROWABLES.frag.max) + a.addThrowable('molotov', THROWABLES.molotov.max);
+        + (it.frags ? a.addThrowable('frag', SUPPLY_DROPS.fragsPerUse) : 0) + (it.molotovs ? a.addThrowable('molotov', SUPPLY_DROPS.molotovsPerUse) : 0);
       if (got <= 0) {
         this.emit({ type: 'notice', player: id, text: 'AMMUNITION FULL' });
         return false;
@@ -2237,11 +2243,14 @@ export class Simulation {
         const weapon = this.rollExclusive();
         const serum = this.forceSerum || this.rand() < D.serumChance;
         this.forceSerum = false;
-        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null, weapon, caseItem: -1, serum, serumItem: -1 });
+        const frags = this.rand() < D.fragChance;
+        const molotovs = this.rand() < D.molotovChance;
+        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null, weapon, caseItem: -1, serum, serumItem: -1, frags, molotovs });
         this.emit({ type: 'heli', drop: id, flight, ...(weapon ? { weapon } : {}), ...(serum ? { serum } : {}) });
+        const packed = ['Universal ammo', frags ? 'grenades' : '', molotovs ? 'Molotovs' : ''].filter(Boolean).join(' · ');
         const extras = [weapon ? `${WEAPONS[weapon].model} aboard` : '', serum ? `${SERUM.name} aboard` : ''].filter(Boolean);
-        if (extras.length) this.emit({ type: 'notice', player: null, text: 'RARE SUPPLY DROP INBOUND', sub: `Universal ammo · ${extras.join(' · ')}` });
-        else this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: 'Universal ammo · refills every weapon' });
+        if (extras.length) this.emit({ type: 'notice', player: null, text: 'RARE SUPPLY DROP INBOUND', sub: `${packed} · ${extras.join(' · ')}` });
+        else this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: frags || molotovs ? packed : 'Universal ammo · refills every weapon' });
         const [lo, hi] = D.interval;
         this.nextDropAt = this.phaseTime + lo + this.rand() * (hi - lo);
       } else {
@@ -2265,6 +2274,7 @@ export class Simulation {
         this.interactables.push({
           id: d.interactable, kind: 'supply', pos: { x: g.x, y: g.y + 0.5, z: g.z },
           supply: D.baseUses + alive, range: 2.1, takenBy: new Map(),
+          ...(d.frags ? { frags: true } : {}), ...(d.molotovs ? { molotovs: true } : {}),
         });
         // A solid crate: people walk around it, not through it.
         const w = this.physics.world;
