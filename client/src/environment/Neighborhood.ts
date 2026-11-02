@@ -4,7 +4,8 @@ import { MaterialLibrary } from '../rendering/Materials';
 import { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
 import { BAKE_CELL, dressHouses } from './Houses';
-import { PropFactory, pineCrown, type PropBuildResult, type Updatable } from './Props';
+import { PropFactory, type PropBuildResult, type Updatable } from './Props';
+import { Trees, type TreeTier } from './trees/Trees';
 import { Sky } from './Sky';
 import { Atmosphere } from './Atmosphere';
 import { Clutter } from './Clutter';
@@ -38,6 +39,8 @@ export class Neighborhood {
   readonly snow = HOLIDAY ? new Snow() : null;
   /** Wind-swayed lawn grass (merged blade tiles around the camera, swayed on the GPU). */
   readonly grass: Grass;
+  /** Every tree and shrub (instanced, levels of detail, wind). */
+  readonly trees: Trees;
   /** Lights for the volumetric fog (set up with the bake). */
   fogLights: FogLights | null = null;
   readonly lighting: Lighting;
@@ -81,10 +84,11 @@ export class Neighborhood {
     // Fixed density: clutter is static geometry, and changing it would re-run the lighting bake.
     this.clutterCount = Clutter.build(map, this.lib, batch);
     this.staticMeshes = batch.build(this.root, 'map');
-    this.buildForest();
     // After the static batches: grass draws after the houses, so the ones in front hide it cheaply.
     this.grass = new Grass(map);
     this.root.add(this.grass.root);
+    this.trees = new Trees(map, treeTier(settings.value.graphics));
+    this.root.add(this.trees.root);
     this.root.add(this.atmosphere.group);
     this.root.add(this.rain.mesh);
     if (this.snow) this.root.add(this.snow.mesh);
@@ -100,6 +104,7 @@ export class Neighborhood {
     bakeUniforms.uGroundRect.value.copy(baker.groundRect());
     for (const m of this.staticMeshes) patchBaked(m.material as THREE.Material);
     for (const m of this.staticMeshes) patchWet(m.material as THREE.Material);
+    await this.trees.light(field, () => new Promise((r) => setTimeout(r, 0)));
     this.fogLights = new FogLights(this.map, field.tracer);
     setWetLamps(this.fogLights.outdoor);
     const lamps = this.puddleLamps(field);
@@ -325,37 +330,6 @@ export class Neighborhood {
     });
   }
 
-  /** The woods: one instanced draw for trunks and one for crowns, with per-instance sway phase. */
-  private buildForest(): void {
-    const trees = this.map.props.filter((p) => p.forest);
-    if (!trees.length) return;
-    const crowns = pineCrown(1).map(([g, y]) => g.translate(0, y, 0));
-    const crown = mergeAll(crowns);
-    const trunk = new THREE.CylinderGeometry(0.12, 0.22, 2.4, 6).translate(0, 1.2, 0);
-    const pineMat = this.lib.custom('pine-forest', () => new THREE.MeshStandardMaterial({ color: 0x1b271d, roughness: 0.95, flatShading: true }));
-    this.propFactory.sway(pineMat, true);
-    const trunkMat = this.lib.custom('trunk-forest', () => new THREE.MeshStandardMaterial({ color: 0x2b231c, roughness: 0.95, flatShading: true }));
-    const a = new THREE.InstancedMesh(crown, pineMat, trees.length);
-    const b = new THREE.InstancedMesh(trunk, trunkMat, trees.length);
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const s = new THREE.Vector3();
-    trees.forEach((p, i) => {
-      const k = 0.85 + ((p.variant ?? 0) % 6) * 0.09;
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotY);
-      s.set(k, k * (0.9 + ((i * 7) % 5) * 0.06), k);
-      m.compose(new THREE.Vector3(p.x, 0, p.z), q, s);
-      a.setMatrixAt(i, m);
-      b.setMatrixAt(i, m);
-    });
-    for (const im of [a, b]) {
-      im.castShadow = true;
-      im.receiveShadow = true;
-      im.computeBoundingSphere();
-      this.root.add(im);
-    }
-  }
-
   /** Current flat fog density (the volumetric fog matches it). */
   get fogDensity(): number {
     return this.fog.density;
@@ -374,6 +348,9 @@ export class Neighborhood {
     setLightConesVisible(g.fogQuality === 'low');
     this.grass.setQuality(g.grass);
     this.lib.setAnisotropy(g.textureQuality === 'low' ? 1 : g.textureQuality === 'medium' ? 4 : 8);
+    this.trees.setTier(treeTier(g), false, renderer);
+    this.trees.prepare(renderer);
+    this.trees.setShadows(shadowSize > 0);
     void this.lib.loadPbr(renderer, g.textureQuality);
   }
 
@@ -395,8 +372,7 @@ export class Neighborhood {
     this.snow?.update(dt, camera, this.fog.density);
     // Rain comes with stronger wind in the grass.
     this.grass.update(camera as THREE.PerspectiveCamera, 1 + weather.rain * 0.35);
-    this.propFactory.foliageUniforms.uTime.value = t;
-    this.propFactory.foliageUniforms.uWind.value = this.atmosphere.windStrength;
+    this.trees.update(camera);
     for (const d of this.dynamic) d.update(dt, t);
   }
 
@@ -407,6 +383,7 @@ export class Neighborhood {
       if (m.isMesh) m.geometry.dispose();
     });
     this.sky.dispose();
+    this.trees.dispose();
     this.rain.dispose();
     this.snow?.dispose();
     this.grass.dispose();
@@ -416,20 +393,7 @@ export class Neighborhood {
   }
 }
 
-function mergeAll(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const parts = list.map((g) => (g.index ? g.toNonIndexed() : g));
-  let count = 0;
-  for (const g of parts) count += g.getAttribute('position').count;
-  const pos = new Float32Array(count * 3);
-  const nor = new Float32Array(count * 3);
-  let o = 0;
-  for (const g of parts) {
-    pos.set(g.getAttribute('position').array as Float32Array, o * 3);
-    nor.set(g.getAttribute('normal').array as Float32Array, o * 3);
-    o += g.getAttribute('position').count;
-  }
-  const out = new THREE.BufferGeometry();
-  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  return out;
+/** Tree detail follows the particle quality (Phone and Low presets: low). */
+export function treeTier(g: { particleQuality: Quality }): TreeTier {
+  return g.particleQuality;
 }

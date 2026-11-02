@@ -224,6 +224,11 @@ export class Game {
   /** The shaders, bodies and textures part of `launch`. */
   private async warm(session: GameSession, screen: LoadingScreen, stop: () => boolean): Promise<void> {
     const putAway = session.prewarm();
+    // One tree of every model at every level of detail beside the stage (and in its shadow).
+    const cam = this.engine.camera;
+    const treeSpot = cam.getWorldDirection(new THREE.Vector3()).setY(0).normalize().multiplyScalar(9).add(cam.position);
+    treeSpot.y = 0;
+    const treesBack = this.world.trees.prewarm(treeSpot, cam);
     try {
       if (stop()) return;
       const r = this.engine.renderer;
@@ -244,6 +249,7 @@ export class Game {
       }
       pinPrograms(r);
     } finally {
+      treesBack();
       putAway();
     }
   }

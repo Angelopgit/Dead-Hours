@@ -250,14 +250,15 @@ export class LightField {
 
   /**
    * Lighting at a free point (no surface): sky visibility, and each visible light's irradiance
-   * on a surface facing it. Used for character probes and auto-exposure.
+   * on a surface facing it. Used for character probes and auto-exposure, and (without the tree
+   * crown proxies, as a probe sits inside its own crown) for the trees' own probes.
    */
-  probe(px: number, py: number, pz: number, out: { ao: number; ambient: Float32Array; dirs: { x: number; y: number; z: number; r: number; g: number; b: number }[] }): void {
+  probe(px: number, py: number, pz: number, out: { ao: number; ambient: Float32Array; dirs: { x: number; y: number; z: number; r: number; g: number; b: number }[] }, crowns = true): void {
     let open = 0;
     const n = AO_DIRS.length / 3;
     for (let i = 0; i < n; i++) {
       // Upper hemisphere for the sky term.
-      if (!this.tracer.occluded(px, py, pz, AO_DIRS[i * 3], AO_DIRS[i * 3 + 1], AO_DIRS[i * 3 + 2], 8, 0)) open++;
+      if (!this.tracer.occluded(px, py, pz, AO_DIRS[i * 3], AO_DIRS[i * 3 + 1], AO_DIRS[i * 3 + 2], 8, 0, crowns)) open++;
     }
     out.ao = open / n;
     out.ambient[0] = out.ambient[1] = out.ambient[2] = 0;
@@ -272,7 +273,7 @@ export class LightField {
         lx /= d; ly /= d; lz /= d;
         const f = this.falloff(l, d, -lx, -ly, -lz);
         if (f * (l.r + l.g + l.b) < 1e-4) continue;
-        if (this.tracer.occluded(px, py, pz, lx, ly, lz, d - 0.12, 0)) continue;
+        if (this.tracer.occluded(px, py, pz, lx, ly, lz, d - 0.12, 0, crowns)) continue;
         out.dirs.push({ x: lx, y: ly, z: lz, r: l.r * f, g: l.g * f, b: l.b * f });
       }
     }

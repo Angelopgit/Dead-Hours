@@ -17,6 +17,7 @@
     "check:world": "tsx client/tests/world.check.ts",
     "check:houses": "tsx client/tests/houses.check.ts",
     "check:grass": "tsx client/tests/grass.check.ts",
+    "check:trees": "tsx client/tests/trees.check.ts",
     "check:audio": "tsx client/tests/audio.check.ts",
     "check:sim": "tsx shared/tests/sim.check.ts",
     "check:raid": "tsx shared/tests/raid.check.ts",

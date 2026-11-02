@@ -47,53 +47,9 @@ const LENS = { street: { r: 0.24, t: 0.04 }, alley: { r: 0.17, t: 0.03 } } as co
 
 /** Builds every map prop. Static parts merge into the world batch; animated parts stay separate. */
 export class PropFactory {
-  readonly foliageUniforms = { uTime: { value: 0 }, uWind: { value: 1 } };
   /** Soft glares that take over from lamp lenses too thin to draw steadily (see LampGlare). */
   readonly glare = new LampGlare();
-  readonly foliage: THREE.MeshStandardMaterial;
-  readonly pine: THREE.MeshStandardMaterial;
-  readonly trunk: THREE.MeshStandardMaterial;
-
-  constructor(private readonly lib: MaterialLibrary) {
-    this.foliage = lib.custom('foliage', () => new THREE.MeshStandardMaterial({ color: 0x27331f, roughness: 0.95, flatShading: true }));
-    this.pine = lib.custom('pine', () => new THREE.MeshStandardMaterial({ color: 0x1d2a1f, roughness: 0.95, flatShading: true }));
-    this.trunk = lib.standard(0x2f261f, 0.95);
-    for (const m of [this.foliage, this.pine]) {
-      m.userData.foliage = true;
-      this.sway(m, false);
-    }
-  }
-
-  /** Wind sway for foliage; instanced copies take their phase from the instance position. */
-  sway(m: THREE.MeshStandardMaterial, instanced: boolean): void {
-    m.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = this.foliageUniforms.uTime;
-      shader.uniforms.uWind = this.foliageUniforms.uWind;
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform float uWind;')
-        .replace(
-          '#include <begin_vertex>',
-          `#include <begin_vertex>
-           float hgt = max(position.y - 1.2, 0.0);
-           ${instanced ? 'vec3 base = instanceMatrix[3].xyz;' : 'vec3 base = position;'}
-           float ph = base.x * 0.35 + base.z * 0.27;
-           transformed.x += sin(uTime * 1.3 + ph) * 0.035 * hgt * uWind;
-           transformed.z += cos(uTime * 1.1 + ph * 1.3) * 0.025 * hgt * uWind;`,
-        );
-      // Dither foliage out right in front of the camera so the shoulder view never ends up
-      // inside a crown in the woods (shadows use their own depth material and are unaffected).
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <clipping_planes_fragment>',
-        `#include <clipping_planes_fragment>
-         float camDist = length(vViewPosition);
-         if (camDist < 4.6) {
-           float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-           if (n > smoothstep(1.2, 4.6, camDist)) discard;
-         }`,
-      );
-    };
-    m.customProgramCacheKey = () => (instanced ? 'sway-instanced' : 'sway');
-  }
+  constructor(private readonly lib: MaterialLibrary) {}
 
   build(map: MapDefinition, scene: THREE.Object3D, batch: StaticBatcher): PropBuildResult {
     const result: PropBuildResult = { dynamic: [], anchors: [], landmarks: {}, vehicles: [] };
@@ -103,7 +59,8 @@ export class PropFactory {
       if (isDrivable(p)) this.buildVehicle(kit, p, index, result);
     });
     for (const p of map.props) {
-      if (p.forest || isDrivable(p)) continue;
+      // Trees, pines and shrubs are drawn by Trees (instanced, levels of detail, wind).
+      if (p.forest || isDrivable(p) || p.kind === 'tree' || p.kind === 'pine' || p.kind === 'bush') continue;
       const root = new THREE.Group();
       root.position.set(p.x, p.y ?? 0, p.z);
       root.rotation.y = p.rotY;
@@ -388,34 +345,6 @@ export class PropFactory {
         }
         break;
       }
-      case 'tree': {
-        const v = p.variant ?? 0;
-        const hgt = 3.2 + (v % 3) * 0.6;
-        k.add(new THREE.CylinderGeometry(0.14, 0.24, hgt, 6), this.trunk, 0, hgt / 2, 0);
-        const clumps = 4 + (v % 3);
-        for (let i = 0; i < clumps; i++) {
-          const a = (i / clumps) * Math.PI * 2 + v;
-          const r = i === 0 ? 0 : 0.9 + (i % 2) * 0.4;
-          const size = i === 0 ? 1.9 : 1.2 + ((v + i) % 3) * 0.2;
-          const g = jitter(new THREE.IcosahedronGeometry(size, 1), size * 0.25, v * 10 + i);
-          k.add(g, this.foliage, Math.cos(a) * r, hgt + (i === 0 ? 0.9 : 0.2 + (i % 3) * 0.5), Math.sin(a) * r);
-        }
-        break;
-      }
-      case 'pine': {
-        k.add(new THREE.CylinderGeometry(0.12, 0.2, 2, 6), this.trunk, 0, 1, 0);
-        for (const [g, y] of pineCrown(p.variant ?? 0)) k.add(g, this.pine, 0, y, 0);
-        break;
-      }
-      case 'bush': {
-        const v = p.variant ?? 0;
-        for (let i = 0; i < 3; i++) {
-          const g = jitter(new THREE.IcosahedronGeometry(0.55 + (i % 2) * 0.2, 0), 0.15, v * 5 + i);
-          g.scale(1, 0.8, 1);
-          k.add(g, this.foliage, (i - 1) * 0.55, 0.45 + (i % 2) * 0.1, ((v + i) % 2) * 0.3 - 0.15);
-        }
-        break;
-      }
       case 'fence': {
         const len = p.length ?? 6;
         const broken = (p.variant ?? 0) === 1;
@@ -467,16 +396,4 @@ export class PropFactory {
         break;
     }
   }
-}
-
-/** Pine crown cones (shared by batched yard pines and the instanced forest). */
-export function pineCrown(v: number): [THREE.BufferGeometry, number][] {
-  const scale = 1 + (v % 3) * 0.15;
-  const out: [THREE.BufferGeometry, number][] = [];
-  for (let i = 0; i < 4; i++) {
-    const r = (2.2 - i * 0.45) * scale;
-    const h = 2.4 * scale;
-    out.push([jitter(new THREE.ConeGeometry(r, h, 7, 1), 0.18, v * 7 + i), 1.6 + i * 1.25 * scale + h / 2 - 0.6]);
-  }
-  return out;
 }
