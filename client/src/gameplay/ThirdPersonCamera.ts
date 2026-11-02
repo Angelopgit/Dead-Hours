@@ -2,12 +2,15 @@ import * as THREE from 'three';
 import type { Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
+import { LOOK_BEND } from '../characters/Humanoid';
 
 const BASE_FOV = 62;
 const AIM_FOV = 46;
 const NEAR = 0.08;
 /** Close enough for an optic a hand's width from the eye. */
 const ADS_NEAR = 0.025;
+/** From the waist, where the survivor bends to look up and down, to the eyes. */
+const WAIST_TO_EYE = 0.71;
 
 /** What aiming down the active weapon's sights needs from the camera. */
 export interface SightView {
@@ -159,6 +162,16 @@ export class ThirdPersonCamera {
     const fwdFlat = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.eye.copy(this.smoothPivot).addScaledVector(fwdFlat, 0.1 + crouch * 0.25).addScaledVector(right, 0.03);
     this.eye.y += 0.14 + crouch * 0.3;
+    // Looking up or down bends the survivor at the waist (LOOK_BEND of the pitch) and the eyes go
+    // with the head, so the shoulders and arms stay behind the sights instead of swinging in front
+    // of them; never into a wall ahead.
+    if (this.adsBlend > 0) {
+      const bend = -this.pitch * LOOK_BEND;
+      const ahead = WAIST_TO_EYE * Math.sin(bend);
+      const wall = ahead > 0 ? this.physics.sphereCast(this.eye.x, this.eye.y, this.eye.z, fwdFlat.x, 0, fwdFlat.z, 0.1, ahead) : null;
+      this.eye.addScaledVector(fwdFlat, wall !== null ? Math.max(0, wall - 0.02) : ahead);
+      this.eye.y -= WAIST_TO_EYE * (1 - Math.cos(bend));
+    }
     const ads = this.adsBlend;
     if (ads > 0) camPos.lerp(this.eye, ads * ads * (3 - 2 * ads));
 

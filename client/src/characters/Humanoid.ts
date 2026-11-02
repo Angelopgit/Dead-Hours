@@ -383,6 +383,9 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
   }
 }
 
+/** How much of the look pitch bends the spine (at the waist): looking down leans the survivor forward. */
+export const LOOK_BEND = 0.45;
+
 /**
  * Low-poly character: one skinned mesh (a single draw call) on an 11-bone rig, animated
  * procedurally (idle, walk, run, crouch, strafe, turn in place, airborne) from one locomotion
@@ -977,7 +980,7 @@ export class Humanoid {
     // A brute rolls its weight from foot to foot.
     this.hips.rotation.set(0, -sin * 0.1 * moving + this.hipYaw, brute ? sin * 0.07 * moving : 0);
     // Spine: lean, look pitch, bladed stance, recoil, flinches and stagger.
-    let spineX = lean + zLean - s.aim * 0.05 - this.lookPitch * 0.45 + this.kick + ft[0].x * 0.08 - sv * this.staggerDir.y * 0.45;
+    let spineX = lean + zLean - s.aim * 0.05 - this.lookPitch * LOOK_BEND + this.kick + ft[0].x * 0.08 - sv * this.staggerDir.y * 0.45;
     let spineZ = -s.strafe * 0.06 * moving + ft[1].x * 0.08 + sv * this.staggerDir.x * 0.3;
     const swingY = z ? Math.sin(p * 0.5) * 0.1 : sin * 0.08 * moving * (1 - s.aim);
     let spineY = swingY + this.twist - this.hipYaw;

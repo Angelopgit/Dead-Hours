@@ -69,6 +69,18 @@ export const POSES: Record<'rifle' | 'pistol', Record<'aim' | 'ready' | 'sprint'
   },
 };
 
+/**
+ * Down the sights (first person): which way each elbow goes (the gun's frame turned level: +Z
+ * along the barrel, +X the gun's left, +Y up) and how far past the wrist the palm sits on the
+ * grip. The hands run on along their forearms (the rig has no wrist joint), so this decides
+ * whether they wrap round under the gun or reach up into the sight picture. Tuned against
+ * `npm run check:sights`.
+ */
+export const ADS_ARMS: Record<'rifle' | 'pistol', { elbowR: V3; elbowL: V3; palm: number }> = {
+  rifle: { elbowR: [-0.73, -0.27, 0.01], elbowL: [0.5, -0.6, -0.62], palm: 0.084 },
+  pistol: { elbowR: [-1.4, -1.1, 0.44], elbowL: [0.16, -0.51, 0.13], palm: 0.071 },
+};
+
 /** Machete swing keyframes (spine space): grip position and blade orientation. */
 const SWING: { t: number; at: V3; rot: V3; twist: number }[] = [
   { t: 0, at: [-0.2, 0.25, 0.12], rot: [0.5, 0, 0], twist: 0 },
@@ -240,6 +252,8 @@ export class PlayerWeapon {
   gore = true;
   private readonly throwModels = new Map<ThrowKind, ThrowableModel>();
   private throwW = 0;
+  /** 0..1 how far the arms have taken the shooter's hold down the sights (shooterArms). */
+  private shooterW = 0;
 
   constructor(private readonly scene: THREE.Object3D, private readonly body: Humanoid) {
     const g = new THREE.CylinderGeometry(0.03, 0.03, 0.07, 8).rotateZ(Math.PI / 2);
@@ -602,10 +616,35 @@ export class PlayerWeapon {
       m.root.visible = m === inHand && this.shown;
       if (m.root.visible) m.root.updateMatrixWorld(true);
     }
+    this.shooterW = ease(this.shooterW, model.sight && s.action === 'idle' && !limb && !throwing ? ads : 0, 20);
+    if (this.shooterW > 0.001) this.shooterArms(model, hold, this.shooterW, leftW);
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
     this.lastProgress = progress;
     this.lastAction = s.action;
+  }
+
+  /**
+   * Down the sights: elbows out and down (ADS_ARMS) and each wrist drawn back along its forearm
+   * so the palm, not the wrist, is on the grip: the hands wrap round under the gun instead of
+   * reaching up across the sights.
+   */
+  private shooterArms(model: WeaponModel, hold: 'rifle' | 'pistol', w: number, leftW: number): void {
+    const arms = ADS_ARMS[hold];
+    const body = this.body;
+    // Elbows hang the same way however far up or down the gun points.
+    _sd.set(0, 0, 1).applyQuaternion(model.root.quaternion);
+    _lv.makeRotationY(Math.atan2(_sd.x, _sd.z));
+    this.poleR.lerp(_sp.set(...arms.elbowR).normalize().applyMatrix4(_lv), w).normalize();
+    this.poleL.lerp(_sp.set(...arms.elbowL).normalize().applyMatrix4(_lv), w).normalize();
+    for (const [limb, target, pole] of [[body.armR, this.rightTarget, this.poleR], [body.armL, this.leftTarget, this.poleL]] as const) {
+      // A support hand only partly on the gun keeps the rest of its own pose.
+      if (limb === body.armL && leftW < 0.999) continue;
+      // Where the forearm points with the wrist on the grip, then the wrist back along it.
+      body.reach(limb, target, pole, 1);
+      limb.end.getWorldPosition(_sd).sub(limb.lower.getWorldPosition(_sp)).normalize();
+      target.addScaledVector(_sd, -arms.palm * w);
+    }
   }
 
   /**
@@ -850,3 +889,4 @@ export class PlayerWeapon {
 
 const _lp = new THREE.Vector3(), _ld = new THREE.Vector3(), _ka = new THREE.Vector3();
 const _lq = new THREE.Quaternion(), _kq = new THREE.Quaternion();
+const _sd = new THREE.Vector3(), _sp = new THREE.Vector3(), _lv = new THREE.Matrix4();
