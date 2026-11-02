@@ -14,6 +14,7 @@ import { DoorSystem } from '../src/gameplay/Doors';
 import { Acoustics, type Space } from '../src/audio/Acoustics';
 import { beamPower, falloff, HOTSPOT_FAR, HOTSPOT_NEAR, lampPower, TRIM_ALBEDO } from '../src/lighting/BeamPower';
 import { BODY_KNEE, GLOSS_CEIL, GLOSS_KNEE, glossCap, softCeil } from '../src/lighting/GlossCap';
+import { Lighting } from '../src/lighting/Lighting';
 
 type V = [number, number];
 const DT = 1 / 60;
@@ -339,6 +340,38 @@ console.log('Wet reflections and fire-lit bodies stay under a soft ceiling');
   const bodyLine = body.map(([x, y]) => `${x} -> ${y.toFixed(2)}`).join(', ');
   if (body[0][1] !== 0.6 || body[1][1] < 0.8 || body[2][1] > GLOSS_CEIL) fail(`body light cap: ${bodyLine}`);
   else console.log(`  ok   bodies: ${bodyLine}`);
+}
+
+console.log('The loading frame readies every shadow-depth program');
+{
+  // three compiles a caster's depth program only when the caster enters a shadow camera right after one of another
+  // kind, so which ones compile depends on what the camera holds: two did mid-night as the park's iron fence came
+  // within the moon's 76 m. The loading frame stretches the moon's shadow over the whole map and has every caster
+  // pick its own program.
+  const light = new Lighting(new THREE.Scene());
+  const cam = light.moon.shadow.camera;
+  const before = [cam.left, cam.right, cam.top, cam.bottom, cam.far, ...light.moon.position.toArray()];
+  const hook = THREE.Object3D.prototype.onBeforeShadow;
+  const b = map.bounds;
+  const back = light.warmShadows(b);
+  light.moon.updateMatrixWorld(); light.moon.target.updateMatrixWorld();
+  light.moon.shadow.updateMatrices(light.moon);
+  const outside: string[] = [];
+  for (const x of [b.x0, b.x1]) for (const z of [b.z0, b.z1]) for (const y of [0, 14]) {
+    const p = new THREE.Vector3(x, y, z).project(cam);
+    if (Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z)) > 1) outside.push(`(${x}, ${y}, ${z})`);
+  }
+  const depth = new THREE.MeshDepthMaterial();
+  const v0 = depth.version;
+  const caster = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+  caster.onBeforeShadow(null as never, caster, cam, cam, caster.geometry, depth, null as never);
+  const picked = depth.version > v0;
+  back();
+  const after = [cam.left, cam.right, cam.top, cam.bottom, cam.far, ...light.moon.position.toArray()];
+  if (outside.length) fail(`map corners outside the whole-map moon shadow: ${outside.join(' ')}`);
+  else if (!picked) fail('a caster drawn into the loading frame\'s shadow kept the depth program of the one before it');
+  else if (after.some((v, i) => v !== before[i]) || THREE.Object3D.prototype.onBeforeShadow !== hook) fail(`shadows not put back: ${before.join(',')} -> ${after.join(',')}`);
+  else console.log(`  ok   all 8 corners of ${b.x1 - b.x0} x ${b.z1 - b.z0} m inside, each caster picks its program, then back to ${cam.right * 2} m`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');

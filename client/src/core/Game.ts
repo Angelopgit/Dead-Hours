@@ -231,9 +231,15 @@ export class Game {
       if (stop()) return;
       await uploadTextures(r, this.engine.scene, (f) => screen.step('textures', f), stop);
       if (stop()) return;
-      // Two real frames with everything in view: shadow passes, post-processing, the last uploads.
+      // Two real frames with everything in view: shadow passes, post-processing, the last uploads. In the first the
+      // moon's shadow takes in the whole map and every caster picks its depth program, so they compile now, not mid-night.
       for (let i = 0; i < 2; i++) {
-        this.engine.post.render(1 / 60);
+        const back = i === 0 ? this.world.lighting.warmShadows(NEIGHBORHOOD.bounds) : null;
+        try {
+          this.engine.post.render(1 / 60);
+        } finally {
+          back?.();
+        }
         await nextFrame();
       }
       pinPrograms(r);

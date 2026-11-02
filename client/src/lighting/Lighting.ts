@@ -64,6 +64,35 @@ export class Lighting {
     this.moon.position.set(fx + this.moonDir.x * 80, this.moonDir.y * 80, fz + this.moonDir.z * 80);
   }
 
+  /**
+   * Readies every shadow-depth program for a frame drawn behind the loading card, until the returned function puts
+   * things back. three compiles a depth program for a caster only when it picks one, and it picks one only when the
+   * caster comes into a shadow camera right after a caster of another kind (instanced, skinned, mapped, alpha-tested):
+   * which pairs meet depends on what the camera holds, so walking up to the park's iron fence compiled two mid-night.
+   * The moon's shadow is stretched over the whole map and every caster picks its own program.
+   */
+  warmShadows(area: { x0: number; x1: number; z0: number; z1: number }): () => void {
+    const proto = THREE.Object3D.prototype;
+    const hook = proto.onBeforeShadow;
+    proto.onBeforeShadow = (...args: Parameters<THREE.Object3D['onBeforeShadow']>) => { args[5].needsUpdate = true; };
+    const cam = this.moon.shadow.camera;
+    const was = { l: cam.left, r: cam.right, t: cam.top, b: cam.bottom, far: cam.far, pos: this.moon.position.clone(), at: this.moon.target.position.clone() };
+    const cx = (area.x0 + area.x1) / 2, cz = (area.z0 + area.z1) / 2;
+    const half = Math.hypot(area.x1 - area.x0, area.z1 - area.z0) / 2 + 10;
+    this.moon.target.position.set(cx, 0, cz);
+    this.moon.position.set(cx + this.moonDir.x * (half + 80), this.moonDir.y * (half + 80), cz + this.moonDir.z * (half + 80));
+    cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+    cam.far = 2 * half + 160;
+    cam.updateProjectionMatrix();
+    return () => {
+      proto.onBeforeShadow = hook;
+      cam.left = was.l; cam.right = was.r; cam.top = was.t; cam.bottom = was.b; cam.far = was.far;
+      cam.updateProjectionMatrix();
+      this.moon.position.copy(was.pos);
+      this.moon.target.position.copy(was.at);
+    };
+  }
+
   update(dt: number): void {
     this.time += dt;
     if (this.calm) this.nextStrike = Math.max(this.nextStrike, this.time + 10);
