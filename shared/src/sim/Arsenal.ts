@@ -4,6 +4,7 @@ import { MELEE, type MeleeId } from '../config/melee';
 import type { ZombieKind } from '../config/zombies';
 import { FIT_TIME, defaultBuild, sameBuild, tunedWeapon, type Loadout, type WeaponBuild } from '../config/progression';
 import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
+import { INJECT, type BoostId } from '../config/boosts';
 import { clamp } from './math';
 
 export interface WeaponState {
@@ -12,10 +13,13 @@ export interface WeaponState {
   reserve: number;
 }
 
-export type ArsenalAction = 'idle' | 'draw' | 'reload' | 'melee' | 'bandage' | 'throw';
+export type ArsenalAction = 'idle' | 'draw' | 'reload' | 'melee' | 'bandage' | 'throw' | 'inject';
 
 /** What a player is doing with their hands that the arsenal finished or advanced this step. */
-export type ArsenalTick = 'drawn' | 'shell' | 'reloaded' | 'meleeHit' | 'meleeDone' | 'bandaged' | 'thrown' | 'throwDone';
+export type ArsenalTick = 'drawn' | 'shell' | 'reloaded' | 'meleeHit' | 'meleeDone' | 'bandaged' | 'thrown' | 'throwDone' | 'injected' | 'injectDone';
+
+/** Busy with something other than a gun: a swing, a bandage, a throw or an injection. */
+const HANDS_FULL = new Set<ArsenalAction>(['melee', 'bandage', 'throw', 'inject']);
 
 /** A severed arm in a survivor's hands. */
 export interface HeldLimb {
@@ -87,6 +91,13 @@ export class Arsenal {
   /** What the current (or last) throw is. */
   throwKind: ThrowKind = 'frag';
   private releasePending = false;
+  /** The boost syringe being injected (while the action is 'inject'). */
+  injectKind: BoostId | null = null;
+  private injectPending = false;
+  /** Reloads take this share of their time (a rapid reload boost; see Simulation.syncBoosts). */
+  reloadScale = 1;
+  /** Spread and recoil bloom are multiplied by this (a focus boost). */
+  steady = 1;
 
   constructor(primary: WeaponId, secondary: WeaponId, builds: Loadout = {}) {
     this.builds = { ...builds };
@@ -114,7 +125,7 @@ export class Arsenal {
    */
   refit(id: WeaponId, b: WeaponBuild): boolean {
     const w = this.primary.id === id ? this.primary : this.secondary.id === id ? this.secondary : null;
-    if (!w || this.action === 'melee' || this.action === 'bandage') return false;
+    if (!w || this.action === 'melee' || this.action === 'bandage' || this.action === 'inject') return false;
     if (sameBuild(this.builds[id] ?? defaultBuild(id), b)) return false;
     this.builds = { ...this.builds, [id]: { ...b } };
     const d = this.defOf(id);
@@ -153,13 +164,13 @@ export class Arsenal {
     const move = 1 + Math.min(1, m.speed / 6.2) * (this.aim > 0.5 ? 0.7 : 1.3);
     const stance = m.crouching ? 0.75 : 1;
     const air = m.grounded ? 1 : 2.2;
-    return base * move * stance * air + this.bloom * d.recoil * 3.2;
+    return (base * move * stance * air + this.bloom * d.recoil * 3.2) * this.steady;
   }
 
   /** Whether a round can be fired now; 'empty' means the trigger clicks dry. */
   fireState(): 'ok' | 'empty' | 'busy' {
     if (this.limb || this.meleeOut) return 'busy';
-    if (this.action === 'draw' || this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return 'busy';
+    if (this.action === 'draw' || HANDS_FULL.has(this.action)) return 'busy';
     if (this.action === 'reload') {
       // Shell-by-shell reloads can be interrupted to fire what is loaded.
       if (!(this.def.perShell && this.weapon.mag > 0)) return 'busy';
@@ -174,7 +185,7 @@ export class Arsenal {
     if (this.action === 'reload') this.action = 'idle';
     this.weapon.mag--;
     this.cooldown = Math.max(this.cooldown, -0.02) + 60 / this.def.fireRate;
-    this.bloom = Math.min(1, this.bloom + this.def.recoil * 0.22);
+    this.bloom = Math.min(1, this.bloom + this.def.recoil * 0.22 * this.steady);
   }
 
   /** Dry fire still needs a pause so the click doesn't repeat every frame. */
@@ -189,9 +200,9 @@ export class Arsenal {
     if (w.mag >= d.magazine || w.reserve <= 0) return false;
     this.action = 'reload';
     if (d.perShell) {
-      this.actionTotal = this.actionT = 0.4;
+      this.actionTotal = this.actionT = 0.4 * this.reloadScale;
     } else {
-      this.actionTotal = this.actionT = d.reloadTime + (w.mag === 0 ? 0.35 : 0);
+      this.actionTotal = this.actionT = (d.reloadTime + (w.mag === 0 ? 0.35 : 0)) * this.reloadScale;
     }
     return true;
   }
@@ -205,7 +216,7 @@ export class Arsenal {
 
   switchTo(slot: 'primary' | 'secondary'): boolean {
     if (slot === this.active && this.action !== 'draw' && !this.meleeOut) return false;
-    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
     this.meleeOut = false;
     this.active = slot;
@@ -217,11 +228,11 @@ export class Arsenal {
 
   /**
    * Takes the melee weapon out in place of the gun (its own quick slot): held until a gun is
-   * picked again. Not with an arm in the hands, mid-swing, bandaging or throwing.
+   * picked again. Not with an arm in the hands, mid-swing, bandaging, throwing or injecting.
    */
   drawMelee(): boolean {
     if (this.meleeOut || this.limb) return false;
-    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
     this.meleeOut = true;
     this.interruptedSlot = null;
@@ -238,7 +249,7 @@ export class Arsenal {
 
   /** Swings the machete, or the arm when one is in hand (not while still getting a grip on it). */
   startMelee(): boolean {
-    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    if (HANDS_FULL.has(this.action)) return false;
     if (this.limb && (this.action === 'draw' || this.limb.broken)) return false;
     this.cancelReload();
     this.meleeWith = this.limb ? 'limb' : 'machete';
@@ -256,7 +267,7 @@ export class Arsenal {
 
   /** Takes a severed arm in hand: the gun is slung while the grip is taken. */
   grabLimb(limb: HeldLimb): boolean {
-    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
     this.meleeOut = false;
     this.limb = limb;
@@ -284,7 +295,7 @@ export class Arsenal {
    */
   startThrow(kind: ThrowKind): boolean {
     if (this.throwables[kind] <= 0 || this.limb) return false;
-    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
     this.throwKind = kind;
     this.throwables[kind]--;
@@ -303,7 +314,7 @@ export class Arsenal {
   }
 
   startBandage(): boolean {
-    if (this.action === 'melee' || this.action === 'bandage' || this.action === 'throw') return false;
+    if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
     this.action = 'bandage';
     this.actionTotal = this.actionT = COMBAT.bandageTime;
@@ -314,6 +325,37 @@ export class Arsenal {
     if (this.action !== 'bandage') return false;
     this.action = 'idle';
     return true;
+  }
+
+  /**
+   * Injects a boost syringe: the gun goes down, the needle goes in `INJECT.press` seconds in
+   * ('injected' tick) and the gun comes back up at the end ('injectDone'). Not with an arm in the
+   * hands, mid-swing, mid-throw or mid-bandage.
+   */
+  startInject(kind: BoostId): boolean {
+    if (this.limb || HANDS_FULL.has(this.action)) return false;
+    this.cancelReload();
+    this.injectKind = kind;
+    this.interruptedSlot = this.action === 'draw' ? this.active : null;
+    this.action = 'inject';
+    this.actionTotal = this.actionT = INJECT.duration;
+    this.injectPending = true;
+    return true;
+  }
+
+  /**
+   * Stops an injection (knocked down, killed). Returns the boost if the needle was not in yet,
+   * else null; either way the hands are free again.
+   */
+  cancelInject(): BoostId | null {
+    if (this.action !== 'inject') return null;
+    const kind = this.injectPending ? this.injectKind : null;
+    this.action = 'idle';
+    this.actionT = 0;
+    this.injectKind = null;
+    this.injectPending = false;
+    this.interruptedSlot = null;
+    return kind;
   }
 
   /** Replaces the primary (weapon table). Keeps the same share of ammunition. */
@@ -349,6 +391,8 @@ export class Arsenal {
     this.meleeWith = 'machete';
     this.releasePending = false;
     this.meleeHitPending = false;
+    this.injectPending = false;
+    this.injectKind = null;
     this.interruptedSlot = null;
     this.cooldown = 0;
     this.bloom = 0;
@@ -371,7 +415,7 @@ export class Arsenal {
     this.cooldown -= dt;
     if (this.cooldown < -0.05) this.cooldown = -0.05;
     this.bloom = Math.max(0, this.bloom - dt * (this.cooldown > -0.04 ? 0.9 : 2.4));
-    const canAim = aiming && !this.limb && this.action !== 'melee' && this.action !== 'bandage' && this.action !== 'draw' && this.action !== 'throw';
+    const canAim = aiming && !this.limb && this.action !== 'draw' && !HANDS_FULL.has(this.action);
     this.aim = clamp(this.aim + (canAim ? dt : -dt) / COMBAT.aimTime, 0, 1);
     if (this.action === 'idle') return;
     this.actionT -= dt;
@@ -387,6 +431,21 @@ export class Arsenal {
         if (this.interruptedSlot) this.actionTotal = this.actionT = this.drawTime * 0.6;
         this.interruptedSlot = null;
         out.push('meleeDone');
+      }
+      return;
+    }
+    if (this.action === 'inject') {
+      if (this.injectPending && this.actionTotal - this.actionT >= INJECT.press) {
+        this.injectPending = false;
+        out.push('injected');
+      }
+      if (this.actionT <= 0) {
+        // The gun comes back up.
+        this.action = 'draw';
+        this.actionTotal = this.actionT = this.drawTime * (this.interruptedSlot ? 0.6 : 0.45);
+        this.interruptedSlot = null;
+        this.injectKind = null;
+        out.push('injectDone');
       }
       return;
     }
@@ -421,7 +480,7 @@ export class Arsenal {
           out.push('shell');
         }
         if (w.mag < d.magazine && w.reserve > 0) {
-          this.actionTotal = this.actionT = d.reloadTime / d.magazine;
+          this.actionTotal = this.actionT = (d.reloadTime / d.magazine) * this.reloadScale;
         } else {
           this.action = 'idle';
           out.push('reloaded');

@@ -110,6 +110,8 @@ export type DebugMsg =
   | { cmd: 'hurt'; amount: number }
   | { cmd: 'raid' }
   | { cmd: 'lull' }
+  /** A boost syringe on the floor just in front of the survivor. */
+  | { cmd: 'boost'; boost?: string }
   /** Health stays full (for slow test clients); 'hurt' still kills. */
   | { cmd: 'god'; on: boolean };
 

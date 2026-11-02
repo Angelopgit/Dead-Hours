@@ -449,8 +449,13 @@ export class PlayerController {
     this.faceT = Math.max(this.faceT, seconds);
   }
 
+  /** A stamina boost: walking and sprinting speed, and how much of each sprint hold-off still applies. */
+  walkBoost = 1;
+  sprintBoost = 1;
+  sprintBlockScale = 1;
+
   blockSprint(seconds: number): void {
-    this.noSprintT = Math.max(this.noSprintT, seconds);
+    this.noSprintT = Math.max(this.noSprintT, seconds * this.sprintBlockScale);
   }
 
   /** Current movement state for the simulation (aim, noise, spread). */
@@ -563,8 +568,8 @@ export class PlayerController {
         : this.aiming
           ? PLAYER.aimSpeed
           : this.sprinting
-            ? PLAYER.sprintSpeed
-            : PLAYER.walkSpeed;
+            ? PLAYER.sprintSpeed * this.sprintBoost
+            : PLAYER.walkSpeed * this.walkBoost;
       const target = this.wish.clone().multiplyScalar(speed);
       const accel = this.grounded ? PLAYER.acceleration : PLAYER.acceleration * PLAYER.airControl;
       const k = 1 - Math.exp(-accel * dt);

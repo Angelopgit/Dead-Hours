@@ -1,18 +1,19 @@
 import * as THREE from 'three';
-import { LIMBS, MELEE, THROWING, WEAPONS, defaultBuild, encodeBuild, isHandgun, isMelee, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type ThrowKind, type WeaponDef, type WeaponId } from '@dead-hours/shared';
+import { LIMBS, MELEE, THROWING, WEAPONS, defaultBuild, encodeBuild, isHandgun, isMelee, type BoostId, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type ThrowKind, type WeaponDef, type WeaponId } from '@dead-hours/shared';
 import type { Humanoid } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
 import { createThrowableModel, type ThrowableModel } from './ThrowableModels';
 import { PUMP_HITS, dueCues } from './reloadScript';
 import type { FoleyKind } from '../audio/GunSynth';
+import { SyringeModel } from '../gameplay/Syringes';
 
 /** What the hands are doing, read from the authoritative arsenal (or a network snapshot). */
 export interface HeldState {
   primary: { id: WeaponId; mag: number };
   secondary: { id: WeaponId; mag: number };
   active: 'primary' | 'secondary';
-  action: 'idle' | 'draw' | 'reload' | 'melee' | 'bandage' | 'throw';
+  action: 'idle' | 'draw' | 'reload' | 'melee' | 'bandage' | 'throw' | 'inject';
   actionT: number;
   actionTotal: number;
   /** A severed arm in the hands (the guns slung while it is). */
@@ -27,6 +28,8 @@ export interface HeldState {
   builds?: Loadout;
   /** What the current throw is. */
   throwKind?: ThrowKind;
+  /** The boost syringe being injected. */
+  injectKind?: BoostId | null;
 }
 
 export interface HandsInput {
@@ -227,6 +230,22 @@ function swingClock(p: number, id: MeleeId): number {
  * Overarm throw (spine space): the right hand brings it up, cocks it back over the shoulder,
  * whips it forward and lets go at THROWING.release, follows through across the body.
  */
+/**
+ * Injecting a boost syringe (progress 0..1, the needle in at 0.5): the right hand brings it up in
+ * front, the left pulls the cap off, then it is driven into the outside of the right thigh, the
+ * thumb pushes the plunger home and it comes out again. `rot` turns the syringe (needle +Z).
+ */
+const INJECT_KEYS: { t: number; at: V3; rot: V3 }[] = [
+  { t: 0, at: [-0.16, 0.12, 0.3], rot: [-0.5, 0.3, 0] },
+  { t: 0.2, at: [-0.11, 0.28, 0.33], rot: [-1.15, 0.25, 0] },
+  { t: 0.3, at: [-0.13, 0.3, 0.31], rot: [-1.2, 0.2, 0] },
+  { t: 0.42, at: [-0.25, 0.17, 0.17], rot: [1.25, -0.25, 0] },
+  { t: 0.5, at: [-0.28, -0.05, 0.08], rot: [1.45, -0.3, 0] },
+  { t: 0.78, at: [-0.28, -0.04, 0.085], rot: [1.45, -0.3, 0] },
+  { t: 0.9, at: [-0.21, 0.07, 0.2], rot: [1.0, -0.2, 0] },
+  { t: 1, at: [-0.18, 0.1, 0.25], rot: [0.6, 0, 0] },
+];
+
 const THROW_KEYS: { t: number; at: V3; rot: V3; twist: number }[] = [
   { t: 0, at: [-0.2, 0.46, 0.14], rot: [-0.4, 0, 0], twist: -0.1 },
   { t: 0.15, at: [-0.27, 0.62, -0.2], rot: [-1.2, 0.2, 0], twist: -0.5 },
@@ -277,6 +296,8 @@ const seg = (p: number, a: number, b: number) => THREE.MathUtils.clamp((p - a) /
 export class PlayerWeapon {
   private readonly models = new Map<WeaponId, WeaponModel>();
   private readonly bandageRoll: THREE.Mesh;
+  /** The boost syringe in the hand while injecting. */
+  private readonly syringe: SyringeModel;
   private primaryId: WeaponId | null = null;
   private secondaryId: WeaponId | null = null;
   private aimW = 0;
@@ -359,6 +380,9 @@ export class PlayerWeapon {
     this.bandageRoll = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.95 }));
     this.bandageRoll.visible = false;
     scene.add(this.bandageRoll);
+    this.syringe = new SyringeModel('strength');
+    this.syringe.root.visible = false;
+    scene.add(this.syringe.root);
     this.ensure('machete');
   }
 
@@ -409,7 +433,7 @@ export class PlayerWeapon {
   }
 
   materials(): THREE.Material[] {
-    return [...[...this.models.values()].flatMap((m) => m.materials), ...(this.offhand?.materials ?? []), this.bandageRoll.material as THREE.Material];
+    return [...[...this.models.values()].flatMap((m) => m.materials), ...(this.offhand?.materials ?? []), this.bandageRoll.material as THREE.Material, ...this.syringe.materials];
   }
 
   private setLoadout(primary: WeaponId, secondary: WeaponId): void {
@@ -599,15 +623,17 @@ export class PlayerWeapon {
     // Blend weights.
     const ease = (cur: number, target: number, rate: number) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
     this.raised = Math.max(0, this.raised - dt);
-    const throwing = s.action === 'throw' || (!!input.priming && !limb && s.action !== 'melee' && s.action !== 'bandage');
-    const busy = s.action === 'reload' || s.action === 'melee' || s.action === 'bandage' || throwing;
+    const injecting = s.action === 'inject';
+    const throwing = s.action === 'throw' || (!!input.priming && !limb && s.action !== 'melee' && s.action !== 'bandage' && !injecting);
+    const busy = s.action === 'reload' || s.action === 'melee' || s.action === 'bandage' || injecting || throwing;
     const aimTarget = busy || s.action === 'draw' ? 0 : Math.max(input.aim, this.raised > 0 ? 1 : 0);
     this.aimW = ease(this.aimW, aimTarget, 16);
     this.sprintW = ease(this.sprintW, input.sprinting && !busy && this.raised <= 0 ? 1 : 0, 9);
     this.reloadW = ease(this.reloadW, s.action === 'reload' ? 1 : 0, 12);
     this.meleeW = ease(this.meleeW, s.action === 'melee' ? 1 : 0, 22);
     this.meleeTwoW = ease(this.meleeTwoW, s.action === 'melee' && !clubbing && style.twoHands ? 1 : 0, 26);
-    const out = !!s.meleeOut && !limb;
+    // (Put away while injecting: that hand holds the syringe.)
+    const out = !!s.meleeOut && !limb && !injecting;
     this.outW = ease(this.outW, out ? 1 : 0, 16);
     // Drawing brings the gun out of its holster (not while the draw is getting a grip on an arm,
     // or taking the melee weapon out).
@@ -619,7 +645,7 @@ export class PlayerWeapon {
     }
     this.wheelW = ease(this.wheelW, input.wheel ? 1 : 0, 10);
     if (this.wheelW < 0.002) this.wheelW = 0;
-    const stowTarget = s.action === 'bandage' || throwing || input.wheel ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
+    const stowTarget = s.action === 'bandage' || injecting || throwing || input.wheel ? 1 : drawing ? 1 - smooth(seg(progress, 0.1, 0.85)) : 0;
     this.stowW = drawing ? stowTarget : ease(this.stowW, stowTarget, 9);
     // The gun goes over the shoulder (or into the holster) while the hands hold an arm.
     this.limbW = limb || clubbing ? ease(this.limbW, 1, 14) : 0;
@@ -822,6 +848,19 @@ export class PlayerWeapon {
     } else {
       this.bandageRoll.visible = false;
     }
+    let injectQ: THREE.Quaternion | null = null;
+    if (injecting) {
+      // From the gun's grip to the syringe and back to it at the end (then the draw takes over).
+      this.keyPose(INJECT_KEYS, progress, this.tmpA, _iq);
+      const settle = smooth(seg(progress, 0, 0.12)) * (1 - smooth(seg(progress, 0.9, 1)));
+      this.rightTarget.lerp(this.tmpA, settle);
+      this.poleR.set(-0.9, -0.35, -0.25).transformDirection(spineM);
+      // The other hand meets the needle end and pulls the cap off.
+      this.leftTarget.copy(this.tmpA).addScaledVector(_ld.set(0, 0, 0.14).applyQuaternion(_iq), 1);
+      this.poleL.set(0.6, -0.7, -0.1).transformDirection(spineM);
+      leftW = smooth(seg(progress, 0.06, 0.17)) * (1 - smooth(seg(progress, 0.25, 0.36)));
+      injectQ = _iq;
+    }
     if (limb || clubbing) leftW = this.holdLimb(dt, s, limb, progress, spineM);
     this.throwW = throwing ? Math.min(1, this.throwW + dt * 8) : 0;
     const kind = s.action === 'throw' ? s.throwKind ?? 'frag' : input.priming ?? null;
@@ -867,8 +906,30 @@ export class PlayerWeapon {
     }
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
+    this.holdSyringe(s, injectQ, progress);
     this.lastProgress = progress;
     this.lastAction = s.action;
+  }
+
+  /** The syringe in the fist while injecting: cap off, plunger pushed home once the needle is in. */
+  private holdSyringe(s: HeldState, q: THREE.Quaternion | null, p: number): void {
+    const sy = this.syringe;
+    if (!q || !s.injectKind) {
+      sy.root.visible = false;
+      return;
+    }
+    if (sy.kind !== s.injectKind) sy.setKind(s.injectKind);
+    const arm = this.body.armR;
+    arm.end.getWorldPosition(_iw);
+    arm.lower.getWorldPosition(_ie);
+    // In the fist, a hand's length on from the wrist.
+    sy.root.position.copy(_iw).addScaledVector(_ie.subVectors(_iw, _ie).normalize(), 0.075);
+    sy.root.quaternion.copy(q);
+    sy.setCap(p < 0.24);
+    sy.setFill(1 - smooth(seg(p, 0.52, 0.78)));
+    sy.setGlow(1);
+    sy.root.visible = this.shown && p < 0.96;
+    sy.root.updateMatrixWorld(true);
   }
 
   /**
@@ -1211,6 +1272,7 @@ export class PlayerWeapon {
     if (this.limbModel) this.limbModel.root.visible = v;
     if (!v) for (const m of this.throwModels.values()) m.root.visible = false;
     if (!v) this.bandageRoll.visible = false;
+    if (!v) this.syringe.root.visible = false;
   }
 
   dispose(): void {
@@ -1225,6 +1287,7 @@ export class PlayerWeapon {
     this.bandageRoll.removeFromParent();
     this.bandageRoll.geometry.dispose();
     (this.bandageRoll.material as THREE.Material).dispose();
+    this.syringe.dispose();
   }
 }
 
@@ -1246,3 +1309,4 @@ const _od = new THREE.Vector3(), _o0 = new THREE.Vector3(), _oy = new THREE.Vect
 const _lp = new THREE.Vector3(), _ld = new THREE.Vector3(), _ka = new THREE.Vector3();
 const _lq = new THREE.Quaternion(), _kq = new THREE.Quaternion();
 const _sd = new THREE.Vector3(), _sp = new THREE.Vector3(), _lv = new THREE.Matrix4();
+const _iq = new THREE.Quaternion(), _iw = new THREE.Vector3(), _ie = new THREE.Vector3();

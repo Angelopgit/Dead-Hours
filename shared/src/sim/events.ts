@@ -2,6 +2,7 @@ import type { HitZone, WeaponId, WeaponSlot } from '../config/weapons';
 import type { ZombieKind } from '../config/zombies';
 import type { LimbCut, LimbZone } from '../config/limbs';
 import type { MeleeId } from '../config/melee';
+import type { BoostId } from '../config/boosts';
 import type { ThrowKind } from '../config/throwables';
 import type { Surface } from '../physics/Physics';
 import type { Vec3 } from './math';
@@ -112,6 +113,11 @@ export type SimEvent =
   | { type: 'limbDropped'; player: string; limb: number; thrown: boolean }
   /** Worn through: it comes apart in the survivor's hands at `pos`. */
   | { type: 'limbBroke'; player: string; limb: number; pos: Vec3; dir: Vec3 }
+  /**
+   * A boost syringe: `taken` from interactable `item` at `pos` (the injection starts), the dose went
+   * in and is running (`start`), or it wore off (`end`).
+   */
+  | { type: 'boost'; player: string; boost: BoostId; stage: 'taken' | 'start' | 'end'; item?: number; pos?: Vec3 }
   /** A found melee weapon was picked up at `pos` (floor); `swapped` is the one left there in its place. */
   | { type: 'meleeTaken'; player: string; item: number; weapon: MeleeId; swapped: MeleeId | null; pos: Vec3 }
   /** A loose arm was cleared away. */

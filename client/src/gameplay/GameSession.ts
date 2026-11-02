@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, BICYCLE, C2S, DOOR_WOOD, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
+  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -37,6 +37,7 @@ import { RaidView } from './RaidView';
 import { LimbView } from '../zombies/LimbView';
 import { BarricadeView } from './BarricadeView';
 import { MeleePickups } from './MeleePickups';
+import { SyringeModel, SyringePickups } from './Syringes';
 import { SkateboardView, type BoardPose } from './Skateboards';
 import type { VehicleView } from './VehicleView';
 import { Driving } from './Driving';
@@ -162,6 +163,9 @@ export class GameSession {
   /** Found melee weapons lying around indoors. */
   private readonly pickups: MeleePickups;
   private meleeHinted = false;
+  /** Boost syringes lying on furniture in the houses. */
+  private readonly syringes: SyringePickups;
+  private boostHinted = false;
   /** Skateboards lying about and under riders' feet. */
   private readonly skates: SkateboardView;
   private skateHinted = false;
@@ -397,6 +401,7 @@ export class GameSession {
     this.throws = new Throwables(engine.scene, physics, this.pyro);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
+    this.syringes = new SyringePickups(engine.scene, field);
     this.skates = new SkateboardView(engine.scene, field, physics);
     this.bikes = new BicycleView(engine.scene, field, physics);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
@@ -527,6 +532,16 @@ export class GameSession {
       const drop = this.drops.sample();
       place(drop.root, 0, 8);
       undo.push(drop.dispose);
+      // Boost syringes lying about (each with its glow), and one in hand.
+      const syr = this.syringes.sample();
+      place(syr.root, 1.5, 1);
+      undo.push(syr.dispose);
+      const held = new SyringeModel('regen');
+      held.setCap(false);
+      this.probe.attach(held.materials);
+      place(held.root, 1.2, 1.5);
+      held.root.position.y = 1.2;
+      undo.push(() => held.dispose());
       const raid = this.raid.sample();
       place(raid.root, 6, 6);
       undo.push(raid.dispose);
@@ -1149,6 +1164,7 @@ export class GameSession {
     this.raid.update(live, this.sim, renderTime, this.engine.camera, !!m);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
     this.pickups.update(live, this.sim, this.engine.camera);
+    this.syringes.update(live, this.sim, this.engine.camera);
     if (m) {
       this.remotes!.update(live, this.sim, m, this.engine.camera, this.ownBikePose(alpha));
       this.updateVoices();
@@ -1281,8 +1297,8 @@ export class GameSession {
 
   private get canAim(): boolean {
     const a = this.me.arsenal;
-    // Nothing to aim down while both hands are on a severed arm (or on the wheel, or the handlebars).
-    return a.action !== 'melee' && a.action !== 'bandage' && !a.limb && !a.meleeOut && !this.player.seated?.driver && !this.player.cycle;
+    // Nothing to aim down while both hands are on a severed arm, a syringe (or on the wheel, or the handlebars).
+    return a.action !== 'melee' && a.action !== 'bandage' && a.action !== 'inject' && !a.limb && !a.meleeOut && !this.player.seated?.driver && !this.player.cycle;
   }
 
   private fovTo(dt: number, fov: number): void {
@@ -1361,7 +1377,7 @@ export class GameSession {
     this.cam.look(input, friction);
     p.sampleInput(input, this.cam.yaw);
     const a = this.me.arsenal;
-    if (a.action === 'bandage') p.blockSprint(0.1);
+    if (a.action === 'bandage' || a.action === 'inject') p.blockSprint(0.1);
     if (this.driving) {
       // At the wheel: the pedals, the steering, the handbrake, the horn and the headlights.
       this.driving.read(input);
@@ -1612,7 +1628,7 @@ export class GameSession {
     }
     if (this.wantHeal) {
       this.wantHeal = false;
-      if (a.action !== 'melee' && a.action !== 'bandage' && a.startBandage()) {
+      if (a.action !== 'melee' && a.action !== 'bandage' && a.action !== 'inject' && a.startBandage()) {
         this.act({ a: 'bandage' });
         audio.bandage();
       }
@@ -1677,9 +1693,10 @@ export class GameSession {
     const dir = this.weapon.muzzleDir(this.tmpB);
     this.effects.muzzle(muzzle, dir, weapon);
     audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor' || weapon === 'wraith');
-    const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1);
-    this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008);
-    this.cam.addTrauma(0.04 + def.recoil * 0.05);
+    const steady = this.sim.boosted(this.me, 'focus') ? BOOSTS.focus.recoil : 1;
+    const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.crouching ? 0.8 : 1) * steady;
+    this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008 * steady);
+    this.cam.addTrauma((0.04 + def.recoil * 0.05) * steady);
     this.input.rumble(0.12 + def.recoil * 0.35, 60 + def.recoil * 60);
     this.player.faceCamera(0.7);
     if (weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
@@ -1800,6 +1817,13 @@ export class GameSession {
       this.hud.setPrompt('interact', `TAKE ${what} · ${it.supply} LEFT`);
     }
     else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()} · ARMOR AGAINST THE DEAD`);
+    else if (best.kind === 'boost') {
+      const b = BOOSTS[best.it!.boost ?? 'strength'];
+      const left = boostLeft(this.me.boosts, best.it!.boost ?? 'strength', this.sim.time);
+      this.hud.setPrompt('interact', left > b.duration * 0.5
+        ? `${b.name.toUpperCase()} · YOURS IS STILL RUNNING`
+        : `INJECT ${b.name.toUpperCase()} · ${b.blurb.toUpperCase()} · ${b.duration}S`);
+    }
     else if (best.kind === 'melee') {
       const mine = this.me.arsenal.meleeId;
       const what = WEAPONS[best.it!.weapon ?? 'machete'].model;
@@ -2680,7 +2704,7 @@ export class GameSession {
       cands.push({ kind: it.kind, pos: new THREE.Vector3(it.pos.x, it.pos.y, it.pos.z), it, near });
     }
     // Severed arms within reach (not mid-swing or mid-bandage, when the hands are busy).
-    const busy = this.me.arsenal.action === 'melee' || this.me.arsenal.action === 'bandage';
+    const busy = this.me.arsenal.action === 'melee' || this.me.arsenal.action === 'bandage' || this.me.arsenal.action === 'inject';
     if (!busy) {
       for (const l of this.sim.limbsInReach(this.myId)) {
         // Lying on the floor they are never close to the chest: count how near they are underfoot.
@@ -2733,7 +2757,7 @@ export class GameSession {
         this.wantThrow = kind;
       }
     }
-    if (t.priming && (a.limb || a.action === 'melee' || a.action === 'bandage' || !this.me.alive || a.throwables[t.priming] <= 0)) t.priming = null;
+    if (t.priming && (a.limb || a.action === 'melee' || a.action === 'bandage' || a.action === 'inject' || !this.me.alive || a.throwables[t.priming] <= 0)) t.priming = null;
     if (t.priming) this.player.blockSprint(0.1);
   }
 
@@ -3169,6 +3193,9 @@ export class GameSession {
         if (e.player !== this.myId) break;
         if (e.stage === 'start') audio.bandage();
         if (e.stage === 'cancel') this.hud.feedLine('BANDAGE INTERRUPTED');
+        break;
+      case 'boost':
+        this.onBoost(e.player, e.boost, e.stage);
         break;
       case 'refit':
         if (e.player !== this.myId) break;
@@ -3607,6 +3634,60 @@ export class GameSession {
     this.cam.addTrauma(0.1);
   }
 
+  // ------------------------------------------------------------------ boost syringes
+
+  /** A syringe taken (the injection starts), its dose in, or worn off; for this survivor or another. */
+  private onBoost(who: string, kind: BoostId, stage: 'taken' | 'start' | 'end'): void {
+    const b = BOOSTS[kind];
+    const mine = who === this.myId;
+    const at = mine ? null : this.sim.players.get(who)?.motion.pos;
+    if (!mine && !at) return;
+    const where = at ? this.tmpC.set(at.x, at.y + 0.9, at.z) : null;
+    if (stage === 'taken') {
+      audio.syringe('cap', kind, where);
+      if (mine) this.player.faceCamera(0.4);
+    } else if (stage === 'start') {
+      audio.syringe('inject', kind, where);
+      if (mine) {
+        this.hud.notify(b.short, `${b.blurb} · ${b.duration} s`, 2.4, 'calm');
+        this.hud.boostFlash(b.color);
+        this.cam.addTrauma(0.1);
+        this.input.rumble(0.35, 120);
+      } else {
+        this.hud.feedLine(`${this.sim.players.get(who)?.name.toUpperCase() ?? 'A SURVIVOR'} INJECTED ${b.short}`);
+      }
+    } else if (mine && this.me.alive) {
+      audio.syringe('end', kind, null);
+      this.hud.feedLine(`${b.short} WORE OFF`);
+    }
+  }
+
+  /** The boost chips over the health bar, the stamina boost's legs, and the first-night hint. */
+  private updateBoosts(): void {
+    const me = this.me;
+    const now = this.sim.time;
+    const list = [];
+    for (const id of Object.keys(me.boosts) as BoostId[]) {
+      const left = boostLeft(me.boosts, id, now);
+      if (left <= 0 || !me.alive) continue;
+      const b = BOOSTS[id];
+      list.push({ id, label: b.short, color: b.color, left, total: b.duration });
+    }
+    this.hud.setBoosts(list);
+    const stamina = me.alive && boostLeft(me.boosts, 'stamina', now) > 0;
+    const p = this.player;
+    p.walkBoost = stamina ? BOOSTS.stamina.walk : 1;
+    p.sprintBoost = stamina ? BOOSTS.stamina.sprint : 1;
+    p.sprintBlockScale = stamina ? BOOSTS.stamina.sprintBlock : 1;
+    if (!this.boostHinted && this.phase === 'playing' && this.sim.phase !== 'over') {
+      const n = this.sim.placedBoosts.length;
+      if (n > 0) {
+        this.boostHinted = true;
+        this.hud.feedLine(`${n} BOOST SYRINGES ARE HIDDEN IN THE HOUSES`);
+      }
+    }
+  }
+
   // ------------------------------------------------------------------ HUD
 
   private timerText(): string {
@@ -3632,6 +3713,7 @@ export class GameSession {
 
     hud.setHealth(me.health, PLAYER.maxHealth);
     hud.setArmor(me.alive ? me.armor : 0, SERUM.armor);
+    this.updateBoosts();
     const limb = a.limb && !a.limb.broken ? a.limb : null;
     hud.weapon({
       model: limb ? (LIMB_NAME[limb.cut]) : a.meleeOut ? WEAPONS[a.meleeId].model : def.model,
@@ -3675,8 +3757,8 @@ export class GameSession {
     // Down the sights, the sights are the crosshair. Not while the mouse is free either: "CLICK TO
     // CONTINUE" stands in the middle of the screen then, and the crosshair would strike through it.
     this.updateDownPanel();
-    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && this.cam.ads < 0.4 && !p.seated?.driver);
-    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && a.action !== 'inject' && this.cam.ads < 0.4 && !p.seated?.driver);
+    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : a.action === 'inject' ? 'INJECTING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
     // Pain: hits flash the screen edges red; low health keeps a pulse there.
@@ -3745,6 +3827,13 @@ export class GameSession {
     raid: () => (this.link ? (this.link.debug({ cmd: 'raid' }), true) : this.sim.callRaid()),
     /** Starts a downtime lull now (during the outbreak). */
     lull: () => (this.link ? (this.link.debug({ cmd: 'lull' }), true) : this.sim.startLull()),
+    /** A boost syringe just in front of the survivor, waist high (as if on a table: one on the floor is out of reach). */
+    boost: (kind: BoostId = 'strength') => {
+      if (this.link) return this.link.debug({ cmd: 'boost', boost: kind }), null;
+      const p = this.player.position;
+      const yaw = this.cam.yaw;
+      return this.sim.layBoost(kind, { x: p.x - Math.sin(yaw) * 0.6, y: p.y + 0.8, z: p.z - Math.cos(yaw) * 0.6 }).id;
+    },
   };
 
   dispose(): void {
@@ -3792,6 +3881,7 @@ export class GameSession {
     this.limbs.dispose();
     this.barricades.dispose();
     this.pickups.dispose();
+    this.syringes.dispose();
     this.drops.dispose();
     audio.helicopters(new Map());
     if (sceneSmoke() === this.effects.smoke) setSceneSmoke(null);

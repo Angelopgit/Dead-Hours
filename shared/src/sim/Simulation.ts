@@ -9,6 +9,8 @@ import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, t
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
 import { GORE, isGoreGun, shotgunReach } from '../config/gore';
 import { findPickupRooms, pickFoundWeapon, type PickupRoom } from './MeleePickups';
+import { BOOSTS, BOOST_PICKUPS, boostLeft, type BoostId } from '../config/boosts';
+import { findBoostSpots, pickBoost, type BoostSpot } from './BoostPickups';
 import { THROWABLES, THROWING, type ThrowKind } from '../config/throwables';
 import { propOccluders } from '../map/colliders';
 import { decodeAppearance, encodeAppearance } from '../config/appearance';
@@ -80,6 +82,8 @@ export class SimPlayer {
   bandages: number = COMBAT.startBandages;
   /** Lazarus serum armor left: soaks up part of every zombie hit (SERUM). */
   armor = 0;
+  /** Boost syringes running: simulation time each wears off (see BOOSTS). */
+  boosts: Partial<Record<BoostId, number>> = {};
   readonly motion: PlayerMotion;
   readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0, revives: 0 };
   /** The crosshair ray the last melee swing was aimed with (decides what it lands on). */
@@ -139,7 +143,7 @@ export interface Noise {
   source: string | null;
 }
 
-export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive' | 'serum' | 'melee';
+export type InteractKind = 'weapons' | 'ammo' | 'medical' | 'supply' | 'exclusive' | 'serum' | 'melee' | 'boost';
 
 export interface Interactable {
   id: number;
@@ -155,8 +159,10 @@ export interface Interactable {
   /** Supply crates: frag grenades and Molotovs packed in with the ammunition. */
   frags?: boolean;
   molotovs?: boolean;
-  /** Found melee weapons: the room it lies in (one room holds only so many). */
+  /** Found melee weapons: the room it lies in (one room holds only so many). Boost syringes: the house. */
   room?: string;
+  /** Boost syringes: which dose it holds. */
+  boost?: BoostId;
 }
 
 /** One helicopter supply drop, from the flight in to the crate being emptied or taken away. */
@@ -291,6 +297,12 @@ export class Simulation {
   /** Its own random stream, so placing weapons never shifts the zombies' rolls. */
   private readonly pickRand: () => number;
   private nextPickupAt = 0;
+  /** Places boost syringes can lie (worked out on first use), how many the night keeps out, and when the next turns up. */
+  private boostPlaces: BoostSpot[] | null = null;
+  private boostCount = 0;
+  private nextBoostAt = 0;
+  /** Its own random stream, like the found weapons'. */
+  private readonly boostRand: () => number;
   /** Where the night is in the horde schedule (see Hordes.ts), as of the last survival step. */
   horde: HordeState = hordeAt(0);
   /** The night's lulls so far (see Lulls.ts); online clients take it from each snapshot. */
@@ -325,6 +337,7 @@ export class Simulation {
     this.doors = opts.doors;
     this.rand = rng(opts.seed ?? 1);
     this.pickRand = rng(((opts.seed ?? 1) * 7919 + 13) >>> 0);
+    this.boostRand = rng(((opts.seed ?? 1) * 6271 + 29) >>> 0);
     this.raid = new Raid(this, opts.seed ?? 1);
     this.phaseTime = opts.preparation ?? GAME.preparationSeconds;
     const controller = (step: boolean) => {
@@ -643,6 +656,7 @@ export class Simulation {
 
   damagePlayer(p: SimPlayer, damage: number, from: Vec3): void {
     if (!p.alive) return;
+    if (this.boosted(p, 'strength')) damage = Math.round(damage * BOOSTS.strength.damageTaken * 10) / 10;
     if (p.armor > 0) {
       const soak = Math.min(p.armor, damage * SERUM.absorb);
       p.armor = Math.max(0, p.armor - soak);
@@ -685,6 +699,9 @@ export class Simulation {
     p.work = null;
     p.arsenal.cancelReload();
     if (p.arsenal.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
+    // Knocked down with the needle at the skin: it goes in as they fall.
+    const dose = p.arsenal.cancelInject();
+    if (dose) this.startBoost(p, dose);
     this.dropLimb(p, false);
     this.skateboards.hopOff(p, 'bail');
     this.vehicles.eject(p);
@@ -704,6 +721,8 @@ export class Simulation {
     p.revive = 0;
     p.work = null;
     p.arsenal.cancelReload();
+    p.arsenal.cancelInject();
+    this.endBoosts(p);
     this.dropLimb(p, false);
     this.dropMelee(p);
     this.skateboards.hopOff(p, 'bail');
@@ -1287,7 +1306,18 @@ export class Simulation {
     const p = this.players.get(id);
     if (!p || !p.up || this.vehicles.seatOf(id)) return false;
     const c = p.chest;
-    return Math.hypot(it.pos.x - c.x, (it.pos.y - c.y) * 1.5, it.pos.z - c.z) < it.range;
+    if (Math.hypot(it.pos.x - c.x, (it.pos.y - c.y) * 1.5, it.pos.z - c.z) >= it.range) return false;
+    // A syringe on a counter can't be taken through the wall behind it.
+    return it.kind !== 'boost' || this.clearLine(p.eye, { x: it.pos.x, y: it.pos.y + 0.1, z: it.pos.z });
+  }
+
+  /** Nothing solid (walls, furniture, closed doors) between two points. */
+  private clearLine(a: Vec3, b: Vec3): boolean {
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d < 0.05) return true;
+    const hit = this.physics.raycast(a.x, a.y, a.z, dx / d, dy / d, dz / d, d);
+    return hit === null || hit >= d - 0.12;
   }
 
   /** Interactables in reach of a player, nearest first. */
@@ -1445,7 +1475,7 @@ export class Simulation {
       return true;
     }
     if (it.kind === 'exclusive') {
-      if (it.supply <= 0 || !it.weapon || p.arsenal.action === 'melee') return false;
+      if (it.supply <= 0 || !it.weapon || p.arsenal.action === 'melee' || p.arsenal.action === 'inject') return false;
       if (p.arsenal.primary.id === it.weapon) {
         this.emit({ type: 'notice', player: id, text: 'YOU ALREADY CARRY ONE' });
         return false;
@@ -1463,6 +1493,7 @@ export class Simulation {
       return true;
     }
     if (it.kind === 'melee') return this.takeMelee(p, it);
+    if (it.kind === 'boost') return this.takeBoost(p, it);
     if (it.kind === 'medical') {
       if (it.supply <= 0) return false;
       const room = COMBAT.maxBandages - p.bandages;
@@ -1485,7 +1516,7 @@ export class Simulation {
     const p = this.players.get(id);
     const it = this.reachable(id).find((x) => x.kind === 'weapons');
     if (!p || !it || !PRIMARY_WEAPONS.includes(weapon)) return false;
-    if (p.arsenal.primary.id === weapon || p.arsenal.action === 'melee' || p.arsenal.action === 'throw') return false;
+    if (p.arsenal.primary.id === weapon || p.arsenal.action === 'melee' || p.arsenal.action === 'throw' || p.arsenal.action === 'inject') return false;
     this.dropLimb(p, false);
     p.arsenal.replacePrimary(weapon);
     this.emit({ type: 'pickup', player: id, item: 'weapon', amount: 1, source: it.id, weapon });
@@ -1698,7 +1729,7 @@ export class Simulation {
     const l = this.limb(limbId);
     if (!p || !p.up || !l || !this.limbInReach(id, l)) return false;
     const a = p.arsenal;
-    if (a.action === 'melee' || a.action === 'bandage' || a.action === 'throw') return false;
+    if (a.action === 'melee' || a.action === 'bandage' || a.action === 'throw' || a.action === 'inject') return false;
     const reloading = a.action === 'reload';
     // Claim it before letting go of the old one (which could otherwise push it over the limit).
     if (l.body) this.physics.world.removeRigidBody(l.body);
@@ -1899,7 +1930,7 @@ export class Simulation {
   private takeMelee(p: SimPlayer, it: Interactable): boolean {
     const a = p.arsenal;
     const weapon = it.weapon;
-    if (it.supply <= 0 || !weapon || !isMelee(weapon) || a.action === 'melee' || a.action === 'bandage') return false;
+    if (it.supply <= 0 || !weapon || !isMelee(weapon) || a.action === 'melee' || a.action === 'bandage' || a.action === 'inject') return false;
     if (a.meleeId === 'katanas' && weapon === 'katana') {
       this.emit({ type: 'notice', player: p.id, text: 'BOTH HANDS ALREADY HOLD A KATANA' });
       return false;
@@ -1930,6 +1961,161 @@ export class Simulation {
     const floor = n >= 0 ? this.nav.nodePos(n) : { x: m.x, y: m.y, z: m.z };
     this.layCarried(a.meleeId, floor);
     a.meleeId = 'machete';
+  }
+
+  // ---------------------------------------------------------------- boost syringes
+
+  /** Places syringes can lie (the tops of counters, dressers, desks, sinks and tables in the houses). */
+  get boostSpots(): BoostSpot[] {
+    this.boostPlaces ??= findBoostSpots(this.map, this.nav, this.physics);
+    return this.boostPlaces;
+  }
+
+  /** Syringes lying on the map now. */
+  get placedBoosts(): Interactable[] {
+    return this.interactables.filter((it) => it.kind === 'boost' && it.supply > 0);
+  }
+
+  /** How many syringes this night keeps out (decided when the first are put down; 0 before). */
+  get boostTarget(): number {
+    return this.boostCount;
+  }
+
+  /** Seconds of a boost a survivor has left (0 when it is not running). */
+  boostLeft(p: SimPlayer, id: BoostId): number {
+    return boostLeft(p.boosts, id, this.time);
+  }
+
+  /** Whether a boost is running for a survivor. */
+  boosted(p: SimPlayer, id: BoostId): boolean {
+    return (p.boosts[id] ?? 0) > this.time;
+  }
+
+  /**
+   * Points a survivor's arsenal at the boosts running (rapid reload, focus). Every step here;
+   * online clients call it for their copies as snapshots come in.
+   */
+  syncBoosts(p: SimPlayer): void {
+    const a = p.arsenal;
+    a.reloadScale = this.boosted(p, 'reload') ? BOOSTS.reload.reloadScale : 1;
+    a.steady = this.boosted(p, 'focus') ? BOOSTS.focus.spread : 1;
+  }
+
+  /** Puts the night's syringes out (all at once at the start), then replaces a taken one now and then. */
+  private runBoosts(): void {
+    if (this.time < this.nextBoostAt) return;
+    const P = BOOST_PICKUPS;
+    const first = this.boostCount === 0;
+    if (first) {
+      const [lo, hi] = P.count;
+      this.boostCount = lo + Math.min(hi - lo, Math.floor(this.boostRand() * (hi - lo + 1)));
+    }
+    // (Ones put down for testing lie about without a house and don't count.)
+    const placed = this.placedBoosts.filter((it) => it.room).length;
+    if (placed >= this.boostCount) {
+      this.nextBoostAt = Infinity;
+      return;
+    }
+    let made = 0;
+    while (placed + made < this.boostCount && this.placeBoost(!first)) {
+      made++;
+      if (!first) break;
+    }
+    const [lo, hi] = P.respawn;
+    if (placed + made >= this.boostCount) this.nextBoostAt = Infinity;
+    // Still short (every free house in someone's sight): look again in a little while.
+    else this.nextBoostAt = this.time + (made && !first ? lo + this.boostRand() * (hi - lo) : 8);
+  }
+
+  /** A taken syringe starts the clock for another to turn up in some other house. */
+  private boostTaken(): void {
+    if (this.nextBoostAt !== Infinity) return;
+    const [lo, hi] = BOOST_PICKUPS.respawn;
+    this.nextBoostAt = this.time + lo + this.boostRand() * (hi - lo);
+  }
+
+  /**
+   * Leaves a syringe on a piece of furniture in a house that has none. `hidden`: only out of every
+   * survivor's way, so nobody sees it appear. Every house is as likely as the next, however much
+   * furniture it has. Returns the interactable, or null when nowhere fits.
+   */
+  placeBoost(hidden = true, kind?: BoostId): Interactable | null {
+    const P = BOOST_PICKUPS;
+    const placed = this.placedBoosts;
+    const used = new Map<string, number>();
+    for (const it of placed) if (it.room) used.set(it.room, (used.get(it.room) ?? 0) + 1);
+    const alive = [...this.players.values()].filter((p) => p.alive);
+    const open = this.boostSpots.filter((s) => {
+      if ((used.get(s.house) ?? 0) >= P.perHouse) return false;
+      if (placed.some((it) => Math.hypot(it.pos.x - s.pos.x, it.pos.z - s.pos.z) < 0.5 && Math.abs(it.pos.y - s.pos.y) < 1)) return false;
+      return !hidden || alive.every((p) => dist2D(p.motion.pos, s.pos) > P.awayFromPlayers);
+    });
+    if (!open.length) return null;
+    const houses = [...new Set(open.map((s) => s.house))];
+    const house = houses[Math.min(houses.length - 1, Math.floor(this.boostRand() * houses.length))];
+    const here = open.filter((s) => s.house === house);
+    const spot = here[Math.min(here.length - 1, Math.floor(this.boostRand() * here.length))];
+    const boost = kind ?? pickBoost(placed.map((it) => it.boost).filter((b): b is BoostId => !!b), this.boostRand);
+    return this.layBoost(boost, spot.pos, house);
+  }
+
+  /** A syringe lying on `surface` (its reach point a little above). Debugging and tests put them anywhere. */
+  layBoost(boost: BoostId, surface: Vec3, house = ''): Interactable {
+    const it: Interactable = {
+      id: this.interactables.length, kind: 'boost', pos: { x: surface.x, y: surface.y + BOOST_PICKUPS.lift, z: surface.z },
+      supply: 1, range: BOOST_PICKUPS.range, boost, room: house,
+    };
+    this.interactables.push(it);
+    return it;
+  }
+
+  /**
+   * Grabs a syringe and injects it there and then (the dose goes in INJECT.press seconds later).
+   * First come, first served. Refused while the same boost still has over half its time to run.
+   */
+  private takeBoost(p: SimPlayer, it: Interactable): boolean {
+    const kind = it.boost;
+    const a = p.arsenal;
+    if (it.supply <= 0 || !kind || this.revivingOf(p.id)) return false;
+    const def = BOOSTS[kind];
+    if (this.boostLeft(p, kind) > def.duration * BOOST_PICKUPS.refreshBelow) {
+      this.emit({ type: 'notice', player: p.id, text: `${def.short} STILL RUNNING`, sub: 'Save this one for later, or for someone else' });
+      return false;
+    }
+    if (a.action === 'inject' || a.action === 'melee' || a.action === 'throw') return false;
+    if (a.cancelBandage()) this.emit({ type: 'bandage', player: p.id, stage: 'cancel' });
+    this.dropLimb(p, false);
+    p.work = null;
+    if (!a.startInject(kind)) return false;
+    it.supply = 0;
+    p.stats.suppliesCollected++;
+    this.boostTaken();
+    this.emit({ type: 'boost', player: p.id, boost: kind, stage: 'taken', item: it.id, pos: { ...it.pos } });
+    return true;
+  }
+
+  /** The dose is in: the boost runs for its time from now (a second one of the same kind starts it over). */
+  private startBoost(p: SimPlayer, kind: BoostId): void {
+    p.boosts[kind] = this.time + BOOSTS[kind].duration;
+    this.syncBoosts(p);
+    this.emit({ type: 'boost', player: p.id, boost: kind, stage: 'start' });
+  }
+
+  /** Boosts wear off; a regen boost heals while on their feet. */
+  private stepBoosts(p: SimPlayer, dt: number): void {
+    for (const id of Object.keys(p.boosts) as BoostId[]) {
+      if ((p.boosts[id] ?? 0) > this.time) continue;
+      delete p.boosts[id];
+      this.emit({ type: 'boost', player: p.id, boost: id, stage: 'end' });
+    }
+    if (p.up && p.health < PLAYER.maxHealth && this.boosted(p, 'regen')) p.health = Math.min(PLAYER.maxHealth, p.health + BOOSTS.regen.heal * dt);
+    this.syncBoosts(p);
+  }
+
+  /** Dead: whatever was running stops (no notices: they have other things on their mind). */
+  private endBoosts(p: SimPlayer): void {
+    p.boosts = {};
+    this.syncBoosts(p);
   }
 
   // ---------------------------------------------------------------- zombies
@@ -2130,9 +2316,11 @@ export class Simulation {
     this.vehicles.step(dt);
     this.bicycles.step(dt);
     if (this.phase !== 'over') this.runPickups();
+    if (this.phase !== 'over') this.runBoosts();
 
     const ticks: ArsenalTick[] = [];
     for (const p of this.players.values()) {
+      this.stepBoosts(p, dt);
       if (!p.up) continue;
       ticks.length = 0;
       p.arsenal.step(dt, p.motion.aiming, ticks);
@@ -2372,6 +2560,7 @@ export class Simulation {
     p.bleed = 0;
     p.health = PLAYER.maxHealth;
     p.armor = 0;
+    p.boosts = {};
     p.reviver = null;
     p.revive = 0;
     p.work = null;
@@ -2625,7 +2814,11 @@ export class Simulation {
         p.throwAim = null;
         break;
       case 'throwDone':
+      case 'injectDone':
         this.emit({ type: 'draw', player: p.id, slot: a.meleeOut ? 'melee' : a.active, weapon: a.meleeOut ? a.meleeId : a.weapon.id });
+        break;
+      case 'injected':
+        if (a.injectKind) this.startBoost(p, a.injectKind);
         break;
       case 'meleeDone':
         // The arm came apart mid-swing: back to the gun.
@@ -2708,7 +2901,7 @@ export class Simulation {
         zone = m.pitch > 0.12 ? 'head' : 'torso';
         at = { x: zc.x - dir.x * 0.2, y: zone === 'head' ? z.pos.y + 1.62 * z.scale : zc.y, z: zc.z - dir.z * 0.2 };
       }
-      const base = club ? club.damage : md.damage;
+      const base = (club ? club.damage : md.damage) * (this.boosted(p, 'strength') ? BOOSTS.strength.meleeDamage : 1);
       const zoneK = zone === 'head' ? (club ? LIMBS.headBonus : md.head) : zone === 'torso' ? 1 : ZONE_MULTIPLIER[zone];
       const share = i === 0 ? 1 : club ? 0.75 : md.share;
       // Blades cut toward taking the arm off; blunt weapons only bruise it.

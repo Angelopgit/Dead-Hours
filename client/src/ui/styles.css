@@ -244,6 +244,17 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .vitals .armor-label { font-size: 0.7em; letter-spacing: 0.22em; color: #6fd0bf; margin-bottom: 0.3em; display: flex; justify-content: space-between; }
 .abar { height: 4px; background: rgba(111, 208, 191, 0.12); border-radius: 1px; position: relative; overflow: hidden; }
 .abar i { position: absolute; inset: 0 auto 0 0; width: 0; background: #6fd0bf; box-shadow: 0 0 6px rgba(111, 208, 191, 0.6); }
+.vitals .boosts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 0.7em; }
+.vitals .boosts:empty { display: none; }
+.boost-chip { --c: #fff; position: relative; overflow: hidden; display: flex; align-items: center; gap: 0.5em; padding: 0.3em 0.6em 0.4em 0.5em; background: rgba(8, 10, 12, 0.6); border-left: 2px solid var(--c); font-size: 0.66em; letter-spacing: 0.18em; color: var(--c); }
+.boost-chip .ico { position: relative; width: 13px; height: 5px; border-radius: 1px; background: var(--c); box-shadow: 0 0 5px var(--c); }
+.boost-chip .ico::before { content: ''; position: absolute; left: -5px; top: 2px; width: 5px; height: 1px; background: rgba(232, 230, 224, 0.85); }
+.boost-chip .ico::after { content: ''; position: absolute; right: -4px; top: 2px; width: 4px; height: 1px; background: rgba(200, 204, 208, 0.9); }
+.boost-chip .l { margin-left: 4px; }
+.boost-chip .t { color: var(--fg); opacity: 0.85; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
+.boost-chip .bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--c); opacity: 0.75; }
+.boost-chip.ending { animation: pulse 0.7s ease-in-out infinite; }
+.boost-flash { --c: #fff; position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 52%, var(--c) 160%); mix-blend-mode: screen; }
 .stance { margin-top: 0.7em; font-size: 0.7em; letter-spacing: 0.3em; color: var(--fg-faint); height: 1.2em; }
 .fps { position: absolute; left: 3vw; top: 3vh; font-family: var(--font-body); font-size: 0.75em; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 .skip { position: absolute; right: 4vw; bottom: 5vh; font-size: 0.75em; letter-spacing: 0.3em; color: var(--fg-dim); }
@@ -684,6 +695,9 @@ body.touch-play .car-panel { bottom: auto; top: calc(10vh + env(safe-area-inset-
 body.touch-play .vitals .stance { position: absolute; left: calc(100% + 1.4em); top: 0.1em; margin: 0; height: auto; white-space: nowrap; }
 body.touch-play .vitals .armor { margin-top: 3px; }
 body.touch-play .vitals .armor-label { display: none; }
+body.touch-play .vitals .boosts { gap: 4px; margin-bottom: 4px; }
+body.touch-play .boost-chip { font-size: 0.6em; padding: 0.25em 0.45em 0.35em 0.4em; }
+body.touch-play .boost-chip .l { display: none; }
 /* The feed shares the timer's row: it stays right of the centred timer and warning, a little smaller and tighter,
    and wraps a long line ("SOMEONE ELSE GOT TO THAT SKATEBOARD" ran over the timer on a 640 px wide phone) while
    four lines still end above SWAP. */

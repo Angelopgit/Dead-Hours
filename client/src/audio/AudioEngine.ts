@@ -5,7 +5,7 @@ import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMec
 import { RELOAD_STEPS } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
-import { MELEE, WEAPONS, type MeleeId } from '@dead-hours/shared';
+import { MELEE, WEAPONS, type BoostId, type MeleeId } from '@dead-hours/shared';
 import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
 import { ShotVoices } from './ShotVoices';
 import { RECORDED_FILES } from './recordedFiles';
@@ -2132,6 +2132,61 @@ export class AudioEngine {
     } else {
       this.burst(d, t, 'bandpass', 1200, 2, 0.4, 0.002, 0.08);
       this.burst(d, t + 0.12, 'bandpass', 2800, 3, 0.4, 0.001, 0.05);
+    }
+  }
+
+  /**
+   * Boost syringes. `cap`: just taken, the cap pops off a moment later. `inject`: the needle goes
+   * in, the plunger hisses home, and (for this survivor's own) the dose kicks in, each in its own
+   * way: a heavy heartbeat (strength), a sharp breath and a racing pulse (stamina), a bright
+   * metallic ring (rapid reload), a warm swell (regen), a high ring clearing to quiet (focus).
+   * `end`: their own wore off. Others' are heard where they stand, without the rush.
+   */
+  syringe(stage: 'cap' | 'inject' | 'end', kind: BoostId, position: THREE.Vector3 | null): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const own = !position;
+    const d = this.out(position, 0.05, 2);
+    if (!own) d.gain.value = 0.7;
+    if (stage === 'cap') {
+      // Plastic: the cap's pull, its pop free, and a tick as it lands.
+      this.burst(d, t + 0.2, 'bandpass', 3400, 3, 0.14, 0.001, 0.025);
+      this.burst(d, t + 0.25, 'bandpass', 1900, 2.5, 0.12, 0.001, 0.035);
+      this.burst(d, t + 0.62, 'bandpass', 4400, 4, 0.04, 0.001, 0.02);
+      return;
+    }
+    if (stage === 'end') {
+      if (!own) return;
+      this.tone(d, t, 'sine', 640, 430, 0.045, 0.02, 0.45);
+      this.tone(d, t + 0.18, 'sine', 430, 320, 0.035, 0.02, 0.5);
+      return;
+    }
+    // The needle going in (a dull little thup), then the dose pushed home.
+    this.burst(d, t, 'lowpass', 700, 0.8, 0.16, 0.002, 0.05);
+    this.burst(d, t + 0.01, 'bandpass', 950, 4, 0.06, 0.002, 0.06);
+    this.burst(d, t + 0.04, 'highpass', 4800, 0.7, own ? 0.06 : 0.04, 0.03, 0.28);
+    this.tone(d, t + 0.05, 'triangle', 900, 720, 0.012, 0.02, 0.25);
+    if (!own) return;
+    const r = t + 0.3;
+    if (kind === 'strength') {
+      for (const k of [0, 0.42, 0.84]) {
+        this.tone(d, r + k, 'sine', 64, 44, 0.3, 0.008, 0.16);
+        this.tone(d, r + k + 0.13, 'sine', 58, 40, 0.18, 0.008, 0.14);
+      }
+      this.burst(d, r, 'lowpass', 180, 0.7, 0.08, 0.3, 0.9);
+    } else if (kind === 'stamina') {
+      this.burst(d, r - 0.05, 'bandpass', 1300, 1.4, 0.1, 0.22, 0.25);
+      for (let i = 0; i < 6; i++) this.tone(d, r + 0.3 + i * 0.26, 'sine', 70, 48, 0.2 - i * 0.02, 0.006, 0.11);
+    } else if (kind === 'reload') {
+      this.tone(d, r, 'sine', 1760, 1740, 0.05, 0.003, 0.7);
+      this.tone(d, r, 'sine', 2637, 2600, 0.03, 0.003, 0.5);
+      this.burst(d, r, 'bandpass', 5200, 6, 0.06, 0.001, 0.04);
+      this.burst(d, r + 0.09, 'bandpass', 3800, 6, 0.05, 0.001, 0.04);
+    } else if (kind === 'regen') {
+      for (const [f0, f1] of [[220, 330], [277, 415], [330, 494]]) this.tone(d, r, 'sine', f0, f1, 0.035, 0.35, 1.1, 0.6);
+    } else {
+      this.tone(d, r, 'sine', 2900, 2400, 0.03, 0.02, 1.3);
+      this.burst(d, r, 'lowpass', 300, 0.7, 0.06, 0.4, 0.8);
     }
   }
 

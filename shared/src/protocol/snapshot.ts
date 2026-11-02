@@ -15,14 +15,15 @@ import { clamp, type Quat, type Vec3 } from '../sim/math';
 import { decodeBuild, defaultBuild, encodeBuild } from '../config/progression';
 import { VEHICLE } from '../config/vehicles';
 import { DRIVE_FLAG, type DriveState } from '../sim/Vehicles';
+import { BOOST_IDS, type BoostId } from '../config/boosts';
 
 // Index tables for the wire format (append only: old clients read new numbers otherwise).
 const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'];
 const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead', 'scream', 'breach', 'vault'];
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
-const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage', 'throw'];
+const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage', 'throw', 'inject'];
 const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper', 'katana', 'bat', 'crowbar', 'wrench', 'hockey', 'rpg', 'wraith', 'katanas', 'akimbo'];
-const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum', 'melee'];
+const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum', 'melee', 'boost'];
 const THROWS: ThrowKind[] = ['frag', 'molotov'];
 const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
 const LEG_STATES: LegState[] = ['intact', 'knee', 'hip'];
@@ -53,8 +54,10 @@ export interface SnapPlayer {
   dt: number;
   /** Lazarus serum armor ×10 (left out when none). */
   ar?: number;
+  /** Boost syringes running: [boost (BOOST_IDS), ms left, ...] (left out when none). */
+  bo?: number[];
   /** [active (1 secondary, +2 melee held out), action, actionT, actionTotal, primary id, mag, reserve, secondary id, mag, reserve, melee with limb, aim ×1000, melee weapon,
-   * frags, Molotovs, throw kind] */
+   * frags, Molotovs, throw kind, boost being injected (-1 none)] */
   w: number[];
   /** The arm in hand: [id, arm, cut, kind, look, scale ×1000, wear, maxWear, broken], or 0. */
   lb: number[] | 0;
@@ -137,6 +140,16 @@ export function unpackPanes(g: string, fn: (i: number) => void): void {
   }
 }
 
+/** A survivor's running boosts for a snapshot (nothing when none). */
+function boostsOf(boosts: Partial<Record<BoostId, number>>, now: number): { bo?: number[] } {
+  const out: number[] = [];
+  for (const id of Object.keys(boosts) as BoostId[]) {
+    const left = (boosts[id] ?? 0) - now;
+    if (left > 0) out.push(idx(BOOST_IDS, id), milli(left));
+  }
+  return out.length ? { bo: out } : {};
+}
+
 /** Captures the world for clients. `facing` is each survivor's body facing (the server keeps it beside the sim). */
 export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, number>): Snapshot {
   const players: SnapPlayer[] = [];
@@ -148,11 +161,12 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
       id: p.id, n: p.name, a: p.appearance,
       m: [cm(m.pos.x), cm(m.pos.y), cm(m.pos.z), cm(m.vel.x), cm(m.vel.y), cm(m.vel.z), milli(m.yaw), milli(m.pitch), milli(facing.get(p.id) ?? m.yaw + Math.PI), cm(m.eyeHeight), flagsOf(m)],
       hp: Math.round(p.health * 10), al: p.alive ? 1 : 0, b: p.bandages, dt: milli(p.diedAt), ...(p.armor > 0 ? { ar: Math.round(p.armor * 10) } : {}),
+      ...boostsOf(p.boosts, sim.time),
       w: [
         (a.active === 'secondary' ? 1 : 0) | (a.meleeOut ? 2 : 0), idx(ACTIONS, a.action), milli(Math.max(0, a.actionT)), milli(a.actionTotal),
         idx(WEAPON_IDS, a.primary.id), a.primary.mag, a.primary.reserve, idx(WEAPON_IDS, a.secondary.id), a.secondary.mag, a.secondary.reserve,
         a.meleeWith === 'limb' ? 1 : 0, milli(a.aim), idx(WEAPON_IDS, a.meleeId),
-        a.throwables.frag, a.throwables.molotov, idx(THROWS, a.throwKind),
+        a.throwables.frag, a.throwables.molotov, idx(THROWS, a.throwKind), a.injectKind ? idx(BOOST_IDS, a.injectKind) : -1,
       ],
       lb: l ? [l.id, idx(ARMS, l.arm), idx(CUTS, l.cut), idx(KINDS, l.kind), l.look, milli(l.scale), l.wear, l.maxWear, l.broken ? 1 : 0] : 0,
       dn: p.downed ? [milli(Math.max(0, p.bleed)), milli(p.revive), p.downs] : 0,
@@ -189,7 +203,10 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   const items: number[][] = [];
   for (const it of sim.interactables) {
     if (!it) continue;
-    items.push([it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range), it.weapon ? idx(WEAPON_IDS, it.weapon) : -1, (it.frags ? 1 : 0) | (it.molotovs ? 2 : 0)]);
+    const row = [it.id, idx(ITEM_KINDS, it.kind), cm(it.pos.x), cm(it.pos.y), cm(it.pos.z), Number.isFinite(it.supply) ? it.supply : -1, cm(it.range), it.weapon ? idx(WEAPON_IDS, it.weapon) : -1, (it.frags ? 1 : 0) | (it.molotovs ? 2 : 0)];
+    // Boost syringes: which dose.
+    if (it.boost) row.push(idx(BOOST_IDS, it.boost));
+    items.push(row);
   }
   const bars: number[] = [];
   for (const b of sim.barricades.slots) {
@@ -617,6 +634,12 @@ export class Mirror {
       p.alive = sp.al === 1;
       p.bandages = sp.b;
       p.armor = (sp.ar ?? 0) / 10;
+      const bo = sp.bo ?? [];
+      p.boosts = {};
+      for (let i = 0; i + 1 < bo.length; i += 2) {
+        const id = BOOST_IDS[bo[i]];
+        if (id) p.boosts[id] = T + bo[i + 1] / 1000;
+      }
       p.diedAt = sp.dt / 1000;
       p.downed = p.alive && Array.isArray(sp.dn);
       if (Array.isArray(sp.dn)) {
@@ -659,6 +682,7 @@ export class Mirror {
         mo.pos.x = pos.x; mo.pos.y = pos.y; mo.pos.z = pos.z;
       }
       if (!mine || !holdSelf) this.syncArsenal(p.arsenal, sp.w, sp.lb, !mine);
+      sim.syncBoosts(p);
       const seen = sp.k ? `${p.arsenal.primary.id}:${p.arsenal.secondary.id}:${sp.k}` : '';
       if (sp.k && this.buildSeen.get(sp.id) !== seen) {
         this.buildSeen.set(sp.id, seen);
@@ -778,6 +802,8 @@ export class Mirror {
         if (weapon) sim.interactables[id].weapon = weapon;
         if (r[8] & 1) sim.interactables[id].frags = true;
         if (r[8] & 2) sim.interactables[id].molotovs = true;
+        const boost = r[9] !== undefined && r[9] >= 0 ? BOOST_IDS[r[9]] : undefined;
+        if (boost) sim.interactables[id].boost = boost;
       }
     }
   }
@@ -863,6 +889,7 @@ export class Mirror {
       a.throwables.molotov = w[14];
       a.throwKind = THROWS[w[15]] ?? 'frag';
     }
+    a.injectKind = action === 'inject' && w.length >= 17 ? BOOST_IDS[w[16]] ?? null : null;
     if (remote) a.aim = w[11] / 1000;
     a.limb = lb ? this.heldLimb(lb) : null;
   }
@@ -898,6 +925,10 @@ export class Mirror {
     } else if (e.type === 'zombieDied' || e.type === 'zombieRemoved') {
       const z = sim.zombie(e.zombie);
       if (z) z.state = 'dead';
+    } else if (e.type === 'boost' && e.stage === 'taken' && e.item !== undefined) {
+      // Gone from the table at once (the snapshot says so a moment later).
+      const it = sim.interactables[e.item];
+      if (it) it.supply = 0;
     } else if (e.type === 'limbGrabbed') {
       const l = sim.limb(e.limb);
       if (l) l.holder = e.player;

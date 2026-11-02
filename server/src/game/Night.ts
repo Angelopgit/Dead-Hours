@@ -1,5 +1,5 @@
 import {
-  BICYCLE, GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion, unpackDrive,
+  BICYCLE, BOOSTS, BOOST_IDS, GAME, GROUP, NEIGHBORHOOD, PLAYER, PRIMARY_WEAPONS, RAPIER, SKATEBOARD, Simulation, captureSnapshot, groups, isSkateTrick, unpackMotion, unpackDrive,
   BUILD_SLOTS, decodeBuild, sanitizeBuild,
   type ActMsg, type DebugMsg, type DoorBody, type Loadout, type Physics, type SimEvent, type Snapshot, type UnlockState, type Vec3,
   type WeaponBuild, type WeaponId, type ZombieKind,
@@ -13,6 +13,9 @@ const BOARD_SPEED = SKATEBOARD.maxSpeed * 1.25;
 const BOARD_GRACE = 0.8;
 /** On a bicycle (either seat), and for the same moment after getting off. */
 const BIKE_SPEED = BICYCLE.maxSpeed * 1.25;
+/** The same with a stamina boost running (and for a moment after it wears off, while the client hears about it). */
+const STAMINA_SPEED = MAX_SPEED * BOOSTS.stamina.sprint;
+const STAMINA_GRACE = 1;
 /** Fastest climb (stairs, jumps). */
 const MAX_CLIMB = 5.5;
 /** Movement that can be banked when messages arrive bunched together (seconds' worth). */
@@ -59,6 +62,8 @@ interface Extra {
   carBudget: number;
   carCorrecting: { id: number; pos: Vec3 } | null;
   carCorrectedAt: number;
+  /** Last simulation time a stamina boost was running for them. */
+  staminaAt: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
@@ -126,7 +131,7 @@ export class Night {
     this.extras.set(s.id, {
       facing: sp.yaw + Math.PI, trigger: false, aimO: eye, aimD: { x: -Math.sin(sp.yaw), y: 0, z: -Math.cos(sp.yaw) },
       press: 0, pressO: eye, pressD: { x: 0, y: 0, z: -1 }, budget: MAX_SPEED * BANK, climb: MAX_CLIMB * BANK,
-      correcting: null, correctedAt: 0, boardAt: -Infinity, trickAt: -Infinity, bikeAt: -Infinity, body, collider,
+      correcting: null, correctedAt: 0, boardAt: -Infinity, trickAt: -Infinity, bikeAt: -Infinity, staminaAt: -Infinity, body, collider,
       carBudget: 0, carCorrecting: null, carCorrectedAt: 0,
     });
     this.facing.set(s.id, sp.yaw + Math.PI);
@@ -420,6 +425,12 @@ export class Night {
     else if (m.cmd === 'supplyDrop') this.sim.callSupplyDrop(typeof m.weapon === 'string' ? m.weapon : undefined, m.serum === true);
     else if (m.cmd === 'raid') this.sim.callRaid();
     else if (m.cmd === 'lull') this.sim.startLull();
+    else if (m.cmd === 'boost') {
+      const kind = BOOST_IDS.find((b) => b === m.boost) ?? 'strength';
+      const at = p.motion.pos;
+      // Waist high (as if on a table): one on the floor is out of a standing survivor's reach.
+      this.sim.layBoost(kind, { x: at.x - Math.sin(p.motion.yaw) * 0.6, y: at.y + 0.8, z: at.z - Math.cos(p.motion.yaw) * 0.6 });
+    }
     else if (m.cmd === 'hurt' && Number.isFinite(m.amount)) this.sim.damagePlayer(p, Math.max(0, m.amount), p.motion.pos);
     else if (m.cmd === 'god') {
       if (m.on) this.gods.add(id);
@@ -484,13 +495,16 @@ export class Night {
     x.collider.setEnabled(true);
   }
 
-  /** How fast this survivor may move now: faster on a skateboard, faster still on a bicycle. */
+  /** How fast this survivor may move now: faster on a skateboard, faster still on a bicycle, a little faster with a stamina boost running. */
   private maxSpeed(id: string, x: Extra): number {
     const t = this.sim.time;
     if (this.sim.skateboards.ridden(id)) x.boardAt = t;
     if (this.sim.bicycles.onBike(id)) x.bikeAt = t;
+    const p = this.sim.players.get(id);
+    if (p && this.sim.boosted(p, 'stamina')) x.staminaAt = t;
     if (t - x.bikeAt < BOARD_GRACE) return BIKE_SPEED;
-    return t - x.boardAt < BOARD_GRACE ? BOARD_SPEED : MAX_SPEED;
+    if (t - x.boardAt < BOARD_GRACE) return BOARD_SPEED;
+    return t - x.staminaAt < STAMINA_GRACE ? STAMINA_SPEED : MAX_SPEED;
   }
 
   /** `world` on snapshot steps: zombies move and the collision world catches up (see Simulation.step). */

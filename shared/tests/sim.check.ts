@@ -12,6 +12,7 @@ import {
   APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, SHAPE_MID, SHAPE_STEPS, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
   BARRICADE, Mirror, NAV_INDOOR, storeyFloors, type BarricadeSlot,
+  BOOSTS, BOOST_IDS, BOOST_PICKUPS, INJECT, findBoostSpots, type BoostId,
   VAULT, BLAST, DOOR_WOOD, ZONE_MULTIPLIER, findVault, planVault, vaultAt, porches, packPanes, unpackPanes, WORLD_FILTER,
   BUILD_OPTIONS, BUILD_SLOTS, FIT_TIME, SKINS, buildable, decodeLoadout, defaultBuild, encodeBuild, encodeLoadout, fitsOf, levelFor,
   levelStart, owns, runXp, sameBuild, sanitizeBuild, sanitizeLoadout, tunedWeapon, unlockTrack, type WeaponBuild, type WeaponId,
@@ -2478,6 +2479,219 @@ section('Found melee weapons');
   sim.damagePlayer(sp, 500, { x: 0, y: 0, z: 0 });
   const dropped = sim.placedMelee.find((it) => it.weapon === 'hockey' && Math.hypot(it.pos.x - standAt.x, it.pos.z - standAt.z) < 1.5);
   check(!!dropped && sim.placedMelee.length === count + 1 && sp.arsenal.meleeId === 'machete', 'a survivor who dies drops it where they fell');
+  cleanup(sim, body);
+}
+
+section('Boost syringes');
+{
+  const spots = findBoostSpots(map, nav, physics);
+  const homes = map.houses.filter((h) => h.enterable && (h.id.startsWith('house-') || h.id.startsWith('oak-')));
+  const bare = homes.filter((h) => !spots.some((s) => s.house === h.id));
+  check(!bare.length, `every home on Elm and Oak Street has furniture a syringe can lie on (${new Set(spots.map((s) => s.house)).size} houses, ${spots.length} places)${bare.length ? `: none in ${bare.map((h) => h.id).join(', ')}` : ''}`);
+  check(spots.every((s) => map.playerSpawns.every((sp) => Math.hypot(sp.x - s.pos.x, sp.z - s.pos.z) >= BOOST_PICKUPS.awayFromSpawn)), 'none in the safehouse the survivors start in');
+  check(spots.every((s) => s.pos.y - s.stand.y > 0.4 && s.pos.y - s.stand.y < 1.1), 'every one on top of a piece of furniture, not on the floor');
+  check(spots.every((s) => nav.reachable(nav.nodeAt(s.stand.x, s.stand.y + 0.05, s.stand.z, 0.3))), 'every one has walkable floor in front of it');
+  check(new Set(spots.map((s) => s.prop)).size >= 5, `on counters, dressers, desks, sinks and tables (${[...new Set(spots.map((s) => s.prop))].join(', ')})`);
+
+  // A night's syringes.
+  const counts = new Set<number>();
+  const kindsSeen = new Set<BoostId>();
+  let spread = true, distinct = true;
+  for (let seed = 1; seed <= 24; seed++) {
+    const s2 = new Simulation({ physics, map, nav, doors, seed, preparation: 600 });
+    s2.step(DT);
+    const placed = s2.placedBoosts;
+    counts.add(placed.length);
+    for (const it of placed) kindsSeen.add(it.boost!);
+    if (new Set(placed.map((it) => it.room)).size !== placed.length) spread = false;
+    if (new Set(placed.map((it) => it.boost)).size !== placed.length) distinct = false;
+    s2.dispose();
+  }
+  check([...counts].every((c) => c >= BOOST_PICKUPS.count[0] && c <= BOOST_PICKUPS.count[1]) && counts.size === 2, `${[...counts].sort().join(' or ')} syringes a night`);
+  check(spread && distinct, 'each in a different house, each a different kind');
+  check(kindsSeen.size === BOOST_IDS.length, `every kind turns up (${[...kindsSeen].join(', ')})`);
+  {
+    const a = new Simulation({ physics, map, nav, doors, seed: 41, preparation: 600 });
+    const b = new Simulation({ physics, map, nav, doors, seed: 41, preparation: 600 });
+    a.step(DT);
+    b.step(DT);
+    const key = (x: Simulation) => x.placedBoosts.map((it) => `${it.boost}@${it.pos.x.toFixed(2)},${it.pos.z.toFixed(2)}`).join(' ');
+    check(key(a) === key(b), 'the same seed puts the same syringes in the same places');
+    a.dispose();
+    b.dispose();
+  }
+
+  const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 }, 0.5);
+  const mate = sim.addPlayer('p2', 'Mate', 'ar', 'pistol', { x: 1, y: 0.15, z: 6 }, 0);
+  run(sim, 1);
+  const clear = () => {
+    for (const z of [...sim.zombies]) z.removeBody();
+    sim.zombies.splice(0, sim.zombies.length);
+    return false;
+  };
+  clear();
+  const standAt = (who: string, at: Vec3) => {
+    sim.setMotion(who, { pos: { ...at } });
+    if (who === 'p1') body.moveTo(at);
+  };
+  const spotOf = (it: { pos: Vec3 }) => sim.boostSpots.find((s) => Math.hypot(s.pos.x - it.pos.x, s.pos.z - it.pos.z) < 1e-6)!;
+  const first = sim.placedBoosts[0];
+  const spot = spotOf(first);
+  check(!sim.reachable('p1').some((it) => it.id === first.id), 'out of reach from across the map');
+  standAt('p1', spot.stand);
+  check(sim.reachable('p1').some((it) => it.id === first.id), `in reach standing in front of the ${spot.prop}`);
+  {
+    // Straight through the wall behind it, as close as from the front: out of reach.
+    const dx = spot.pos.x - spot.stand.x, dz = spot.pos.z - spot.stand.z;
+    const l = Math.hypot(dx, dz);
+    const behind = { x: spot.pos.x + (dx / l) * 0.85, y: spot.stand.y, z: spot.pos.z + (dz / l) * 0.85 };
+    const blocked = physics.raycast(spot.pos.x, spot.pos.y + 0.3, spot.pos.z, dx / l, 0, dz / l, 0.85) !== null;
+    sim.setMotion('p2', { pos: behind });
+    check(!blocked || !sim.reachable('p2').some((it) => it.id === first.id), 'not through the wall behind the furniture');
+    standAt('p2', { x: 1, y: 0.15, z: 6 });
+  }
+  sim.drain();
+  const kind = first.boost!;
+  check(sim.use('p1', first.id) && first.supply === 0 && sp.arsenal.action === 'inject' && sp.arsenal.injectKind === kind, `grabbing the ${kind} syringe starts the injection`);
+  let ev = sim.drain();
+  check(ev.some((e) => e.type === 'boost' && e.stage === 'taken' && e.boost === kind && e.item === first.id), 'everyone hears it taken');
+  standAt('p2', spot.stand);
+  check(!sim.use('p2', first.id) && !sim.use('p1', first.id), 'first come, first served: it cannot be taken twice');
+  standAt('p2', { x: 1, y: 0.15, z: 6 });
+  check(sim.fire('p1', sp.eye, { x: 0, y: 0, z: -1 }, true, 1) === 'busy' && !sim.reload('p1'), 'no shooting or reloading mid-injection');
+  check(!sp.arsenal.drawMelee() && !sp.arsenal.switchTo('secondary') && sp.arsenal.action === 'inject', 'no drawing the melee weapon or switching guns mid-injection');
+  check(sim.placedBoosts.length === sim.boostTarget - 1, 'one fewer on the map');
+  ev = run(sim, INJECT.press - 0.05, clear).events;
+  check(!sim.boosted(sp, kind) && !ev.some((e) => e.type === 'boost' && e.stage === 'start'), 'nothing yet before the needle goes in');
+  ev = run(sim, 0.1, clear).events;
+  check(sim.boosted(sp, kind) && Math.abs(sim.boostLeft(sp, kind) - BOOSTS[kind].duration) < 0.1 && ev.some((e) => e.type === 'boost' && e.stage === 'start' && e.player === 'p1'),
+    `the dose goes in ${INJECT.press} s in and runs ${BOOSTS[kind].duration} s`);
+  ev = run(sim, INJECT.duration - INJECT.press + WEAPONS.ar.draw, clear).events;
+  check(sp.arsenal.action === 'idle' && sim.fire('p1', sp.eye, { x: 0, y: 0, z: -1 }, true, 1) !== 'busy', 'the gun comes back up afterwards');
+
+  // What each one does.
+  const give = (k: BoostId) => {
+    const it = sim.layBoost(k, { x: sp.motion.pos.x + 0.4, y: sp.motion.pos.y + 0.8, z: sp.motion.pos.z });
+    const ok = sim.use('p1', it.id);
+    run(sim, INJECT.duration + 0.6, clear);
+    return ok && sim.boosted(sp, k);
+  };
+  standAt('p1', { x: 0, y: 0.15, z: 6 });
+  run(sim, 0.2, clear);
+  sp.boosts = {};
+  sp.health = 100;
+  sim.damagePlayer(sp, 20, sp.motion.pos);
+  const plain = 100 - sp.health;
+  sp.health = 100;
+  check(give('strength'), 'strength shot injected');
+  sim.damagePlayer(sp, 20, sp.motion.pos);
+  check(Math.abs((100 - sp.health) - plain * BOOSTS.strength.damageTaken) < 0.11, `strength: a 20-point hit takes ${(100 - sp.health).toFixed(1)} instead of ${plain}`);
+  const sameAgain = sim.layBoost('strength', { x: sp.motion.pos.x + 0.4, y: sp.motion.pos.y + 0.8, z: sp.motion.pos.z });
+  sim.drain();
+  check(!sim.use('p1', sameAgain.id) && sameAgain.supply === 1 && sim.drain().some((e) => e.type === 'notice' && /STILL RUNNING/.test(e.text)), 'a second one of the same kind waits while the first has most of its time left');
+  sp.boosts.strength = sim.time + BOOSTS.strength.duration * 0.3;
+  check(sim.use('p1', sameAgain.id), 'with under half its time left, a second dose is taken');
+  run(sim, INJECT.duration + 0.6, clear);
+  check(Math.abs(sim.boostLeft(sp, 'strength') - (BOOSTS.strength.duration - INJECT.duration - 0.6 + INJECT.press)) < 0.1, 'and starts it over at full time');
+
+  const a = sp.arsenal;
+  a.weapon.mag = 3;
+  check(sim.reload('p1') && Math.abs(a.actionTotal - WEAPONS.ar.reloadTime) < 1e-6, 'a reload takes its usual time');
+  run(sim, WEAPONS.ar.reloadTime + 0.1, clear);
+  check(give('reload'), 'rapid reload shot injected');
+  a.weapon.mag = 3;
+  check(sim.reload('p1') && Math.abs(a.actionTotal - WEAPONS.ar.reloadTime * BOOSTS.reload.reloadScale) < 1e-6, `rapid reload: ${a.actionTotal.toFixed(2)} s instead of ${WEAPONS.ar.reloadTime} s`);
+  run(sim, WEAPONS.ar.reloadTime * BOOSTS.reload.reloadScale + 0.05, clear);
+  check(a.weapon.mag === WEAPONS.ar.magazine && a.action === 'idle', 'and the magazine is full when it ends');
+  {
+    const shot = new Arsenal('shotgun', 'pistol');
+    shot.reloadScale = 0.5;
+    shot.step(1, false, []);
+    shot.weapon.mag = 0;
+    shot.startReload();
+    let t = 0;
+    while (shot.action === 'reload' && t < 20) {
+      shot.step(DT, false, []);
+      t += DT;
+    }
+    const full = new Arsenal('shotgun', 'pistol');
+    full.step(1, false, []);
+    full.weapon.mag = 0;
+    full.startReload();
+    let t2 = 0;
+    while (full.action === 'reload' && t2 < 20) {
+      full.step(DT, false, []);
+      t2 += DT;
+    }
+    check(Math.abs(t - t2 * 0.5) < 0.2, `shell by shell too: ${t.toFixed(2)} s instead of ${t2.toFixed(2)} s`);
+  }
+
+  const motion = { speed: 0, crouching: false, grounded: true, aiming: false };
+  const before = a.spread(motion);
+  check(give('focus'), 'focus shot injected');
+  check(Math.abs(a.spread(motion) - before * BOOSTS.focus.spread) < 1e-6, `focus: spread ${a.spread(motion).toFixed(2)}° instead of ${before.toFixed(2)}°`);
+
+  sp.health = 40;
+  check(give('regen'), 'regen shot injected');
+  const h0 = sp.health;
+  run(sim, 4, clear);
+  check(Math.abs(sp.health - h0 - 4 * BOOSTS.regen.heal) < 0.2, `regen: ${(sp.health - h0).toFixed(1)} health back in 4 s`);
+  check(give('stamina') && Object.keys(sp.boosts).length === BOOST_IDS.length, 'stamina shot injected; boosts of different kinds run side by side');
+
+  // Online players see them.
+  const snap = captureSnapshot(sim, new Map());
+  const me = snap.p.find((p) => p.id === 'p1')!;
+  check(!!me.bo && me.bo.length === BOOST_IDS.length * 2, 'snapshots carry each boost running and its time left');
+  const lying = sim.placedBoosts[0];
+  const row = snap.i.find((r) => r[0] === lying.id)!;
+  check(row[9] === BOOST_IDS.indexOf(lying.boost!), 'and which syringe lies where');
+  {
+    const other = new Simulation({ physics, map, nav, doors, seed: 8, preparation: 600 });
+    const mirror = new Mirror(other, 'p2');
+    mirror.apply(snap, sim.time);
+    const copy = other.players.get('p1')!;
+    check(Math.abs(other.boostLeft(copy, 'reload') - sim.boostLeft(sp, 'reload')) < 0.06 && copy.arsenal.reloadScale === BOOSTS.reload.reloadScale && copy.arsenal.steady === BOOSTS.focus.spread,
+      'clients take the boosts (and the faster reload and steadier aim) from snapshots');
+    check(other.interactables[lying.id]?.kind === 'boost' && other.interactables[lying.id]?.boost === lying.boost, 'and put the same syringes on the same furniture');
+    other.dispose();
+  }
+  {
+    const it = sim.layBoost('focus', { x: mate.motion.pos.x + 0.4, y: mate.motion.pos.y + 0.8, z: mate.motion.pos.z });
+    sim.use('p2', it.id);
+    run(sim, 0.2, clear);
+    const s3 = captureSnapshot(sim, new Map());
+    check(s3.p.find((p) => p.id === 'p2')!.w[16] === BOOST_IDS.indexOf('focus'), 'mid-injection, everyone sees which syringe is in the hand');
+    run(sim, INJECT.duration, clear);
+  }
+
+  // Wearing off, and death.
+  sim.drain();
+  sp.boosts.focus = sim.time + 0.5;
+  ev = run(sim, 0.6, clear).events;
+  check(!sim.boosted(sp, 'focus') && a.steady === 1 && ev.some((e) => e.type === 'boost' && e.stage === 'end' && e.boost === 'focus'), 'a boost wears off when its time is up');
+  {
+    // Knocked down mid-injection: the dose still goes in.
+    const it = sim.layBoost('focus', { x: sp.motion.pos.x + 0.4, y: sp.motion.pos.y + 0.8, z: sp.motion.pos.z });
+    sim.use('p1', it.id);
+    run(sim, 0.2, clear);
+    sim.damagePlayer(sp, 500, sp.motion.pos);
+    check(sp.downed && sim.boosted(sp, 'focus') && sp.arsenal.action !== 'inject', 'knocked down mid-injection, the dose still goes in');
+  }
+  sim.damagePlayer(sp, 500, sp.motion.pos);
+  run(sim, DOWNED.bleedOut + 1, clear);
+  check(!sp.alive && Object.keys(sp.boosts).length === 0, 'death ends every boost');
+
+  // A taken one is replaced somewhere else, out of everyone's way.
+  const shortBy = sim.boostTarget - sim.placedBoosts.filter((it) => it.room).length;
+  standAt('p2', { x: 1, y: 0.15, z: 6 });
+  const was = new Set(sim.placedBoosts.map((it) => it.id));
+  run(sim, BOOST_PICKUPS.respawn[1] + 10, clear);
+  const fresh = sim.placedBoosts.filter((it) => !was.has(it.id) && it.room);
+  check(shortBy === 1 && fresh.length === 1, `the one taken is replaced within ${BOOST_PICKUPS.respawn[1]} s`);
+  check(fresh.every((it) => [...sim.players.values()].every((p) => !p.alive || Math.hypot(p.motion.pos.x - it.pos.x, p.motion.pos.z - it.pos.z) > BOOST_PICKUPS.awayFromPlayers)), 'out of sight of everyone, in a house without one');
+  const houses = sim.placedBoosts.filter((it) => it.room).map((it) => it.room);
+  check(new Set(houses).size === houses.length, 'still one per house');
+  for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
   cleanup(sim, body);
 }
 

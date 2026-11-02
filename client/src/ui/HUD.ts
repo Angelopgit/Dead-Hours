@@ -29,6 +29,24 @@ export interface WeaponReadout {
   light?: boolean;
 }
 
+/** A boost syringe running, for the chips over the health bar. */
+export interface BoostReadout {
+  id: string;
+  label: string;
+  /** The dose's colour (0xrrggbb). */
+  color: number;
+  /** Seconds left, and how long it lasts in all. */
+  left: number;
+  total: number;
+}
+
+interface BoostChip {
+  el: HTMLElement;
+  time: HTMLElement;
+  bar: HTMLElement;
+  shown: string;
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 export const clock = (s: number) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
 
@@ -80,6 +98,11 @@ export class HUD {
   private readonly armorFill: HTMLElement;
   private readonly armorText: HTMLElement;
   private armor = -1;
+  /** Boost syringes running: a chip each over the name, with its time left. */
+  private readonly boostRow: HTMLElement;
+  private readonly chips = new Map<string, BoostChip>();
+  /** A wash of the dose's colour round the screen edges as it goes in. */
+  private readonly flash: HTMLElement;
   private timerText = '';
   private warningText = '';
   private lastReadout = '';
@@ -132,6 +155,8 @@ export class HUD {
     this.armorRow = h('div', { class: 'armor', style: 'display:none' },
       h('div', { class: 'armor-label' }, h('span', {}, 'LAZARUS SERUM'), this.armorText),
       h('div', { class: 'abar' }, this.armorFill));
+    this.boostRow = h('div', { class: 'boosts' });
+    this.flash = h('div', { class: 'boost-flash' });
     this.fragLine = h('div', { class: 'w-heal w-throw' });
     this.molotovLine = h('div', { class: 'w-heal w-throw' });
     this.lightLine = h('div', { class: 'w-heal w-throw w-light' });
@@ -146,6 +171,7 @@ export class HUD {
       h('div', { class: 'car-gas' }, h('b', {}, 'GAS'), h('div', { class: 'gbar' }, this.carGas), this.carGasText),
       this.carState);
     this.el = h('div', { class: 'hud' },
+      this.flash,
       this.scope,
       this.arcs,
       this.crosshair,
@@ -158,6 +184,7 @@ export class HUD {
       this.trick,
       this.feed,
       h('div', { class: 'vitals' },
+        this.boostRow,
         h('div', { class: 'name' }, h('span', {}, name.toUpperCase()), this.hp),
         h('div', { class: 'hbar' }, this.lag, this.fill),
         this.armorRow,
@@ -199,6 +226,45 @@ export class HUD {
     this.armorRow.style.display = r > 0 ? '' : 'none';
     this.armorText.textContent = String(r);
     gsap.to(this.armorFill, { width: `${Math.max(0, v / max) * 100}%`, duration: 0.25 });
+  }
+
+  /** The boosts running (an empty list clears the chips). Cheap to call every frame. */
+  setBoosts(list: BoostReadout[]): void {
+    for (const [id, c] of this.chips) {
+      if (list.some((b) => b.id === id)) continue;
+      c.el.remove();
+      this.chips.delete(id);
+    }
+    for (const b of list) {
+      let c = this.chips.get(b.id);
+      if (!c) {
+        const hex = `#${b.color.toString(16).padStart(6, '0')}`;
+        const time = h('span', { class: 't' });
+        const bar = h('i', { class: 'bar' });
+        const el = h('div', { class: 'boost-chip', style: `--c:${hex}` }, h('b', { class: 'ico' }), h('span', { class: 'l' }, b.label), time, bar);
+        c = { el, time, bar, shown: '' };
+        this.chips.set(b.id, c);
+        this.boostRow.append(el);
+        gsap.fromTo(el, { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: 0.3 });
+      }
+      const secs = Math.ceil(b.left);
+      const text = `${Math.floor(secs / 60)}:${pad(secs % 60)}`;
+      if (text !== c.shown) {
+        c.shown = text;
+        c.time.textContent = text;
+        c.el.classList.toggle('ending', b.left <= 10);
+      }
+      c.bar.style.width = `${Math.max(0, Math.min(1, b.left / b.total)) * 100}%`;
+    }
+  }
+
+  /** The screen edges wash with a dose's colour as it goes in. */
+  boostFlash(color: number): void {
+    this.flash.style.setProperty('--c', `#${color.toString(16).padStart(6, '0')}`);
+    gsap.killTweensOf(this.flash);
+    gsap.timeline()
+      .fromTo(this.flash, { opacity: 0 }, { opacity: 0.85, duration: 0.12, ease: 'power2.out' })
+      .to(this.flash, { opacity: 0, duration: 1.4, ease: 'power2.in' });
   }
 
   /** Crosshair gap in pixels (from the weapon's current spread). */
@@ -404,7 +470,8 @@ export class HUD {
   }
 
   dispose(): void {
-    gsap.killTweensOf([this.notice, this.fill, this.lag, this.el, this.marker]);
+    gsap.killTweensOf([this.notice, this.fill, this.lag, this.el, this.marker, this.flash]);
+    for (const c of this.chips.values()) gsap.killTweensOf(c.el);
     for (const c of [...Array.from(this.arcs.children), ...Array.from(this.feed.children), ...Array.from(this.trick.children)]) gsap.killTweensOf(c);
     this.el.remove();
   }
