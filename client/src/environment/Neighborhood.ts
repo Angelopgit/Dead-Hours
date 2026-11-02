@@ -18,6 +18,7 @@ import { FogLights } from '../lighting/FogLights';
 import { setLightConesVisible } from './LightCone';
 import { Rain, buildCoverMap } from './Rain';
 import { updateWeather, weather } from './Weather';
+import { updateWind } from './Wind';
 
 const FOG_DENSITY: Record<Quality, number> = { low: 0.017, medium: 0.02, high: 0.022 };
 export const FOG_COLOR = 0x252e3c;
@@ -382,6 +383,7 @@ export class Neighborhood {
     u.uWxWind.value.set(this.atmosphere.wind.x, this.atmosphere.wind.z).multiplyScalar(this.atmosphere.windStrength);
     updateWetLamps(camera.position, dt);
     this.rain.update(camera, this.fog.density, this.lighting.flash * (settings.value.accessibility.reducedFlashing ? 0.2 : 1));
+    updateWind(t, this.atmosphere.wind, this.atmosphere.windStrength);
     this.propFactory.foliageUniforms.uTime.value = t;
     this.propFactory.foliageUniforms.uWind.value = this.atmosphere.windStrength;
     for (const d of this.dynamic) d.update(dt, t);
