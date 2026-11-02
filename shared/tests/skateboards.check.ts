@@ -3,12 +3,13 @@
  * (pavement, outdoors, one by the safehouse, spread out, the same for the same seed), hopping on
  * and off (reach, one rider a board, one board a rider, where it comes to rest), being thrown off
  * (hard hits, going down, dying, leaving), the rolling noise zombies hear, and the wire format
- * (snapshot rows, the client's copy, the motion message's heading).
+ * (snapshot rows, the client's copy, the motion message's heading), and flip tricks (which way
+ * the stick is held picks one, each is caught before the ollie lands, everyone is told of it).
  * Run with `npm run check:skate`.
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, createDoorBodies, buildNavGrid, Simulation, Mirror, captureSnapshot, packMotion, unpackMotion,
-  SKATEBOARD, NAV_INDOOR, PLAYER, rng, type SimEvent, type NavGrid, type Vec3,
+  SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, NAV_INDOOR, PLAYER, isSkateTrick, rng, skateTrickFor, type SimEvent, type NavGrid, type SkateTrick, type Vec3,
 } from '../src/index';
 
 let failures = 0;
@@ -255,6 +256,40 @@ section('Wire format');
   check(packed.length === 18 && !!back && Math.abs((back.motion.board ?? 0) - 1.25) < 0.002 && back.motion.pushing === true, 'the motion message carries the heading and the push');
   const foot = unpackMotion(packMotion({ ...frame, motion: { ...frame.motion, board: undefined, pushing: false } }));
   check(!!foot && foot.motion.board === undefined && foot.motion.pushing === false, 'on foot it carries neither (17 numbers, as before)');
+}
+
+section('Flip tricks');
+{
+  // The stick (or keys: diagonals come in at 0.71) as the rider pops.
+  const want: [number, number, SkateTrick][] = [
+    [0, 0, 'ollie'], [0, 1, 'ollie'], [0.3, 0.9, 'ollie'], [-1, 0, 'kickflip'], [1, 0, 'heelflip'], [-0.71, 0.71, 'kickflip'], [0.71, 0.71, 'heelflip'],
+    [0, -1, 'shuvit'], [-0.71, -0.71, 'treflip'], [0.71, -0.71, 'varialheel'], [0.2, -1, 'shuvit'],
+  ];
+  const wrong = want.filter(([x, y, k]) => skateTrickFor(x, y) !== k);
+  check(!wrong.length, `held left kickflips, right heelflips, back shove-its, back-left 360 flips, back-right varial heelflips, else an ollie${wrong.length ? ` (wrong: ${JSON.stringify(wrong)})` : ''}`);
+  // Every flip is caught before an ollie on the flat comes down.
+  const air = (2 * SKATEBOARD.ollie) / -PLAYER.gravity;
+  const late = Object.entries(SKATE_TRICKS).filter(([, t]) => TRICK_DELAY + t.time > air - 0.03);
+  check(!late.length, `every trick is caught before the wheels land (${air.toFixed(2)} s in the air; slowest ${Math.max(...Object.values(SKATE_TRICKS).map((t) => TRICK_DELAY + t.time)).toFixed(2)} s)`);
+  check(isSkateTrick('kickflip') && !isSkateTrick('toString') && !isSkateTrick('backflip') && !isSkateTrick(3), 'only real trick names pass');
+  const sim = fresh(11);
+  const b = sim.skateboards.boards[2];
+  sim.addPlayer('p1', 'One', 'ar', 'pistol', { ...b.pos }, 0);
+  check(!sim.skateTrick('p1', 'kickflip'), 'on foot there is no trick');
+  sim.rideBoard('p1', b.id);
+  sim.drain();
+  check(sim.skateTrick('p1', 'treflip'), 'on a board there is');
+  const ev = sim.drain().find((e) => e.type === 'skate' && e.stage === 'trick');
+  check(!!ev && ev.type === 'skate' && ev.player === 'p1' && ev.board === b.id && ev.trick === 'treflip', 'and everyone is told which (a skate event, stage trick)');
+  check(b.rider === 'p1', 'it leaves the rider on the board');
+  // A client's copy: someone's trick doesn't change who rides what (not even this client's own).
+  const copy = fresh(11);
+  copy.addPlayer('me', 'Me', 'ar', 'pistol', { ...b.pos }, 0);
+  const mirror = new Mirror(copy, 'me');
+  const cb = copy.skateboards.boards[b.id];
+  cb.rider = 'me';
+  mirror.event({ type: 'skate', player: 'me', board: b.id, stage: 'trick', pos: { x: 50, y: 0, z: 50 }, yaw: 2, trick: 'kickflip' });
+  check(cb.rider === 'me' && cb.pos.x !== 50, 'a client\'s copy takes a trick as just that (the board stays under its rider)');
 }
 
 for (const s of sims) s.dispose();

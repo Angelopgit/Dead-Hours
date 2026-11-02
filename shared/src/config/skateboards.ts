@@ -39,8 +39,8 @@ export const SKATEBOARD = {
   turnFast: 1.6,
   /** Steering reaches this share of its rate in the air. */
   airTurn: 0.35,
-  /** Ollie: straight up off the tail. */
-  ollie: 4.7,
+  /** Ollie: straight up off the tail (half a second in the air on the flat: time for a flip trick). */
+  ollie: 5.0,
   /** Hop onto the board (a little jump as the feet land on the deck). */
   mountHop: 1.8,
   /** Taking a wall head-on faster than this throws the rider off. */
@@ -62,6 +62,8 @@ export const SKATEBOARD = {
   noiseEvery: 0.4,
   /** A landing after an ollie and a bail are heard this far. */
   landNoise: 9,
+  /** The server passes on at most one trick per this many seconds from a rider. */
+  trickEvery: 0.3,
 
   // ---- the board itself
   /** Height of the deck's top above the ground (where the feet stand). */
@@ -73,3 +75,35 @@ export const SKATEBOARD = {
   /** Deck graphics to pick from. */
   looks: 8,
 } as const;
+
+/**
+ * Flip tricks off an ollie: which way the stick is held at the pop picks one (skateTrickFor).
+ * `flip`: turns of the board about its length (+1 kicked off the toe side, -1 the heel side);
+ * `spin`: half turns about the upright (+ backside: the tail swings round behind the heels);
+ * `time`: seconds from the flick to the catch (the tail snaps first, for TRICK_DELAY).
+ * Every one has to be caught before an ollie on the flat comes down (2 * ollie / 19.6 = 0.51 s).
+ */
+export const SKATE_TRICKS = {
+  ollie: { name: 'OLLIE', flip: 0, spin: 0, time: 0 },
+  kickflip: { name: 'KICKFLIP', flip: 1, spin: 0, time: 0.36 },
+  heelflip: { name: 'HEELFLIP', flip: -1, spin: 0, time: 0.36 },
+  shuvit: { name: 'POP SHOVE-IT', flip: 0, spin: 1, time: 0.32 },
+  treflip: { name: '360 FLIP', flip: 1, spin: 2, time: 0.42 },
+  varialheel: { name: 'VARIAL HEELFLIP', flip: -1, spin: -1, time: 0.4 },
+} as const;
+export type SkateTrick = keyof typeof SKATE_TRICKS;
+/** Seconds from the pop to the flick (the tail cracks down first). */
+export const TRICK_DELAY = 0.05;
+
+export const isSkateTrick = (k: unknown): k is SkateTrick => typeof k === 'string' && Object.prototype.hasOwnProperty.call(SKATE_TRICKS, k);
+
+/**
+ * The trick for the stick (or keys) held as the rider pops: sideways for a kickflip (left) or a
+ * heelflip (right), back for a shove-it, back and to a side for a 360 flip (left) or a varial
+ * heelflip (right); straight up or nothing, an ollie. `x` right, `y` forward, -1..1.
+ */
+export function skateTrickFor(x: number, y: number): SkateTrick {
+  if (y < -0.45) return x < -0.35 ? 'treflip' : x > 0.35 ? 'varialheel' : 'shuvit';
+  if (Math.abs(x) > 0.5 && Math.abs(x) > y * 0.8) return x < 0 ? 'kickflip' : 'heelflip';
+  return 'ollie';
+}

@@ -2688,6 +2688,32 @@ export class AudioEngine {
     this.crack(d, t, 'bandpass', 520, 0.9, 0.5, 0.05, 0.004);
   }
 
+  /**
+   * A flip trick's flick: the shoe dragging up the grip tape and off the edge of the nose (`flip`),
+   * or the back foot scooping the tail round (a shove-it), then the board whirring as it turns.
+   */
+  skateFlick(position: THREE.Vector3, flip: boolean): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.15, 3);
+    this.crack(d, t, 'bandpass', flip ? 3300 : 2400, 0.8, 1.1, 0.07, 0.022);
+    this.crack(d, t + 0.035, 'highpass', 5200, 0.7, 0.5, 0.03, 0.008);
+    if (flip) this.crack(d, t + 0.055, 'bandpass', 1900, 2.2, 0.8, 0.018);
+    else this.crack(d, t + 0.02, 'bandpass', 1300, 0.9, 0.7, 0.06, 0.015);
+    // The deck cutting the air, a soft pulse each half turn.
+    for (let i = 0; i < 3; i++) this.crack(d, t + 0.08 + i * 0.09, 'bandpass', 650 + i * 120, 1.1, 0.32 - i * 0.07, 0.045, 0.03);
+  }
+
+  /** Both feet coming down onto the grip to catch a flipped board in the air. */
+  skateCatch(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.2, 3);
+    this.crack(d, t, 'bandpass', 760, 1.1, 0.9, 0.035);
+    this.tone(d, t, 'sine', 150, 95, 0.18, 0.002, 0.05);
+    this.crack(d, t + 0.028, 'bandpass', 980, 1.2, 0.6, 0.03);
+  }
+
   /** Board slapped down and stepped onto. */
   skateMount(position: THREE.Vector3): void {
     if (!this.ctx) return;

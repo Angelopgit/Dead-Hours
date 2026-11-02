@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
+  BARRICADE, DOWNED, GAME, HORDES, LULLS, MELEE, Mirror, NEIGHBORHOOD, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, WEAPONS, LIMB_NAME, encodeAppearance, isLeg, packMotion, sanitizeAppearance,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
   type ActMsg, type BarricadeSlot, type ArsenalTick, type BeginMsg, type Interactable, type LimbCut, type LimbZone, type MapDefinition, type NavGrid,
   type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type WeaponId, type ZombieKind,
@@ -159,7 +159,12 @@ export class GameSession {
   private rideAskedAt = 0;
   /** Online: when this survivor said a wall threw them (the server's echo of it is not shown twice). */
   private bailSentAt = -Infinity;
-  private readonly myBoard: BoardPose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, pop: -1, air: false, push: -1 };
+  private readonly myBoard: BoardPose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, pop: -1, air: false, push: -1, trick: null, trickU: -1, toe: 1 };
+  /** Shown once: hold a direction while popping for a flip trick. */
+  private trickHinted = false;
+  /** Tricks landed one after another (each within `streakT` seconds of the last). */
+  private streak = 0;
+  private streakT = 0;
   private readonly drops: SupplyDrops;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
@@ -1044,11 +1049,12 @@ export class GameSession {
     this.raid.update(live, this.sim, renderTime, this.engine.camera, !!m);
     this.limbs.update(live, this.sim, m ? m.limbAlpha : alpha, this.engine.camera, m ? m.limbStep : step);
     this.pickups.update(live, this.sim, this.engine.camera);
-    this.skates.update(live, this.sim, this.engine.camera, (b) => this.boardPose(b, alpha));
     if (m) {
       this.remotes!.update(live, this.sim, m, this.engine.camera);
       this.updateVoices();
     }
+    // After the other survivors: their boards go under their feet as drawn this frame (not the last).
+    this.skates.update(live, this.sim, this.engine.camera, (b) => this.boardPose(b, alpha));
     this.barricades.update(live, this.engine.camera);
     if (this.work) this.work.t += live;
     this.bleedHeldLimb(live);
@@ -1584,6 +1590,20 @@ export class GameSession {
     }
   }
 
+  /** After the first plain ollie: which way to hold the stick (or keys) while popping for each flip trick. */
+  private trickHint(): void {
+    if (this.trickHinted) return;
+    this.trickHinted = true;
+    const d = this.input.device;
+    const k = (a: Action, alt: string) => actionLabel(a) || alt;
+    const jump = k('jump', d === 'pad' ? 'A' : d === 'touch' ? 'JUMP' : 'SPACE');
+    // Keys by their bindings; a stick by the way it is pushed (short enough for a phone's width).
+    const stick = d === 'pad' || d === 'touch';
+    const [l, r, b] = stick ? ['←', '→', '↓'] : [k('left', 'A'), k('right', 'D'), k('back', 'S')];
+    const [bl, br] = stick ? ['↙', '↘'] : [`${b}+${l}`, `${b}+${r}`];
+    this.hud.notify('FLIP TRICKS', `${jump} + ${stick ? 'STICK ' : ''}${l} KICKFLIP · ${r} HEELFLIP · ${b} SHOVE-IT · ${bl} 360 FLIP · ${br} VARIAL HEELFLIP`, 5);
+  }
+
   /** Steps off (or, `bail`, is thrown off by a wall): the board comes to rest on the floor where the session put it. */
   private leaveBoard(bail: boolean): void {
     const p = this.player;
@@ -1631,8 +1651,24 @@ export class GameSession {
     const p = this.player;
     const r = p.ride;
     this.cam.rush = r ? THREE.MathUtils.smoothstep(r.speed, 5, SKATEBOARD.sprintTop) : 0;
-    if (!r) return;
+    const popped = p.popped, tricked = p.tricked, landed = p.landedTrick;
     p.kicked = p.popped = false;
+    p.tricked = p.landedTrick = null;
+    this.streakT = Math.max(0, this.streakT - dt);
+    if (!r) return;
+    // A flip trick: the others see it (online it goes by the server; solo the simulation hears of it
+    // all the same), and once it is landed it is called out.
+    if (tricked) {
+      if (this.link) this.link.act({ a: 'trick', kind: tricked });
+      else this.sim.skateTrick(this.myId, tricked);
+    } else if (popped && !this.trickHinted && r.since > 1) this.later.push({ t: 0.7, fn: () => this.trickHint() });
+    if (tricked) this.trickHinted = true;
+    if (landed) {
+      this.streak = this.streakT > 0 ? this.streak + 1 : 1;
+      this.streakT = 3;
+      this.hud.trickCall(SKATE_TRICKS[landed].name, this.streak);
+      this.input.rumble(0.25, 90);
+    }
     if (p.bailed) {
       this.leaveBoard(true);
       return;
@@ -1665,6 +1701,9 @@ export class GameSession {
     o.pop = r.pop;
     o.air = !p.grounded;
     o.push = r.push;
+    o.trick = r.trick;
+    o.trickU = p.trickU(alpha);
+    o.toe = p.character.skateToe;
     return o;
   }
 
@@ -1913,6 +1952,11 @@ export class GameSession {
       case 'limbDropped':
         break;
       case 'skate': {
+        // Another rider's flip trick: drawn as they leave the ground (this survivor's own already shows).
+        if (e.stage === 'trick') {
+          if (e.player !== this.myId && e.trick) this.remotes?.trick(e.player, e.trick);
+          break;
+        }
         if (e.stage !== 'bail') break;
         v3(e.pos, A);
         if (e.player === this.myId) {
