@@ -67,7 +67,8 @@ export class PauseMenu {
     if (!panel) return;
     this.el.append(panel);
     const covered = panelCoversMenu(panel, this.main);
-    gsap.fromTo(panel, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, ease: 'power3.out' });
+    // The stylesheet's centring back at the end (see MainMenu.openPanel).
+    gsap.fromTo(panel, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, ease: 'power3.out', clearProps: 'transform' });
     if (covered) {
       gsap.killTweensOf(this.main); // the fade back from a panel just closed
       gsap.to(this.main, { opacity: 0, duration: 0.3 });

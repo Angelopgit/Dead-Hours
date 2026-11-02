@@ -223,7 +223,10 @@ export class MainMenu {
     this.el.append(el);
     // Dimmed menu words beside a panel read fine; words the panel slices through (phones, narrow windows) don't.
     const covered = panelCoversMenu(el, this.main, (e) => !this.playOpen && !!e.closest('.menu-sub'));
-    gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out' });
+    // Panels centre themselves with a CSS translate(-50%). Animating the transform, GSAP keeps that as -50% only when
+    // it reads exactly half the height and as fixed pixels otherwise, so a panel that grew afterwards (the leaderboard
+    // once its rows came in) sat far below centre with its bottom cut off. The stylesheet takes it back at the end.
+    gsap.fromTo(el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: 'power3.out', clearProps: 'transform' });
     gsap.to(this.main, { opacity: covered ? 0 : 0.35, duration: 0.4 });
     this.main.style.pointerEvents = covered ? 'none' : '';
   }

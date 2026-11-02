@@ -131,6 +131,12 @@ check(none === null, 'nothing near: full speed');
   const chat = readFileSync(new URL('../src/ui/ChatBox.ts', import.meta.url), 'utf8');
   check(/new ResizeObserver\([^]*?scrollTop = this\.log\.scrollHeight[^]*?\.observe\(this\.log\)/.test(chat),
     'the in-game chat keeps its newest line in view when the window changes size');
+  // Panels centre themselves with a CSS translate(-50%); a slide-in that leaves GSAP's transform behind can freeze
+  // that as pixels, and the leaderboard (taller once its rows come in) sat 193 px low with its bottom cut off.
+  const slides = ['../src/ui/MainMenu.ts', '../src/ui/PauseMenu.ts', '../src/gameplay/GameSession.ts']
+    .flatMap((f) => readFileSync(new URL(f, import.meta.url), 'utf8').match(/gsap\.fromTo\([^;]*\{ opacity: 0, x: 24 \}[^;]*;/g) ?? []);
+  check(slides.length === 4 && slides.every((s) => s.includes("clearProps: 'transform'")),
+    `menu and table panels hand their centring back to the stylesheet after sliding in (${slides.length} slides)`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');

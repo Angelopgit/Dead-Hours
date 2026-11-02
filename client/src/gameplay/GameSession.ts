@@ -793,7 +793,7 @@ export class GameSession {
     );
     this.smith = { stage, panel, el, bench };
     this.ui.append(el);
-    gsap.fromTo(el.querySelector('.gunsmith-panel'), { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.35, ease: 'power3.out' });
+    gsap.fromTo(el.querySelector('.gunsmith-panel'), { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.35, ease: 'power3.out', clearProps: 'transform' });
     audio.ui('click');
   }
 
@@ -891,7 +891,7 @@ export class GameSession {
       onGunsmith: () => this.openGunsmith(true),
     });
     this.ui.append(this.table.el);
-    gsap.fromTo(this.table.el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, delay: 0.25, ease: 'power3.out' });
+    gsap.fromTo(this.table.el, { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.4, delay: 0.25, ease: 'power3.out', clearProps: 'transform' });
     audio.ui('click');
   }
 
