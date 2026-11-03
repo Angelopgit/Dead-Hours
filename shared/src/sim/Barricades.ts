@@ -78,7 +78,7 @@ export class Barricades {
       const normal = w.axis === 'x' ? { x: 0, z: w.outward } : { x: w.outward, z: 0 };
       const bottom = w.y - w.h / 2;
       const pane = physics.paneAt(w.x, w.y, w.z);
-      pane?.setEnabled(true);
+      if (pane) physics.switchOn(pane);
       // Where a zombie stands to climb in, and where it lands: the nearest floor on each side.
       const side = (sign: number): number => {
         const x = w.x + normal.x * sign * 0.75, z = w.z + normal.z * sign * 0.75;
@@ -104,7 +104,7 @@ export class Barricades {
       this.windows.push(slot);
     }
     // Panes a previous night smashed are back in.
-    physics.world.updateSceneQueries();
+    physics.sync();
   }
 
   private add(s: Omit<BarricadeSlot, 'index' | 'boards' | 'damage' | 'busyUntil'>): BarricadeSlot {
@@ -166,11 +166,8 @@ export class Barricades {
   breakGlass(s: BarricadeSlot): boolean {
     if (!s.glass) return false;
     s.glass = false;
-    if (s.pane) {
-      s.pane.setEnabled(false);
-      // Rays cast this same step must already go through.
-      this.physics.world.updateSceneQueries();
-    }
+    // Rays cast this same step must already go through.
+    if (s.pane) this.physics.switchOff(s.pane);
     return true;
   }
 

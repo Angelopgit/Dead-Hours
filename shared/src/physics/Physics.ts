@@ -25,6 +25,9 @@ export function groups(member: number, filter: number): number {
   return (member << 16) | filter;
 }
 
+/** The map's own colliders: static, and everything may touch them. */
+const STATIC_GROUPS = groups(GROUP.static, 0xffff);
+
 /** What a bullet hit, for impact effects and sounds. */
 export type Surface = 'concrete' | 'asphalt' | 'brick' | 'plaster' | 'wood' | 'metal' | 'glass' | 'grass' | 'dirt' | 'fabric' | 'flesh';
 
@@ -74,6 +77,39 @@ export const WORLD_FILTER = groups(0xffff, GROUP.static | GROUP.dynamic | GROUP.
 export const BODY_FILTER = GROUP.static | GROUP.dynamic | GROUP.vehicle | GROUP.cabin;
 
 /**
+ * Whether the character controller's last move touched something upright below `top` (world
+ * height): a door threshold, a stair or a curb it may have to step or ride up onto. Contact points
+ * come back in world space.
+ */
+export function touchedLedge(ctrl: RAPIER.KinematicCharacterController, top: number, hit?: RAPIER.CharacterCollision): boolean {
+  const n = ctrl.numComputedCollisions();
+  for (let i = 0; i < n; i++) {
+    const c = ctrl.computedCollision(i, hit);
+    if (c && Math.abs(c.normal1.y) < 0.7 && c.witness2.y < top) return true;
+  }
+  return false;
+}
+
+/** Whether the controller's last move got less than half as far sideways as `move` asked. */
+export function stalled(ctrl: RAPIER.KinematicCharacterController, move: { x: number; z: number }): boolean {
+  const ask = Math.hypot(move.x, move.z);
+  if (ask < 1e-5) return false;
+  const m = ctrl.computedMovement();
+  return Math.hypot(m.x, m.z) < ask * 0.5;
+}
+
+/**
+ * The same move with a hair of upward intent, for a body walking into a low edge. Rapier up to 0.19
+ * let a sideways push ride a capsule up the rounded contact with an edge (a doorstep met at an angle,
+ * or by a brute with no headroom left to autostep under a door header); from 0.20 only a move that
+ * points upward may climb what is too steep to walk, so without this they stall on the edge. Kept
+ * to moves that touched a ledge: on open ground an upward move would turn off snap-to-ground.
+ */
+export function climbing(move: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+  return move.y < 0 ? move : { x: move.x, y: Math.max(move.y, 1e-4), z: move.z };
+}
+
+/**
  * Rapier world built from the shared map definition. The client and the server construct the
  * same one, so movement, sight lines and bullets agree everywhere.
  */
@@ -89,10 +125,9 @@ export class Physics {
   constructor(readonly map: MapDefinition) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = this.fixedDt;
-    const staticGroups = groups(GROUP.static, 0xffff);
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     const add = (desc: RAPIER.ColliderDesc, surface: Surface | 'ground') => {
-      const c = this.world.createCollider(desc.setCollisionGroups(staticGroups), body);
+      const c = this.world.createCollider(desc.setCollisionGroups(STATIC_GROUPS), body);
       this.surfaces.set(c.handle, surface);
       return c;
     };
@@ -138,29 +173,43 @@ export class Physics {
   }
 
   /**
-   * Brings the world `dt` seconds on when nothing in it needs the solver: kinematic bodies (zombies,
-   * survivors, doors, crates) jump to where they were sent and the query structures are rebuilt,
-   * at about half the cost of a full step. While a dynamic body (a loose arm) is awake it is a full
-   * step of `dt`.
+   * Brings the world `dt` seconds on in one step: kinematic bodies (zombies, survivors, doors, crates)
+   * land where they were sent and a loose arm falls `dt`. The server calls it once per snapshot.
+   * Since Rapier 0.20 the broad phase (which is also the query tree) leaves resting colliders alone,
+   * so a step on this mostly static map costs ~0.01 ms; 0.14 rebuilt the whole tree, ~1.4 ms.
+   * (0.21 adds ~0.7 ms back: its World.step re-wraps every collider in JS. Bench before bumping:
+   * `npm run bench:physics -w server`.)
    */
   advance(dt: number): void {
     const w = this.world;
-    let awake = false;
-    w.bodies.forEach((b) => {
-      if (!awake && b.isDynamic() && !b.isSleeping()) awake = true;
-    });
-    if (awake) {
-      w.timestep = dt;
-      w.step();
-      w.timestep = this.fixedDt;
-      return;
-    }
-    w.bodies.forEach((b) => {
-      if (!b.isKinematic()) return;
-      b.setTranslation(b.nextTranslation(), false);
-      b.setRotation(b.nextRotation(), false);
-    });
-    w.updateSceneQueries();
+    w.timestep = dt;
+    w.step();
+    w.timestep = this.fixedDt;
+  }
+
+  /**
+   * Makes colliders created or switched back on since the last step show up in ray and shape casts.
+   * Only a step updates the query tree, so this is one step of the world: for setting a night up
+   * (cars parked, panes put back), not for the middle of one. Mid-step, use `switchOff`.
+   */
+  sync(): void {
+    this.world.step();
+  }
+
+  /**
+   * Takes a world collider (a window pane) out at once: casts made before the next step already go
+   * through it. A disabled collider stays in the query tree until the next step, but every cast here
+   * filters by collision groups, and the groups are read as the cast runs.
+   */
+  switchOff(collider: RAPIER.Collider): void {
+    collider.setCollisionGroups(0);
+    collider.setEnabled(false);
+  }
+
+  /** Puts a collider `switchOff` took out back (in casts after the next step or `sync`). */
+  switchOn(collider: RAPIER.Collider): void {
+    collider.setCollisionGroups(STATIC_GROUPS);
+    collider.setEnabled(true);
   }
 
   /** The terrain slab: nothing walkable lies under it. */

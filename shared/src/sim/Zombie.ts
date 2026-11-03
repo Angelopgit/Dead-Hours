@@ -1,4 +1,4 @@
-import { RAPIER, BODY_FILTER, GROUP, groups } from '../physics/Physics';
+import { RAPIER, BODY_FILTER, GROUP, climbing, groups, touchedLedge } from '../physics/Physics';
 import { VEHICLE } from '../config/vehicles';
 import { SPECIALS, ZOMBIES, type ZombieDef, type ZombieKind } from '../config/zombies';
 import { COMBAT, type HitZone } from '../config/weapons';
@@ -939,7 +939,7 @@ export class Zombie {
     ctrl.computeColliderMovement(this.collider, want, undefined, ZOMBIE_GROUPS);
     if (this.hitLedge(ctrl)) {
       ctrl = sim.zombieController;
-      ctrl.computeColliderMovement(this.collider, want, undefined, ZOMBIE_GROUPS);
+      ctrl.computeColliderMovement(this.collider, climbing(want), undefined, ZOMBIE_GROUPS);
     }
     const m = ctrl.computedMovement();
     this.grounded = ctrl.computedGrounded();
@@ -970,15 +970,7 @@ export class Zombie {
 
   /** Whether the last move touched an upright surface low enough to step onto. */
   private hitLedge(ctrl: RAPIER.KinematicCharacterController): boolean {
-    const n = ctrl.numComputedCollisions();
-    if (n === 0) return false;
-    // Contact points come back in world space.
-    const top = this.collider.translation().y - this.bodyHeight / 2 + ZOMBIE_STEP + 0.05;
-    for (let i = 0; i < n; i++) {
-      const c = ctrl.computedCollision(i, this.hit);
-      if (c && Math.abs(c.normal1.y) < 0.7 && c.witness2.y < top) return true;
-    }
-    return false;
+    return touchedLedge(ctrl, this.collider.translation().y - this.bodyHeight / 2 + ZOMBIE_STEP + 0.05, this.hit);
   }
 
   private unstick(wx: number, wz: number): void {

@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@dead-hours/shared": "*",
-    "@dimforge/rapier3d-compat": "0.14.0",
+    "@dimforge/rapier3d-compat": "0.20.0",
     "@fontsource/inter": "^5.2.0",
     "@fontsource/oswald": "^5.2.0",
     "colyseus.js": "^0.16.22",

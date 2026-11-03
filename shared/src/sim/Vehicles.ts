@@ -127,7 +127,7 @@ export class Vehicles {
         body, hull, cabin, hits: new Map(), noiseT: 0, prev: { ...pos }, prevYaw: p.rotY,
       });
     }
-    w.updateSceneQueries();
+    sim.physics.sync();
   }
 
   vehicle(id: number): Vehicle | undefined {

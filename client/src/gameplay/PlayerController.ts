@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BICYCLE, BODY_FILTER, DIVE, DOWNED, PLAYER, PRONE, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, skateTrickFor, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
+import { BICYCLE, BODY_FILTER, DIVE, DOWNED, PLAYER, PRONE, SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, VAULT, VEHICLE, climbing, skateTrickFor, stalled, touchedLedge, vaultAt, type PlayerMotion, type SkateTrick, type Vec3, type VaultPlan } from '@dead-hours/shared';
 import { RAPIER, GROUP, groups, type Physics } from '../core/Physics';
 import type { Input } from '../core/Input';
 import { settings } from '../core/Settings';
@@ -745,12 +745,17 @@ export class PlayerController {
       this.slope();
     }
     this.controller.computeColliderMovement(this.collider, desired, undefined, FEET);
+    // Walked into a doorstep at an angle and stuck on its edge: ride up it (see climbing()).
+    if (this.grounded && stalled(this.controller, desired)
+      && touchedLedge(this.controller, this.body.translation().y - this.height / 2 + PLAYER.maxStepHeight + 0.05)) {
+      this.controller.computeColliderMovement(this.collider, climbing(desired), undefined, FEET);
+    }
     const m = this.controller.computedMovement();
     const wasGrounded = this.grounded;
     let grounded = this.controller.computedGrounded();
     if (!grounded && wasGrounded && this.intent.y <= 0) {
-      // Without a downward push the controller reports "airborne" on flat floor every other
-      // step; a short probe under the feet keeps the survivor grounded unless the floor is gone.
+      // Before Rapier 0.20 the controller reported "airborne" on flat floor every other step
+      // without a downward push; a short probe under the feet still guards against a stray one.
       const t = this.body.translation();
       const feet = t.y + m.y - this.height / 2;
       if (this.physics.raycast(t.x + m.x, feet + 0.05, t.z + m.z, 0, -1, 0, 0.14) !== null) grounded = true;

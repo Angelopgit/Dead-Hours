@@ -1,10 +1,11 @@
-import { RAPIER, BODY_FILTER, GROUP, groups } from '../physics/Physics';
+import { RAPIER, BODY_FILTER, GROUP, climbing, groups, stalled, touchedLedge } from '../physics/Physics';
 import type { DoorBody } from '../physics/DoorBody';
 import { WEAPONS, type HitZone, type WeaponId } from '../config/weapons';
 import { RAID, RAID_ROUTES, raiderAppearance, routeAt, sampleRoute, type RouteSamples } from '../config/raid';
 import { encodeAppearance } from '../config/appearance';
 import { Arsenal, type ArsenalTick } from './Arsenal';
 import { NAV_INDOOR } from './NavGrid';
+import { ZOMBIE_STEP } from './Zombie';
 import { rayCapsule, rayZones, zombieZones, type ZoneShape } from './hitzones';
 import { angleDiff, clamp, dist2D, rng, v3, type Vec3 } from './math';
 import type { PelletTrace } from './events';
@@ -441,7 +442,12 @@ export class Raider {
       return;
     }
     const ctrl = sim.zombieController;
-    ctrl.computeColliderMovement(this.collider, { x: m.vel.x * dt, y: m.vel.y * dt, z: m.vel.z * dt }, undefined, RAIDER_GROUPS);
+    const want = { x: m.vel.x * dt, y: m.vel.y * dt, z: m.vel.z * dt };
+    ctrl.computeColliderMovement(this.collider, want, undefined, RAIDER_GROUPS);
+    // Stalled on a doorstep's edge: ride up it as a survivor does (see climbing()).
+    if (m.grounded && stalled(ctrl, want) && touchedLedge(ctrl, m.pos.y + ZOMBIE_STEP + 0.05)) {
+      ctrl.computeColliderMovement(this.collider, climbing(want), undefined, RAIDER_GROUPS);
+    }
     const mv = ctrl.computedMovement();
     m.grounded = ctrl.computedGrounded();
     const t = this.body.translation();

@@ -11,6 +11,7 @@
     "check:cluster": "tsx tests/cluster.check.ts",
     "load": "tsx tests/load.ts",
     "bench": "tsx tests/bench.ts",
+    "bench:physics": "tsx tests/physics.ts",
     "spawns": "tsx tests/spawns.ts",
     "balance": "tsx tests/balance.ts"
   },
