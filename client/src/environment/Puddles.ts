@@ -46,8 +46,8 @@ interface Spot {
  * mirror) and adds what the water reflects: the street above it (PlanarMirror, or a sky gradient
  * where reflections are off), the lamps it can see as soft glints, and every live light (flashlight,
  * muzzle flashes, fires) through the material's own lighting. Its edge is frayed with noise and
- * fades into a band of damp, darker asphalt. Rain drops ring it, a drip lands now and then after
- * the rain stops, and the wind ruffles it.
+ * fades into a band of damp, darker asphalt. Rain drops ring it while it rains (only then: the
+ * rings follow the rain itself, so they fade out with it), and the wind ruffles it.
  *
  * All puddles are one blended draw, not part of the static batch or the light bake.
  */
@@ -448,10 +448,10 @@ const PUDDLE_GLSL = /* glsl */ `
     float env = (1.0 - ph) * (1.0 - ph) * exp(-x * x * 900.0);
     return (r > 1e-3 ? d / r : vec2(0.0)) * cos(x * 120.0) * env * 2.4;
   }
-  // Rain rings (three grids, denser and livelier the harder it rains) or, once the rain stops,
-  // a drip now and then.
+  // Rain rings: three grids, denser and livelier the harder it rains, and none without rain
+  // (the same 0.02 the rain streaks start at).
   vec2 puddleRings(vec2 p, float t, float rain) {
-    vec2 g = puddleDrops(p, t, 0.9, 0.32, 0.07, 0.0);
+    vec2 g = vec2(0.0);
     if (rain > 0.02) {
       float k = smoothstep(0.02, 0.6, rain);
       g += puddleDrops(p, t, 0.34, 1.25, mix(0.25, 0.95, rain), 1.7) * k;
