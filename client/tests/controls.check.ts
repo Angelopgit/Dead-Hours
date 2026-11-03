@@ -161,10 +161,11 @@ check(none === null, 'nothing near: full speed');
   check(prop('body.touch-play .vitals .boosts', 'position') === 'absolute' && prop('body.touch-play .vitals .boosts', 'flex-direction') === 'column',
     'touch: boost chips stack under the pause button, clear of the health bar and the gun slots');
   // The main menu's height bands each fit the column at one window height, and windows just under it (701 px,
-  // 1536x864 laptops at about 714, 861 with the name hint) had SETTINGS and CREDITS under the fold with PLAY open.
+  // 1536x864 laptops at about 714, 861 with the name hint) had SETTINGS and CREDITS under the fold with PLAY open,
+  // as did half-screen laptop windows (683 px wide), which had no band at all: the bands start at 601 px wide.
   // Each band names the height it fits (holiday logo a bit more) and the column shrinks to it, never under 3/4
   // size at the bottom of a band. `node client/dev/menu-sweep.cjs` measures it in a browser.
-  const bands = [...css.matchAll(/@media \(min-width: 721px\) and \(min-height: (\d+)px\)[^{]*\{/g)].map((m) => {
+  const bands = [...css.matchAll(/@media \(min-width: 601px\) and \(min-height: (\d+)px\)[^{]*\{/g)].map((m) => {
     let depth = 1, i = m.index + m[0].length;
     while (depth && i < css.length) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0, i++;
     const body = css.slice(m.index + m[0].length, i - 1);
