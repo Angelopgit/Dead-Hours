@@ -4,6 +4,7 @@ import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import type { Physics } from '../core/Physics';
 import { audio } from '../audio/AudioEngine';
+import { PICKUP_DRAW_RANGE } from '../environment/FogRange';
 
 /** Where a ridden board is drawn: under its rider's feet. */
 export interface BoardPose {
@@ -277,6 +278,7 @@ export class SkateboardView {
         v = this.create(b);
       }
       this.place(v, b, dt, poseOf(b));
+      v.model.root.visible = v.model.root.position.distanceToSquared(camera.position) < PICKUP_DRAW_RANGE ** 2;
       v.probe.update(dt, v.pos, camera, 0.3);
     }
     for (const id of [...this.views.keys()]) if (!seen.has(id)) this.remove(id);

@@ -15,6 +15,8 @@ import { Acoustics, type Space } from '../src/audio/Acoustics';
 import { beamPower, falloff, HOTSPOT_FAR, HOTSPOT_NEAR, lampPower, TRIM_ALBEDO } from '../src/lighting/BeamPower';
 import { BODY_KNEE, GLOSS_CEIL, GLOSS_KNEE, glossCap, softCeil } from '../src/lighting/GlossCap';
 import { Lighting } from '../src/lighting/Lighting';
+import { FOG_DENSITY, fogLeft, PICKUP_DRAW_RANGE } from '../src/environment/FogRange';
+import { readFileSync } from 'node:fs';
 
 type V = [number, number];
 const DT = 1 / 60;
@@ -372,6 +374,21 @@ console.log('The loading frame readies every shadow-depth program');
   else if (!picked) fail('a caster drawn into the loading frame\'s shadow kept the depth program of the one before it');
   else if (after.some((v, i) => v !== before[i]) || THREE.Object3D.prototype.onBeforeShadow !== hook) fail(`shadows not put back: ${before.join(',')} -> ${after.join(',')}`);
   else console.log(`  ok   all 8 corners of ${b.x1 - b.x0} x ${b.z1 - b.z0} m inside, each caster picks its program, then back to ${cam.right * 2} m`);
+}
+
+console.log('Loose bikes, boards and syringes stop drawing where the fog has hidden them');
+{
+  // Past PICKUP_DRAW_RANGE even the thinnest fog leaves under 2% of an object; seen from the woods the far ones
+  // were some 50 draw calls a frame. Each view hides its far models by that range.
+  const thinnest = Math.min(...Object.values(FOG_DENSITY));
+  const left = fogLeft(PICKUP_DRAW_RANGE, thinnest);
+  const views = ['Bicycles', 'Skateboards', 'Syringes'].filter((f) => {
+    const src = readFileSync(new URL(`../src/gameplay/${f}.ts`, import.meta.url), 'utf8');
+    return !/model\.root\.visible = [^;]*PICKUP_DRAW_RANGE/.test(src);
+  });
+  if (left >= 0.02) fail(`fog leaves ${(left * 100).toFixed(1)}% at ${PICKUP_DRAW_RANGE} m (density ${thinnest})`);
+  else if (views.length) fail(`views that still draw past ${PICKUP_DRAW_RANGE} m: ${views.join(', ')}`);
+  else console.log(`  ok   ${(left * 100).toFixed(1)}% left at ${PICKUP_DRAW_RANGE} m in the thinnest fog; bikes, boards and syringes hide past it`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');

@@ -3,6 +3,7 @@ import { BOOSTS, boostYaw, type BoostId, type Interactable, type Simulation } fr
 import type { LightField } from '../lighting/LightField';
 import { StaticProbe } from '../lighting/Probes';
 import { patchProbe } from '../lighting/BakeShader';
+import { PICKUP_DRAW_RANGE } from '../environment/FogRange';
 
 /** The model is drawn this much bigger than life, so it reads on a counter across a dark room. */
 const SCALE = 0.86;
@@ -180,6 +181,7 @@ export class SyringePickups {
       const k = 0.5 + 0.5 * Math.sin((this.time + v.phase) * 2.1);
       v.model.setGlow(0.55 + 0.45 * k);
       const d = camera.position.distanceTo(v.model.root.position);
+      v.model.root.visible = v.pool.visible = d < PICKUP_DRAW_RANGE;
       v.halo.visible = d < 28;
       if (v.halo.visible) {
         // A touch bigger far off, so it stays a point of colour rather than shrinking to nothing.

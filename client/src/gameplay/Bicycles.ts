@@ -5,6 +5,7 @@ import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import type { Physics } from '../core/Physics';
 import { audio } from '../audio/AudioEngine';
+import { PICKUP_DRAW_RANGE } from '../environment/FogRange';
 
 /** Where a ridden bike is drawn and what its moving parts do. */
 export interface BikePose {
@@ -299,6 +300,7 @@ export class BicycleView {
         v = this.create(b);
       }
       this.place(v, b, dt, poseOf(b));
+      v.model.root.visible = v.model.root.position.distanceToSquared(camera.position) < PICKUP_DRAW_RANGE ** 2;
       v.probe.update(dt, v.pos, camera, 0.6);
     }
     for (const id of [...this.views.keys()]) if (!seen.has(id)) this.remove(id);

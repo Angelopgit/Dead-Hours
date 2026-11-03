@@ -26,8 +26,7 @@ import { Grass } from './Grass';
 import { groundNoise, woodsAt } from './Lawn';
 import { Puddles, PUDDLE_Y } from './Puddles';
 import { PlanarMirror } from '../rendering/PlanarMirror';
-
-const FOG_DENSITY: Record<Quality, number> = { low: 0.017, medium: 0.02, high: 0.022 };
+import { FOG_DENSITY } from './FogRange';
 
 /**
  * Puddle reflections per quality: the share of the screen's resolution the mirror draws at, the
