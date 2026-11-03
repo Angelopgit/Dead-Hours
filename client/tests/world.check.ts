@@ -466,5 +466,21 @@ console.log('A door is a few draws, not one per part');
   else console.log(`  ok   ${doors.doors.length} doors: ${total} draws and ${shadow} shadow draws (was 336 and 335), panels on the leaf's damage map`);
 }
 
+console.log('Flesh chunks build without three.js warnings');
+{
+  // The lump asked an already non-indexed icosahedron for toNonIndexed(): a console warning every night, and the
+  // geometry it then used had been disposed (it was the same object).
+  const { FleshChunks } = await import('../src/effects/Chunks');
+  const said: string[] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => { said.push(a.map(String).join(' ')); };
+  let chunks: InstanceType<typeof FleshChunks> | null = null;
+  try { chunks = new FleshChunks(phys); } finally { console.warn = warn; }
+  const g = chunks!.mesh.geometry;
+  if (said.length) fail(`building the chunks warned: ${said[0]}`);
+  else if (g.index || !g.attributes.normal || g.attributes.uv) fail('the lump should be faceted: non-indexed, normals, no uv');
+  else console.log(`  ok   no warnings; the lump is ${g.attributes.position.count / 3} facets`);
+}
+
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
 process.exit(failures ? 1 : 0);

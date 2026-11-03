@@ -54,8 +54,9 @@ function lumpGeometry(): THREE.BufferGeometry {
     if (k === undefined) dents.set(key, (k = 0.62 + rnd() * 0.5));
     p.setXYZ(i, p.getX(i) * k, p.getY(i) * k, p.getZ(i) * k);
   }
-  const flat = g.toNonIndexed();
-  g.dispose();
+  // Polyhedra come non-indexed already (three.js warns and hands back the same geometry if asked again).
+  const flat = g.index ? g.toNonIndexed() : g;
+  if (flat !== g) g.dispose();
   flat.deleteAttribute('uv');
   flat.computeVertexNormals();
   return flat;
