@@ -25,6 +25,7 @@
     "check:cluster": "npm run check:cluster -w server",
     "check:controls": "tsx client/tests/controls.check.ts",
     "check:sights": "tsx client/tests/sights.check.ts",
+    "check:melee": "tsx client/tests/melee.check.ts",
     "check:explosives": "tsx shared/tests/explosives.check.ts",
     "check:skate": "tsx shared/tests/skateboards.check.ts && tsx server/tests/skate.check.ts",
     "check:windows": "tsx server/tests/vault.check.ts",

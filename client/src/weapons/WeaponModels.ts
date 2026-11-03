@@ -531,14 +531,26 @@ function machete(): Spec {
     .box(0.004, 0.05, 0.36, 0x8e9296, 0, 0.014, 0.3)
     .box(0.004, 0.034, 0.09, 0x8e9296, 0, 0.022, 0.51, -0.25)
     .box(0.0045, 0.008, 0.36, 0xb6babe, 0, -0.008, 0.3);
-  return {
+  // The fist round the middle of the handle, the butt just showing under the little finger.
+  return regrip({
     body: b, metal: true,
     muzzle: [0, 0.01, 0.56], fore: [0, 0, 0], eject: [0, 0, 0], stock: [0, 0, 0], bolt: [0, 0, 0],
-  };
+  }, 0.045);
 }
 
 /** Melee models: origin at the right hand's grip, +Z toward the striking end, +Y the edge's back. */
 const MELEE_POINTS = { eject: [0, 0, 0] as V3, stock: [0, 0, 0] as V3, bolt: [0, 0, 0] as V3 };
+
+/**
+ * Moves a melee model along its handle so the origin is where the lead fist closes (the middle of
+ * the hand, PlayerWeapon/MeleeGrip): `z` is that point as the model was drawn.
+ */
+function regrip(spec: Spec, z: number): Spec {
+  for (const b of [spec.body, spec.trim]) for (const part of b?.parts ?? []) part.g.translate(0, 0, -z);
+  spec.muzzle = [spec.muzzle[0], spec.muzzle[1], spec.muzzle[2] - z];
+  spec.fore = [spec.fore[0], spec.fore[1], spec.fore[2] - z];
+  return spec;
+}
 
 function katana(): Spec {
   const blade = new Builder();
@@ -609,10 +621,11 @@ function crowbar(): Spec {
   for (const [z, y, a] of arc) b.box(0.022, 0.022, 0.04, 0x4a4744, 0, y, z, -a);
   b.box(0.03, 0.007, 0.045, 0x3a3836, 0, 0.116, 0.462, -3.0);
   b.box(0.004, 0.012, 0.03, 0x1a1a1a, 0, 0.12, 0.45, -3.0);
-  return {
+  // Held near the chisel end, the goose neck out where it hits.
+  return regrip({
     body: b, metal: true,
     muzzle: [0, 0.1, 0.5], fore: [0, 0, -0.08], ...MELEE_POINTS,
-  };
+  }, -0.1);
 }
 
 function wrench(): Spec {
@@ -631,10 +644,11 @@ function wrench(): Spec {
     .box(0.03, 0.022, 0.052, IRON, 0, 0.128, 0.322);
   // Jaw teeth.
   for (let i = 0; i < 4; i++) b.box(0.032, 0.004, 0.006, 0x2a2b2c, 0, 0.115, 0.306 + i * 0.008);
-  return {
+  // Held down the handle toward its end.
+  return regrip({
     body: b, metal: true,
     muzzle: [0, 0.1, 0.33], fore: [0, 0, -0.07], ...MELEE_POINTS,
-  };
+  }, -0.035);
 }
 
 function hockey(): Spec {
@@ -652,10 +666,11 @@ function hockey(): Spec {
     b.box(0.075, 0.07, 0.012, BLADE, x, 0.018, z, 0, a - Math.PI / 2 + 0.1);
     b.box(0.072, 0.03, 0.013, 0xe7e7e2, x, 0.015, z, 0, a - Math.PI / 2 + 0.1);
   }
-  return {
+  // The left hand on the taped butt, the right 20 cm down the shaft.
+  return regrip({
     body: new Builder(), trim: b, trimRough: 0.45,
     muzzle: [0.14, 0.02, 1.0], fore: [0, 0, -0.26], ...MELEE_POINTS,
-  };
+  }, -0.06);
 }
 
 const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, akimbo: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith,
