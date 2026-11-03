@@ -94,6 +94,28 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   vertical-align: middle; display: inline-block; white-space: nowrap; max-width: calc(100% - 1em); overflow: hidden; text-overflow: ellipsis; }
 .menu-sub { margin: 0.2em 0 0.8em 1.2em; display: flex; flex-direction: column; gap: 0.05em; overflow: hidden; }
 .menu-sub .menu-item { font-size: 1.1em; letter-spacing: 0.24em; padding: 0.3em 0 0.3em 0.1em; }
+/* The survivor's name, right on the menu (NameField; the creator has the same box): an underlined line that
+   reads as part of the menu, with a pen to say it can be typed into. It takes some of the gap under the
+   subtitle, and asks for a name until one is picked. */
+.menu-name { display: flex; flex-wrap: wrap; align-items: center; column-gap: 1.1em; row-gap: 0.45em; margin: -1.3em 0 2.1em 0.2em; cursor: text; }
+.menu-name-label { font-family: var(--font-display); font-weight: 300; font-size: 0.75em; letter-spacing: 0.3em; color: var(--fg-dim); white-space: nowrap; display: inline-grid; }
+.menu-name-label > span { grid-area: 1 / 1; }
+.menu-name .menu-name-label .ask, .menu-name.unnamed .menu-name-label .have { visibility: hidden; }
+.menu-name.unnamed .menu-name-label .ask { visibility: visible; }
+.menu-name-box { display: inline-flex; align-items: center; min-width: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.18); transition: border-color 0.25s; }
+.menu-name-input { font-family: var(--font-display); font-weight: 500; font-size: 1.2em; letter-spacing: 0.12em; color: #f0ebe2; background: transparent;
+  border: 0; border-radius: 0; outline: none; padding: 0.12em 0 0.18em; width: 10em; min-width: 0; user-select: text; }
+.menu-name-input::placeholder { color: var(--fg-dim); opacity: 0.75; }
+.menu-name-pen { width: 0.95em; height: 0.95em; margin: 0 0.1em 0 0.5em; flex: none; color: var(--fg-faint); transition: color 0.25s; pointer-events: none; }
+.menu-name-pen svg { display: block; width: 100%; height: 100%; }
+.menu-name:hover .menu-name-box, .menu-name:focus-within .menu-name-box { border-color: var(--accent); }
+.menu-name:focus-within .menu-name-box { box-shadow: 0 1px 0 var(--accent); }
+.menu-name:hover .menu-name-pen, .menu-name:focus-within .menu-name-pen { color: var(--accent); }
+.menu-name-hint { display: none; flex-basis: 100%; font-size: 0.68em; letter-spacing: 0.2em; color: var(--fg-faint); }
+/* Only tall windows have the room for the reason under it: shorter ones keep the menu in one screen with PLAY open. */
+@media (min-height: 861px) { .menu-name.unnamed .menu-name-hint { display: block; } }
+.menu-name.unnamed .menu-name-label, .menu-name.unnamed .menu-name-pen { color: var(--accent); }
+.menu-name.unnamed .menu-name-box { border-bottom-color: rgba(212, 154, 90, 0.55); }
 .menu-footer { position: absolute; left: 7vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.12em; pointer-events: none; }
 .menu-hint { position: absolute; right: 4vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.14em; pointer-events: none; text-align: right; }
 .menu-hint .touch { display: none; color: var(--accent); }
@@ -102,12 +124,14 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 @media (min-width: 721px) and (min-height: 501px) and (max-height: 860px) {
   .menu .title { font-size: 3.9em; }
   .menu .subtitle { margin-bottom: 2em; }
-  .menu .menu-item { padding-top: 0.26em; padding-bottom: 0.26em; }
+  .menu .menu-name { margin-top: -0.9em; margin-bottom: 1em; }
+  .menu .menu-item { padding-top: 0.22em; padding-bottom: 0.22em; }
   .menu .menu-sub .menu-item { padding-top: 0.22em; padding-bottom: 0.22em; }
 }
 @media (min-width: 721px) and (min-height: 501px) and (max-height: 700px) {
   .menu .title { font-size: 3.3em; }
   .menu .subtitle { margin: 0.7em 0 1.3em 0.2em; }
+  .menu .menu-name { margin-top: -0.6em; margin-bottom: 0.7em; }
   .menu .menu-item { padding-top: 0.17em; padding-bottom: 0.17em; }
   .menu .menu-sub { margin-bottom: 0.4em; }
   .menu .menu-sub .menu-item { padding-top: 0.16em; padding-bottom: 0.16em; }
@@ -644,6 +668,35 @@ body.pad-nav :focus { outline: 2px solid var(--accent); outline-offset: 3px; }
 body.pad-nav .menu-item:focus { outline: none; color: #f0ebe2; padding-left: 0.5em; }
 body.pad-nav .menu-item:focus::before { width: 0.9em; }
 body.pad-nav #viewport { cursor: none; }
+/* The name box shows focus with its underline (a box drawn round it looked like another control). */
+body.pad-nav .menu-name-input:focus { outline: none; }
+
+/* ── On-screen keyboard (PadKeyboard: typing a name or code with a controller) ── */
+.osk { position: absolute; left: 0; right: 0; bottom: max(3vh, calc(env(safe-area-inset-bottom) + 8px)); margin: 0 auto; width: max-content;
+  max-width: calc(100vw - 32px); z-index: 40; pointer-events: auto; display: flex; flex-direction: column; gap: 0.35em;
+  padding: 1em 1.1em 0.8em; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55); }
+.osk-field { display: flex; align-items: baseline; gap: 1em; padding: 0.1em 0.2em 0.6em; margin-bottom: 0.3em; border-bottom: 1px solid var(--line); }
+.osk-label { font-family: var(--font-display); font-weight: 300; font-size: 0.72em; letter-spacing: 0.28em; color: var(--fg-dim); white-space: nowrap; }
+.osk-value { font-family: var(--font-display); font-weight: 500; font-size: 1.3em; letter-spacing: 0.1em; color: #f0ebe2; white-space: pre; min-height: 1.3em; overflow: hidden; }
+.osk-text.sel { background: rgba(212, 154, 90, 0.32); color: #fff; }
+.osk-caret { display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: -0.12em; background: var(--accent); animation: osk-blink 1s steps(1) infinite; }
+@keyframes osk-blink { 50% { opacity: 0; } }
+.osk-row { display: flex; justify-content: center; gap: 0.35em; }
+.osk-key { min-width: 2.6em; height: 2.5em; padding: 0 0.6em; font-family: var(--font-display); font-size: 1.05em; letter-spacing: 0.04em; color: var(--fg);
+  background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line); border-radius: 3px; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.osk-key.wide { min-width: 4.4em; font-size: 0.85em; letter-spacing: 0.18em; height: 3.08em; }
+.osk-key.space { flex: 1; font-size: 0.85em; letter-spacing: 0.24em; height: 3.08em; color: var(--fg-dim); }
+.osk-key.on { color: var(--accent); border-color: rgba(212, 154, 90, 0.5); }
+.osk-key.done { color: #17120b; background: var(--accent); border-color: var(--accent); }
+.osk-key:hover, .osk-key:focus, body.pad-nav .osk-key:focus { outline: none; color: #fff; border-color: var(--accent); background: var(--accent-dim); }
+.osk-key.done:hover, .osk-key.done:focus, body.pad-nav .osk-key.done:focus { color: #17120b; background: #e3ad70; box-shadow: 0 0 0 2px rgba(212, 154, 90, 0.45); }
+.osk-help { margin-top: 0.35em; text-align: center; font-family: var(--font-display); font-size: 0.68em; letter-spacing: 0.22em; color: var(--fg-faint); }
+@media (max-height: 500px) {
+  .osk { padding: 0.6em 0.8em 0.5em; gap: 0.25em; bottom: 8px; }
+  .osk-key { height: 2.1em; min-width: 2.3em; }
+  .osk-key.wide, .osk-key.space { height: 2.6em; }
+  .osk-help { display: none; }
+}
 .pad-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35em 1.2em; font-size: 0.85em; color: var(--fg-dim); margin-top: 0.6em; }
 .pad-layout .k { display: inline-block; min-width: 4.2em; color: var(--fg); font-family: var(--font-display); letter-spacing: 0.1em; }
 @media (max-width: 720px) { .pad-layout { grid-template-columns: 1fr; } }
@@ -751,6 +804,7 @@ body.touch-play .spectate:not(.net-lost) { left: auto; right: calc(16px + env(sa
 @media (max-height: 500px) {
   .title { font-size: 2.4em; }
   .subtitle { margin-bottom: 0.4em; font-size: 0.75em; }
+  .menu-name { margin: 0.5em 0 0.6em 0.2em; }
   .menu-main, .menu > .menu-main { top: 12px; bottom: 12px; scrollbar-width: none; }
   .menu-item { font-size: 1.2em; padding-top: 0.25em; padding-bottom: 0.25em; }
   .menu-sub .menu-item { font-size: 0.95em; }

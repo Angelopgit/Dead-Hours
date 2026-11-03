@@ -7,6 +7,7 @@ import { h } from './dom';
 import { settings } from '../core/Settings';
 import { audio } from '../audio/AudioEngine';
 import { CharacterPreview, type PreviewFocus } from '../characters/CharacterPreview';
+import { nameField, type NameField } from './NameField';
 
 type ColorKey = { [K in keyof Appearance]: Appearance[K] extends number ? K : never }[keyof Appearance];
 
@@ -121,18 +122,14 @@ export class CharacterCreator {
   private readonly preview = new CharacterPreview();
   private readonly tabsEl = h('nav', { class: 'creator-tabs', role: 'tablist', 'aria-label': 'Customization categories' });
   private readonly optionsEl = h('div', { class: 'creator-options' });
-  private readonly nameInput: HTMLInputElement;
+  /** The same name box as the main menu's: both show and save the profile's name. */
+  private readonly name: NameField = nameField('creator-name');
   private tab = TABS[0];
   private a: Appearance;
   private pending = 0;
 
   constructor(private readonly onClose: () => void) {
     this.a = sanitizeAppearance(settings.value.profile.appearance);
-    this.nameInput = h('input', {
-      class: 'creator-name', type: 'text', maxlength: 16, spellcheck: 'false', 'aria-label': 'Survivor name',
-      value: settings.value.profile.name,
-      oninput: () => settings.update((s) => { s.profile.name = this.nameInput.value.trim().slice(0, 16) || 'Survivor'; }),
-    });
     const btn = (label: string, onClick: () => void, cls = '') => h('button', {
       class: `creator-btn ${cls}`,
       onmouseenter: () => audio.ui('hover'),
@@ -160,7 +157,7 @@ export class CharacterCreator {
     this.el = h('div', { class: 'creator', role: 'dialog', 'aria-label': 'Customize your survivor' },
       h('header', { class: 'creator-head' },
         h('h2', {}, 'SURVIVOR'),
-        h('label', { class: 'creator-name-wrap' }, h('span', {}, 'NAME'), this.nameInput),
+        h('label', { class: 'creator-name-wrap' }, h('span', {}, 'NAME'), this.name.el),
         h('div', { class: 'creator-actions' },
           // Both keep the body type picked: a new random survivor, or that body's starting look.
           btn('RANDOMIZE', () => this.apply(randomAppearance(Math.random, this.a.body))),
@@ -310,6 +307,7 @@ export class CharacterCreator {
 
   dispose(): void {
     cancelAnimationFrame(this.pending);
+    this.name.dispose();
     this.preview.dispose();
     this.el.remove();
   }

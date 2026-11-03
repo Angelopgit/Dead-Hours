@@ -1,11 +1,17 @@
+import { PadKeyboard } from './PadKeyboard';
+
 /** Standard layout indices used by menu navigation. */
-const A = 0, B = 1, LB = 4, RB = 5, START = 9, UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15;
+const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, START = 9, UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15;
 
 type Dir = 'up' | 'down' | 'left' | 'right';
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 /** Layers that cover the screen; when one is open only its controls can be reached. */
 const LAYERS = '[role="dialog"], .panel, .pause, .results, .creator, .lobby';
+
+/** Boxes typed into: A opens the on-screen keyboard for them. */
+const TEXT_TYPES = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
+const typable = (el: Element): el is HTMLInputElement => el instanceof HTMLInputElement && TEXT_TYPES.has(el.type);
 
 /** Initial delay and repeat rate when a direction is held. */
 const REPEAT_DELAY = 0.38;
@@ -30,7 +36,8 @@ function key(code: string, keyName = code): void {
 /**
  * Menus with a controller: the D-pad or left stick moves focus to the nearest control in that
  * direction, A presses it, B and Start go back (as Escape does), left and right change sliders,
- * and the right stick scrolls long panels.
+ * and the right stick scrolls long panels. A on a text box opens the on-screen keyboard
+ * (PadKeyboard), where X deletes and Y types a space.
  */
 export class PadMenus {
   private heldDir: Dir | null = null;
@@ -51,7 +58,14 @@ export class PadMenus {
       }
     }
     if (edge(A)) this.press();
-    if (edge(B) || edge(START)) key('Escape');
+    const osk = PadKeyboard.active;
+    if (osk && edge(X)) osk.backspace();
+    if (osk && edge(Y)) osk.space();
+    // Over a keyboard, back closes just the keyboard (an Escape would reach the menu behind it too).
+    if (edge(B) || edge(START)) {
+      if (osk) osk.cancel();
+      else key('Escape');
+    }
     if (edge(LB) || edge(RB)) this.tab(edge(RB) ? 1 : -1);
     if (ry) {
       const scroller = this.scope().querySelector('.panel') ?? (this.scope().matches('.panel') ? this.scope() : null);
@@ -81,10 +95,16 @@ export class PadMenus {
     el.dispatchEvent(new MouseEvent('mouseenter'));
   }
 
+  /** Where focus starts: the first control, past text boxes (A on PLAY shouldn't open a keyboard). */
+  private first(): HTMLElement | undefined {
+    const all = this.candidates();
+    return all.find((el) => !typable(el)) ?? all[0];
+  }
+
   private step(dir: Dir): void {
     const cur = this.focused();
     if (!cur) {
-      const first = this.candidates()[0];
+      const first = this.first();
       if (first) this.focus(first);
       return;
     }
@@ -131,11 +151,11 @@ export class PadMenus {
   private press(): void {
     const cur = this.focused();
     if (cur) {
-      if (cur instanceof HTMLInputElement && cur.type !== 'range' && cur.type !== 'checkbox') cur.select();
+      if (typable(cur)) PadKeyboard.open(cur);
       else cur.click();
       return;
     }
-    const first = this.candidates()[0];
+    const first = this.first();
     if (first) this.focus(first);
     // Nothing to press (the opening shot): any key skips it.
     else key('Enter');

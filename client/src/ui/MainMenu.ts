@@ -13,6 +13,9 @@ import { account } from '../network/Account';
 import type { NetLink } from '../network/NetLink';
 import { HOLIDAY } from '../core/Holiday';
 import { holidayTitle } from './HolidayTitle';
+import { nameField, unnamed, type NameField } from './NameField';
+
+const PEN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 2.2a1.5 1.5 0 0 1 2.1 0l.4.4a1.5 1.5 0 0 1 0 2.1L6 12.5 2.5 13.5l1-3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M10 3.5l2.5 2.5" stroke="currentColor" stroke-width="1.2"/></svg>';
 
 export interface MainMenuCallbacks {
   onSolo: () => void;
@@ -44,6 +47,9 @@ export class MainMenu {
   private readonly main: HTMLElement;
   private accountItem!: HTMLButtonElement;
   private readonly offAccount: () => void;
+  /** The survivor's name, right on the menu (the creator has the same box). */
+  private readonly name: NameField;
+  private readonly nameRow: HTMLElement;
 
   constructor(private readonly input: Input, private readonly cb: MainMenuCallbacks) {
     const item = (label: string, onClick: () => void, opts: { tag?: string; online?: boolean } = {}) => {
@@ -65,9 +71,26 @@ export class MainMenu {
       item('JOIN GAME', () => this.openOnline('browse'), { tag: 'CODE OR OPEN GAMES', online: true }),
     );
 
+    // Other players and the leaderboards see it, so it is out here and not only in the creator: tucked away
+    // in there, players tended never to change it and played as "Survivor".
+    this.name = nameField('menu-name-input', () => this.nameHint());
+    this.nameRow = h('label', { class: 'menu-name', title: 'Other players and the leaderboards see this name' },
+      // Both labels take the same room, so the box doesn't shift when the name is picked.
+      h('span', { class: 'menu-name-label' }, h('span', { class: 'ask' }, 'PICK A NAME'), h('span', { class: 'have' }, 'YOUR NAME')),
+      h('span', { class: 'menu-name-box' },
+        this.name.el,
+        h('span', { class: 'menu-name-pen', html: PEN }),
+      ),
+      h('span', { class: 'menu-name-hint' }, 'OTHER PLAYERS AND THE LEADERBOARDS SEE IT'),
+    );
+    this.name.el.addEventListener('mouseenter', () => audio.ui('hover'));
+    this.name.el.addEventListener('focus', () => audio.unlock());
+    this.nameHint();
+
     this.main = h('div', { class: 'menu-main' },
       HOLIDAY ? holidayTitle(GAME.title) : h('h1', { class: 'title' }, GAME.title),
       h('div', { class: 'subtitle' }, GAME.subtitle),
+      this.nameRow,
       h('nav', { class: 'menu-list' },
         item('PLAY', () => this.togglePlay()),
         this.sub,
@@ -90,6 +113,11 @@ export class MainMenu {
     this.sizes?.observe(this.el);
     this.offAccount = account.onChange(() => this.accountTag());
     this.refreshServer(false);
+  }
+
+  /** Until a name is picked, the box asks for one (and says why, where there is room). */
+  private nameHint(): void {
+    this.nameRow.classList.toggle('unnamed', unnamed());
   }
 
   /** The account item says who is signed in (or that they play as a guest). */
@@ -268,7 +296,7 @@ export class MainMenu {
     parent.append(this.el);
     this.refreshServer(net.status !== 'online');
     gsap.fromTo(this.main.querySelector('.title'), { opacity: 0, letterSpacing: '0.5em' }, { opacity: 1, letterSpacing: '0.22em', duration: 2.4, ease: 'power3.out' });
-    gsap.fromTo(this.main.querySelectorAll('.subtitle, .menu-list > .menu-item'), { opacity: 0, y: 8 },
+    gsap.fromTo(this.main.querySelectorAll('.subtitle, .menu-name, .menu-list > .menu-item'), { opacity: 0, y: 8 },
       { opacity: 1, y: 0, duration: 0.8, stagger: 0.08, delay: 0.7, ease: 'power2.out' });
   }
 
@@ -287,6 +315,7 @@ export class MainMenu {
     window.removeEventListener('keydown', this.onKey);
     this.sizes?.disconnect();
     this.offAccount();
+    this.name.dispose();
     this.el.remove();
   }
 }
