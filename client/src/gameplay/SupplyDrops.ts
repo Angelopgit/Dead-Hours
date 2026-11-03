@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { SUPPLY_DROPS, WEAPONS, caseSpot, type HeliFlight, type WeaponId } from '@dead-hours/shared';
 import { createLightConeMaterial } from '../environment/LightCone';
 import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
+import type { Physics } from '../core/Physics';
+import { Parachute } from './Parachute';
 
 /** Where the helicopter is along its flight, how it is tilted and how fast it goes. */
 export interface HeliPose {
@@ -224,20 +226,14 @@ function stencilTexture(): THREE.CanvasTexture | null {
   return stencil;
 }
 
-/** The drop itself: a strapped ammunition crate under an orange-and-white chute, with a red flare. */
+/** The drop itself: a strapped ammunition crate with a red flare (its chute is a Parachute). */
 class CrateModel {
   readonly root = new THREE.Group();
   readonly crate = new THREE.Group();
-  readonly chute = new THREE.Group();
   readonly lid = new THREE.Group();
-  private readonly canopy: THREE.Mesh;
-  private readonly lines: THREE.LineSegments;
   private readonly flare: THREE.Mesh;
   private readonly materials: THREE.Material[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
-  /** Chute collapse after landing, 0..1, and where it drifts to. */
-  collapse = 0;
-  private readonly drift = new THREE.Vector2();
 
   constructor() {
     const tex = stencilTexture();
@@ -262,6 +258,7 @@ class CrateModel {
       add(new THREE.BoxGeometry(0.07, 0.74, 0.8), strap, x, 0.36, 0);
       add(new THREE.BoxGeometry(0.06, 0.06, 0.06), metal, x, 0.72, 0.4);
     }
+    // Lugs on the ends, where the chute's risers are shackled.
     for (const x of [-0.56, 0.56]) add(new THREE.BoxGeometry(0.04, 0.08, 0.3), metal, x, 0.42, 0);
     // Rounds inside, seen when the lid is open.
     const brass = this.mat(std(0xb8913a, 0.35, 0.8));
@@ -269,42 +266,6 @@ class CrateModel {
     // Flare on the lid.
     this.flare = add(new THREE.CylinderGeometry(0.04, 0.04, 0.22, 6), this.mat(new THREE.MeshBasicMaterial({ color: 0xff3018 })), 0.42, 0.25, 0.25, this.lid);
     this.root.add(this.crate);
-
-    // Chute: twelve gores, alternating orange and white, and lines down to the crate's corners.
-    const gores = 12;
-    const cg = new THREE.SphereGeometry(3.1, gores * 2, 6, 0, Math.PI * 2, 0, Math.PI * 0.42).toNonIndexed();
-    const pos = cg.getAttribute('position') as THREE.BufferAttribute;
-    const col = new Float32Array(pos.count * 3);
-    const orange = new THREE.Color(0xd8642a), white = new THREE.Color(0xe6e2d6);
-    for (let i = 0; i < pos.count; i += 3) {
-      const cx = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3, cz = (pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
-      const k = Math.floor(((Math.atan2(cz, cx) + Math.PI) / (Math.PI * 2)) * gores) % 2;
-      const c = k ? orange : white;
-      for (let j = i; j < i + 3; j++) col.set([c.r, c.g, c.b], j * 3);
-    }
-    cg.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    cg.computeVertexNormals();
-    this.geometries.push(cg);
-    this.canopy = new THREE.Mesh(cg, this.mat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide, flatShading: true })));
-    this.canopy.scale.set(1, 0.62, 1);
-    this.canopy.castShadow = true;
-    this.chute.add(this.canopy);
-    const rim = 3.1 * Math.sin(Math.PI * 0.42), rimY = 3.1 * Math.cos(Math.PI * 0.42) * 0.62;
-    const pts: number[] = [];
-    const corners = [[-0.5, -0.35], [0.5, -0.35], [0.5, 0.35], [-0.5, 0.35]];
-    for (let i = 0; i < gores; i++) {
-      const a = (i / gores) * Math.PI * 2;
-      const [cx, cz] = corners[Math.floor((i / gores) * 4) % 4];
-      pts.push(Math.cos(a) * rim, rimY, Math.sin(a) * rim, cx, -6.2 + 0.72, cz);
-    }
-    const lg = new THREE.BufferGeometry();
-    lg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    this.geometries.push(lg);
-    this.lines = new THREE.LineSegments(lg, this.mat(new THREE.LineBasicMaterial({ color: 0x8a8576, transparent: true, opacity: 0.7 })));
-    this.chute.add(this.lines);
-    this.chute.position.y = 6.2;
-    this.root.add(this.chute);
-    this.drift.set(Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(2.2);
   }
 
   private mat<M extends THREE.Material>(m: M): M {
@@ -312,17 +273,7 @@ class CrateModel {
     return m;
   }
 
-  /** `open` 0..1 deploys the chute after release; `collapse` 0..1 lays it down after landing. */
-  pose(open: number, collapse: number, time: number, flareOn: boolean, lidOpen: number): void {
-    const o = THREE.MathUtils.clamp(open, 0, 1);
-    const c = THREE.MathUtils.clamp(collapse, 0, 1);
-    const ease = c * c * (3 - 2 * c);
-    const breathe = 1 + Math.sin(time * 2.3) * 0.03 * (1 - c);
-    this.canopy.scale.set(lerp(0.12, 1, o) * breathe, lerp(0.25, 0.62, o) * (1 - ease * 0.94), lerp(0.12, 1, o) * breathe);
-    this.chute.position.set(this.drift.x * ease, lerp(6.2, 0.15, ease), this.drift.y * ease);
-    this.chute.rotation.set(this.drift.y * 0.25 * ease, time * 0.15 * (1 - c), -this.drift.x * 0.25 * ease);
-    this.lines.visible = c < 0.6 && o > 0.02;
-    this.chute.visible = o > 0.02;
+  pose(time: number, flareOn: boolean, lidOpen: number): void {
     this.flare.visible = flareOn && time % 0.16 < 0.11;
     this.lid.rotation.x = -lidOpen * 1.9;
   }
@@ -505,6 +456,7 @@ interface Drop {
   flight: HeliFlight;
   heli: Helicopter | null;
   crate: CrateModel;
+  chute: Parachute;
   /** The exclusive weapon's case (rare drops), shown once the crate is down. */
   weapon: WeaponCase | null;
   weaponLeft: boolean;
@@ -516,8 +468,12 @@ interface Drop {
   emptyAt: number;
   smokeT: number;
   pose: HeliPose;
-  /** Where the crate hung under the helicopter at release (the fall eases out from there). */
+  /** Where the crate hung under the helicopter at release (the fall eases out from there), and its heading then. */
   hang: THREE.Vector3;
+  hangYaw: number;
+  /** Heading of the way in, and the crate's heading once it is down (the same on every machine). */
+  inYaw: number;
+  landYaw: number;
 }
 
 export interface DropMarker {
@@ -538,11 +494,13 @@ export class SupplyDrops {
   private readonly beam: THREE.Mesh;
   private readonly flareLight = new THREE.PointLight(0xff3a1c, 0, 14, 1.6);
   private readonly tmp = new THREE.Vector3();
+  private readonly anchor = new THREE.Vector3();
   /** Smoke and sparks from the flare. */
   onSmoke: ((pos: THREE.Vector3, strong: boolean) => void) | null = null;
   onLand: ((pos: THREE.Vector3) => void) | null = null;
 
-  constructor(scene: THREE.Scene) {
+  /** `physics` lets a landed canopy find room to lie and drape over curbs (flat ground without it). */
+  constructor(scene: THREE.Scene, private readonly physics: Physics | null = null) {
     this.root.name = 'supply-drops';
     this.search.castShadow = false;
     this.root.add(this.search, this.search.target, this.flareLight);
@@ -565,17 +523,20 @@ export class SupplyDrops {
     const f: HeliFlight = { from: o, over: o, to: o, start: 0, arrive: 1, release: 2, leave: 3, end: 4, ground: o, land: 3, releaseHeight: 10 };
     const heli = new Helicopter();
     const crate = new CrateModel();
+    const chute = new Parachute(1);
     const wcase = new WeaponCase('ar', f);
     const kit = new SerumKit(f);
     const root = new THREE.Group();
-    root.add(heli.root, crate.root, wcase.root, kit.root);
+    root.add(heli.root, crate.root, chute.root, wcase.root, kit.root);
     crate.root.position.x = 3;
+    chute.fly(crate.root.position, crate.root.position, 0, 5, 0);
     wcase.root.position.x = -3;
     kit.root.position.x = 5;
     return { root, dispose: () => {
       root.removeFromParent();
       heli.dispose();
       crate.dispose();
+      chute.dispose();
       wcase.dispose();
       kit.dispose();
     } };
@@ -586,7 +547,8 @@ export class SupplyDrops {
     if (this.drops.has(id)) return;
     const heli = new Helicopter();
     const crate = new CrateModel();
-    this.root.add(heli.root, crate.root);
+    const chute = new Parachute(id * 7919 + Math.round(f.ground.x * 10) * 31 + Math.round(f.ground.z * 10));
+    this.root.add(heli.root, crate.root, chute.root);
     const wcase = weapon ? new WeaponCase(weapon, f) : null;
     if (wcase) {
       wcase.root.visible = false;
@@ -597,8 +559,11 @@ export class SupplyDrops {
       kit.root.visible = false;
       this.root.add(kit.root);
     }
+    const inYaw = headingOf(f.from.x, f.from.z, f.over.x, f.over.z);
+    const landYaw = inYaw + Math.sin(id * 12.9898 + f.ground.x * 0.731) * 0.12;
     this.drops.set(id, {
-      id, flight: f, heli, crate, weapon: wcase, weaponLeft: !!wcase, serum: kit, serumLeft: !!kit, landed: false, empty: false, emptyAt: 0, smokeT: 0, hang: new THREE.Vector3(f.over.x, f.ground.y + f.releaseHeight, f.over.z),
+      id, flight: f, heli, crate, chute, weapon: wcase, weaponLeft: !!wcase, serum: kit, serumLeft: !!kit, landed: false, empty: false, emptyAt: 0, smokeT: 0,
+      hang: new THREE.Vector3(f.over.x, f.ground.y + f.releaseHeight, f.over.z), hangYaw: landYaw, inYaw, landYaw,
       pose: { pos: new THREE.Vector3(), yaw: 0, pitch: 0, roll: 0, speed: 0, hover: 0 },
     });
   }
@@ -631,9 +596,17 @@ export class SupplyDrops {
     if (!d) return;
     d.heli?.dispose();
     d.crate.dispose();
+    d.chute.dispose();
     d.weapon?.dispose();
     d.serum?.dispose();
     this.drops.delete(id);
+  }
+
+  /** Where landed canopies lie, so the lawn grass under them is pressed flat (y is the ground's). */
+  pressGrass(add: (x: number, y: number, z: number, r: number) => void): void {
+    for (const d of this.drops.values()) {
+      if (d.landed) d.chute.pressed((x, z, r) => add(x, d.flight.ground.y, z, r));
+    }
   }
 
   /** Helicopter positions (for its sound) by drop id, while it flies. */
@@ -653,7 +626,8 @@ export class SupplyDrops {
 
   private timeNow = 0;
 
-  update(dt: number, time: number): void {
+  /** `view` is the camera position: a canopy lying far from it is left still. */
+  update(dt: number, time: number, view: THREE.Vector3 | null = null): void {
     this.timeNow = time;
     let lit: Drop | null = null;
     let flare: Drop | null = null;
@@ -676,24 +650,47 @@ export class SupplyDrops {
         d.heli.root.updateMatrixWorld();
         d.crate.root.position.copy(d.heli.body.localToWorld(this.tmp.set(0, -2.6, -0.5)));
         d.hang.copy(d.crate.root.position);
+        d.hangYaw = d.pose.yaw;
         d.crate.root.rotation.set(0, d.pose.yaw, 0);
         d.crate.root.visible = time > f.arrive - 3;
-        d.crate.pose(0, 0, time, false, 0);
+        d.crate.pose(time, false, 0);
+        d.chute.hide();
       } else {
         const fall = time - f.release;
-        const sway = time < f.land ? Math.sin(fall * 1.7) * 0.5 * Math.min(1, fall / 2) : 0;
+        // Swings under the canopy on the way down, coming to rest before it touches down.
+        const calm = THREE.MathUtils.clamp((f.land - time) / 1.4, 0, 1);
+        const sway = time < f.land ? Math.sin(fall * 1.7) * 0.5 * Math.min(1, fall / 2) * calm : 0;
+        const swayZ = Math.cos(fall * 1.3) * sway * 0.6;
         d.crate.root.visible = true;
-        d.crate.root.position.set(g.x + sway, g.y + h, g.z + Math.cos(fall * 1.3) * sway * 0.6);
+        d.crate.root.position.set(g.x + sway, g.y + h, g.z + swayZ);
         // Out of the door from where it hung, settling onto the straight fall in the first second.
         const k = Math.max(0, 1 - fall / 1.1);
         if (k > 0 && time < f.land) {
           this.tmp.set(g.x, g.y + f.releaseHeight, g.z);
           d.crate.root.position.addScaledVector(this.tmp.subVectors(d.hang, this.tmp), k * k);
         }
-        d.crate.root.rotation.set(sway * 0.06, (d.pose.yaw || 0) + fall * 0.05, 0);
-        const open = THREE.MathUtils.smoothstep(fall, 0.3, 1.6);
-        const collapse = time >= f.land ? Math.min(1, (time - f.land) / 2.6) : 0;
-        d.crate.pose(open, collapse, time, d.landed && !d.empty, d.empty ? Math.min(1, (time - d.emptyAt) / 0.5) : 0);
+        // Turns from its heading in the door to the one it lands on.
+        const turn = THREE.MathUtils.smoothstep(fall, 0, Math.max(0.1, f.land - f.release));
+        const yaw = d.hangYaw + angleTo(d.hangYaw, d.landYaw) * turn;
+        d.crate.root.rotation.set(sway * 0.06, yaw, 0);
+        d.crate.pose(time, d.landed && !d.empty, d.empty ? Math.min(1, (time - d.emptyAt) / 0.5) : 0);
+        // Where the canopy will lie is worked out mid-fall, not in the busy landing frame.
+        if (fall > 2.5) d.chute.lay(g, d.inYaw, d.landYaw, f.land - f.release, this.physics);
+        if (time < f.land) {
+          // The canopy swings less than the crate hanging under it.
+          this.anchor.copy(d.crate.root.position);
+          this.anchor.x -= sway * 0.65;
+          this.anchor.z -= swayZ * 0.65;
+          // Height free under the helicopter's skids while it is still over the drop.
+          let room = Infinity;
+          if (d.heli) {
+            const hp = d.pose.pos, c = d.crate.root.position;
+            if ((hp.x - c.x) ** 2 + (hp.z - c.z) ** 2 < 12 * 12) room = hp.y - 1.62 - 0.6 - c.y;
+          }
+          d.chute.fly(this.anchor, d.crate.root.position, yaw, fall, time, room);
+        } else {
+          d.chute.settle(d.crate.root.position, yaw, time - f.land, time, dt, view);
+        }
       }
       if (d.weapon) {
         d.weapon.root.visible = time >= f.land;

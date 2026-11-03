@@ -413,7 +413,7 @@ export class GameSession {
     this.bikes = new BicycleView(engine.scene, field, physics);
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     this.barricades = new BarricadeView(engine.scene, this.sim, field);
-    this.drops = new SupplyDrops(engine.scene);
+    this.drops = new SupplyDrops(engine.scene, physics);
     this.drops.onSmoke = (pos, strong) => this.effects.flareSmoke(pos, strong);
     this.drops.onLand = (pos) => {
       this.effects.landingDust(pos);
@@ -1198,7 +1198,7 @@ export class GameSession {
     this.barricades.update(live, this.engine.camera);
     if (this.work) this.work.t += live;
     this.bleedHeldLimb(live);
-    if (running) this.drops.update(live, renderTime);
+    if (running) this.drops.update(live, renderTime, this.engine.camera.position);
     this.drops.helicopters(this.helis);
     audio.helicopters(this.phase === 'paused' && !this.link ? new Map() : this.helis);
     this.effects.update(live, this.engine.camera);
@@ -1220,7 +1220,7 @@ export class GameSession {
 
   /**
    * Survivors, zombies, bodies and cars on the lawns push the grass aside, and supply drops
-   * flatten it so their crates, cases and syringes never hide in it: this survivor first, then the
+   * flatten it so their crates, cases, syringes and chutes never hide in it: this survivor first, then the
    * nearest to the camera.
    */
   private updateGrassFeet(): void {
@@ -1252,6 +1252,8 @@ export class GameSession {
       if (!it || it.supply <= 0 || (it.kind !== 'supply' && it.kind !== 'exclusive' && it.kind !== 'serum')) continue;
       add(it.pos.x, 0, it.pos.z, it.kind === 'supply' ? 1.4 : 0.9);
     }
+    // And the parachutes lying beside them.
+    this.drops.pressGrass(add);
     // Cars press it flat under both axles (parked on a lawn, or driven across one).
     for (const v of this.sim.vehicles.list) {
       const c = Math.cos(v.yaw), sn = Math.sin(v.yaw), r = v.def.track + 0.45;
