@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { SKATEBOARD, SKATE_TRICKS, TRICK_DELAY, type SkateTrick, type Skateboard, type Simulation } from '@dead-hours/shared';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
@@ -157,7 +158,8 @@ interface BoardModel {
   dispose(): void;
 }
 
-function createBoard(look: number): BoardModel {
+/** Exported for check:skate's draw count. */
+export function createBoard(look: number): BoardModel {
   const c = LOOKS[look % LOOKS.length];
   const deckMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0 });
   const metal = new THREE.MeshStandardMaterial({ color: 0xa9adb3, roughness: 0.38, metalness: 0.85 });
@@ -169,43 +171,43 @@ function createBoard(look: number): BoardModel {
   const deck = new THREE.Mesh(keep(deckGeometry(look)), deckMat);
   deck.castShadow = deck.receiveShadow = true;
   root.add(deck);
-  const plate = keep(new THREE.BoxGeometry(0.056, 0.008, 0.07));
-  const hanger = keep(new THREE.BoxGeometry(0.13, 0.022, 0.03));
-  const yoke = keep(new THREE.CylinderGeometry(0.012, 0.016, 0.05, 8));
-  const axle = keep(new THREE.CylinderGeometry(0.004, 0.004, 0.2, 6).rotateZ(Math.PI / 2));
-  const wheel = keep(new THREE.CylinderGeometry(R, R, 0.032, 16).rotateZ(Math.PI / 2));
-  const hub = keep(new THREE.CylinderGeometry(R * 0.45, R * 0.45, 0.034, 10).rotateZ(Math.PI / 2));
+  // Every part but the deck is built as its own placed piece, then the pieces of one material that move together
+  // are merged: one draw for the trucks (plates, yokes, hangers, axles), and per axle one for its two wheels and
+  // one for their hubs, which spin with it. Seventeen draws and thirteen shadow draws a board came down to six
+  // and four.
+  const plate = new THREE.BoxGeometry(0.056, 0.008, 0.07);
+  const hanger = new THREE.BoxGeometry(0.13, 0.022, 0.03);
+  const yoke = new THREE.CylinderGeometry(0.012, 0.016, 0.05, 8);
+  const axle = new THREE.CylinderGeometry(0.004, 0.004, 0.2, 6).rotateZ(Math.PI / 2);
+  const wheel = new THREE.CylinderGeometry(R, R, 0.032, 16).rotateZ(Math.PI / 2);
+  const hub = new THREE.CylinderGeometry(R * 0.45, R * 0.45, 0.034, 10).rotateZ(Math.PI / 2);
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x3a3b3f, roughness: 0.5, metalness: 0.4 });
+  const placed = (g: THREE.BufferGeometry, x: number, y: number, z: number, sz = 1) =>
+    g.clone().applyMatrix4(new THREE.Matrix4().makeTranslation(x, y, z).multiply(new THREE.Matrix4().makeScale(1, 1, sz)));
+  const merged = (parts: THREE.BufferGeometry[]) => {
+    const g = keep(mergeGeometries(parts, false)!);
+    for (const q of parts) q.dispose();
+    return g;
+  };
+  const trucks: THREE.BufferGeometry[] = [];
   const axles: THREE.Group[] = [];
   for (const side of [1, -1]) {
     const z = side * TRUCK_Z;
-    const p = new THREE.Mesh(plate, metal);
-    p.position.set(0, UNDER - 0.004, z);
-    const y = new THREE.Mesh(yoke, metal);
-    y.position.set(0, UNDER - 0.03, z - side * 0.006);
-    const h = new THREE.Mesh(hanger, metal);
-    h.position.set(0, R + 0.012, z);
-    const a = new THREE.Mesh(axle, metal);
-    a.position.set(0, R, z);
-    for (const m of [p, y, h, a]) {
-      m.castShadow = true;
-      root.add(m);
-    }
+    trucks.push(placed(plate, 0, UNDER - 0.004, z), placed(yoke, 0, UNDER - 0.03, z - side * 0.006), placed(hanger, 0, R + 0.012, z), placed(axle, 0, R, z));
     const spin = new THREE.Group();
     spin.position.set(0, R, z);
-    for (const x of [0.085, -0.085]) {
-      const w = new THREE.Mesh(wheel, wheelMat);
-      w.position.x = x;
-      w.castShadow = true;
-      // A darker core so the spin reads.
-      const hb = new THREE.Mesh(hub, hubMat);
-      hb.position.x = x;
-      hb.scale.set(1, 1, 0.6);
-      spin.add(w, hb);
-    }
+    const wheels = new THREE.Mesh(merged([0.085, -0.085].map((x) => placed(wheel, x, 0, 0))), wheelMat);
+    wheels.castShadow = true;
+    // A darker core so the spin reads.
+    const hubs = new THREE.Mesh(merged([0.085, -0.085].map((x) => placed(hub, x, 0, 0, 0.6))), hubMat);
+    spin.add(wheels, hubs);
     root.add(spin);
     axles.push(spin);
   }
+  const truckMesh = new THREE.Mesh(merged(trucks), metal);
+  truckMesh.castShadow = true;
+  root.add(truckMesh);
+  for (const g of [plate, hanger, yoke, axle, wheel, hub]) g.dispose();
   const materials = [deckMat, metal, wheelMat, hubMat];
   return {
     root, axles, materials,

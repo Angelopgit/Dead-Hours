@@ -17,6 +17,7 @@ import { BODY_KNEE, GLOSS_CEIL, GLOSS_KNEE, glossCap, softCeil } from '../src/li
 import { Lighting } from '../src/lighting/Lighting';
 import { FOG_DENSITY, fogLeft, PICKUP_DRAW_RANGE } from '../src/environment/FogRange';
 import { readFileSync } from 'node:fs';
+import { register } from 'node:module';
 
 type V = [number, number];
 const DT = 1 / 60;
@@ -389,6 +390,24 @@ console.log('Loose bikes, boards and syringes stop drawing where the fog has hid
   if (left >= 0.02) fail(`fog leaves ${(left * 100).toFixed(1)}% at ${PICKUP_DRAW_RANGE} m (density ${thinnest})`);
   else if (views.length) fail(`views that still draw past ${PICKUP_DRAW_RANGE} m: ${views.join(', ')}`);
   else console.log(`  ok   ${(left * 100).toFixed(1)}% left at ${PICKUP_DRAW_RANGE} m in the thinnest fog; bikes, boards and syringes hide past it`);
+}
+
+console.log('A loose skateboard is a handful of draws');
+{
+  // Each board was 17 meshes (deck, 8 truck parts, 4 wheels, 4 hubs), 17 draws and 13 shadow draws: six boards in
+  // view near the woods were 68 draws a frame. Parts of one material that move together are one mesh now.
+  // Skateboards.ts plays sounds through the AudioEngine, whose recordings come from Vite: a silent stand-in here.
+  register('data:text/javascript,' + encodeURIComponent('export async function resolve(s, c, next) { return /\\/audio\\/AudioEngine(\\.ts)?$/.test(s) '
+    + "? { url: 'data:text/javascript,export const audio = new Proxy({}, { get: () => () => {} });', shortCircuit: true } : next(s, c); }"));
+  const { createBoard } = await import('../src/gameplay/Skateboards');
+  const board = createBoard(0);
+  let draws = 0, shadow = 0;
+  board.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) { draws++; if (o.castShadow) shadow++; } });
+  const spinning = board.axles.every((a) => a.children.length === 2 && a.children.every((m) => (m as THREE.Mesh).isMesh));
+  board.dispose();
+  if (draws > 6 || shadow > 4) fail(`a board takes ${draws} draws and ${shadow} shadow draws`);
+  else if (!spinning) fail('each axle should carry its wheels and hubs, so they spin with it');
+  else console.log(`  ok   ${draws} draws and ${shadow} shadow draws a board (was 17 and 13), wheels and hubs on the spinning axles`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
