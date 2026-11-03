@@ -9,11 +9,15 @@ const RADIUS: Record<Quality, number> = { low: 10, medium: 12, high: 13 };
 const HEIGHT = 12;
 /** Snowfall runs on the rain's wall-clock curve, a quarter hour ahead (ms). */
 const SNOW_CLOCK_SHIFT = 900_000;
+/** How much of the wind the flakes ride (m/s per unit of wind): a gentle slant, faster in gusts. */
+const WIND_CARRY = 0.25;
+/** The wind drift wraps at a whole number of boxes for every quality (2 * RADIUS), so wrapping never moves a flake. */
+const DRIFT_WRAP = 1560;
 
 /**
  * Holiday snow over the main menu and through the nights: soft round flakes that drift down slowly
- * in a box around the camera, swaying and tumbling on the wind, all in the vertex shader like the
- * rain (no per-frame CPU work). They stop under roofs (the rain's cover map), so there is none
+ * in a box around the camera, riding the wind and fluttering, all in the vertex shader like the
+ * rain (the CPU only adds up the wind). They stop under roofs (the rain's cover map), so there is none
  * indoors, thin out in the fog and catch the street lamps and the flashlight, so they glow in each
  * beam and read as faint white specks in the dark between them.
  *
@@ -33,6 +37,8 @@ export class Snow {
     uRadius: { value: RADIUS.high },
     uAmount: { value: 0 },
     uSnowTime: { value: 0 },
+    /** How far the wind has carried the snow so far (m), integrated frame by frame. */
+    uDrift: { value: new THREE.Vector2() },
     uFogDensity: { value: 0.02 },
   };
 
@@ -47,7 +53,7 @@ export class Snow {
         attribute vec4 seed;
         uniform vec3 uCam;
         uniform float uRadius, uAmount, uSnowTime, uFogDensity;
-        uniform vec2 uWxWind;
+        uniform vec2 uDrift;
         uniform sampler2D uCover;
         uniform vec4 uCoverRect;
         uniform int uLampCount;
@@ -66,16 +72,26 @@ export class Snow {
           vColor = vec3(0.0);
           vUv = position.xy;
           if (seed.w > uAmount) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-          // Big flakes fall a little faster; each one sways on its own slow loop.
-          float speed = 0.55 + seed.w * 0.6;
+          // Big flakes fall a little faster. All of them ride the wind together (uDrift: gusts speed
+          // the drift up, never swing it back); on top, each flake flutters in small quick loops
+          // of its own (a few centimetres, its own direction, pace and phase) and wanders slowly.
+          float speed = 0.6 + seed.w * 0.55;
           float t = uSnowTime;
-          float ph = seed.x * 37.0 + seed.z * 11.0;
-          vec2 drift = uWxWind * 0.35 * t;
-          vec2 sway = vec2(sin(t * (0.6 + seed.y * 0.5) + ph), cos(t * (0.45 + seed.x * 0.4) + ph * 1.3)) * (0.25 + seed.z * 0.35);
+          float h1 = fract(seed.x * 91.7 + seed.z * 13.3);
+          float h2 = fract(seed.y * 57.1 + seed.w * 29.9);
+          float h3 = fract(seed.z * 37.3 + seed.x * 71.1);
+          float ang = h1 * 6.2832;
+          vec2 dirA = vec2(cos(ang), sin(ang));
+          vec2 dirB = vec2(-dirA.y, dirA.x);
+          float w = 1.6 + h2 * 1.6;
+          float amp = 0.03 + h3 * 0.06;
+          vec2 flutter = (dirA * sin(t * w + h3 * 40.0) + dirB * (0.6 * sin(t * w * 1.37 + h1 * 40.0))) * amp;
+          vec2 wander = vec2(sin(t * (0.17 + h3 * 0.15) + h2 * 30.0), sin(t * (0.13 + h1 * 0.15) + h3 * 30.0)) * (0.08 + h2 * 0.1);
+          vec2 sway = flutter + wander;
           float span = uRadius * 2.0;
           vec3 base;
-          base.x = (uCam.x - uRadius) + mod(seed.x * span + drift.x - (uCam.x - uRadius), span) + sway.x;
-          base.z = (uCam.z - uRadius) + mod(seed.z * span + drift.y - (uCam.z - uRadius), span) + sway.y;
+          base.x = (uCam.x - uRadius) + mod(seed.x * span + uDrift.x - (uCam.x - uRadius), span) + sway.x;
+          base.z = (uCam.z - uRadius) + mod(seed.z * span + uDrift.y - (uCam.z - uRadius), span) + sway.y;
           base.y = (uCam.y - H * 0.35) + mod(seed.y * H - t * speed - (uCam.y - H * 0.35), H);
           vec2 cuv = (base.xz - uCoverRect.xy) * uCoverRect.zw;
           float cover = texture2D(uCover, cuv).r * 20.0 - 4.0;
@@ -111,7 +127,9 @@ export class Snow {
           float fog = exp(-uFogDensity * uFogDensity * dist * dist);
           // Flakes that just appeared at the top of the box fade in instead of popping.
           float top = 1.0 - smoothstep(H * 0.85, H, base.y - (uCam.y - H * 0.35));
-          vAlpha = near * far * fog * top * dim * (0.6 + 0.4 * seed.z);
+          // A flake turning as it falls catches the light on and off, softly.
+          float turn = 0.82 + 0.18 * sin(t * (2.0 + h1 * 3.0) + h2 * 50.0);
+          vAlpha = near * far * fog * top * dim * turn * (0.6 + 0.4 * seed.z);
           vColor = min(light, vec3(1.1));
           vec4 mv = viewMatrix * vec4(base, 1.0);
           mv.xy += position.xy * size;
@@ -175,6 +193,11 @@ export class Snow {
     this.mesh.visible = this.amount > 0;
     if (!this.mesh.visible) return;
     this.time += dt;
+    // The wind is integrated, not multiplied by the time: a gust then speeds the snow up for a
+    // while instead of swinging the whole snowfall back and forth (worse the longer it ran).
+    const wind = weatherUniforms.uWxWind.value, d = this.uniforms.uDrift.value;
+    const step = Math.min(dt, 0.1) * WIND_CARRY;
+    d.set((d.x + wind.x * step) % DRIFT_WRAP, (d.y + wind.y * step) % DRIFT_WRAP);
     this.uniforms.uCam.value.setFromMatrixPosition(camera.matrixWorld);
     this.uniforms.uAmount.value = this.amount;
     this.uniforms.uSnowTime.value = this.time;
