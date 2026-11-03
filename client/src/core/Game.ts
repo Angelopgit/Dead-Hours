@@ -106,7 +106,7 @@ export class Game {
       this.input.endFrame();
     };
     await pbr;
-    this.menuSnow(true, true);
+    this.holidaySnow();
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);
     compileForPost(this.engine.renderer, this.engine.scene, this.engine.camera);
@@ -119,13 +119,16 @@ export class Game {
     if (import.meta.env.DEV) Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
   }
 
-  /** Holiday season: snow over the menu's street instead of rain (and no lightning); the nights stay as they are. */
-  private menuSnow(on: boolean, instant: boolean): void {
+  /**
+   * Holiday season: it snows over the menu's street and through every night instead of raining,
+   * with no lightning. On from boot, so the snow's shaders compile with the menu's.
+   */
+  private holidaySnow(): void {
     const snow = this.world.snow;
     if (!HOLIDAY || !snow) return;
-    snow.set(on, instant);
-    this.world.lighting.calm = on;
-    setSnowing(on, instant);
+    snow.set(true, true);
+    this.world.lighting.calm = true;
+    setSnowing(true, true);
   }
 
   private unlockAudio = (): void => {
@@ -166,7 +169,6 @@ export class Game {
     ]);
     const pose = this.menuCine.pose();
     this.menuCine.setActive(false);
-    this.menuSnow(false, true);
     await this.launched(await this.launch(() => this.createSession(pose, false), 'SOLO'));
   }
 
@@ -289,7 +291,6 @@ export class Game {
       new Promise<void>((r) => gsap.to(fade, { opacity: 1, duration: 0.6, onComplete: () => r() })),
     ]);
     this.menuCine.setActive(false);
-    this.menuSnow(false, true);
     if (this.link !== link || !link.open) {
       await this.quitToMenu();
       return;
@@ -346,7 +347,6 @@ export class Game {
     this.session = null;
     this.doors.reset();
     this.state = 'menu';
-    this.menuSnow(true, true);
     this.menu.show(this.ui);
     gsap.to(fade, { opacity: 0, duration: 1.4 });
   }

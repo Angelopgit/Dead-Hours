@@ -1,6 +1,6 @@
 /**
- * Seasonal dressing, all behind one switch: Christmas snow over the main menu, the festive logo,
- * and Santa hats on a few of the dead. (The Santa hat in the character creator is a permanent
+ * Seasonal dressing, all behind one switch: Christmas snow over the main menu and through the
+ * nights (instead of rain), the festive logo, and Santa hats on a few of the dead. (The Santa hat in the character creator is a permanent
  * item and stays either way.)
  *
  * 'auto' turns it on from November 1 to January 6 every year, so it comes and goes by itself;

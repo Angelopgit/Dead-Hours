@@ -1,17 +1,24 @@
 import * as THREE from 'three';
 import type { Quality } from '../core/Settings';
 import { weatherUniforms } from '../lighting/WetShader';
+import { rainAt } from './Weather';
 
 /** Flakes in the box around the camera, by particle quality. */
 const FLAKES: Record<Quality, number> = { low: 1800, medium: 5000, high: 9000 };
 const RADIUS: Record<Quality, number> = { low: 10, medium: 12, high: 13 };
 const HEIGHT = 12;
+/** Snowfall runs on the rain's wall-clock curve, a quarter hour ahead (ms). */
+const SNOW_CLOCK_SHIFT = 900_000;
 
 /**
- * GPU snow for the holiday main menu: soft round flakes that drift down slowly in a box around
- * the camera, swaying and tumbling on the wind, all in the vertex shader like the rain. They stop
- * under roofs (the rain's cover map), thin out in the fog and catch the street lamps, so they glow
- * under each lamp and read as faint white specks in the dark between them.
+ * Holiday snow over the main menu and through the nights: soft round flakes that drift down slowly
+ * in a box around the camera, swaying and tumbling on the wind, all in the vertex shader like the
+ * rain (no per-frame CPU work). They stop under roofs (the rain's cover map), so there is none
+ * indoors, thin out in the fog and catch the street lamps and the flashlight, so they glow in each
+ * beam and read as faint white specks in the dark between them.
+ *
+ * How hard it snows follows the wall clock (the rain's curve, shifted), so everyone in an online
+ * room sees the same flurries and heavier spells without any network traffic.
  */
 export class Snow {
   readonly mesh: THREE.Mesh;
@@ -161,7 +168,9 @@ export class Snow {
   }
 
   update(dt: number, camera: THREE.Camera, fogDensity: number): void {
-    this.amount += (this.target - this.amount) * Math.min(1, dt * 0.6);
+    // Never stops while it is on: from a light flurry (60% of the flakes) to all of them.
+    const want = this.target * (0.6 + 0.4 * rainAt(Date.now() + SNOW_CLOCK_SHIFT));
+    this.amount += (want - this.amount) * Math.min(1, dt * 0.6);
     if (this.amount < 0.005 && this.target === 0) this.amount = 0;
     this.mesh.visible = this.amount > 0;
     if (!this.mesh.visible) return;

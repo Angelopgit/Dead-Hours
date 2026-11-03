@@ -14,7 +14,7 @@ export const weather = {
   wetness: 0,
   /** Seconds, for rain and ripple animation. */
   time: 0,
-  /** Snow is falling instead (the holiday main menu): the rain holds off meanwhile. */
+  /** Snow is falling instead (the holiday season, menu and nights): the rain holds off meanwhile. */
   snowing: false,
 };
 

@@ -48,7 +48,7 @@ export class Neighborhood {
   readonly sky = new Sky();
   readonly atmosphere = new Atmosphere();
   readonly rain = new Rain();
-  /** Christmas snow over the main menu (only built in the holiday season). */
+  /** Christmas snow over the menu and the nights (only built in the holiday season). */
   readonly snow = HOLIDAY ? new Snow() : null;
   /** Wind-swayed lawn grass (merged blade tiles around the camera, swayed on the GPU). */
   readonly grass: Grass;
