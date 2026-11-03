@@ -185,6 +185,9 @@ function fogShader(steps: number): THREE.ShaderMaterial {
         float t0[MAX_LIGHTS];
         float t1[MAX_LIGHTS];
         bool any = false;
+        // Where the ray first enters and last leaves any light's stretch: before tFirst a step only
+        // thins the light that comes after it, and past tLast nothing more scatters toward the eye.
+        float tFirst = 1e9, tLast = -1.0;
         for (int i = 0; i < MAX_LIGHTS; i++) {
           t0[i] = 1e9; t1[i] = -1.0;
           if (i >= uCount) continue;
@@ -201,7 +204,7 @@ function fogShader(steps: number): THREE.ShaderMaterial {
           vec3 lo = min(s0, s1), hi = max(s0, s1);
           a0 = max(a0, max(max(lo.x, lo.y), lo.z));
           a1 = min(a1, min(min(hi.x, hi.y), hi.z));
-          if (a1 > a0) { t0[i] = a0; t1[i] = a1; any = true; }
+          if (a1 > a0) { t0[i] = a0; t1[i] = a1; any = true; tFirst = min(tFirst, a0); tLast = max(tLast, a1); }
         }
         vec3 acc = vec3(0.0);
         if (any) {
@@ -210,8 +213,10 @@ function fogShader(steps: number): THREE.ShaderMaterial {
           float T = 1.0;
           for (int s = 0; s < STEPS; s++) {
             float t = (float(s) + j) * stepLen;
+            if (t > tLast) break;
             vec3 p = ro + rd * t;
             float dens = density(p);
+            if (t < tFirst) { T *= exp(-dens * stepLen * 0.6); continue; }
             vec3 ins = vec3(0.0);
             for (int i = 0; i < MAX_LIGHTS; i++) {
               if (i >= uCount) break;
@@ -219,13 +224,16 @@ function fogShader(steps: number): THREE.ShaderMaterial {
               vec3 lv = uPos[i].xyz - p;
               float dl = max(length(lv), 0.05);
               vec3 l = lv / dl;
-              float win = 1.0 - pow(min(dl / uPos[i].w, 1.0), 4.0);
+              float x2 = min(dl / uPos[i].w, 1.0);
+              x2 *= x2;
+              float win = 1.0 - x2 * x2;
               float att = win * win / pow(max(dl, 0.35), uCol[i].w);
               float co = uDir[i].w;
               float cone = co < -1.0 ? 1.0 : smoothstep(co, uBoxMin[i].w, dot(-l, uDir[i].xyz));
               // Henyey-Greenstein, g = 0.35: light bends gently forward toward the eye.
               float mu = dot(l, rd);
-              float ph = 0.0796 * (1.0 - 0.1225) / pow(max(1.1225 - 0.7 * mu, 1e-3), 1.5);
+              float hg = max(1.1225 - 0.7 * mu, 1e-3);
+              float ph = 0.0796 * (1.0 - 0.1225) / (hg * sqrt(hg));
               ins += uCol[i].rgb * (att * cone * ph);
             }
             acc += T * dens * ins * stepLen;

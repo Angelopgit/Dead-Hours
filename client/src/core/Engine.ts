@@ -1,5 +1,8 @@
 import * as THREE from 'three';
+import '../rendering/LightLoop';
+import '../rendering/ShadowDepth';
 import { PostFX } from '../rendering/PostFX';
+import { FrameGate } from './FrameGate';
 import { settings, isPhone, type SettingsData, type ShadowQuality } from './Settings';
 import type { SceneFXOptions } from '../rendering/SceneFX';
 
@@ -10,6 +13,8 @@ const SHADOW_SIZE: Record<ShadowQuality, number> = { off: 0, low: 1024, medium: 
 const PHONE = isPhone();
 const MAX_PIXEL_RATIO = PHONE ? 1.5 : 2;
 const MIN_DYNAMIC_SCALE = PHONE ? 0.45 : 0.55;
+/** Frame rate while the page is on screen but another window has the focus. */
+const BACKGROUND_FPS = 30;
 
 /**
  * Scene effects per graphics settings. Low fog keeps the flat fog (and the cheap cone meshes under
@@ -36,7 +41,7 @@ export class Engine {
   private readonly callbacks = new Set<FrameCallback>();
   private readonly timer = new THREE.Timer();
   private running = false;
-  private lastFrame = 0;
+  private readonly gate = new FrameGate();
   private time = 0;
   private dynamicScale = 1;
   private fpsAccum = 0;
@@ -46,6 +51,9 @@ export class Engine {
   private highFpsTime = 0;
   private readonly unsub: () => void;
   onFps: ((fps: number) => void) | null = null;
+  private focused = typeof document === 'undefined' || document.hasFocus();
+  private readonly onFocus = (): void => { this.focused = true; };
+  private readonly onBlur = (): void => { this.focused = false; };
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
@@ -65,6 +73,8 @@ export class Engine {
     this.post.configure(sceneFxFor(settings.value.graphics));
 
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('focus', this.onFocus);
+    window.addEventListener('blur', this.onBlur);
     this.onResize();
     let prevFx = JSON.stringify(sceneFxFor(settings.value.graphics));
     this.unsub = settings.subscribe((s) => {
@@ -121,13 +131,11 @@ export class Engine {
   private frame = (now: number): void => {
     if (this.paused) {
       this.timer.update(now);
-      this.lastFrame = now;
+      this.gate.tick(now, 0);
       this.whilePaused?.();
       return;
     }
-    const limit = settings.value.graphics.fpsLimit;
-    if (limit > 0 && now - this.lastFrame < 1000 / limit - 0.5) return;
-    this.lastFrame = now;
+    if (!this.gate.tick(now, this.frameLimit)) return;
     this.timer.update(now);
     const dt = Math.min(this.timer.getDelta(), 0.1);
     this.time += dt;
@@ -135,6 +143,16 @@ export class Engine {
     this.post.render(dt);
     this.trackPerformance(dt);
   };
+
+  /**
+   * Frames a second the loop may draw (0: every display refresh). While another window has the
+   * focus (the game still on screen beside it), a calm 30 is plenty.
+   */
+  private get frameLimit(): number {
+    const set = settings.value.graphics.fpsLimit;
+    if (this.focused) return set;
+    return set > 0 ? Math.min(set, BACKGROUND_FPS) : BACKGROUND_FPS;
+  }
 
   /** Adaptive resolution: drop render scale when sustained FPS is low, restore when there is headroom. */
   private trackPerformance(dt: number): void {
@@ -152,7 +170,7 @@ export class Engine {
       }
       return;
     }
-    const limit = settings.value.graphics.fpsLimit || 60;
+    const limit = this.frameLimit || 60;
     const target = Math.min(limit, 60);
     if (this.fps < target * 0.75) {
       this.lowFpsTime += 0.5;
@@ -175,6 +193,8 @@ export class Engine {
   dispose(): void {
     this.renderer.setAnimationLoop(null);
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('focus', this.onFocus);
+    window.removeEventListener('blur', this.onBlur);
     this.unsub();
     this.post.dispose();
     this.renderer.dispose();

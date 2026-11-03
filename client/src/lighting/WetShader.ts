@@ -249,6 +249,8 @@ export function patchWet(mat: THREE.Material): void {
             if (i >= uLampCount) break;
             vec3 lv = uLampPos[i].xyz - vBakeWorld;
             float d = max(length(lv), 1e-3);
+            // Out of the lamp's reach its window (w below) is zero: nothing to add.
+            if (d >= uLampPos[i].w) continue;
             vec3 l = lv / d;
             float nl = max(dot(wN, l), 0.0);
             vec3 hv = l + pv;

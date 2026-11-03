@@ -74,7 +74,10 @@ export class Lighting {
   warmShadows(area: { x0: number; x1: number; z0: number; z1: number }): () => void {
     const proto = THREE.Object3D.prototype;
     const hook = proto.onBeforeShadow;
-    proto.onBeforeShadow = (...args: Parameters<THREE.Object3D['onBeforeShadow']>) => { args[5].needsUpdate = true; };
+    proto.onBeforeShadow = function (this: THREE.Object3D, ...args: Parameters<THREE.Object3D['onBeforeShadow']>) {
+      args[5].needsUpdate = true;
+      hook.apply(this, args);
+    };
     const cam = this.moon.shadow.camera;
     const was = { l: cam.left, r: cam.right, t: cam.top, b: cam.bottom, far: cam.far, pos: this.moon.position.clone(), at: this.moon.target.position.clone() };
     const cx = (area.x0 + area.x1) / 2, cz = (area.z0 + area.z1) / 2;
