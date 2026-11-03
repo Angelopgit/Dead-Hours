@@ -699,7 +699,9 @@ body.touch-play .car-panel { bottom: auto; top: calc(10vh + env(safe-area-inset-
 body.touch-play .vitals .stance { position: absolute; left: calc(100% + 1.4em); top: 0.1em; margin: 0; height: auto; white-space: nowrap; }
 body.touch-play .vitals .armor { margin-top: 3px; }
 body.touch-play .vitals .armor-label { display: none; }
-body.touch-play .vitals .boosts { gap: 4px; margin-bottom: 4px; }
+/* Boost chips stack under the pause button, each its colour and time left: over the name they pushed the health
+   bar down into the gun slots (and on a 667 px wide phone into the timer). */
+body.touch-play .vitals .boosts { position: absolute; left: -56px; top: 52px; flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; }
 body.touch-play .boost-chip { font-size: 0.6em; padding: 0.25em 0.45em 0.35em 0.4em; }
 body.touch-play .boost-chip .l { display: none; }
 /* The feed shares the timer's row: it stays right of the centred timer and warning, a little smaller and tighter,

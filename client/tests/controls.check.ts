@@ -148,6 +148,10 @@ check(none === null, 'nothing near: full speed');
   const hud = readFileSync(new URL('../src/ui/HUD.ts', import.meta.url), 'utf8');
   check(/new ResizeObserver\([^]*?--vitals-h[^]*?\.observe\(vitals\)/.test(hud) && /var\(--vitals-h/.test(prop('.comms-hud', 'bottom') ?? ''),
     'the in-game chat column lifts clear of boost chips stacked over the health panel');
+  // On a phone the health bar sits right over the ammo panel, and chips stacked over the name pushed it down into the
+  // gun slots: there they take the column under the pause button instead.
+  check(prop('body.touch-play .vitals .boosts', 'position') === 'absolute' && prop('body.touch-play .vitals .boosts', 'flex-direction') === 'column',
+    'touch: boost chips stack under the pause button, clear of the health bar and the gun slots');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
