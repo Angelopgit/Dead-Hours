@@ -7,6 +7,7 @@
  * when switched off.
  */
 import { readFileSync } from 'node:fs';
+import { register } from 'node:module';
 import * as THREE from 'three';
 import type { Simulation } from '@dead-hours/shared';
 import type { Physics } from '../src/core/Physics';
@@ -73,7 +74,14 @@ check(none === null, 'nothing near: full speed');
   const noop = () => {};
   const g = globalThis as Record<string, unknown>;
   g.window = Object.assign(globalThis, { addEventListener: noop, dispatchEvent: noop });
-  g.document = { body: { classList: { toggle: noop, add: noop, remove: noop } }, addEventListener: noop, pointerLockElement: null, getElementById: () => null };
+  // Input brings in the pad menus' on-screen keyboard, and with it GSAP, which makes a scratch element as it loads,
+  // and the sound engine for its clicks, which lists its recordings with Vite's import.meta.glob (node has none):
+  // a silent stand-in takes the engine's place here.
+  register('data:text/javascript,' + encodeURIComponent('export async function resolve(s, c, next) { return /\\/audio\\/AudioEngine(\\.ts)?$/.test(s) '
+    + "? { url: 'data:text/javascript,export const audio = new Proxy({}, { get: () => () => {} });', shortCircuit: true } : next(s, c); }"));
+  const element = () => ({ style: {} });
+  g.document = { body: { classList: { toggle: noop, add: noop, remove: noop } }, addEventListener: noop, pointerLockElement: null, getElementById: () => null,
+    createElement: element, createElementNS: element, documentElement: { style: {} } };
   const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
   const pad = { buttons, axes: [0, 0, 0, 0], connected: true, index: 0, mapping: 'standard', id: 'test pad' };
   Object.defineProperty(globalThis, 'navigator', { value: { getGamepads: () => [pad], userAgent: 'node' }, configurable: true });
