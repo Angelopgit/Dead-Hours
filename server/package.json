@@ -11,7 +11,8 @@
     "check:cluster": "tsx tests/cluster.check.ts",
     "load": "tsx tests/load.ts",
     "bench": "tsx tests/bench.ts",
-    "spawns": "tsx tests/spawns.ts"
+    "spawns": "tsx tests/spawns.ts",
+    "balance": "tsx tests/balance.ts"
   },
   "dependencies": {
     "@colyseus/schema": "3.0.76",

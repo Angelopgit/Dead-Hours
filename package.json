@@ -31,6 +31,7 @@
     "check:vehicles": "tsx shared/tests/vehicles.check.ts && tsx server/tests/vehicles.check.ts && tsx client/tests/vehicles.check.ts",
     "check:bike": "tsx shared/tests/bicycles.check.ts && tsx server/tests/bike.check.ts",
     "check:boosts": "tsx server/tests/boosts.check.ts",
+    "balance:guns": "tsx shared/tests/guns.ts",
     "textures": "node client/tools/textures/generate.mjs && node client/tools/textures/encode.mjs",
     "textures:cc0": "node client/tools/textures/generate.mjs && node client/tools/textures/fetch-cc0.mjs && node client/tools/textures/encode.mjs"
   }
