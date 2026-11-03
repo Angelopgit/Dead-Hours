@@ -49,3 +49,4 @@ export * from './sim/VehicleDrive';
 export * from './sim/Vehicles';
 export * from './config/bicycles';
 export * from './sim/Bicycles';
+export * from './sim/Squad';

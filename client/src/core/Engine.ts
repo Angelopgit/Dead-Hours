@@ -123,6 +123,39 @@ export class Engine {
     this.renderer.setAnimationLoop(this.frame);
   }
 
+  /** Stops the frame loop (the trailer renders frame by frame with `step` instead). */
+  stop(): void {
+    this.running = false;
+    this.renderer.setAnimationLoop(null);
+  }
+
+  /** One frame by hand, `dt` seconds after the last (the loop must be stopped first): updates and, unless `draw` is false, draws. */
+  step(dt: number, draw = true): void {
+    this.time += dt;
+    for (const cb of this.callbacks) cb(dt, this.time);
+    if (draw) this.post.render(dt);
+  }
+
+  /**
+   * The frame just drawn, as raw RGBA rows from the bottom up (what `readPixels` gives), base64. The
+   * canvas's `toDataURL` takes minutes on a software GL; a read of the drawing buffer takes milliseconds.
+   */
+  readFrame(): Promise<string> {
+    const gl = this.renderer.getContext();
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    if (!this.pixels || this.pixels.length !== w * h * 4) this.pixels = new Uint8Array(new ArrayBuffer(w * h * 4));
+    const pixels = this.pixels;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => { const s = r.result as string; resolve(s.slice(s.indexOf(',') + 1)); };
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(new Blob([pixels]));
+    });
+  }
+  private pixels: Uint8Array<ArrayBuffer> | null = null;
+
   /** While true the loop keeps time but neither updates nor draws (a full-screen menu covers the view). */
   paused = false;
   /** Runs every frame while paused (the controller still drives the menu in front). */

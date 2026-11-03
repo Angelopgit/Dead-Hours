@@ -34,6 +34,8 @@
     "check:bike": "tsx shared/tests/bicycles.check.ts && tsx server/tests/bike.check.ts",
     "check:boosts": "tsx server/tests/boosts.check.ts",
     "balance:guns": "tsx shared/tests/guns.ts",
+    "trailer": "node client/tools/trailer/render.mjs",
+    "trailer:cut": "node client/tools/trailer/assemble.mjs",
     "textures": "node client/tools/textures/generate.mjs && node client/tools/textures/encode.mjs",
     "textures:cc0": "node client/tools/textures/generate.mjs && node client/tools/textures/fetch-cc0.mjs && node client/tools/textures/encode.mjs"
   }

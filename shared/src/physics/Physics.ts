@@ -73,6 +73,38 @@ export interface RayHit {
 /** Filter for bullets and sight lines: the static world, door leaves and vehicle bodies, never characters. */
 export const WORLD_FILTER = groups(0xffff, GROUP.static | GROUP.dynamic | GROUP.vehicle);
 
+let warnedRay = false;
+/** A ray with a NaN in it stops Rapier dead (a WASM panic); it hits nothing instead, and is reported once, with where it came from. */
+function finiteRay(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number): boolean {
+  if (Number.isFinite(ox + oy + oz + dx + dy + dz) && maxDist === maxDist) return true;
+  if (!warnedRay) {
+    warnedRay = true;
+    console.warn(`NaN ray (${ox}, ${oy}, ${oz}) -> (${dx}, ${dy}, ${dz}) x ${maxDist}`, new Error().stack);
+  }
+  return false;
+}
+
+let warnedBody = 0;
+/**
+ * A NaN or infinite position or rotation must never reach a body either: the broad phase takes
+ * it and the next ray cast through it panics the whole engine. The write is dropped and reported
+ * (the first few, with where they came from), so one bad number costs a step of movement, not the night.
+ */
+function guardBodies(): void {
+  type Vec = { x: number; y: number; z: number; w?: number };
+  const proto = RAPIER.RigidBody.prototype as unknown as Record<string, (v: Vec, ...rest: unknown[]) => unknown>;
+  if (proto.__finiteGuard) return;
+  proto.__finiteGuard = () => true;
+  for (const name of ['setTranslation', 'setNextKinematicTranslation', 'setRotation', 'setNextKinematicRotation']) {
+    const orig = proto[name];
+    proto[name] = function (this: unknown, v: Vec, ...rest: unknown[]) {
+      if (Number.isFinite(v.x + v.y + v.z + (v.w ?? 0))) return orig.call(this, v, ...rest);
+      if (warnedBody++ < 4) console.warn(`non-finite ${name} (${v.x}, ${v.y}, ${v.z}${v.w === undefined ? '' : `, ${v.w}`}) dropped`, new Error().stack);
+      return undefined;
+    };
+  }
+}
+
 /** What survivors and zombies walk into: the world, doors, each other, and vehicles (bodywork and cabin). */
 export const BODY_FILTER = GROUP.static | GROUP.dynamic | GROUP.vehicle | GROUP.cabin;
 
@@ -123,6 +155,7 @@ export class Physics {
   private readonly panes: { x: number; y: number; z: number; collider: RAPIER.Collider }[] = [];
 
   constructor(readonly map: MapDefinition) {
+    guardBodies();
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = this.fixedDt;
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
@@ -250,6 +283,7 @@ export class Physics {
     filter = WORLD_FILTER,
     exclude?: RAPIER.RigidBody | null,
   ): number | null {
+    if (!finiteRay(ox, oy, oz, dx, dy, dz, maxDist)) return null;
     const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
     const hit = this.world.castRay(ray, maxDist, true, undefined, filter, undefined, exclude ?? undefined);
     return hit ? hit.timeOfImpact : null;
@@ -263,6 +297,7 @@ export class Physics {
     filter = WORLD_FILTER,
     exclude?: RAPIER.RigidBody | null,
   ): RayHit | null {
+    if (!finiteRay(ox, oy, oz, dx, dy, dz, maxDist)) return null;
     const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
     const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filter, undefined, exclude ?? undefined);
     if (!hit) return null;

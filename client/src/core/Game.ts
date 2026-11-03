@@ -5,7 +5,7 @@ import { Engine } from './Engine';
 import { Input } from './Input';
 import { Physics, initPhysics } from './Physics';
 import { loadNavGrid } from './NavLoader';
-import { settings } from './Settings';
+import { GRAPHICS_PRESETS, settings } from './Settings';
 import { Neighborhood } from '../environment/Neighborhood';
 import { DoorSystem } from '../gameplay/Doors';
 import { MenuCinematic } from '../gameplay/MenuCinematic';
@@ -116,7 +116,10 @@ export class Game {
     document.querySelector('.boot')?.remove();
     gsap.to(document.getElementById('fade'), { opacity: 0, duration: 2.2, ease: 'power2.out' });
     this.menu.show(this.ui);
-    if (import.meta.env.DEV) Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
+    if (import.meta.env.DEV) {
+      Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
+      if (new URLSearchParams(location.search).has('trailer')) void this.startTrailer();
+    }
   }
 
   /**
@@ -265,12 +268,41 @@ export class Game {
     if (result === 'failed') this.menu.notice('THE NIGHT FAILED TO LOAD');
   }
 
-  private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean, online?: { link: NetLink; begin: BeginMsg }): GameSession {
+  private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean, online?: { link: NetLink; begin: BeginMsg }, trailer?: { seed: number }): GameSession {
     return new GameSession(
       this.engine, this.input, this.physics, this.doors, this.vehicles, this.field, this.nav, this.ui,
       () => void this.quitToMenu(), () => void this.retry(), pose,
-      { skipIntro, online, onLobby: online ? () => void this.backToLobby() : undefined },
+      { skipIntro, online, onLobby: online ? () => void this.backToLobby() : undefined, trailer: !!trailer, seed: trailer?.seed },
     );
+  }
+
+  /**
+   * Development only: `?trailer` starts a solo night with computer-driven teammates for the
+   * trailer's director (gameplay/Trailer.ts), which client/tools/trailer renders frame by frame
+   * through `window.__trailer`.
+   */
+  private async startTrailer(): Promise<void> {
+    if (this.state !== 'menu') return;
+    const { TrailerDirector } = await import('../gameplay/Trailer');
+    // Everything on, at the window's size; MSAA only when asked (`&aa`): on a software GL it costs a
+    // second a frame, and the cut scales the frames up anyway.
+    const query = new URLSearchParams(location.search);
+    const aa = query.has('aa');
+    // The same night every render (`&seed=N` for another one), so a shot re-rendered on its own matches the last look at it.
+    const seed = Number(query.get('seed')) || 7;
+    settings.update((s) => Object.assign(s.graphics, GRAPHICS_PRESETS.high, { adaptiveResolution: false, fpsLimit: 0, resolutionScale: 1, showFps: false, antialias: aa }));
+    this.state = 'session';
+    await this.menu.hide();
+    const pose = this.menuCine.pose();
+    this.menuCine.setActive(false);
+    const result = await this.launch(() => this.createSession(pose, true, undefined, { seed }), 'TRAILER');
+    if (result !== 'ready' || !this.session) {
+      await this.launched(result);
+      return;
+    }
+    const director = new TrailerDirector(this.engine, this.session, this.world, this.physics);
+    Object.assign(window, { __trailer: director });
+    gsap.set(document.getElementById('fade'), { opacity: 0 });
   }
 
   /** The host started the night: into the game with everyone in the room. */

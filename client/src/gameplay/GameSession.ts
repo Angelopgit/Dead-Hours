@@ -98,6 +98,16 @@ export interface SessionOptions {
   online?: { link: NetLink; begin: BeginMsg };
   /** Online: back to the room's lobby after the night (otherwise only leaving is offered). */
   onLobby?: () => void;
+  /** The trailer: a solo night with computer-driven teammates drawn like online ones (see Trailer.ts). */
+  trailer?: boolean;
+  /** Solo: the night's random seed (the trailer renders the same night every time); otherwise drawn at random. */
+  seed?: number;
+}
+
+/** What the trailer's director does inside a session: drives the bots each step and places the camera each frame. */
+export interface TrailerHooks {
+  fixedUpdate(step: number): void;
+  placeCamera(camera: THREE.PerspectiveCamera, focus: THREE.Vector3): void;
 }
 
 interface Candidate {
@@ -145,7 +155,20 @@ export class GameSession {
   readonly myId: string;
   private readonly link: NetLink | null;
   readonly mirror: Mirror | null;
-  private readonly remotes: RemoteSurvivors | null;
+  readonly remotes: RemoteSurvivors | null;
+  /** The trailer's director, once attached (solo, with bots). */
+  trailer: TrailerHooks | null = null;
+  /** Solo with bots: where each is, straight from the simulation (what the mirror answers online). */
+  private readonly localMirror = {
+    playerPose: (id: string, out: Vec3): number | null => {
+      const p = this.sim.players.get(id);
+      if (!p) return null;
+      out.x = p.motion.pos.x;
+      out.y = p.motion.pos.y;
+      out.z = p.motion.pos.z;
+      return p.motion.yaw + Math.PI;
+    },
+  } as unknown as Mirror;
   private motionT = 0;
   private teamResults: TeamResults | null = null;
   /** Online, after dying: whose fight the camera follows. */
@@ -336,7 +359,7 @@ export class GameSession {
     // The simulation: authoritative here (solo), or the copy of the server's (online).
     this.sim = new Simulation({
       physics, map: NEIGHBORHOOD, nav, doors: doors.bodies,
-      seed: online ? online.begin.seed : (Math.random() * 2 ** 31) | 0, preparation: GAME.preparationSeconds,
+      seed: online ? online.begin.seed : opts.seed ?? (Math.random() * 2 ** 31) | 0, preparation: GAME.preparationSeconds,
     });
     this.link = online?.link ?? null;
     this.myId = online ? online.link.id : 'p1';
@@ -346,7 +369,7 @@ export class GameSession {
     const look = sanitizeAppearance(profile.appearance);
     this.me = this.sim.addPlayer(this.myId, profile.name, primary, secondary, { x: spawn.x, y: spawn.y, z: spawn.z }, spawn.yaw, encodeAppearance(look), account.loadout);
     this.mirror = online ? new Mirror(this.sim, this.myId) : null;
-    this.remotes = online ? new RemoteSurvivors(engine.scene, physics, field, ui, this.myId) : null;
+    this.remotes = online || opts.trailer ? new RemoteSurvivors(engine.scene, physics, field, ui, this.myId) : null;
     if (this.remotes) this.remotes.seats = vehicleView;
     // Every vehicle back where the map parks it (the simulation starts them there).
     vehicleView.reset();
@@ -468,6 +491,14 @@ export class GameSession {
       this.showResults();
     }, sig);
     this.startPose = startPose;
+  }
+
+  /** The trailer: this survivor stays out of every shot (the bots are the cast), lamp off. */
+  hideSelf(): void {
+    this.player.character.setVisible(false);
+    this.weapon.setVisible(false);
+    const f = flashlight();
+    if (f?.on) f.toggle();
   }
 
   /**
@@ -1081,6 +1112,7 @@ export class GameSession {
         this.stepOnline(step);
       } else {
         if (this.phase === 'playing') this.sendIntents(step);
+        this.trailer?.fixedUpdate(step);
         this.sim.step(step);
         // In or out of a seat as the simulation says (got in, got out, thrown out going down).
         this.syncSeat();
@@ -1146,6 +1178,8 @@ export class GameSession {
       this.cam.update(dt, p.renderPosition, p.eyeHeight, p.aiming && this.canAim, p.sprinting, this.adsSight());
     }
     this.focus.copy(p.renderPosition);
+    // The trailer's camera goes where its script says, whatever this survivor does.
+    this.trailer?.placeCamera(this.engine.camera, this.focus);
 
     // Body and hands.
     const a = this.me.arsenal;
@@ -1182,7 +1216,7 @@ export class GameSession {
     if (m) {
       this.remotes!.update(live, this.sim, m, this.engine.camera, this.ownBikePose(alpha));
       this.updateVoices();
-    }
+    } else this.remotes?.update(live, this.sim, this.localMirror, this.engine.camera, this.ownBikePose(alpha));
     // After the other survivors: their boards go under their feet as drawn this frame (not the last).
     this.skates.update(live, this.sim, this.engine.camera, (b) => this.boardPose(b, alpha));
     // After the others: their bikes go where they are drawn this frame.
