@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { BOOSTS, boostYaw, type BoostId, type Interactable, type Simulation } from '@dead-hours/shared';
 import type { LightField } from '../lighting/LightField';
 import { StaticProbe } from '../lighting/Probes';
@@ -70,16 +71,26 @@ export class SyringeModel {
       parent.add(mesh);
       return mesh;
     };
+    // Parts of one material that sit still together are one mesh (one draw): each piece moved to its place along Z.
+    const at = (g: THREE.BufferGeometry, z: number) => g.translate(0, 0, z);
+    const one = (parts: THREE.BufferGeometry[]) => {
+      const g = mergeGeometries(parts, false)!;
+      for (const p of parts) p.dispose();
+      return g;
+    };
     // The dose: a cylinder from the stopper face to the tip, shortened as the plunger goes in.
     this.liquid = add(along(new THREE.CylinderGeometry(RADIUS * 0.93, RADIUS * 0.93, 1, 12).translate(0, 0.5, 0)), this.liquidMat, -HALF);
     this.liquid.castShadow = false;
-    // Barrel rims, the graduated end and the tip cone.
-    add(along(new THREE.CylinderGeometry(RADIUS, RADIUS, 0.008, 12)), white, -HALF + 0.004);
-    add(along(new THREE.CylinderGeometry(RADIUS, RADIUS * 0.55, 0.012, 12)), white, HALF + 0.006);
-    for (let i = 0; i < 3; i++) add(along(new THREE.CylinderGeometry(RADIUS * 1.01, RADIUS * 1.01, 0.0016, 12)), rubber, -0.02 + i * 0.02).castShadow = false;
-    // Finger flange across the open end.
-    const flange = new THREE.BoxGeometry(0.046, 0.007, 0.004);
-    add(flange, white, -HALF - 0.002);
+    // Barrel rims, the graduated end and the tip cone, and the finger flange across the open end.
+    add(one([
+      at(along(new THREE.CylinderGeometry(RADIUS, RADIUS, 0.008, 12)), -HALF + 0.004),
+      at(along(new THREE.CylinderGeometry(RADIUS, RADIUS * 0.55, 0.012, 12)), HALF + 0.006),
+      at(new THREE.BoxGeometry(0.046, 0.007, 0.004), -HALF - 0.002),
+    ]), white, 0);
+    // The dark rings round the barrel.
+    const marks: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 3; i++) marks.push(at(along(new THREE.CylinderGeometry(RADIUS * 1.01, RADIUS * 1.01, 0.0016, 12)), -0.02 + i * 0.02));
+    add(one(marks), rubber, 0).castShadow = false;
     // Needle hub, needle and its cap.
     add(along(new THREE.CylinderGeometry(0.005, 0.0065, 0.012, 10)), this.hubMat, HALF + 0.018);
     this.needle = add(along(new THREE.CylinderGeometry(0.0007, 0.0007, 0.034, 6)), steel, HALF + 0.041);
@@ -87,9 +98,11 @@ export class SyringeModel {
     this.cap = add(along(new THREE.CylinderGeometry(0.0045, 0.0052, 0.038, 10)), this.capMat, HALF + 0.043);
     // Stopper, plunger rod (a cross) and thumb rest: they move together.
     add(along(new THREE.CylinderGeometry(RADIUS * 0.96, RADIUS * 0.96, 0.007, 12)), rubber, 0.0035, this.plunger);
-    add(new THREE.BoxGeometry(0.0055, 0.0016, 0.064), white, -0.032, this.plunger);
-    add(new THREE.BoxGeometry(0.0016, 0.0055, 0.064), white, -0.032, this.plunger);
-    add(along(new THREE.CylinderGeometry(0.013, 0.013, 0.004, 12)), white, -0.066, this.plunger);
+    add(one([
+      at(new THREE.BoxGeometry(0.0055, 0.0016, 0.064), -0.032),
+      at(new THREE.BoxGeometry(0.0016, 0.0055, 0.064), -0.032),
+      at(along(new THREE.CylinderGeometry(0.013, 0.013, 0.004, 12)), -0.066),
+    ]), white, 0, this.plunger);
     this.root.add(this.plunger);
     this.root.scale.setScalar(SCALE);
     this.setKind(kind);

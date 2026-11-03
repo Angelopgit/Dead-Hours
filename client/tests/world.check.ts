@@ -410,5 +410,31 @@ console.log('A loose skateboard is a handful of draws');
   else console.log(`  ok   ${draws} draws and ${shadow} shadow draws a board (was 17 and 13), wheels and hubs on the spinning axles`);
 }
 
+console.log('A boost syringe is a handful of draws');
+{
+  // Each syringe was 14 meshes: 13 draws and 9 shadow draws lying capped on a counter, and every one within the
+  // pickup draw range drew, through the house walls. The white parts, the dark rings and the plunger's rod and
+  // thumb rest are one mesh each now (the plunger's parts still ride on the plunger).
+  const { SyringeModel } = await import('../src/gameplay/Syringes');
+  const s = new SyringeModel('strength');
+  s.setCap(true);
+  let draws = 0, shadow = 0;
+  s.root.traverse((o) => {
+    if (!(o as THREE.Mesh).isMesh) return;
+    let shown = true;
+    for (let p: THREE.Object3D | null = o; p; p = p.parent) if (!p.visible) shown = false;
+    if (shown) draws++;
+    if (shown && o.castShadow) shadow++;
+  });
+  const plunger = s.root.children.find((c) => !(c as THREE.Mesh).isMesh);
+  const before = plunger?.position.z ?? 0;
+  s.setFill(0);
+  const travels = !!plunger && plunger.children.length === 2 && plunger.position.z - before > 0.08;
+  s.dispose();
+  if (draws > 7 || shadow > 5) fail(`a capped syringe takes ${draws} draws and ${shadow} shadow draws`);
+  else if (!travels) fail('the stopper, rod and thumb rest should be the two meshes on the plunger, pushed home together');
+  else console.log(`  ok   ${draws} draws and ${shadow} shadow draws a syringe (was 13 and 9), the plunger's parts pushed home together`);
+}
+
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
 process.exit(failures ? 1 : 0);
