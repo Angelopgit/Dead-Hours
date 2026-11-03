@@ -58,6 +58,8 @@ export class TouchControls {
   private readonly unsub: () => void;
   /** In a vehicle: at the wheel (JUMP is the handbrake, MELEE the horn) or a passenger. */
   private seat: 'driver' | 'passenger' | null = null;
+  /** The button size in use (see applyScale). */
+  private scale = 1;
 
   constructor(private readonly input: Input, online: boolean) {
     this.knob = this.base.firstElementChild as HTMLElement;
@@ -82,12 +84,22 @@ export class TouchControls {
     this.el.addEventListener('contextmenu', (e) => e.preventDefault(), sig);
     this.applyScale();
     this.unsub = settings.subscribe(() => this.applyScale());
+    window.addEventListener('resize', () => this.applyScale(), sig);
   }
 
+  /**
+   * The button size in use: the setting, or smaller where the buttons would not fit the screen. They grow until the
+   * thumb cluster would reach the middle of the screen (BOARD sat on the crosshair of a 568 px wide phone at the
+   * default size) or leave no room above it for the timer and a notice (at the largest size the cluster ran into
+   * the top row of buttons on most phones).
+   */
   private applyScale(): void {
-    const s = String(settings.value.controls.touchScale);
+    const safe = safeArea();
+    const fit = Math.min((innerWidth - safe.left - safe.right) / 640, (innerHeight - safe.top - 82) / 272);
+    this.scale = Math.max(0.6, Math.min(settings.value.controls.touchScale, fit));
+    const s = this.scale.toFixed(3);
     this.el.style.setProperty('--tc-scale', s);
-    // The HUD reads it too: on a phone the interaction prompt keeps clear of the button cluster.
+    // The HUD reads it too: on a phone it lays itself out round the buttons.
     document.body.style.setProperty('--tc-scale', s);
   }
 
@@ -169,7 +181,7 @@ export class TouchControls {
 
   private onMove(e: PointerEvent): void {
     if (e.pointerId === this.stickId) {
-      const r = STICK_RADIUS * settings.value.controls.touchScale;
+      const r = STICK_RADIUS * this.scale;
       let dx = e.clientX - this.stickX, dy = e.clientY - this.stickY;
       const m = Math.hypot(dx, dy);
       if (m > r) {
@@ -287,6 +299,18 @@ export class TouchControls {
 /** First words of a prompt ("OPEN DOOR", "TAKE AMMUNITION · 3 LEFT" → "TAKE AMMUNITION"). */
 function shortUse(text: string): string {
   return text.split('·')[0].trim().split(' ').slice(0, 2).join(' ');
+}
+
+/** The screen's safe-area insets (a notch, the home bar) in px. */
+function safeArea(): { left: number; right: number; top: number; bottom: number } {
+  const probe = h('div', { style: 'position:fixed;visibility:hidden;pointer-events:none;'
+    + 'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)' });
+  document.body.append(probe);
+  const cs = getComputedStyle(probe);
+  const px = (v: string) => parseFloat(v) || 0;
+  const out = { left: px(cs.paddingLeft), right: px(cs.paddingRight), top: px(cs.paddingTop), bottom: px(cs.paddingBottom) };
+  probe.remove();
+  return out;
 }
 
 let askedFullscreen = false;

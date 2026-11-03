@@ -248,7 +248,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .waypoint.edge .wp-icon { width: 0; height: 0; border: 9px solid transparent; border-bottom: 16px solid currentColor; border-top: 0; background: none; box-shadow: none;
   transform: rotate(var(--wp-angle, 0rad)); animation: none; }
 @keyframes wp-pulse { 50% { box-shadow: 0 0 16px rgba(232, 194, 90, 0.9); } }
-.notice { position: absolute; left: 50%; top: 12vh; transform: translateX(-50%); text-align: center; letter-spacing: 0.4em; font-size: 1.15em;
+/* The timer, warning and notices: each placed on its own on a desktop (a column on a phone, below). */
+.hud-top { display: contents; }
+/* The letter spacing settles from wide as a notice comes in (HUD.notify tweens --ls from 1.5 to 1). */
+.notice { position: absolute; left: 50%; top: 12vh; transform: translateX(-50%); text-align: center; letter-spacing: calc(0.4em * var(--ls, 1)); font-size: 1.15em;
   color: #ece6dc; text-shadow: 0 1px 10px rgba(0,0,0,0.9); white-space: nowrap; }
 .notice.danger { color: #e2725f; }
 .notice.rare { color: #e6c35a; }
@@ -261,6 +264,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .notice small { display: block; font-family: var(--font-body); letter-spacing: 0.25em; font-size: 0.55em; color: var(--fg-dim); margin-top: 0.7em; }
 .vitals { position: absolute; left: 3vw; bottom: 4vh; width: 260px; }
 .vitals .name { font-size: 0.85em; letter-spacing: 0.22em; color: var(--fg-dim); margin-bottom: 0.5em; display: flex; justify-content: space-between; }
+/* A long name is cut short with an ellipsis instead of running into the health number at a big UI scale. */
+.vitals .name > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vitals .name > span:last-child { flex: none; margin-left: 0.8em; }
 .hbar { height: 6px; background: rgba(255,255,255,0.08); border-radius: 1px; position: relative; overflow: hidden; }
 .hbar .lag { position: absolute; inset: 0 auto 0 0; background: rgba(181, 66, 58, 0.7); }
 .hbar .fill { position: absolute; inset: 0 auto 0 0; background: #d8d3c8; }
@@ -702,7 +708,10 @@ body.pad-nav .menu-name-input:focus { outline: none; }
 @media (max-width: 720px) { .pad-layout { grid-template-columns: 1fr; } }
 
 /* ── Touch controls ───────────────────────────────────── */
-.touch-controls { position: absolute; inset: 0; touch-action: none; z-index: 5; --tc-scale: 1; }
+/* --tc-lift raises the thumb buttons just clear of an iPhone's home bar when they are small enough to reach it (AIM,
+   the lowest, sits 22 px up at the default size, above the 21 px bar). */
+.touch-controls { position: absolute; inset: 0; touch-action: none; z-index: 5; --tc-scale: 1;
+  --tc-lift: max(0px, env(safe-area-inset-bottom) - 22px * var(--tc-scale)); }
 .touch-controls.hidden { display: none; }
 .tc-move { position: absolute; left: 0; top: 0; bottom: 0; width: 42%; }
 .tc-look { position: absolute; right: 0; top: 0; bottom: 0; width: 58%; }
@@ -718,15 +727,15 @@ body.pad-nav .menu-name-input:focus { outline: none; }
   border: 1.5px solid rgba(255,255,255,0.3); background: rgba(10,13,18,0.38); color: rgba(236,230,220,0.85);
   font-family: var(--font-display); font-size: calc(10px * var(--tc-scale)); letter-spacing: 0.12em; line-height: 1.1; }
 .tc-btn.on { background: rgba(212,154,90,0.42); border-color: var(--accent); color: #fff; }
-.tc-btn.fire { --s: 96px; right: calc(24px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(34px * var(--tc-scale)); font-size: calc(13px * var(--tc-scale)); border-color: rgba(181,66,58,0.7); }
-.tc-btn.aim { --s: 66px; right: calc(134px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(22px * var(--tc-scale)); }
-.tc-btn.jump { --s: 58px; right: calc(128px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(104px * var(--tc-scale)); }
-.tc-btn.reload { --s: 58px; right: calc(36px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(146px * var(--tc-scale)); }
-.tc-btn.crouch { --s: 54px; right: calc(212px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(26px * var(--tc-scale)); }
-.tc-btn.melee { --s: 54px; right: calc(204px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(100px * var(--tc-scale)); }
-.tc-btn.swap { --s: 50px; right: calc(104px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(176px * var(--tc-scale)); }
-.tc-btn.use { --s: 60px; right: calc(178px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(168px * var(--tc-scale)); opacity: 0.45; padding: 4px; }
-.tc-btn.board { --s: 52px; right: calc(252px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(172px * var(--tc-scale)); opacity: 0.45; }
+.tc-btn.fire { --s: 96px; right: calc(24px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(34px * var(--tc-scale) + var(--tc-lift)); font-size: calc(13px * var(--tc-scale)); border-color: rgba(181,66,58,0.7); }
+.tc-btn.aim { --s: 66px; right: calc(134px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(22px * var(--tc-scale) + var(--tc-lift)); }
+.tc-btn.jump { --s: 58px; right: calc(128px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(104px * var(--tc-scale) + var(--tc-lift)); }
+.tc-btn.reload { --s: 58px; right: calc(36px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(146px * var(--tc-scale) + var(--tc-lift)); }
+.tc-btn.crouch { --s: 54px; right: calc(212px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(26px * var(--tc-scale) + var(--tc-lift)); }
+.tc-btn.melee { --s: 54px; right: calc(204px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(100px * var(--tc-scale) + var(--tc-lift)); }
+.tc-btn.swap { --s: 50px; right: calc(104px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(176px * var(--tc-scale) + var(--tc-lift)); }
+.tc-btn.use { --s: 60px; right: calc(178px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(168px * var(--tc-scale) + var(--tc-lift)); opacity: 0.45; padding: 4px; }
+.tc-btn.board { --s: 52px; right: calc(252px * var(--tc-scale) + env(safe-area-inset-right)); bottom: calc(172px * var(--tc-scale) + var(--tc-lift)); opacity: 0.45; }
 .tc-btn.use.ready, .tc-btn.board.ready { opacity: 1; border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
 /* In a vehicle: the wheel takes the driver's hands (no gun buttons); nobody crouches or jumps in a seat. */
 .touch-controls.seated .tc-btn.crouch, .touch-controls.seated .tc-btn.melee:not(.horn) { display: none; }
@@ -742,57 +751,100 @@ body.pad-nav .menu-name-input:focus { outline: none; }
 .tc-btn.crouch.lit { border-color: var(--accent); color: #fff; background: rgba(212,154,90,0.22); }
 .tc-btn.talk { --s: 44px; right: calc(196px * var(--tc-scale) + env(safe-area-inset-right)); top: calc(12px + env(safe-area-inset-top)); }
 .tc-btn.pause { --s: 44px; left: calc(12px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); font-size: 12px; }
-/* Thumbs cover the bottom corners: health, ammo and the feed move to the top. */
-body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); width: 200px; font-size: 0.85em; }
-body.touch-play .weapon-panel { bottom: auto; top: calc(52px + env(safe-area-inset-top)); left: calc(68px + env(safe-area-inset-left)); right: auto; text-align: left; font-size: 0.75em; }
-body.touch-play .weapon-panel .w-slots { justify-content: flex-start; }
-body.touch-play .car-panel { bottom: auto; top: calc(10vh + env(safe-area-inset-top)); font-size: 0.8em; }
-/* The ammo panel starts right under the health bar on a phone: the stance line ("CROUCHED") goes beside the
-   name and health, and the serum armor is its teal bar alone (both printed over the gun's slots and name). */
-body.touch-play .vitals .stance { position: absolute; left: calc(100% + 1.4em); top: 0.1em; margin: 0; height: auto; white-space: nowrap; }
+/* ── Phones: the HUD round the thumb buttons ─────────────
+   Thumbs cover the bottom corners, so health, ammo and the feed sit at the top on a phone. Every row is placed
+   from the buttons' real size (--tc-scale) and the letters' (--u, the HUD's em): rows fixed in pixels printed the
+   timer, notices, feed and ammo over each other, and over the buttons, once the UI scale made the letters bigger.
+   The letters grow with the UI scale until the timer and a notice would no longer fit between the top row of buttons
+   and the thumb buttons, or across the screen (about 110% on a 640x360 phone, 135% on an 844x390 one); past that
+   they stay that size. */
+body.touch-play #ui-root {
+  --t: var(--tc-scale, 1);
+  --u: min(calc(14px * var(--ui-scale)), max(12px, min((100vh - 272px * var(--t) - env(safe-area-inset-top) - 12px) / 5,
+    (100vw - env(safe-area-inset-left) - env(safe-area-inset-right)) / 39)));
+  /* Under the pause / TALK / LIGHT / BAG / HEAL row. */
+  --top-row: calc(12px + 44px * var(--t) + env(safe-area-inset-top));
+  /* The left column (health, then ammo, then the chat): right of the pause button and the boost chips under it. */
+  --col-l: calc(24px + max(44px * var(--t), 2.9 * var(--u)) + env(safe-area-inset-left));
+  --panel-w: calc(6 * var(--u));
+  /* The side columns (ammo and chat on the left, the feed on the right) reach this far in from either edge; the
+     timer, warning and notices keep to the band between them. */
+  --side: calc(var(--col-l) + var(--panel-w) + 0.6 * var(--u));
+  /* The thumb buttons' cluster (SWAP, USE, BOARD on top): its height up from the bottom, its width in from the right. */
+  --cluster-h: calc(228px * var(--t) + max(0px, env(safe-area-inset-bottom) - 22px * var(--t)));
+  --cluster-w: calc(304px * var(--t) + env(safe-area-inset-right));
+  /* Where the timer, warning and notices start: under the top row and the health bar. */
+  --stack-top: calc(max(var(--top-row), 12px + env(safe-area-inset-top) + var(--vitals-h, 0px)) + 0.35 * var(--u));
+}
+body.touch-play .hud, body.touch-play .comms-hud { font-size: var(--u); }
+/* Health beside the pause button, as wide as the top row leaves it. A stance ("GRENADE READY", "PRONE") stands in
+   for the name while it lasts: beside or under the bar it ran into the buttons or the ammo panel. */
+body.touch-play .vitals { bottom: auto; top: calc(12px + env(safe-area-inset-top)); left: var(--col-l); font-size: 0.85em;
+  width: min(16.8em, calc(100vw - var(--col-l) - 240px * var(--t) - env(safe-area-inset-right) - 12px)); }
+body.touch-play .vitals .stance { position: absolute; left: 0; top: 0; margin: 0; height: auto; max-width: calc(100% - 3em); overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; font-size: 0.85em; letter-spacing: 0.22em; color: var(--accent); }
+body.touch-play .vitals:has(.stance:not(:empty)) .name > span:first-child { visibility: hidden; }
 body.touch-play .vitals .armor { margin-top: 3px; }
 body.touch-play .vitals .armor-label { display: none; }
-/* Boost chips stack under the pause button, each its colour and time left: over the name they pushed the health
-   bar down into the gun slots (and on a 667 px wide phone into the timer). */
-body.touch-play .vitals .boosts { position: absolute; left: -56px; top: 52px; flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; }
+/* Boost chips stack under the pause button, each its colour and time left. */
+body.touch-play .vitals .boosts { position: absolute; left: calc(12px + env(safe-area-inset-left) - var(--col-l)); top: calc(44px * var(--t) + 8px);
+  flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; }
 body.touch-play .boost-chip { font-size: 0.6em; padding: 0.25em 0.45em 0.35em 0.4em; }
 body.touch-play .boost-chip .l { display: none; }
-/* The feed shares the timer's row: it stays right of the centred timer and warning, a little smaller and tighter,
-   and wraps a long line ("SOMEONE ELSE GOT TO THAT SKATEBOARD" ran over the timer on a 640 px wide phone) while
-   four lines still end above SWAP. */
-body.touch-play .feed { bottom: auto; top: calc(66px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right));
-  max-width: calc(50vw - 126px); text-align: right; font-size: 0.72em; letter-spacing: 0.14em; gap: 0.25em; }
-/* Talking and chat take the bottom-left corner (the ammo panel is up top; they printed over it): three
-   lines and the names in a row, so on a 360 px tall phone they stay under the longest prompt, which slides
-   left of the buttons there. */
-body.touch-play .comms-hud { left: calc(16px + env(safe-area-inset-left)); bottom: calc(12px + env(safe-area-inset-bottom)); width: min(24em, 40vw); }
-body.touch-play .chat-game .chat-log { max-height: 5em; }
-body.touch-play .vox-list { flex-direction: row; flex-wrap: wrap; gap: 0.3em 1.4em; }
-/* The interaction prompt sits under the crosshair (the rows above it are the timer, warnings and notices),
-   centred while it clears the BOARD / USE / MELEE buttons (their left edge is 304 px x button size in from the
-   right), slid left of them when it would not, and wrapped to fit (it ran under BOARD and USE on most phones). */
-body.touch-play .prompt { top: calc(50% + 36px); width: max-content; white-space: normal; text-align: center;
-  font-size: 0.85em; letter-spacing: 0.16em; line-height: 1.35;
-  max-width: calc(100vw - 304px * var(--tc-scale, 1) - 12px - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
-  transform: translateX(min(-50%, calc(50vw - 304px * var(--tc-scale, 1) - 12px - env(safe-area-inset-right) - 100%))); }
-/* The health bar and the LIGHT / BAG / HEAL buttons fill the top row on a phone, so the timer, the
-   warning and notices take rows of their own under it, a little smaller (they printed over the health
-   bar and over each other). */
-body.touch-play .phase-timer { top: calc(62px + env(safe-area-inset-top)); font-size: 0.75em; letter-spacing: 0.26em; }
-body.touch-play .warning { top: calc(80px + env(safe-area-inset-top)); font-size: 0.7em; letter-spacing: 0.32em; }
-/* Between the notices and the crosshair (a phone on its side has no more room above it). */
-body.touch-play .trick-call { top: calc(50% - 56px); font-size: 0.75em; }
-body.touch-play .notice { top: calc(100px + env(safe-area-inset-top)); font-size: 1em; line-height: 1.15; }
-/* Set tight, so a long grey line clears the tops of BOARD / USE / SWAP on a 360 px tall phone, and a little
-   narrower, so on a 667 px wide one it stays clear of the ammo panel's fire-mode row on the left. */
-body.touch-play .notice small { margin-top: 0.35em; line-height: 1.25; letter-spacing: 0.15em; }
-/* Online on a phone, CONNECTION LOST takes the warning row, small, and the warning steps aside meanwhile (it
-   printed over the timer, the warning and notices). Fallen, WATCHING … TAP HERE FOR RESULTS sits in the
-   bottom-right corner, where the buttons were, clear of the chat (it wrapped onto the chat lines). */
-body.touch-play .spectate.net-lost { top: calc(74px + env(safe-area-inset-top)); padding: 0.3em 1em; font-size: 0.75em; white-space: nowrap; }
-body.touch-play #ui-root:has(> .net-lost) .warning { visibility: hidden; }
+/* Ammo under the health bar (it follows the bar down when the serum's armor shows), narrow, so the timer's band
+   between it and the feed stays wide. */
+body.touch-play .weapon-panel { bottom: auto; right: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));
+  text-align: left; font-size: 0.75em; width: max-content; max-width: var(--panel-w); }
+/* (The gun in hand is the line under it; the others are a tap on BAG away.) */
+body.touch-play .weapon-panel .w-slots { display: none; }
+body.touch-play .weapon-panel .w-model { letter-spacing: 0.22em; }
+body.touch-play .weapon-panel .w-bar { width: 100%; max-width: 12em; margin-left: 0; }
+body.touch-play .weapon-panel .w-heal { margin-top: 0.45em; letter-spacing: 0.2em; }
+body.touch-play .weapon-panel .w-heal.w-throw { margin-top: 0.3em; }
+/* At the wheel the gauges take the ammo panel's place (the driver has no gun in hand); a passenger keeps the gun. */
+body.touch-play .hud.driving .weapon-panel, body.touch-play .hud.riding .car-panel { display: none !important; }
+body.touch-play .car-panel { bottom: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));
+  transform: none; text-align: left; font-size: 0.8em; min-width: 0; width: var(--panel-w); }
+body.touch-play .car-name { white-space: normal; }
+/* The timer, the warning and notices, one under another between the side columns, wrapped to fit. A notice takes
+   the warning's row while it shows (no room for both above the thumb buttons on a phone). */
+body.touch-play .hud-top { display: flex; flex-direction: column; align-items: center; gap: 0.2em; position: absolute;
+  top: var(--stack-top); left: var(--side); right: var(--side); text-align: center; }
+body.touch-play .hud-top > * { position: static; transform: none; max-width: 100%; white-space: normal; text-wrap: balance; }
+body.touch-play .hud-top:has(.notice.showing) .warning { display: none; }
+body.touch-play .phase-timer { font-size: 0.75em; letter-spacing: 0.14em; line-height: 1.3; }
+body.touch-play .warning { font-size: 0.7em; letter-spacing: 0.2em; line-height: 1.3; }
+body.touch-play .notice { font-size: 1em; line-height: 1.15; letter-spacing: calc(0.2em * var(--ls, 1)); margin-top: 0.1em; }
+body.touch-play .notice small { margin-top: 0.3em; line-height: 1.25; letter-spacing: 0.08em; }
+/* The feed under the top-right buttons, ending above the thumb buttons (only the newest lines that fit stay). */
+body.touch-play .feed { bottom: auto; top: var(--stack-top); right: calc(16px + env(safe-area-inset-right));
+  max-width: calc(var(--side) - 16px - env(safe-area-inset-right)); max-height: calc(100% - var(--stack-top) - var(--cluster-h) - 0.4 * var(--u));
+  overflow: hidden; text-align: right; font-size: 0.72em; letter-spacing: 0.12em; gap: 0.25em; line-height: 1.25; }
+/* Talking and chat take the bottom of the left column (under the ammo panel), as wide as it. */
+body.touch-play .comms-hud { left: calc(16px + env(safe-area-inset-left)); bottom: calc(12px + env(safe-area-inset-bottom));
+  width: calc(var(--side) - 16px - env(safe-area-inset-left)); gap: 0.4em; }
+body.touch-play .chat-game .chat-log { max-height: 3.8em; }
+body.touch-play .vox-list { flex-direction: row; flex-wrap: wrap; gap: 0.2em 1.2em; }
+/* The interaction prompt (and, while down, the bleed-out bar) sit under the crosshair, centred while they clear the
+   left column and the BOARD / USE / MELEE buttons, slid left of the buttons when they would not, and wrapped to fit. */
+body.touch-play .prompt, body.touch-play .downed-panel, body.touch-play .trick-call { top: calc(50% + 36px); width: max-content; white-space: normal; text-align: center;
+  max-width: calc(100vw - var(--cluster-w) - 12px - var(--side) - 8px);
+  transform: translateX(max(calc(var(--side) + 8px - 50vw), min(-50%, calc(50vw - var(--cluster-w) - 12px - 100%)))); }
+body.touch-play .prompt { font-size: 0.85em; letter-spacing: 0.12em; line-height: 1.35; }
+body.touch-play .downed-panel { font-size: calc(0.8 * var(--u)); letter-spacing: 0.2em; }
+body.touch-play .downed-panel .dp-bar { width: min(16em, 100%); }
+/* A trick landed on a skateboard: its name takes the prompt's place for a moment (the prompt only says HOP OFF THE
+   SKATEBOARD then); above the crosshair it ran into BOARD and USE, and into the notices. */
+body.touch-play .trick-call { font-size: 0.75em; }
+body.touch-play .trick-call > div { line-height: 1.2; }
+body.touch-play .hud:has(.trick-call > div) .prompt { visibility: hidden; }
+/* Online on a phone, CONNECTION LOST takes the timer's row (the clock waits on the server anyway) and the warning
+   steps aside meanwhile. Fallen, WATCHING … TAP HERE FOR RESULTS sits in the bottom-right corner, where the buttons were. */
+body.touch-play .spectate.net-lost { top: var(--stack-top); padding: 0 0.8em; font-size: calc(0.7 * var(--u)); line-height: 1.3; white-space: nowrap; }
+body.touch-play #ui-root:has(> .net-lost) .phase-timer { visibility: hidden; }
+body.touch-play #ui-root:has(> .net-lost) .warning { display: none; }
 body.touch-play .spectate:not(.net-lost) { left: auto; right: calc(16px + env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom));
-  transform: none; max-width: 50vw; text-align: right; }
+  transform: none; max-width: calc(100vw - var(--side) - 16px - env(safe-area-inset-right)); text-align: right; font-size: calc(0.85 * var(--u)); }
 
 /* Phones held upright: the game is played sideways. */
 @media (orientation: portrait) and (pointer: coarse) {

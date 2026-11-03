@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>HUD layout (dev)</title>
+    <style>
+      /* A night street stand-in: dark, a lamp glow on the right, a lit doorway on the left. */
+      body { background:
+        radial-gradient(ellipse 30% 40% at 72% 38%, rgba(214, 170, 110, 0.28), transparent 70%),
+        radial-gradient(ellipse 18% 30% at 22% 55%, rgba(120, 140, 170, 0.18), transparent 70%),
+        linear-gradient(180deg, #0d1118 0%, #151a22 55%, #0b0d11 100%) !important; }
+      #viewport { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+    <div id="ui-root"></div>
+    <script type="module" src="./hud.ts"></script>
+  </body>
+</html>

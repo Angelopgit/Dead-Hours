@@ -183,9 +183,9 @@ export class HUD {
       this.marker,
       this.waypoint,
       this.prompt,
-      this.timer,
-      this.warning,
-      this.notice,
+      // The timer, the warning and notices: placed one by one on a desktop, stacked in a column on a phone (fixed
+      // rows there printed them over each other once the UI scale made the letters bigger).
+      h('div', { class: 'hud-top' }, this.timer, this.warning, this.notice),
       this.trick,
       this.feed,
       h('div', { class: 'vitals' },
@@ -382,7 +382,10 @@ export class HUD {
   feedLine(text: string): void {
     const line = h('div', {}, text);
     this.feed.append(line);
-    while (this.feed.children.length > 4) this.feed.firstElementChild?.remove();
+    // Four lines at most, and (on a phone, where the feed ends above the thumb buttons) only as many as fit.
+    while (this.feed.children.length > 4 || (this.feed.children.length > 1 && this.feed.scrollHeight > this.feed.clientHeight + 1)) {
+      this.feed.firstElementChild?.remove();
+    }
     gsap.fromTo(line, { opacity: 0, x: 12 }, { opacity: 1, x: 0, duration: 0.25 });
     gsap.to(line, { opacity: 0, duration: 0.6, delay: 3, onComplete: () => line.remove() });
   }
@@ -414,7 +417,7 @@ export class HUD {
     this.trick.replaceChildren(line);
     gsap.timeline()
       .fromTo(line, { opacity: 0, scale: 1.45, y: 6 }, { opacity: 1, scale: 1, y: 0, duration: 0.2, ease: 'back.out(2.2)' })
-      .to(line, { opacity: 0, y: -16, duration: 0.5, delay: 0.85, ease: 'power1.in' });
+      .to(line, { opacity: 0, y: -16, duration: 0.5, delay: 0.85, ease: 'power1.in', onComplete: () => line.remove() });
   }
 
   /** Top-center contextual message, e.g. location titles or SUPPLY HELICOPTER INBOUND. */
@@ -424,9 +427,11 @@ export class HUD {
     this.notice.classList.toggle('rare', tone === 'rare');
     this.notice.classList.toggle('calm', tone === 'calm');
     gsap.killTweensOf(this.notice);
+    // While it shows, a phone puts it in the warning's row (there is no room for both above the thumb buttons).
+    this.notice.classList.add('showing');
     gsap.timeline()
-      .fromTo(this.notice, { opacity: 0, letterSpacing: '0.6em' }, { opacity: 1, letterSpacing: '0.4em', duration: 0.9, ease: 'power2.out' })
-      .to(this.notice, { opacity: 0, duration: 1.2, delay: hold });
+      .fromTo(this.notice, { opacity: 0, '--ls': 1.5 }, { opacity: 1, '--ls': 1, duration: 0.9, ease: 'power2.out' })
+      .to(this.notice, { opacity: 0, duration: 1.2, delay: hold, onComplete: () => this.notice.classList.remove('showing') });
   }
 
   /**
@@ -457,6 +462,9 @@ export class HUD {
     if (key === this.carKey) return;
     this.carKey = key;
     this.car.style.display = v ? '' : 'none';
+    // On a phone the driver's gauges take the ammo panel's place (no gun in their hands); a passenger keeps the gun.
+    this.el.classList.toggle('driving', v?.seat === 'DRIVING');
+    this.el.classList.toggle('riding', !!v && v.seat !== 'DRIVING');
     if (!v) return;
     this.carName.textContent = `${v.name} · ${v.seat}`;
     this.carSpeed.textContent = String(Math.round(v.mph));
