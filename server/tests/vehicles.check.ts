@@ -198,6 +198,38 @@ advance(1 / 60);
 check(p1.health < hp, `a wall at 22 m/s hurts the people inside (${hp} → ${p1.health})`);
 check(events.some((e) => e.type === 'vehicle' && e.stage === 'crash'), 'and is heard');
 
+section('One car, then another');
+{
+  const p2 = sim.players.get('p2')!;
+  const free = sim.vehicles.list.filter((v) => v !== car && v.kind === 'car' && v.seats.every((s) => s === null) && sim.vehicles.exitSpot(v, 0));
+  const a = free[0];
+  const b = free.find((v) => Math.hypot(v.pos.x - a.pos.x, v.pos.z - a.pos.z) > 8);
+  check(!!a && !!b, 'two more cars apart, each with a clear driver\'s door');
+  /** Walks up to a car's driver door, gets in, gets out: where the server says they stand. */
+  const ride = (v: Vehicle): Vec3 | null => {
+    const c = Math.cos(v.yaw), s = Math.sin(v.yaw), lz = -(v.def.hz + 0.6);
+    put('p2', { x: v.pos.x + 0.1 * c + lz * s, y: v.pos.y, z: v.pos.z - 0.1 * s + lz * c });
+    night.act('p2', { a: 'seat', v: v.id });
+    advance(0.2);
+    if (sim.vehicles.seatOf('p2')?.[0] !== v) return null;
+    events.length = 0;
+    night.act('p2', { a: 'seat', v: -1 });
+    advance(1 / 60);
+    const e = events.find((x) => x.type === 'vehicle' && x.stage === 'out' && x.player === 'p2');
+    return e && e.type === 'vehicle' && e.pos ? e.pos : null;
+  };
+  if (a && b) {
+    const atA = ride(a);
+    check(!!atA && Math.hypot(p2.motion.pos.x - atA.x, p2.motion.pos.z - atA.z) < 0.05, 'out of the first car, by its door');
+    check(!!atA && night.motion('p2', motionOf(atA)) === null, 'walking on from there');
+    const atB = ride(b);
+    check(!!atB && Math.hypot(p2.motion.pos.x - atB.x, p2.motion.pos.z - atB.z) < 0.05, 'out of the second car, by its door');
+    check(!!atA && !!atB && Math.hypot(atA.x - atB.x, atA.z - atB.z) > 5, 'which is not the first car\'s door');
+    check(!!atB && night.motion('p2', motionOf(atB)) === null, 'walking on from the second car\'s door (the server holds that spot, not the first)');
+    check(a.seats.every((s) => s === null) && b.seats.every((s) => s === null) && !sim.vehicles.seatOf('p2'), 'both cars empty');
+  }
+}
+
 section('Leaving the game');
 night.removeSurvivor('p1');
 check(car.seats.every((s) => s === null) && !car.engine, 'a survivor who leaves empties their seat');

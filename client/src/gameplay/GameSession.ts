@@ -41,6 +41,7 @@ import { SyringeModel, SyringePickups } from './Syringes';
 import { SkateboardView, type BoardPose } from './Skateboards';
 import type { VehicleView } from './VehicleView';
 import { Driving } from './Driving';
+import { ExitSpot } from './ExitSpot';
 import { BicycleView, barAngle, type BikePose } from './Bicycles';
 import { HUD, clock } from '../ui/HUD';
 import { PauseMenu } from '../ui/PauseMenu';
@@ -190,7 +191,7 @@ export class GameSession {
   private driveT = 0;
   private carHinted = false;
   /** Online: where the server let this survivor out of a vehicle (until the session has put them there). */
-  private exitAt: Vec3 | null = null;
+  private readonly exitSpot = new ExitSpot();
   /** This frame's interpolation between fixed steps (where this survivor's own car is drawn). */
   private alpha = 0;
   private readonly seatPos = new THREE.Vector3();
@@ -2134,6 +2135,7 @@ export class GameSession {
     if (at) {
       const [v, seat] = at;
       if (cur && cur.vehicle === v.id && cur.seat === seat) return;
+      this.exitSpot.sat();
       p.sitIn(v.id, seat, seat === 0);
       this.cam.seat = seat === 0 ? 'driver' : 'passenger';
       this.cam.seeThrough = this.assist.seeThrough = v.body;
@@ -2146,9 +2148,7 @@ export class GameSession {
       return;
     }
     if (!cur) return;
-    const out = this.exitAt ?? this.me.motion.pos;
-    this.exitAt = null;
-    p.leaveSeat(out);
+    p.leaveSeat(this.exitSpot.take(this.me.motion.pos));
     this.cam.seat = null;
     this.cam.seeThrough = this.assist.seeThrough = null;
     this.touch.setSeat(null);
@@ -2353,7 +2353,8 @@ export class GameSession {
         break;
       case 'out':
       case 'thrown':
-        if (mine && e.pos) this.exitAt = { ...e.pos };
+        // Online this is heard before the seat sync puts them out; solo they are out already.
+        this.exitSpot.heard(e, this.myId, this.player.seated?.vehicle ?? null);
         audio.carDoor(e.pos ? v3(e.pos, this.tmpB) : at);
         break;
       case 'crank':
