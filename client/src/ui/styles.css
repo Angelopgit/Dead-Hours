@@ -120,8 +120,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .menu-hint { position: absolute; right: 4vw; bottom: 4vh; font-size: 0.8em; color: var(--fg-faint); letter-spacing: 0.14em; pointer-events: none; text-align: right; }
 .menu-hint .touch { display: none; color: var(--accent); }
 @media (pointer: coarse) { .menu-hint .touch { display: block; margin-bottom: 0.6em; } }
+/* Each band of window heights lays the menu out for the window height that just fits it with PLAY open
+   (--menu-fit, in px at 100% UI; the holiday logo's hat needs a bit more). A shorter window in the band
+   shrinks the whole column, whose sizes are all in em, by the same share, so it still fits: a 1536x864
+   laptop leaves about 714 px, and CREDITS went under the fold. 14 is #ui-root's font size. Bigger UI
+   scales shrink by that share too and scroll the rest, as above. */
+@media (min-width: 721px) and (min-height: 501px) {
+  .menu { --menu-fit: 875; }
+  .menu.holiday { --menu-fit: 910; }
+  .menu > .menu-main { font-size: min(1em, calc(100vh * 14 / var(--menu-fit) * max(1, var(--ui-scale)))); }
+}
 /* Laptop-height windows (1366x768 leaves about 650 px): tighter spacing, so the whole menu fits with PLAY open. */
 @media (min-width: 721px) and (min-height: 501px) and (max-height: 860px) {
+  .menu { --menu-fit: 745; }
+  .menu.holiday { --menu-fit: 775; }
   .menu .title { font-size: 3.9em; }
   .menu .subtitle { margin-bottom: 2em; }
   .menu .menu-name { margin-top: -0.9em; margin-bottom: 1em; }
@@ -129,6 +141,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .menu .menu-sub .menu-item { padding-top: 0.22em; padding-bottom: 0.22em; }
 }
 @media (min-width: 721px) and (min-height: 501px) and (max-height: 700px) {
+  .menu { --menu-fit: 640; }
+  .menu.holiday { --menu-fit: 658; }
   .menu .title { font-size: 3.3em; }
   .menu .subtitle { margin: 0.7em 0 1.3em 0.2em; }
   .menu .menu-name { margin-top: -0.6em; margin-bottom: 0.7em; }

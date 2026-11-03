@@ -160,6 +160,23 @@ check(none === null, 'nothing near: full speed');
   // gun slots: there they take the column under the pause button instead.
   check(prop('body.touch-play .vitals .boosts', 'position') === 'absolute' && prop('body.touch-play .vitals .boosts', 'flex-direction') === 'column',
     'touch: boost chips stack under the pause button, clear of the health bar and the gun slots');
+  // The main menu's height bands each fit the column at one window height, and windows just under it (701 px,
+  // 1536x864 laptops at about 714, 861 with the name hint) had SETTINGS and CREDITS under the fold with PLAY open.
+  // Each band names the height it fits (holiday logo a bit more) and the column shrinks to it, never under 3/4
+  // size at the bottom of a band. `node client/dev/menu-sweep.cjs` measures it in a browser.
+  const bands = [...css.matchAll(/@media \(min-width: 721px\) and \(min-height: (\d+)px\)[^{]*\{/g)].map((m) => {
+    let depth = 1, i = m.index + m[0].length;
+    while (depth && i < css.length) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0, i++;
+    const body = css.slice(m.index + m[0].length, i - 1);
+    const fit = (sel: string) => Number(body.match(new RegExp(`(?:^|[\\n}])\\s*${sel.replace(/\./g, '\\.')}\\s*\\{\\s*--menu-fit:\\s*(\\d+);`))?.[1]);
+    const top = Number(m[0].match(/max-height: (\d+)px/)?.[1] ?? Infinity);
+    const low = [501, 701, 861].filter((h) => h <= top).at(-1)!;
+    return { low, plain: fit('.menu'), holiday: fit('.menu.holiday'), body };
+  });
+  const shrink = /font-size:\s*min\(1em, calc\(100vh \* 14 \/ var\(--menu-fit\) \* max\(1, var\(--ui-scale\)\)\)\)/;
+  check(bands.length === 3 && shrink.test(bands[0].body) && prop('#ui-root', 'font-size') === 'calc(14px * var(--ui-scale))'
+    && bands.every((b) => b.plain > 0 && b.holiday >= b.plain && b.low / b.holiday >= 0.75),
+    `the main menu fits every desktop window height with PLAY open (${bands.map((b) => `${b.low}+: ${b.plain}/${b.holiday}`).join(', ')})`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
