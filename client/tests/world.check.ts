@@ -436,5 +436,35 @@ console.log('A boost syringe is a handful of draws');
   else console.log(`  ok   ${draws} draws and ${shadow} shadow draws a syringe (was 13 and 9), the plunger's parts pushed home together`);
 }
 
+console.log('A door is a few draws, not one per part');
+{
+  // Every door drew each part on its own: a wooden door 7 draws (slab, four panels, two knobs), the garage door 21
+  // (ten slats, ten seams, the handle), 336 draws and 335 shadow draws for the map's 46 doors. Parts of one material
+  // that move together are one mesh now. The panels keep the leaf-wide UVs, so bullet holes still go through them.
+  const doors = new DoorSystem(map, phys, new THREE.Group());
+  const most = { wood: 3, glass: 4, rollup: 3 };
+  let total = 0, shadow = 0, worst = '';
+  for (const d of doors.doors) {
+    let n = 0;
+    d.pivot.traverse((o) => { if ((o as THREE.Mesh).isMesh) { n++; total++; if (o.castShadow) shadow++; } });
+    const style = d.spec.style ?? 'wood';
+    if (n > most[style] && !worst) worst = `a ${style} door takes ${n} draws`;
+    if (style === 'rollup') {
+      const panel = d.pivot.children.find((c) => !(c as THREE.Mesh).isMesh);
+      if (!panel || panel.children.length !== 3) worst ||= 'the garage door\'s slats, seams and handle should be the three meshes on its sliding panel';
+    }
+    if (style === 'wood') {
+      // The panels' mesh: its UVs are where each corner sits on the leaf.
+      const panels = d.pivot.children.find((c) => (c as THREE.Mesh).geometry?.attributes.position.count === 96) as THREE.Mesh | undefined;
+      const pos = panels?.geometry.attributes.position, uv = panels?.geometry.attributes.uv;
+      let off = panels ? 0 : Infinity;
+      if (pos && uv) for (let i = 0; i < pos.count; i++) off = Math.max(off, Math.abs(uv.getX(i) * d.spec.w - pos.getX(i)), Math.abs(uv.getY(i) * d.spec.h - pos.getY(i)));
+      if (off > 1e-5) worst ||= `a wooden door's panels are off the leaf's damage map by ${off}`;
+    }
+  }
+  if (worst) fail(worst);
+  else console.log(`  ok   ${doors.doors.length} doors: ${total} draws and ${shadow} shadow draws (was 336 and 335), panels on the leaf's damage map`);
+}
+
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
 process.exit(failures ? 1 : 0);
