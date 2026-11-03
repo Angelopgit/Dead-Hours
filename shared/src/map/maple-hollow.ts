@@ -75,15 +75,15 @@ function streetDressing(b: MapBuilder): void {
   for (const [x, z] of [[-9.5, -5.1], [30.5, 5.1], [-60.4, -5.1], [78, -5.1], [-80, 5.1]] as const) b.prop('hydrant', x, z, 0);
 
   // Abandoned traffic.
-  b.prop('policeCar', -5.5, 1.6, 0.32, { flag: true });
+  b.prop('policeCar', -5.5, 1.6, 0.32, { flag: true, drive: true });
   b.prop('wreckedCar', 15.5, -2.1, -0.22, { variant: 2, flag: true });
-  b.prop('car', 31.3, -2.9, Math.PI + 0.03, { variant: 1 });
+  b.prop('car', 31.3, -2.9, Math.PI + 0.03, { variant: 1, drive: true });
   b.prop('car', 9.2, 3.0, 0.02, { variant: 4 });
   b.prop('car', 58.5, 2.6, 0.05, { variant: 5 });
   b.prop('wreckedCar', 101, -2.4, Math.PI - 0.4, { variant: 3 });
-  b.prop('car', -38, 2.8, Math.PI, { variant: 2 });
+  b.prop('car', -38, 2.8, Math.PI, { variant: 2, drive: true });
   b.prop('wreckedCar', -77.5, -1.5, 0.9, { variant: 0 });
-  b.prop('car', BIRCH + 2.4, -21, -Math.PI / 2 + 0.05, { variant: 3 });
+  b.prop('car', BIRCH + 2.4, -21, -Math.PI / 2 + 0.05, { variant: 3, drive: true });
   b.prop('car', BIRCH - 2.6, 33, Math.PI / 2, { variant: 0 });
   b.prop('wreckedCar', BIRCH + 1.4, 74, -Math.PI / 2 + 0.5, { variant: 1, flag: false });
 
@@ -348,7 +348,7 @@ function gasStation(b: MapBuilder): void {
     b.light({ kind: 'spot', x, y: 5.12, z, tx: x, ty: 0, tz: z, color: 0xe6eeff, intensity: 420, range: 16, angle: 1.15, penumbra: 0.55, decay: 2, fixture: 'panel' });
   }
   b.prop('signPylon', 77.5, -9.6, 0, { text: 'FUEL' });
-  b.prop('car', 88.7, -16.9, Math.PI / 2 + 0.03, { variant: 0 });
+  b.prop('car', 88.7, -16.9, Math.PI / 2 + 0.03, { variant: 0, drive: true });
   b.prop('wreckedCar', 104.5, -26.5, 0.7, { variant: 5 });
   b.prop('iceChest', 89.5, -32.2, 0);
   b.prop('tireStack', 82.0, -32.0, 0);
@@ -441,9 +441,9 @@ function checkpoint(b: MapBuilder): void {
   b.prop('sandbags', -104, -9.3, Math.PI / 2, { length: 3.4 });
   b.prop('sandbags', -94.6, -9.2, 0.1, { length: 2.4 });
 
-  b.prop('policeCar', -92.6, -2.9, Math.PI / 2 - 0.35, { flag: true });
+  b.prop('policeCar', -92.6, -2.9, Math.PI / 2 - 0.35, { flag: true, drive: true });
   b.prop('policeCar', -107.5, 3.9, Math.PI / 2 - 0.2, { flag: false });
-  b.prop('armoredTruck', -113.5, 1.4, 0.04);
+  b.prop('armoredTruck', -113.5, 1.4, 0.04, { drive: true });
   b.prop('wreckedCar', -117.8, -4.6, 0.6, { variant: 10 });
   for (const [x, z] of [[-89.6, 0.2], [-89.8, 1.9], [-89.6, 3.6], [-101.6, 3.4], [-101, -3.8], [-109, 1.2]]) b.prop('cone', x, z, x);
 

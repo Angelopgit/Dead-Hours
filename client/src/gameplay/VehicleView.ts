@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, vehicleKindOf, type Vec3, type VehicleDef, type Vehicle } from '@dead-hours/shared';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, seatDrop, vehicleKindOf, type Vec3, type VehicleDef, type Vehicle } from '@dead-hours/shared';
 import type { VehicleParts } from '../environment/Props';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
@@ -79,17 +80,27 @@ function bodyMaterial(head: { value: number }, tail: { value: number }): THREE.M
 /**
  * Merges a vehicle's static parts into one geometry: positions in its frame, colour, and per
  * vertex roughness, metalness, lamp (0 none, 1 head, 2 tail) and glow. Parts with a texture
- * (police lettering) are handed back to stay meshes of their own.
+ * (police lettering) are handed back to stay meshes of their own, and the clear glass (Kit.pane)
+ * comes back as one geometry of its own with its material.
  */
-function mergeParts(root: THREE.Group): { geometry: THREE.BufferGeometry; textured: THREE.Mesh[] } {
+function mergeParts(root: THREE.Group): { geometry: THREE.BufferGeometry; textured: THREE.Mesh[]; glass: { geometry: THREE.BufferGeometry; material: THREE.Material } | null } {
   root.updateMatrixWorld(true);
   const pos: number[] = [], col: number[] = [], pbr: number[] = [], glow: number[] = [];
   const textured: THREE.Mesh[] = [];
+  const panes: THREE.BufferGeometry[] = [];
+  let paneMat: THREE.Material | null = null;
   const c = new THREE.Color();
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     const mat = mesh.material as THREE.MeshStandardMaterial;
+    if (mesh.userData.glass) {
+      const g = (mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone()).applyMatrix4(mesh.matrixWorld);
+      for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
+      panes.push(g);
+      paneMat = mat;
+      return;
+    }
     if (mat.map) {
       textured.push(mesh);
       return;
@@ -118,7 +129,14 @@ function mergeParts(root: THREE.Group): { geometry: THREE.BufferGeometry; textur
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
-  return { geometry, textured };
+  let glass: { geometry: THREE.BufferGeometry; material: THREE.Material } | null = null;
+  if (panes.length && paneMat) {
+    const g = panes.length === 1 ? panes[0] : mergeGeometries(panes)!;
+    for (const p of panes) if (p !== g) p.dispose();
+    g.computeBoundingSphere();
+    glass = { geometry: g, material: paneMat };
+  }
+  return { geometry, textured, glass };
 }
 
 /** A soft dark patch under each vehicle (contact shadow: they cast no baked shadow, being free to move). */
@@ -159,7 +177,7 @@ export class VehicleView {
       const def = VEHICLES[kind];
       const head = { value: 0 }, tail = { value: 0 };
       const mat = bodyMaterial(head, tail);
-      const { geometry, textured } = mergeParts(part.root);
+      const { geometry, textured, glass } = mergeParts(part.root);
       const body = new THREE.Mesh(geometry, mat);
       body.castShadow = true;
       body.receiveShadow = true;
@@ -168,6 +186,16 @@ export class VehicleView {
       group.rotation.order = 'YXZ';
       group.add(body);
       const mats: THREE.MeshStandardMaterial[] = [mat];
+      if (glass) {
+        // Clear windows: whoever sits inside shows through them (drawn after everything solid).
+        const gm = (glass.material as THREE.MeshStandardMaterial).clone();
+        const pane = new THREE.Mesh(glass.geometry, gm);
+        pane.name = `vehicle-glass:${this.drawn.length}`;
+        pane.castShadow = false;
+        pane.receiveShadow = false;
+        group.add(pane);
+        mats.push(gm);
+      }
       for (const t of textured) {
         const m = (t.material as THREE.MeshStandardMaterial).clone();
         const g = t.geometry.clone().applyMatrix4(t.matrixWorld);
@@ -330,6 +358,12 @@ export class VehicleView {
     return d.yaw;
   }
 
+  /** How high a seat's cushion is over the vehicle's floor (where the feet of whoever sits there go). */
+  seatDrop(id: number, seat: number): number {
+    const d = this.drawn[id];
+    return d ? seatDrop(d.def, seat) : 0.5;
+  }
+
   /** Where the driver's hands go on the steering wheel (left and right of its rim), as drawn. */
   wheelPoints(id: number, left: THREE.Vector3, right: THREE.Vector3): boolean {
     const d = this.drawn[id];
@@ -347,7 +381,7 @@ export class VehicleView {
 
   dispose(): void {
     for (const d of this.drawn) {
-      d.body.geometry.dispose();
+      for (const o of d.group.children) if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose();
       for (const m of d.mats) m.dispose();
     }
     this.shadows.geometry.dispose();

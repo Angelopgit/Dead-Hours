@@ -275,13 +275,18 @@ export class Vehicles {
     v.input = 0;
   }
 
-  /** Where a survivor getting out of a seat can stand, or null when every door is blocked. */
+  /**
+   * Where a survivor getting out of a seat can stand, or null when every door is blocked: by
+   * their own door (a step further out when that is up on a curb), else the other side's.
+   */
   exitSpot(v: Vehicle, seat: number): Vec3 | null {
     const S = v.def.seats[seat] ?? v.def.seats[0];
     const side = S.z < 0 ? -1 : 1;
     const out = v.def.hz + PLAYER.radius + 0.18;
+    const curb = out + 0.4;
     const tries: [number, number][] = [
       [S.x, side * out], [S.x - 0.9, side * out], [S.x + 0.9, side * out],
+      [S.x, side * curb], [S.x - 0.9, side * curb],
       [S.x, -side * out], [S.x - 0.9, -side * out],
       [-v.def.hx - 0.6, 0], [v.def.hx + 0.6, 0],
     ];

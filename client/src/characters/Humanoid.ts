@@ -77,6 +77,31 @@ export interface SkatePose {
 export interface SeatPose {
   /** Which way the seat faces, relative to the body's facing (radians). */
   yaw: number;
+  /** How high the cushion is over the floor the feet rest on (metres; see seatDrop). */
+  drop: number;
+}
+
+/** The heel in the shin's frame: behind the ankle and down from the knee (the soles, see Outfit's shoes). */
+const HEEL = { back: 0.07, down: 0.52 };
+/** Seated, the hip joints over the cushion: hips 0.95 over the root, the legs 0.04 under them, the root 0.88 under the cushion. */
+const SEAT_HIP = 0.95 - 0.04 - 0.88;
+
+/**
+ * The legs of someone sitting with the cushion `drop` over the floor: the bone rotations (thigh
+ * swung forward, knee bent) that put the heels down on that floor. A low seat (a car's) has the
+ * thighs a little up and the shins reaching forward, toes up, so the feet stay in the footwell
+ * instead of going through the floor; a seat high enough lets the shins hang down.
+ */
+export function seatLegs(drop: number): { thigh: number; knee: number } {
+  // The shin leans forward from straight down as far as 1.15 rad, less when the thigh would then point down past level.
+  let shin = 1.15;
+  let c = 0;
+  for (; ; shin -= 0.05) {
+    c = (SEAT_HIP + drop - HEEL.back * Math.sin(shin) - HEEL.down * Math.cos(shin)) / LEG.upper;
+    if (c <= Math.cos(1.45) || shin <= 0.05) break;
+  }
+  const thigh = Math.acos(THREE.MathUtils.clamp(c, -1, 1));
+  return { thigh: -thigh, knee: thigh - shin };
 }
 
 /**
@@ -554,11 +579,11 @@ export class Humanoid {
   skateToe = 1;
   /**
    * In a vehicle's seat (null on foot): hips on the cushion facing the way the seat does, thighs
-   * forward, shins down. The owner puts the root 0.88 below the cushion (where the feet would be).
+   * forward, heels on the floor (seatLegs). The owner puts the root 0.88 below the cushion.
    */
   seat: SeatPose | null = null;
   private seatW = 0;
-  private readonly lastSeat: SeatPose = { yaw: 0 };
+  private readonly lastSeat: SeatPose = { yaw: 0, drop: 0.5 };
   /** On a bicycle (null otherwise): the saddle or the pegs. */
   bike: BikeRig | null = null;
   /** 0..1 how far into the bike pose (eases in and out). */
@@ -1505,16 +1530,17 @@ export class Humanoid {
     this.reach(rear, _sk2, pole, e);
   }
 
-  /** Sitting: hips on the cushion, thighs forward along the seat, shins down to the floor, leaning back a little. */
+  /** Sitting: hips on the cushion, thighs forward along the seat, heels on the floor, leaning back a little. */
   private seatPose(): void {
     const w = this.seatW;
     const e = w * w * (3 - 2 * w);
     const L = THREE.MathUtils.lerp;
     this.hips.position.y = L(this.hips.position.y, 0.95, e);
     this.spine.rotation.x -= 0.12 * e;
+    const legs = seatLegs(this.lastSeat.drop);
     for (const [leg, spread] of [[this.legL, 0.07], [this.legR, -0.07]] as const) {
-      leg.upper.rotation.set(L(leg.upper.rotation.x, -1.5, e), L(leg.upper.rotation.y, 0, e), L(leg.upper.rotation.z, spread, e));
-      leg.lower.rotation.set(L(leg.lower.rotation.x, 1.45, e), 0, 0);
+      leg.upper.rotation.set(L(leg.upper.rotation.x, legs.thigh, e), L(leg.upper.rotation.y, 0, e), L(leg.upper.rotation.z, spread, e));
+      leg.lower.rotation.set(L(leg.lower.rotation.x, legs.knee, e), 0, 0);
     }
   }
 

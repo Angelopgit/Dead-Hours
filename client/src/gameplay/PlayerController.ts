@@ -157,7 +157,7 @@ export class PlayerController {
   /** The vehicle's heading as drawn (its yaw: the nose along (cos, -sin)), and its velocity. */
   private seatYaw = 0;
   private readonly seatVel = new THREE.Vector3();
-  private readonly seatPose: SeatPose = { yaw: 0 };
+  private readonly seatPose: SeatPose = { yaw: 0, drop: 0.5 };
   /** On a bicycle's saddle (null otherwise). */
   cycle: Cycle | null = null;
   /** On the pegs of someone's bicycle (null otherwise). */
@@ -293,9 +293,11 @@ export class PlayerController {
 
   /**
    * Into a vehicle's seat: off any skateboard, standing height (crouching makes no sense in a
-   * seat), the capsule out of the world (the car's body is what others bump into).
+   * seat), the capsule out of the world (the car's body is what others bump into). `drop`: how
+   * high the cushion is over the cabin floor (the feet go down to it).
    */
-  sitIn(vehicle: number, seat: number, driver: boolean): void {
+  sitIn(vehicle: number, seat: number, driver: boolean, drop: number): void {
+    this.seatPose.drop = drop;
     this.ride = null;
     this.vault = null;
     this.sprinting = false;

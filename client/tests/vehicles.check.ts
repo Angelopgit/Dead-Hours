@@ -4,13 +4,19 @@
  * client's real copy of the server's (Mirror): out of one car, into another and out of that one
  * stands the survivor by the door of the car they just left, never the first one's. A solo night
  * hears the 'out' event after the seat sync has already put them out; online it is heard first.
+ * Then sitting: in every seat of every kind of vehicle, a survivor posed as the game poses them
+ * (Humanoid.seat) has their soles on the cabin floor, never through the bottom of the car, and
+ * their head under the roof.
  * Run with `npx tsx client/tests/vehicles.check.ts` (part of `npm run check:vehicles`).
  */
+import * as THREE from 'three';
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, createDoorBodies, buildNavGrid, Simulation, Mirror, captureSnapshot, seatWorld,
-  type NavGrid, type SimEvent, type SimPlayer, type Vec3, type Vehicle,
+  DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, VEHICLES, seatDrop,
+  type NavGrid, type SimEvent, type SimPlayer, type Vec3, type Vehicle, type VehicleKind,
 } from '@dead-hours/shared';
 import { ExitSpot } from '../src/gameplay/ExitSpot';
+import { Humanoid, survivorLook } from '../src/characters/Humanoid';
 
 let failures = 0;
 let passes = 0;
@@ -193,6 +199,48 @@ section('What is kept');
   spot.heard(ev(ME, 3, 'out'), ME, 3);
   spot.sat();
   check(flat(spot.take(here), here) < 1e-9, 'getting into a seat forgets an exit not yet used');
+}
+
+section('Sitting: feet on the floor, heads under the roof');
+{
+  /** The underside of each body as drawn (Props: the car's body box, the truck's chassis), and the inside of its roof over the seats. */
+  const SHELL: Record<VehicleKind, { under: number; roof: (seat: number) => number }> = {
+    car: { under: 0.31, roof: () => 1.52 },
+    police: { under: 0.31, roof: () => 1.52 },
+    wreck: { under: 0.31, roof: () => 1.52 },
+    // The cab's roof (outdoor.ts truckCab) over the front seats; the back is the armored box.
+    truck: { under: 0.45, roof: (s) => (s < 2 ? 2.12 : 2.6) },
+  };
+  const pose = { speed: 0, crouch: 0, aim: 0, grounded: true, strafe: 0, moveAngle: 0, turn: 0 };
+  const sole = new THREE.Vector3(), head = new THREE.Vector3();
+  for (const kind of ['car', 'truck'] as VehicleKind[]) {
+    const def = VEHICLES[kind];
+    const shell = SHELL[kind];
+    check(def.floor > shell.under && def.floor < def.seats[0].y, `${kind}: the cabin floor (${def.floor} m) is inside the body, under the seats`);
+    for (let s = 0; s < def.seats.length; s++) {
+      for (const look of [DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE]) {
+        const h = new Humanoid(survivorLook(look));
+        const seat = def.seats[s];
+        h.root.position.set(seat.x, seat.y - 0.88, seat.z);
+        h.root.rotation.y = Math.PI / 2;
+        h.seat = { yaw: 0, drop: seatDrop(def, s) };
+        for (let i = 0; i < 30; i++) h.update(1 / 60, pose);
+        h.root.updateMatrixWorld(true);
+        // The soles (Outfit's shoes): 0.52 under the knee, from the heel 0.07 behind the shin to the toe 0.18 ahead.
+        let low = Infinity;
+        for (const leg of [h.legL, h.legR]) {
+          for (const f of [-0.07, 0.18]) {
+            sole.set(0, -0.52, f).applyMatrix4(leg.lower.matrixWorld);
+            low = Math.min(low, sole.y);
+          }
+        }
+        head.set(0, 0.24, 0).applyMatrix4(h.head.matrixWorld);
+        const who = `${kind} seat ${s} (${look === DEFAULT_APPEARANCE ? 'man' : 'woman'})`;
+        check(low > shell.under + 0.01 && Math.abs(low - def.floor) < 0.04, `${who}: soles at ${low.toFixed(2)} m, on the floor (${def.floor}), not under the car (${shell.under})`);
+        check(head.y < shell.roof(s), `${who}: head top ${head.y.toFixed(2)} m, under the roof (${shell.roof(s)})`);
+      }
+    }
+  }
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

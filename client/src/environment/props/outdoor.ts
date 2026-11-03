@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PropKind } from '@dead-hours/shared';
+import { VEHICLES, isDrivable, type PropKind } from '@dead-hours/shared';
 import { gableRoof, jitter, type Kit } from './Kit';
 
 type Builder = (k: Kit) => void;
@@ -17,6 +17,44 @@ function water(k: Kit): THREE.MeshStandardMaterial {
   }));
   m.userData.envMap = true;
   return m;
+}
+
+/**
+ * The cab of an armored truck that drives: a shell round the two front seats (on the chassis,
+ * which is the floor, VEHICLES.truck.floor), the dashboard and the wheel, under clear glass. Its
+ * roof stands higher than the closed cab's did, clear of the heads of the two sitting in it.
+ */
+function truckCab(k: Kit, body: Parameters<Kit['box']>[3]): void {
+  const def = VEHICLES.truck;
+  const cloth = k.mat(0x2a2722, 0.95);
+  const dash = k.mat(0x1a1b1c, 0.8);
+  const sill = 1.5, band = 0.62;
+  // Below the windows: the sides and the front; the back wall up to the roof; the roof.
+  for (const sz of [-1, 1]) k.block(1.8, sill - 0.85, 0.06, body, 2.2, 0.85, sz * 1.12);
+  k.block(0.06, sill - 0.85, 2.3, body, 3.07, 0.85, 0);
+  k.block(0.06, sill + band + 0.06 - 0.85, 2.3, body, 1.33, 0.85, 0);
+  k.block(1.8, 0.06, 2.3, body, 2.2, sill + band, 0);
+  // Round the windows: either side of each side window, and either side of the windshield.
+  for (const sz of [-1, 1]) {
+    k.block(0.5, band, 0.06, body, 2.8, sill, sz * 1.12);
+    k.block(0.3, band, 0.06, body, 1.5, sill, sz * 1.12);
+    k.block(0.06, band, 0.2, body, 3.07, sill, sz * 1.05);
+    k.pane(new THREE.BoxGeometry(0.9, band, 0.02), 2.1, sill + band / 2, sz * 1.12);
+  }
+  k.pane(new THREE.BoxGeometry(0.02, band, 1.9), 3.08, sill + band / 2, 0);
+  // Seats, the dashboard, the wheel.
+  for (const s of def.seats.slice(0, 2)) {
+    k.block(0.5, s.y - def.floor, 0.5, cloth, s.x - 0.02, def.floor, s.z);
+    k.box(0.13, 0.62, 0.5, cloth, s.x - 0.28, s.y + 0.31, s.z, { rz: 0.14 });
+  }
+  k.block(0.26, 0.2, 2.1, dash, 2.92, 1.3, 0);
+  const w = def.wheel, z = def.seats[0].z, tilt = 0.6;
+  const rim = new THREE.TorusGeometry(0.17, 0.022, 6, 20);
+  rim.rotateY(Math.PI / 2);
+  rim.rotateZ(tilt);
+  k.add(rim, dash, w.x, w.y, z, { cast: false });
+  k.cyl(0.05, 0.05, 0.05, 8, dash, w.x + 0.01, w.y, z, { rz: tilt - Math.PI / 2, cast: false });
+  k.rod(V(w.x + 0.03, w.y - 0.02, z), V(2.85, 1.45, z), 0.03, dash);
 }
 
 export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
@@ -113,9 +151,12 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
     const glass = k.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.08, metalness: 0.8 }));
     k.block(6.2, 0.5, 2.3, k.mat(0x151617, 0.7), 0, 0.45, 0);
     k.block(4.3, 1.75, 2.4, body, -0.95, 0.85, 0);
-    k.block(1.8, 1.15, 2.3, body, 2.2, 0.85, 0);
-    k.box(0.05, 0.5, 1.9, glass, 3.11, 1.75, 0, { rz: -0.2 });
-    for (const sz of [-1, 1]) k.box(0.9, 0.42, 0.05, glass, 2.1, 1.72, sz * 1.16);
+    if (isDrivable(k.p)) truckCab(k, body);
+    else {
+      k.block(1.8, 1.15, 2.3, body, 2.2, 0.85, 0);
+      k.box(0.05, 0.5, 1.9, glass, 3.11, 1.75, 0, { rz: -0.2 });
+      for (const sz of [-1, 1]) k.box(0.9, 0.42, 0.05, glass, 2.1, 1.72, sz * 1.16);
+    }
     k.box(2.0, 0.3, 0.02, k.text(['STATE POLICE'], { w: 512, h: 96, bg: '#22261f', fg: '#c8c2a8', border: null }), -1.2, 1.9, 1.205, { cast: false });
     k.box(2.0, 0.3, 0.02, k.text(['STATE POLICE'], { w: 512, h: 96, bg: '#22261f', fg: '#c8c2a8', border: null }), -1.2, 1.9, -1.205, { cast: false, ry: Math.PI });
     const rubber = k.mat(0x111111, 0.9);

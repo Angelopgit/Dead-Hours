@@ -26,6 +26,8 @@ export interface VehicleDef {
   cabin: { x0: number; x1: number; top: number; hz: number };
   /** Seat 0 is the driver's. */
   seats: SeatSpec[];
+  /** Height of the cabin floor over the road: where the feet of the people inside rest. */
+  floor: number;
   /** The steering wheel's rim, ahead of the driver (hands go on it). */
   wheel: { x: number; y: number };
   /** Distance between the axles, and where they sit along the body. */
@@ -75,6 +77,7 @@ const CAR_BODY = {
   hx: 2.22, hz: 0.93, low: 0.95, clear: 0.22,
   cabin: { x0: -1.35, x1: 0.95, top: 1.58, hz: 0.86 },
   seats: CAR_SEATS,
+  floor: 0.36,
   wheel: { x: 0.52, y: 0.93 },
   wheelbase: 2.7, axles: [1.35, -1.35] as [number, number], wheelRadius: 0.36, track: 0.86,
 };
@@ -108,6 +111,7 @@ export const VEHICLES: Record<VehicleKind, VehicleDef> = {
       { x: -0.4, y: 1.08, z: -0.6 },
       { x: -0.4, y: 1.08, z: 0.6 },
     ],
+    floor: 0.95,
     wheel: { x: 2.45, y: 1.55 },
     wheelbase: 4.4, axles: [2.2, -2.2], wheelRadius: 0.5, track: 1.05,
     top: 17, reverse: 5, accel: 3.8, brake: 9, steer: 0.5, grip: 9,
@@ -117,11 +121,12 @@ export const VEHICLES: Record<VehicleKind, VehicleDef> = {
 };
 
 /**
- * Drivable vehicles: every car, cruiser, wreck and the armored truck parked about the map can be
- * started and driven (a wreck on its roof can't). Each has whatever was left in its tank; when it
- * runs dry the engine dies and it rolls to a stop. Survivors get in by any free seat, the driver
- * steers, the others lean out and shoot. The driver's own browser moves the car (like walking);
- * the simulation keeps the fuel, the seats, and what the car does to the dead it hits.
+ * Drivable vehicles: some of the cars and cruisers parked about each street, and the armored truck,
+ * can be started and driven (the map marks which; the rest, and every wreck, stay parked). Each
+ * has whatever was left in its tank; when it runs dry the engine dies and it rolls to a stop.
+ * Survivors get in by any free seat, the driver steers, the others lean out and shoot. The
+ * driver's own browser moves the car (like walking); the simulation keeps the fuel, the seats,
+ * and what the car does to the dead it hits.
  */
 export const VEHICLE = {
   /** How close to the body a survivor must be to get in (metres from the bodywork). */
@@ -164,8 +169,12 @@ export const VEHICLE = {
   maxSpeed: 30,
 } as const;
 
-/** Which vehicle a map prop is, or null when it can't be driven (anything else, or a wreck on its roof). */
+/**
+ * Which vehicle a map prop is, or null when it can't be driven: anything else, a car the map leaves
+ * parked for good (only the ones it marks `drive` still run), or a wreck on its roof.
+ */
 export function vehicleKindOf(p: PropSpec): VehicleKind | null {
+  if (!p.drive) return null;
   switch (p.kind) {
     case 'car':
       return 'car';
@@ -178,6 +187,12 @@ export function vehicleKindOf(p: PropSpec): VehicleKind | null {
     default:
       return null;
   }
+}
+
+/** How high a seat's cushion is over the cabin floor (the legs reach down that far to it). */
+export function seatDrop(def: VehicleDef, seat: number): number {
+  const s = def.seats[seat] ?? def.seats[0];
+  return Math.max(0, s.y - def.floor);
 }
 
 /** Whether a map prop is a vehicle that can be driven (it is built and moved as one, not as scenery). */

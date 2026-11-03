@@ -158,6 +158,8 @@ export interface PropSpec {
   use?: 'weapons';
   /** Knocked over (chairs lie on their side, floor lamps on the floor). */
   tipped?: boolean;
+  /** Cars, cruisers, wrecks and the armored truck: this one still runs and can be driven (the rest stay parked scenery). */
+  drive?: boolean;
 }
 
 /** Static light: baked into static geometry and sampled by dynamic objects through probes. */

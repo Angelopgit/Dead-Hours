@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { isDrivable, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
+import { VEHICLES, isDrivable, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
 import { LampGlare, patchLens } from './LampGlare';
 import { settings } from '../core/Settings';
-import { Kit, jitter, type PropBuildResult } from './props/Kit';
+import { Kit, jitter, type PropBuildResult, type Surface } from './props/Kit';
 import { INTERIOR } from './props/interior';
 import { OUTDOOR } from './props/outdoor';
 
@@ -26,6 +26,23 @@ function cabinGeometry(len: number, h: number, wid: number, insetF: number, inse
   g.computeVertexNormals();
   return g;
 }
+
+/** A car's greenhouse as panes only (windshield, rear window, the sides): open top and bottom, for a cabin to show through. */
+function openCabinGeometry(len: number, h: number, wid: number, insetF: number, insetB: number, insetSide: number): THREE.BufferGeometry {
+  const box = cabinGeometry(len, h, wid, insetF, insetB, insetSide);
+  const index = box.getIndex()!;
+  const keep: number[] = [];
+  // BoxGeometry's faces: +x, -x, +y, -y, +z, -z; the top (under the roof) and the bottom go.
+  for (const g of box.groups) {
+    if (g.materialIndex === 2 || g.materialIndex === 3) continue;
+    for (let i = g.start; i < g.start + g.count; i++) keep.push(index.getX(i));
+  }
+  box.setIndex(keep);
+  box.clearGroups();
+  return box;
+}
+
+const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 /**
  * Knocked-over furniture: a chair falls onto its side (toward local -X, matching its tipped collider),
@@ -107,6 +124,55 @@ export class PropFactory {
       return { anchor, offset: new THREE.Vector3(dx * c - dz * s, anchor.position.y - (p.y ?? 0), dx * s + dz * c) };
     });
     out.vehicles.push({ prop: index, root, dyn, anchors: parts });
+  }
+
+  /**
+   * A drivable car's middle, between the solid hood and trunk: the doors and the floor pan the
+   * feet rest on (VEHICLES.car.floor), the seats, the dashboard and the steering wheel where the
+   * driver's hands go, under clear glass with slim pillars holding up the roof.
+   */
+  private carCabin(k: Kit, paint: Surface, police: boolean): void {
+    const def = VEHICLES.car;
+    const white = k.mat(0xb9bcbf, 0.5, 0.2);
+    const cloth = k.mat(0x2b2724, 0.95);
+    const dash = k.mat(0x1b1b1d, 0.8);
+    k.box(1.25, 0.62, 1.86, paint, 1.575, 0.62, 0);
+    k.box(0.85, 0.62, 1.86, paint, -1.775, 0.62, 0);
+    k.block(2.3, def.floor - 0.31, 1.86, k.mat(0x161617, 0.9), -0.2, 0.31, 0);
+    for (const sz of [-1, 1]) {
+      if (police) {
+        // Black and white: the white doors as the solid car had them.
+        k.box(0.3, 0.62, 0.07, paint, -1.2, 0.62, sz * 0.895);
+        k.box(1.9, 0.63, 0.075, white, -0.1, 0.62, sz * 0.9);
+        k.box(0.1, 0.62, 0.07, paint, 0.9, 0.62, sz * 0.895);
+      } else k.box(2.3, 0.62, 0.07, paint, -0.2, 0.62, sz * 0.895);
+    }
+    // Two bucket seats in front, a bench behind.
+    const [driver, front, back] = def.seats;
+    for (const s of [driver, front]) {
+      k.block(0.48, s.y - def.floor, 0.48, cloth, s.x - 0.02, def.floor, s.z);
+      k.box(0.12, 0.6, 0.48, cloth, s.x - 0.27, s.y + 0.3, s.z, { rz: 0.16 });
+      k.box(0.09, 0.16, 0.26, cloth, s.x - 0.33, s.y + 0.68, s.z, { rz: 0.16 });
+    }
+    k.block(0.5, back.y - def.floor, 1.62, cloth, back.x - 0.02, def.floor, 0);
+    k.box(0.13, 0.52, 1.62, cloth, back.x - 0.29, back.y + 0.27, 0, { rz: 0.2 });
+    // The dashboard under the windshield, and the wheel in front of the driver (its rim where VehicleView puts the hands).
+    k.block(0.28, 0.27, 1.72, dash, 0.81, 0.68, 0);
+    const w = def.wheel, tilt = 0.45;
+    const rim = new THREE.TorusGeometry(0.17, 0.02, 6, 20);
+    rim.rotateY(Math.PI / 2);
+    rim.rotateZ(tilt);
+    k.add(rim, dash, w.x, w.y, driver.z, { cast: false });
+    k.cyl(0.045, 0.045, 0.05, 8, dash, w.x + 0.01, w.y, driver.z, { rz: tilt - Math.PI / 2, cast: false });
+    k.rod(V(w.x + 0.03, w.y - 0.01, driver.z), V(0.75, 0.82, driver.z), 0.028, dash);
+    // Glass all round, the roof, and the pillars at the corners and between the doors.
+    k.pane(openCabinGeometry(2.3, 0.6, 1.7, 0.55, 0.4, 0.12), -0.2, 1.23, 0);
+    k.box(1.39, 0.06, 1.54, police ? white : paint, -0.275, 1.555, 0);
+    for (const sz of [-1, 1]) {
+      k.rod(V(0.95, 0.93, sz * 0.85), V(0.4, 1.53, sz * 0.748), 0.035, paint);
+      k.rod(V(-0.28, 0.93, sz * 0.85), V(-0.3, 1.53, sz * 0.748), 0.03, paint);
+      k.rod(V(-1.35, 0.93, sz * 0.85), V(-0.95, 1.53, sz * 0.748), 0.045, paint);
+    }
   }
 
   /** A lamp lens that hands its light to the glare as it shrinks on screen. */
@@ -225,10 +291,15 @@ export class PropFactory {
         glass.userData.envMap = true;
         const rubber = k.mat(0x111111, 0.9);
         const chrome = k.mat(0x77797b, 0.35, 0.8);
-        k.box(4.4, 0.62, 1.86, paint, 0, 0.62, 0);
-        if (police) k.box(1.9, 0.63, 1.875, k.mat(0xb9bcbf, 0.5, 0.2), -0.1, 0.62, 0);
-        k.add(cabinGeometry(2.3, 0.6, 1.7, 0.55, 0.4, 0.12), glass, -0.2, 1.23, 0);
-        k.box(1.3, 0.06, 1.5, police ? k.mat(0xb9bcbf, 0.5, 0.2) : paint, -0.15, 1.55, 0);
+        // One that drives shows who is inside: clear glass over an open cabin.
+        const open = isDrivable(p);
+        if (open) this.carCabin(k, paint, police);
+        else {
+          k.box(4.4, 0.62, 1.86, paint, 0, 0.62, 0);
+          if (police) k.box(1.9, 0.63, 1.875, k.mat(0xb9bcbf, 0.5, 0.2), -0.1, 0.62, 0);
+          k.add(cabinGeometry(2.3, 0.6, 1.7, 0.55, 0.4, 0.12), glass, -0.2, 1.23, 0);
+          k.box(1.3, 0.06, 1.5, police ? k.mat(0xb9bcbf, 0.5, 0.2) : paint, -0.15, 1.55, 0);
+        }
         k.box(0.12, 0.25, 1.9, chrome, 2.22, 0.45, 0);
         k.box(0.12, 0.25, 1.9, chrome, -2.22, 0.45, 0);
         for (const wx of [-1.35, 1.35]) for (const wz of [-0.86, 0.86]) k.cyl(0.36, 0.36, 0.26, 10, rubber, wx, 0.36, wz, { rx: Math.PI / 2 });
@@ -242,9 +313,11 @@ export class PropFactory {
           k.box(door.length - 0.08, 0.5, 0.02, k.mat(0x0d0d0e, 0.9), 0.55 - door.length / 2, 0.68, dz, { cast: false });
           k.box(door.length, 0.62, 0.07, paint, door.cx, 0.62, door.cz, { ry: door.ry });
           const win = new THREE.BoxGeometry(door.length * 0.62, 0.42, 0.02);
-          k.add(win, glass, door.cx + Math.cos(door.ry) * 0.12, 1.12, door.cz - Math.sin(door.ry) * 0.12, { ry: door.ry, cast: false });
-          // Interior: seat backs show through the opening.
-          k.box(0.5, 0.55, 1.5, k.mat(0x2a2422, 0.95), 0.05, 0.95, 0, { cast: false });
+          const wx = door.cx + Math.cos(door.ry) * 0.12, wz = door.cz - Math.sin(door.ry) * 0.12;
+          if (open) k.pane(win, wx, 1.12, wz, { ry: door.ry });
+          else k.add(win, glass, wx, 1.12, wz, { ry: door.ry, cast: false });
+          // Interior: seat backs show through the opening (an open cabin has its seats already).
+          if (!open) k.box(0.5, 0.55, 1.5, k.mat(0x2a2422, 0.95), 0.05, 0.95, 0, { cast: false });
         }
         if (wreck) {
           k.root.rotation.z = 0.03;

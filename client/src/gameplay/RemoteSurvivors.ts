@@ -81,6 +81,7 @@ const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 export interface SeatSource {
   seatPoint(id: number, seat: number, out: THREE.Vector3): number | null;
   wheelPoints(id: number, left: THREE.Vector3, right: THREE.Vector3): boolean;
+  seatDrop(id: number, seat: number): number;
 }
 
 /**
@@ -127,7 +128,7 @@ export class RemoteSurvivors {
       id: p.id, body, weapon, probe, pos: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), facing: m.yaw + Math.PI,
       ragdoll: null, tag, tagHp, hurtDir: new THREE.Vector3(0, 0, 1), downed: false,
       lamp, lightOn: null, beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), level: 0, dim: 1 },
-      ride: null, trickWait: null, seat: { yaw: 0 },
+      ride: null, trickWait: null, seat: { yaw: 0, drop: 0.5 },
       cycle: null,
       prone: !!m.prone, diving: !!m.diving, diveDown: false,
     };
@@ -204,6 +205,7 @@ export class RemoteSurvivors {
     b.root.position.y -= 0.88;
     b.root.rotation.y = r.facing;
     r.seat.yaw = wrap(ahead - r.facing);
+    r.seat.drop = this.seats.seatDrop(vehicle, seat);
     b.seat = r.seat;
     if (r.downed) {
       r.downed = false;

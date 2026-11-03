@@ -128,12 +128,12 @@ function streetDressing(b: MapBuilder): void {
 
   // Parked and abandoned cars.
   b.prop('car', -44, z + 2.8, Math.PI, { variant: 1 });
-  b.prop('car', -4, z - 2.9, 0.03, { variant: 3 });
+  b.prop('car', -4, z - 2.9, 0.03, { variant: 3, drive: true });
   b.prop('wreckedCar', 21, z + 0.6, 0.35, { variant: 8 });
   b.prop('car', 40, z + 2.9, Math.PI + 0.04, { variant: 5 });
   b.prop('wreckedCar', 72, z - 1.6, -0.5, { variant: 12 });
   // Two left in their driveways.
-  b.prop('car', 37.6, FRONT_N + 3.4, Math.PI / 2 + 0.02, { variant: 2 });
+  b.prop('car', 37.6, FRONT_N + 3.4, Math.PI / 2 + 0.02, { variant: 2, drive: true });
   b.prop('car', 18.6, FRONT_S - 3.5, -Math.PI / 2 + 0.03, { variant: 4 });
 
   // Litter, puddles and leaves.

@@ -73,10 +73,11 @@ function driver(sim: Simulation, p: SimPlayer, v: Vehicle) {
   };
 }
 
-/** A vehicle with a clear run of `ahead` metres in front of it (and a little either side). */
-function clearLane(sim: Simulation, ahead: number, kind?: string): Vehicle | null {
+/** A vehicle with a clear run of `ahead` metres in front of it (and a little either side), and `ok` with it. */
+function clearLane(sim: Simulation, ahead: number, kind?: string, ok?: (v: Vehicle) => boolean): Vehicle | null {
   for (const v of sim.vehicles.list) {
     if (kind && v.kind !== kind) continue;
+    if (ok && !ok(v)) continue;
     const c = Math.cos(v.yaw), s = Math.sin(v.yaw);
     const hit = physics.world.castShape(
       { x: v.pos.x, y: v.pos.y + hullY(v.def), z: v.pos.z }, { x: 0, y: Math.sin(v.yaw / 2), z: 0, w: Math.cos(v.yaw / 2) },
@@ -99,9 +100,18 @@ section('Which props drive');
   const sim = fresh();
   const drivable = map.props.filter(isDrivable);
   const overturned = map.props.filter((p) => p.kind === 'wreckedCar' && (p.variant ?? 0) >= 10);
-  check(sim.vehicles.list.length === drivable.length && drivable.length >= 20, `every upright car, cruiser, wreck and truck is a vehicle (${sim.vehicles.list.length})`);
-  check(overturned.length > 0 && overturned.every((p) => vehicleKindOf(p) === null), `wrecks on their roofs stay scenery (${overturned.length})`);
-  check(sim.vehicles.list.some((v) => v.kind === 'truck') && sim.vehicles.list.some((v) => v.kind === 'police') && sim.vehicles.list.some((v) => v.kind === 'wreck'), 'cars, cruisers, wrecks and the armored truck are all there');
+  const parkedKinds = ['car', 'policeCar', 'wreckedCar', 'armoredTruck'];
+  const all = map.props.filter((p) => parkedKinds.includes(p.kind));
+  check(sim.vehicles.list.length === drivable.length && drivable.length >= 6 && drivable.length <= all.length / 2, `only some of the ${all.length} cars, cruisers, wrecks and trucks drive (${drivable.length}, the ones the map marks)`);
+  const elm = drivable.filter((p) => Math.abs(p.z) < 30).length;
+  const oak = drivable.filter((p) => p.z > 75 && p.z < 112 && p.x > -55).length;
+  check(elm >= 2 && oak >= 2, `a few on each street (Elm ${elm}, Oak ${oak})`);
+  check(map.props.filter((p) => p.kind === 'wreckedCar').every((p) => vehicleKindOf(p) === null && vehicleKindOf({ ...p, drive: false }) === null), 'every wreck stays parked');
+  check(overturned.length > 0 && overturned.every((p) => vehicleKindOf({ ...p, drive: true }) === null), `wrecks on their roofs never drive, even marked (${overturned.length})`);
+  check(sim.vehicles.list.some((v) => v.kind === 'truck') && sim.vehicles.list.some((v) => v.kind === 'police') && sim.vehicles.list.some((v) => v.kind === 'car'), 'cars, cruisers and the armored truck are all there');
+  const parked = all.find((p) => !isDrivable(p) && p.kind === 'car')!;
+  const roof = physics.raycastHit(parked.x, 3, parked.z, 0, -1, 0, 4);
+  check(!!roof && !!roof.collider.parent()?.isFixed() && sim.vehicles.list.every((v) => roof.collider.parent()?.handle !== v.body.handle) && 3 - roof.distance > 0.8, 'a car left parked is solid scenery (a fixed body, not a vehicle)');
   const gasOk = sim.vehicles.list.every((v) => v.gas >= v.def.fuel[0] - 1e-9 && v.gas <= v.def.fuel[1] + 1e-9);
   check(gasOk, 'each tank holds what that kind of vehicle has left (never full)');
   const first = sim.vehicles.list.map((v) => v.gas);
@@ -266,9 +276,13 @@ section('Fuel');
   check(v.seats[0] === 'd' && !v.engine && ev2.some((e) => e.type === 'vehicle' && e.stage === 'dry'), 'a dry tank cranks but won\'t start');
 }
 
+/** Which side of a vehicle a point is: -1 the driver's, +1 the passenger's. */
+const sideOf = (v: Vehicle, at: Vec3 | null) => (at ? Math.sign((at.x - v.pos.x) * Math.sin(v.yaw) + (at.z - v.pos.z) * Math.cos(v.yaw)) : 0);
+
 section('Getting out');
 {
   const sim = fresh();
+  // Parked (and stopping) with the driver's door to the curb.
   const v = clearLane(sim, 40, 'car')!;
   const p = sim.addPlayer('d', 'D', 'ar', 'pistol', v.pos, 0);
   const q = sim.addPlayer('e', 'E', 'ar', 'pistol', v.pos, 0);
@@ -287,8 +301,7 @@ section('Getting out');
   ev.push(...sim.drain());
   const out = ev.find((e) => e.type === 'vehicle' && e.stage === 'out');
   check(!!out && !!out.pos && outsideBy(v, out.pos.x, out.pos.z) > 0.3, 'they stand clear of the bodywork');
-  const side = out?.pos ? Math.sign((out.pos.x - v.pos.x) * Math.sin(v.yaw) + (out.pos.z - v.pos.z) * Math.cos(v.yaw)) : 0;
-  check(side === -1, 'by the driver\'s door');
+  check(sideOf(v, out?.pos ?? null) === -1, 'by the driver\'s door, up on the curb beside it');
   check(!sim.vehicles.seatOf('d') && p.motion.eyeHeight > 1.4 && !v.engine, 'on their feet again, and the engine is off');
   check(sim.enterVehicle('e', v.id) === false && sim.vehicles.seatOf('e')?.[1] === 1, 'the passenger stays put');
   // Down in a seat: thrown out.

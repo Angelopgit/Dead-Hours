@@ -173,6 +173,22 @@ export class Kit {
     return this.add(new THREE.CylinderGeometry(rTop, rBottom, h, seg), m, x, y, z, o);
   }
 
+  /**
+   * Clear glass (a drivable car's windows): see-through, casting no shadow. Tagged
+   * userData.glass so the vehicle view draws it as a pane of its own, not merged into the body.
+   */
+  pane(g: THREE.BufferGeometry, x: number, y: number, z: number, o: PartOptions = {}): THREE.Mesh {
+    const m = this.lib.custom('car-glass-clear', () => {
+      const glass = new THREE.MeshStandardMaterial({ color: 0xa9bccb, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.16, depthWrite: false });
+      glass.userData.envMap = true;
+      glass.userData.noBake = true;
+      return glass;
+    });
+    const mesh = this.add(g, m, x, y, z, { ...o, cast: false });
+    mesh.userData.glass = true;
+    return mesh;
+  }
+
   /** Thin rod between two local points. */
   rod(a: THREE.Vector3, b: THREE.Vector3, r: number, m: Surface, seg = 5): THREE.Mesh {
     const len = a.distanceTo(b);

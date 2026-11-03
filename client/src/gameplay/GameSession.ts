@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, LIMB_NAME,
+  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -2153,7 +2153,7 @@ export class GameSession {
       const [v, seat] = at;
       if (cur && cur.vehicle === v.id && cur.seat === seat) return;
       this.exitSpot.sat();
-      p.sitIn(v.id, seat, seat === 0);
+      p.sitIn(v.id, seat, seat === 0, seatDrop(v.def, seat));
       this.cam.seat = seat === 0 ? 'driver' : 'passenger';
       this.cam.seeThrough = this.assist.seeThrough = v.body;
       this.touch.setSeat(seat === 0 ? 'driver' : 'passenger');
