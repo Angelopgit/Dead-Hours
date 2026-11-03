@@ -208,5 +208,23 @@ check(none === null, 'nothing near: full speed');
   check(/wheelScrollsSideways\(this\.tabsEl\)/.test(creator), 'the creator hands its category strip to the wheel');
 }
 
+// The YOU DIED screen after a long run (three lines of unlocks) is about 740 px tall at full size: on a 1366x768
+// laptop (about 650 px) RETRY and MAIN MENU sat 60 px under the fold, and in a half-screen window (683 px wide,
+// two stat columns) 190 px. The compact sizes reach up to 760 px tall, and three stat columns down to 601 px wide.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  const blockWith = (rule: RegExp) => [...css.matchAll(/@media \(max-(height|width): (\d+)px\) \{/g)].map((m) => {
+    let depth = 1, i = m.index + m[0].length;
+    while (depth && i < css.length) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0, i++;
+    return { side: m[1], px: Number(m[2]), body: css.slice(m.index + m[0].length, i - 1) };
+  }).filter((b) => rule.test(b.body));
+  const compact = blockWith(/\.results \.title \{ font-size: 2\.4em; \}/);
+  check(compact.length === 1 && compact[0].side === 'height' && compact[0].px >= 760,
+    `the results page takes its compact sizes on windows up to ${compact[0]?.px} px tall (a 1366x768 laptop's 650 px included)`);
+  const two = blockWith(/\.results-stats \{ grid-template-columns: repeat\(2, 1fr\); \}/);
+  check(two.length === 1 && two[0].side === 'width' && two[0].px <= 600,
+    `the results stats keep three columns down to ${(two[0]?.px ?? 0) + 1} px wide (half-screen laptop windows)`);
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);
