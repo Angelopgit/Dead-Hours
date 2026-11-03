@@ -37,3 +37,22 @@ export function panelCoversMenu(panel: HTMLElement, menu: HTMLElement, skip?: (e
   }
   return false;
 }
+
+/**
+ * A row that scrolls sideways (the creator's category strip on a narrow window) moves with an ordinary mouse wheel
+ * too: the browser scrolls such a row only for a sideways wheel or Shift, so with a mouse its last tabs were out of
+ * reach. A sideways swipe, a pinch (ctrl) and a row that fits pass through untouched, and so does the wheel once
+ * the row is at its end.
+ */
+export function wheelScrollsSideways(row: HTMLElement): void {
+  row.addEventListener('wheel', (e) => {
+    if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+    const max = row.scrollWidth - row.clientWidth;
+    if (max <= 0) return;
+    const step = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? row.clientWidth : 1);
+    const to = Math.min(max, Math.max(0, row.scrollLeft + step));
+    if (to === row.scrollLeft) return;
+    row.scrollLeft = to;
+    e.preventDefault();
+  }, { passive: false });
+}

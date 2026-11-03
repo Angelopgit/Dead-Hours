@@ -3,7 +3,7 @@ import {
   APPEARANCE_ITEMS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, PALETTE_LABELS, SHAPE_LABELS, SHAPE_STEPS, appearanceItem,
   randomAppearance, sanitizeAppearance, type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type PaletteName, type ShapeKey,
 } from '@dead-hours/shared';
-import { h } from './dom';
+import { h, wheelScrollsSideways } from './dom';
 import { settings } from '../core/Settings';
 import { audio } from '../audio/AudioEngine';
 import { CharacterPreview, type PreviewFocus } from '../characters/CharacterPreview';
@@ -143,6 +143,8 @@ export class CharacterCreator {
         onclick: () => { audio.ui('click'); this.select(t); },
       }, t.label));
     }
+    // On narrow windows the strip runs sideways past the window edge: the mouse wheel moves it too.
+    wheelScrollsSideways(this.tabsEl);
 
     const stage = h('div', { class: 'creator-stage' },
       this.preview.canvas,

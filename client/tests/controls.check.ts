@@ -180,5 +180,33 @@ check(none === null, 'nothing near: full speed');
     `the main menu fits every desktop window height with PLAY open (${bands.map((b) => `${b.low}+: ${b.plain}/${b.holiday}`).join(', ')})`);
 }
 
+// On a window 860 px wide or less the creator's category strip runs sideways past the edge (at 683 px EARRINGS,
+// NECK, BACK, GEAR and SMOKES are off it), and the browser scrolls such a row only for a sideways wheel or Shift:
+// with a mouse those tabs were out of reach. The ordinary wheel moves the strip now.
+{
+  const { wheelScrollsSideways } = await import('../src/ui/dom');
+  let on: ((e: WheelEvent) => void) | null = null;
+  const row = { scrollWidth: 980, clientWidth: 651, scrollLeft: 0, addEventListener: (_: string, f: (e: WheelEvent) => void) => { on = f; } };
+  wheelScrollsSideways(row as unknown as HTMLElement);
+  const wheel = (deltaY: number, more: Partial<WheelEvent> = {}) => {
+    let used = false;
+    on!({ deltaX: 0, deltaY, deltaMode: 0, ctrlKey: false, preventDefault: () => { used = true; }, ...more } as WheelEvent);
+    return used;
+  };
+  const first = wheel(120);
+  check(first && row.scrollLeft === 120, `a wheel notch over the creator's category strip moves it sideways (${row.scrollLeft} px)`);
+  for (let i = 0; i < 3; i++) wheel(120);
+  check(row.scrollLeft === 329 && !wheel(120), 'the strip stops at its last tab, and the wheel goes on to the page from there');
+  wheel(-1000);
+  check(row.scrollLeft === 0, 'the wheel the other way brings the first tabs back');
+  check(!wheel(10, { deltaX: 50 }) && !wheel(120, { ctrlKey: true }) && row.scrollLeft === 0, 'a sideways swipe and a pinch are left to the browser');
+  check(wheel(3, { deltaMode: 1 }) && row.scrollLeft === 48, 'a wheel that counts in lines (Firefox) moves it too');
+  row.scrollWidth = row.clientWidth;
+  row.scrollLeft = 0;
+  check(!wheel(120), 'a strip that fits (the wide column layout) leaves the wheel alone');
+  const creator = readFileSync(new URL('../src/ui/CharacterCreator.ts', import.meta.url), 'utf8');
+  check(/wheelScrollsSideways\(this\.tabsEl\)/.test(creator), 'the creator hands its category strip to the wheel');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

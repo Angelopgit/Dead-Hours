@@ -514,7 +514,7 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
   .creator { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 44vh minmax(0, 1fr); overflow: hidden; }
   .creator-head { flex-wrap: wrap; gap: 0.8em 1.2em; padding: 1em 16px 0.8em; }
   .creator-actions { margin-left: 0; }
-  .creator-tabs { flex-direction: row; overflow-x: auto; padding: 0.5em 16px; gap: 0.4em; }
+  .creator-tabs { flex-direction: row; overflow-x: auto; padding: 0.5em 16px; gap: 0.4em; scrollbar-width: thin; scrollbar-color: var(--fg-faint) transparent; }
   .creator-tab { white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; padding: 0.5em 0.3em; font-size: 0.95em; }
   .creator-tab.on { padding-left: 0.3em; border-bottom-color: var(--accent); }
   .creator-options { padding: 1em 16px 2em; background: rgba(10, 13, 18, 0.6); }
