@@ -125,6 +125,9 @@ interface Dropped {
   landed: boolean;
 }
 
+/** How far ahead of the eyes the lamp's light starts for a pair down the sights: past both muzzles (see updateLamp). */
+const TWIN_TORCH = 0.66;
+
 /**
  * A play session. Solo: the survivor's browser runs the simulation itself. Online: the
  * simulation runs on the server and this keeps a mirror of it (never stepped here); the
@@ -132,6 +135,7 @@ interface Dropped {
  * messages and are shown at once (fire, swing, reload, switch, bandage), and everything else
  * is drawn from the server's snapshots and events, exactly as solo draws its own simulation.
  */
+
 export class GameSession {
   readonly player: PlayerController;
   readonly cam: ThirdPersonCamera;
@@ -244,6 +248,8 @@ export class GameSession {
   private readonly lamp: ChestLamp;
   private readonly tmpTorchDir = new THREE.Vector3();
   private readonly tmpTorchAt = new THREE.Vector3();
+  /** Where the lamp's light goes for a pair down the sights (see updateLamp). */
+  private readonly twinTorch = new THREE.Vector3();
   private readonly unsubSettings: () => void;
   private readonly doorColliders = new Set<number>();
 
@@ -1388,7 +1394,18 @@ export class GameSession {
       want.set(Math.sin(yaw), -0.25, Math.cos(yaw)).normalize();
     }
     const dir = this.lamp.follow(want, dt);
-    torch.update(dt, alive, this.lamp.source(this.tmpTorchAt), dir);
+    const source = this.lamp.source(this.tmpTorchAt);
+    // A pair down the sights holds both guns straight out in front of the lamp, which would burn the
+    // fists white from a few centimetres: in first person the light starts just past the muzzles
+    // instead (short of a wall), so the guns stand dark against what the beam lights. Only this
+    // player's view changes; everyone else still sees the beam leave the chest.
+    const twin = WEAPONS[this.me.arsenal.weapon.id].hold === 'akimbo' ? this.cam.ads : 0;
+    if (twin > 0.001) {
+      const e = this.cam.eye;
+      const wall = this.physics.raycast(e.x, e.y, e.z, dir.x, dir.y, dir.z, TWIN_TORCH);
+      source.lerp(this.twinTorch.copy(e).addScaledVector(dir, wall === null ? TWIN_TORCH : Math.max(0, wall - 0.05)), twin);
+    }
+    torch.update(dt, alive, source, dir);
     this.lamp.show(torch.level, this.engine.camera);
   }
 
@@ -3793,10 +3810,11 @@ export class GameSession {
     const cam = this.engine.camera;
     const px = (Math.tan((spread * Math.PI) / 180) / Math.tan((cam.fov * Math.PI) / 360)) * (window.innerHeight / 2);
     hud.setSpread(Math.min(70, px));
-    // Down the sights, the sights are the crosshair. Not while the mouse is free either: "CLICK TO
-    // CONTINUE" stands in the middle of the screen then, and the crosshair would strike through it.
+    // Down the sights, the sights are the crosshair (except for a pair, held out either side of it).
+    // Not while the mouse is free either: "CLICK TO CONTINUE" stands in the middle of the screen
+    // then, and the crosshair would strike through it.
     this.updateDownPanel();
-    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && a.action !== 'inject' && this.cam.ads < 0.4 && !p.seated?.driver);
+    hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && a.action !== 'inject' && (this.cam.ads < 0.4 || WEAPONS[a.weapon.id].hold === 'akimbo') && !p.seated?.driver);
     hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : a.action === 'inject' ? 'INJECTING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.dive ? 'DIVING' : p.prone ? 'PRONE' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     this.touch.setStance(p.stance);
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);

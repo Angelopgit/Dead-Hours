@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { LIMBS, MELEE, THROWING, WEAPONS, defaultBuild, encodeBuild, isHandgun, isMelee, type BoostId, type HeldLimb, type Loadout, type MeleeId, type MeleeStyle, type ThrowKind, type WeaponDef, type WeaponId } from '@dead-hours/shared';
-import type { Humanoid } from '../characters/Humanoid';
+import type { Humanoid, Limb } from '../characters/Humanoid';
 import { SeveredArm } from '../characters/Severed';
 import { createWeaponModel, type WeaponModel } from './WeaponModels';
 import { createThrowableModel, type ThrowableModel } from './ThrowableModels';
@@ -121,10 +121,34 @@ const AKIMBO_RELOAD: Record<'right' | 'left', { t: number; at: V3; rot: V3 }[]> 
 export const AKIMBO_TIMES = { right: { drop: 0.12, seat: 0.5, slide: 0.82 }, left: { drop: 0.14, seat: 0.62, slide: 0.86 } } as const;
 
 /**
- * The left gun of a pair down the sights (camera space: +X right, +Y up, -Z ahead): held out
- * beside the right gun's sight line, a little low and canted out so the picture stays clear.
+ * A pair down the sights (first person). There is no one sight to look down: both guns are held
+ * out at arm's length either side of the crosshair, level with each other, muzzles toed in a touch
+ * and the tops canted in the way wrists turn holding two guns out. `at` is where the right gun's
+ * grip sits in camera space (+X right, +Y up, -Z ahead); the left gun mirrors it.
  */
-const OFFHAND_ADS = { at: [-0.2, -0.155, -0.42] as V3, roll: 0.22, toe: 0.02 };
+const TWIN_ADS = { at: [0.128, -0.152, -0.43] as V3, toe: 0.045, cant: 0.1 };
+/**
+ * How the pair moves with the survivor down the sights (twinMotion): the guns lag a turn and a
+ * look up or down and swing back (`lag` m and rad per rad/s), bob with the steps (`bob`, per m/s
+ * of walking pace), breathe while standing still, and each kicks up, back and out when it fires.
+ */
+const TWIN_FEEL = {
+  lag: { x: 0.011, y: 0.009, yaw: 0.032, pitch: 0.03, max: 0.035, maxRot: 0.1 },
+  /** Lift as the eye rises or drops (per m/s). */
+  lift: 0.005,
+  bob: { x: 0.015, y: 0.012, roll: 0.03, pitch: 0.016, stride: 2.4 },
+  breath: { y: 0.003, x: 0.0015, pitch: 0.008, rate: 1.6 },
+  /** `other`: how much of one gun's kick the other feels through the body. */
+  kick: { pitch: 0.72, back: 0.24, up: 0.026, roll: 0.17, yaw: 0.1, other: 0.14 },
+};
+/** Each M17's grip in its own model space: the middle of where the fist closes round it, and its axis up. */
+export const GRIP_AT = new THREE.Vector3(0, -0.006, 0.043);
+const GRIP_UP = new THREE.Vector3(0, 0.955, -0.296);
+/**
+ * Where a grip sits in a closed hand, from the wrist (lower arm bone space, the hand built as in
+ * Outfit's hand(): fingers along -Y, the palm toward -side X, thumb along +Z). Side: +1 left, -1 right.
+ */
+export const HAND_GRIP = [0.027, -0.072, 0.004] as const;
 
 /**
  * Lying prone, in the body's own frame (+Z ahead along it, +X its left, from the middle of it on
@@ -414,6 +438,10 @@ export class PlayerWeapon {
   private throwW = 0;
   /** 0..1 how far the arms have taken the shooter's hold down the sights (shooterArms). */
   private shooterW = 0;
+  /** The pair's first-person sway: lag springs, walking pace and stride phase (twinMotion). */
+  private readonly feel = { x: 0, vx: 0, y: 0, vy: 0, yaw: 0, vyaw: 0, pitch: 0, vpitch: 0, speed: 0, phase: 0, primed: false };
+  private readonly lastEye = new THREE.Vector3();
+  private readonly lastView = new THREE.Quaternion();
   /** 0..1 how far the hands have gone to the steering wheel, and where it was last. */
   private wheelW = 0;
   private readonly wheelL = new THREE.Vector3();
@@ -729,13 +757,21 @@ export class PlayerWeapon {
       this.mix(this.tmpA, this.tmpQ, this.aimW);
     }
     const ads = busy ? 0 : input.ads ?? 0;
+    if (off) this.twinMotion(dt, input);
     if (ads > 0.001 && model.sight && input.eye && input.view) {
-      // Down the sights: the sight line on the camera axis, the stock wherever that puts it,
-      // with a slow breathing sway.
-      const t = this.time;
-      this.tmpQ.copy(input.view).multiply(FLIP)
-        .multiply(this.e2q(Math.sin(t * 1.3) * 0.0016, Math.sin(t * 0.9 + 1) * 0.002, 0));
-      this.tmpA.copy(stockLocal).sub(model.sight.eye).applyQuaternion(this.tmpQ).add(input.eye);
+      if (off) {
+        // A pair: the right gun held out to the right of the crosshair (twinPose); its anchor is
+        // wherever that puts the grip.
+        this.twinPose(1, input, this.recoil, this.tmpA, this.tmpQ);
+        this.tmpA.sub(_tg.copy(GRIP_AT).sub(stockLocal).applyQuaternion(this.tmpQ));
+      } else {
+        // Down the sights: the sight line on the camera axis, the stock wherever that puts it,
+        // with a slow breathing sway.
+        const t = this.time;
+        this.tmpQ.copy(input.view).multiply(FLIP)
+          .multiply(this.e2q(Math.sin(t * 1.3) * 0.0016, Math.sin(t * 0.9 + 1) * 0.002, 0));
+        this.tmpA.copy(stockLocal).sub(model.sight.eye).applyQuaternion(this.tmpQ).add(input.eye);
+      }
       this.mix(this.tmpA, this.tmpQ, ads);
     }
     body.headHidden = ads > 0.35;
@@ -773,10 +809,12 @@ export class PlayerWeapon {
     const r = this.recoil;
     spring(r, dt);
     const kickScale = 0.5 + 0.5 * this.aimW;
-    this.quat.multiply(this.tmpQ.setFromEuler(this.e.set(-r.pitch * 0.05 * kickScale, r.yaw * 0.03, 0)));
+    // A handgun of a pair flips harder; down the sights twinPose has its own kick.
+    const flip = off ? HIP_FLIP * (1 - ads) : 0.05, push = off ? HIP_PUSH * (1 - ads) : 0.022;
+    this.quat.multiply(this.tmpQ.setFromEuler(this.e.set(-r.pitch * flip * kickScale, r.yaw * 0.03, 0)));
     const rootPos = model.root.position;
     rootPos.copy(stockLocal).applyQuaternion(this.quat).negate().add(this.anchor);
-    rootPos.addScaledVector(this.tmpA.set(0, 0, -1).applyQuaternion(this.quat), r.z * 0.022 * kickScale);
+    rootPos.addScaledVector(this.tmpA.set(0, 0, -1).applyQuaternion(this.quat), r.z * push * kickScale);
     model.root.quaternion.copy(this.quat);
     model.root.visible = this.shown && !this.hideHeld;
     model.root.updateMatrixWorld(true);
@@ -967,8 +1005,20 @@ export class PlayerWeapon {
       this.poleR.lerp(_ld.set(-0.75, -0.6, -0.1).transformDirection(spineM), bars).normalize();
       this.poleL.lerp(_ld.set(0.75, -0.6, -0.1).transformDirection(spineM), bars).normalize();
     }
+    // A pair: each fist closed round its own gun's grip, the thumb up the back of it, whenever that
+    // hand is holding its gun (not swinging a blade, throwing, bandaging, driving...).
+    let gripR = 0, gripL = 0;
+    if (off) {
+      const free = (1 - this.throwW) * (1 - this.wheelW) * (1 - bars) * (s.action === 'bandage' || injecting ? 0 : 1);
+      gripR = free * (1 - away);
+      gripL = free * (1 - Math.max(this.limbW, this.meleeTwoW, this.outW)) * THREE.MathUtils.clamp(leftW, 0, 1);
+      if (gripR > 0.01) this.gripTarget(body.armR, model, this.rightTarget, this.poleR, gripR, -1);
+      if (gripL > 0.01) this.gripTarget(body.armL, off, this.leftTarget, this.poleL, gripL, 1);
+    }
     body.reach(body.armR, this.rightTarget, this.poleR, 1);
     body.reach(body.armL, this.leftTarget, this.poleL, leftW);
+    if (gripR > 0.01) this.wrapHand(body.armR, model, gripR);
+    if (gripL > 0.01) this.wrapHand(body.armL, off!, gripL);
     this.holdSyringe(s, injectQ, progress);
     this.lastProgress = progress;
     this.lastAction = s.action;
@@ -1291,11 +1341,10 @@ export class PlayerWeapon {
       mixL(this.aimW);
     }
     if (ads > 0.001 && input.eye && input.view) {
-      const o = OFFHAND_ADS;
-      const t = this.time;
-      this.tmpQ.copy(input.view).multiply(FLIP)
-        .multiply(this.e2q(Math.sin(t * 1.1 + 2) * 0.002, o.toe + Math.sin(t * 0.8) * 0.002, -o.roll));
-      this.tmpA.set(...o.at).applyQuaternion(input.view).add(input.eye);
+      // Down the sights: out to the left of the crosshair, level with the right gun (its model is
+      // mirrored in X, which GRIP_AT, on the middle line, doesn't feel).
+      this.twinPose(-1, input, this.recoilL, this.tmpA, this.tmpQ);
+      this.tmpA.sub(_tg.copy(GRIP_AT).applyQuaternion(this.tmpQ));
       mixL(ads);
     }
     if (this.sprintW > 0.001) {
@@ -1321,11 +1370,127 @@ export class PlayerWeapon {
     }
     const r = this.recoilL;
     spring(r, dt);
-    q.multiply(this.tmpQ.setFromEuler(this.e.set(-r.pitch * 0.05 * kickScale, -r.yaw * 0.03, 0)));
-    off.root.position.copy(pos).addScaledVector(this.tmpA.set(0, 0, -1).applyQuaternion(q), r.z * 0.022 * kickScale);
+    const flip = HIP_FLIP * (1 - ads), push = HIP_PUSH * (1 - ads);
+    q.multiply(this.tmpQ.setFromEuler(this.e.set(-r.pitch * flip * kickScale, -r.yaw * 0.03, 0)));
+    off.root.position.copy(pos).addScaledVector(this.tmpA.set(0, 0, -1).applyQuaternion(q), r.z * push * kickScale);
     off.root.quaternion.copy(q);
     off.root.visible = this.shown && !this.hideHeld;
     off.root.updateMatrixWorld(true);
+  }
+
+  /**
+   * Moves `target` (the wrist) so the closed hand lands on the gun's grip (GRIP_AT in HAND_GRIP),
+   * turned as wrapHand will turn it: solved by trying the arm there and correcting, then put back.
+   * `side` +1 left hand, -1 right.
+   */
+  private gripTarget(limb: Limb, gun: WeaponModel, target: THREE.Vector3, pole: THREE.Vector3, w: number, side: 1 | -1): void {
+    _su.copy(limb.upper.quaternion);
+    _sl.copy(limb.lower.quaternion);
+    gun.root.localToWorld(_gg.copy(GRIP_AT));
+    _gt.copy(target);
+    for (let i = 0; i < 3; i++) {
+      this.body.reach(limb, _gt, pole, 1);
+      this.wrapHand(limb, gun, 1);
+      limb.end.localToWorld(_gh.set(-side * HAND_GRIP[0], HAND_GRIP[1], HAND_GRIP[2]));
+      _gt.add(_gh.subVectors(_gg, _gh));
+    }
+    limb.upper.quaternion.copy(_su);
+    limb.lower.quaternion.copy(_sl);
+    limb.upper.updateMatrixWorld(true);
+    target.lerp(_gt, w);
+  }
+
+  /**
+   * Turns the forearm about its own length so the hand's thumb edge runs up the gun's grip
+   * (GRIP_UP): the fingers then wrap round the grip instead of the fist lying flat beside it.
+   */
+  private wrapHand(limb: Limb, gun: WeaponModel, w: number): void {
+    limb.lower.getWorldQuaternion(_wq);
+    limb.end.getWorldPosition(_wa);
+    const f = _wf.subVectors(_wa, limb.lower.getWorldPosition(_wb)).normalize();
+    const z = _wz.set(0, 0, 1).applyQuaternion(_wq);
+    z.addScaledVector(f, -z.dot(f)).normalize();
+    const u = _wu.copy(GRIP_UP).applyQuaternion(gun.root.quaternion);
+    u.addScaledVector(f, -u.dot(f));
+    if (u.lengthSq() < 1e-6) return;
+    u.normalize();
+    const turn = Math.atan2(f.dot(_wb.crossVectors(z, u)), z.dot(u));
+    // The bone's own +Y runs back up the forearm (-f): a turn about f is the opposite turn about it.
+    limb.lower.quaternion.multiply(_wr.setFromAxisAngle(_Y, -turn * w));
+    limb.lower.updateMatrixWorld(true);
+  }
+
+  /**
+   * The pair's first-person feel, once a frame from the camera's own movement: how fast the view
+   * turns and pitches (the guns lag behind and swing back on springs), how fast the eye travels
+   * (stride phase and pace for the bob) and how fast it rises or drops.
+   */
+  private twinMotion(dt: number, input: HandsInput): void {
+    const f = this.feel;
+    if (!input.eye || !input.view || dt <= 0) return;
+    if (!f.primed) {
+      this.lastEye.copy(input.eye);
+      this.lastView.copy(input.view);
+      f.primed = true;
+    }
+    const inv = 1 / Math.max(dt, 1 / 240);
+    _tq.copy(this.lastView).invert().multiply(input.view);
+    _te.setFromQuaternion(_tq, 'YXZ');
+    const clamp = THREE.MathUtils.clamp;
+    const yawRate = clamp(_te.y * inv, -12, 12), pitchRate = clamp(_te.x * inv, -12, 12);
+    _tv.subVectors(input.eye, this.lastEye);
+    const rise = clamp(_tv.y * inv, -6, 6);
+    _tv.y = 0;
+    // Only steps bob: not riding a board, a bike or a seat, and not a teleport (respawn) of metres in a frame.
+    const b = this.body;
+    const pace = b.skate || b.bike || b.seat ? 0 : _tv.length() * inv;
+    f.speed += ((pace > 12 ? 0 : pace) - f.speed) * (1 - Math.exp(-dt * 8));
+    f.phase = (f.phase + dt * f.speed * TWIN_FEEL.bob.stride) % (Math.PI * 4);
+    this.lastEye.copy(input.eye);
+    this.lastView.copy(input.view);
+    const L = TWIN_FEEL.lag;
+    // Turning left (positive yaw) leaves the guns to the right, pointing a little right; looking up leaves them low.
+    const tx = clamp(yawRate * L.x, -L.max, L.max);
+    const ty = clamp(-pitchRate * L.y - rise * TWIN_FEEL.lift, -L.max, L.max);
+    const tyaw = clamp(-yawRate * L.yaw, -L.maxRot, L.maxRot);
+    const tpitch = clamp(pitchRate * L.pitch, -L.maxRot, L.maxRot);
+    // Springs a little under critical damping: the guns overshoot once and settle, like arms do.
+    const subs = Math.min(8, Math.ceil(dt * 240)), h = dt / subs;
+    for (let i = 0; i < subs; i++) {
+      f.vx += (140 * (tx - f.x) - 15 * f.vx) * h; f.x += f.vx * h;
+      f.vy += (140 * (ty - f.y) - 15 * f.vy) * h; f.y += f.vy * h;
+      f.vyaw += (120 * (tyaw - f.yaw) - 14 * f.vyaw) * h; f.yaw += f.vyaw * h;
+      f.vpitch += (120 * (tpitch - f.pitch) - 14 * f.vpitch) * h; f.pitch += f.vpitch * h;
+    }
+  }
+
+  /**
+   * One gun of a pair down the sights (`side` 1 right, -1 left): where its grip goes (world) and
+   * how it is turned, from TWIN_ADS plus the lag, bob, breathing and its own kick (`own`, with a
+   * little of the other gun's).
+   */
+  private twinPose(side: 1 | -1, input: HandsInput, own: typeof this.recoil, pos: THREE.Vector3, q: THREE.Quaternion): void {
+    const f = this.feel, T = TWIN_ADS, B = TWIN_FEEL.bob, Br = TWIN_FEEL.breath, K = TWIN_FEEL.kick;
+    const other = own === this.recoil ? this.recoilL : this.recoil;
+    const r = _tk;
+    r.z = own.z + other.z * K.other;
+    r.pitch = own.pitch + other.pitch * K.other;
+    r.yaw = own.yaw;
+    const t = this.time;
+    const move = THREE.MathUtils.clamp(f.speed / 3.5, 0, 1.3);
+    // Each arm a beat apart, so the two guns never move as one block.
+    const ph = f.phase + (side < 0 ? 0.45 : 0);
+    const still = 1 - 0.7 * Math.min(1, move);
+    const b = t * Br.rate + side * 0.9;
+    const x = side * T.at[0] + f.x + Math.sin(ph) * B.x * move + Math.sin(t * 0.7 + side) * Br.x * still;
+    const y = T.at[1] + f.y - (1 - Math.cos(2 * ph)) * 0.5 * B.y * move + Math.sin(b) * Br.y * still + r.pitch * K.up;
+    const z = T.at[2] + r.z * K.back;
+    // Gun space after FLIP: +X pitch dips the muzzle, +Y yaw swings it to the screen's left, +Z roll leans the top left.
+    const pitch = f.pitch + Math.sin(2 * ph + 0.6) * B.pitch * move + Math.sin(b + 0.5) * Br.pitch * still - r.pitch * K.pitch;
+    const yaw = f.yaw + side * T.toe + Math.sin(ph) * 0.4 * B.roll * move + r.yaw * K.yaw;
+    const roll = side * (T.cant - r.pitch * K.roll) + Math.sin(ph) * B.roll * move;
+    pos.set(x, y, z).applyQuaternion(input.view!).add(input.eye!);
+    q.copy(input.view!).multiply(FLIP).multiply(this.e2q(pitch, yaw, roll));
   }
 
   /** A pair's magazines: each drops free as its muzzle comes up, and the gun is pushed down onto a fresh one at the belt. */
@@ -1411,4 +1576,11 @@ const _lq = new THREE.Quaternion(), _kq = new THREE.Quaternion();
 const _sd = new THREE.Vector3(), _sp = new THREE.Vector3(), _sq = new THREE.Vector3(), _lv = new THREE.Matrix4();
 const _iq = new THREE.Quaternion(), _iw = new THREE.Vector3(), _ie = new THREE.Vector3();
 const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion();
+const _tg = new THREE.Vector3(), _tv = new THREE.Vector3(), _tq = new THREE.Quaternion(), _te = new THREE.Euler();
+const _tk = { z: 0, pitch: 0, yaw: 0 };
+const _gg = new THREE.Vector3(), _gt = new THREE.Vector3(), _gh = new THREE.Vector3(), _su = new THREE.Quaternion(), _sl = new THREE.Quaternion();
+const _wq = new THREE.Quaternion(), _wr = new THREE.Quaternion(), _wa = new THREE.Vector3(), _wb = new THREE.Vector3(), _wf = new THREE.Vector3();
+const _wz = new THREE.Vector3(), _wu = new THREE.Vector3(), _Y = new THREE.Vector3(0, 1, 0);
+/** Hip-fire kick of a pair (rad of muzzle flip and m of push per unit of recoil spring). */
+const HIP_FLIP = 0.38, HIP_PUSH = 0.07;
 const _mv = new THREE.Vector3();

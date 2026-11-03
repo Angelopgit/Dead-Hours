@@ -96,7 +96,17 @@ const HANDGUN_OPTIC: Record<string, string> = { dot: 'mini', holo: 'miniHolo', a
 const opticKey = (id: WeaponId, optic: string) => (isHandgun(id) ? HANDGUN_OPTIC[optic] ?? optic : optic);
 
 /** Sights of a weapon with a build fitted (null for blades), without building its model. */
+/**
+ * A pair down the sights frames both guns either side of the crosshair rather than looking down
+ * one of them, so the view only closes in a little (a 3x prism can't magnify two guns at once).
+ */
+const TWIN_FOV: Record<string, number> = { iron: 58, dot: 56, holo: 55, acog: 50 };
+
 export function sightOf(id: WeaponId, build: WeaponBuild = defaultBuild(id)): Sight | null {
+  if (id === 'akimbo') {
+    const one = sightOf('pistol', { ...defaultBuild('pistol'), optic: build.optic });
+    return one && { ...one, fov: TWIN_FOV[build.optic] ?? TWIN_FOV.iron };
+  }
   const fixed = FIXED_SIGHTS[id];
   if (fixed) return { eye: new THREE.Vector3(...fixed.eye), fov: fixed.fov, optic: fixed.optic };
   const irons = IRONS[id];

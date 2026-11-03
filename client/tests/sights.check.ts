@@ -5,18 +5,22 @@
  * any of the body (hands, sleeves, arms) shows where the sight picture is.
  * Run with `npm run check:sights` (`-- --verbose` lists every case, `-- --map ar` draws what the
  * eye sees for cases matching "ar": # body, = gun, + body in the sight window; `--bones` letters
- * the body by bone, `--pitch -0.6` maps that pitch).
+ * the body by bone, `--pitch -0.6` maps that pitch, `--only akimbo` runs only matching cases).
  *
  * What must stay clear: the sight window in the middle of the screen, everything above the bore
  * line, and the whole lens while looking through a rifle scope (the gun is hidden then, so the
  * hands would be all there is to see). Desktop (16:9) and phone (844x390) screens alike, for men
  * and women, bare hands and bulky gloves and sleeves, looking level, down and up, standing and
  * lying prone (`--prone` runs only the prone cases).
+ *
+ * Akimbo has no one sight to look down: both guns are held out either side of the crosshair. There
+ * the middle of the screen must be clear of guns and hands alike, both guns must be in view at the
+ * same height, and each fist must be closed on its own gun's grip.
  */
 import * as THREE from 'three';
 import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, WEAPONS, buildable, defaultBuild, fitsOf, isHandgun, type Appearance, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
 import { Humanoid, survivorLook } from '../src/characters/Humanoid';
-import { PlayerWeapon, type HeldState } from '../src/weapons/PlayerWeapon';
+import { GRIP_AT, HAND_GRIP, PlayerWeapon, type HeldState } from '../src/weapons/PlayerWeapon';
 import { ThirdPersonCamera } from '../src/gameplay/ThirdPersonCamera';
 import { sightOf, type WeaponModel } from '../src/weapons/WeaponModels';
 import type { Physics } from '../src/core/Physics';
@@ -28,6 +32,8 @@ const mapFilter = args.includes('--map') ? args[args.indexOf('--map') + 1] ?? ''
 const bones = args.includes('--bones');
 const mapPitch = args.includes('--pitch') ? Number(args[args.indexOf('--pitch') + 1]) : 0;
 const proneOnly = args.includes('--prone');
+/** `--only akimbo`: just the cases whose label has this in it. */
+const only = args.includes('--only') ? args[args.indexOf('--only') + 1] ?? '' : '';
 let failures = 0;
 let checks = 0;
 const check = (cond: boolean, msg: string) => {
@@ -57,6 +63,11 @@ const BORE = 0.06;
  * riser the eye sits in fills the sight picture (the guns are drawn double sided).
  */
 const GUN_CLEAR = 0.05;
+/** Akimbo: the crosshair's clear disc (fraction of half the screen height). */
+const TWIN_WINDOW = 0.28;
+/** Akimbo: the two guns' tops this many depth-buffer rows apart at most, and each fist this close to its grip (m). */
+const TWIN_LEVEL = 2;
+const TWIN_GRIP = 0.025;
 /** Depth-buffer rows (columns follow the aspect). */
 const ROWS = 90;
 
@@ -177,7 +188,7 @@ function boneTags(mesh: THREE.SkinnedMesh): Uint8Array {
 }
 /** Map letters per bone (BONE order in rig.ts): hips, spine, head, left arm upper/lower, right arm upper/lower, legs; O the left gun of a pair. */
 const BONE_CH = 'tsHlLrRggggO';
-/** Tag of the left gun of an akimbo pair: it must stay out of the right gun's sight picture like a hand. */
+/** Tag of the left gun of an akimbo pair (drawn with the body: it shows the pair's left gun in the maps). */
 const OFFHAND_TAG = 11;
 
 /** World-space triangle soup of a mesh (skinned meshes posed as they are now). */
@@ -200,8 +211,16 @@ function triangles(mesh: THREE.Mesh): Float32Array {
   return out;
 }
 
-interface Pose { body: Float32Array; tags: Uint8Array; gun: Float32Array[]; offhand: Float32Array[]; scoped: boolean; handgun: boolean; camera: THREE.PerspectiveCamera }
-interface Seen { window: number; above: number; nearest: number; gunAtEye: number; map: string }
+interface Pose {
+  body: Float32Array; tags: Uint8Array; gun: Float32Array[]; offhand: Float32Array[]; scoped: boolean; handgun: boolean; camera: THREE.PerspectiveCamera;
+  /** Akimbo: how far each fist (right, left) is from its gun's grip (m); empty otherwise. */
+  grips: number[];
+}
+interface Seen {
+  window: number; above: number; nearest: number; gunAtEye: number; map: string;
+  /** Akimbo: top row and cell count of each gun in view (right, left). */
+  tops: number[]; cells: number[];
+}
 
 /** Aims for a second and a half at 60 fps (everything settles) and takes the final pose. */
 function aim(c: Case, look: Appearance, pitch: number, prone: boolean): Pose {
@@ -245,7 +264,15 @@ function aim(c: Case, look: Appearance, pitch: number, prone: boolean): Pose {
   // The left gun of a pair counts as an obstruction: only the right gun's sights are looked down.
   const offhand: Float32Array[] = [];
   weapon.offhandModel?.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) offhand.push(triangles(o as THREE.Mesh)); });
-  const pose = { body: triangles(h.mesh), tags: boneTags(h.mesh), gun, offhand, scoped, handgun: isHandgun(c.id), camera: camera.clone() };
+  // A pair: where each closed hand holds against where its gun's grip is.
+  const grips: number[] = [];
+  if (weapon.offhandModel) {
+    for (const [m, arm, side] of [[model(), h.armR, -1], [weapon.offhandModel, h.armL, 1]] as const) {
+      const hand = arm.end.localToWorld(new THREE.Vector3(-side * HAND_GRIP[0], HAND_GRIP[1], HAND_GRIP[2]));
+      grips.push(hand.distanceTo(m.root.localToWorld(GRIP_AT.clone())));
+    }
+  }
+  const pose = { body: triangles(h.mesh), tags: boneTags(h.mesh), gun, offhand, scoped, handgun: isHandgun(c.id), camera: camera.clone(), grips };
   weapon.dispose();
   return pose;
 }
@@ -263,9 +290,10 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
   for (const g of p.offhand) body.draw(g, vp, false, new Uint8Array(g.length / 9).fill(OFFHAND_TAG));
   const gun = new Depth(W, ROWS);
   for (const g of p.gun) gun.draw(g, vp, false);
-  const R = p.scoped ? LENS : WINDOW;
-  const floor = p.handgun ? HANDGUN_FLOOR : -Infinity;
-  const seen: Seen = { window: 0, above: 0, nearest: Infinity, gunAtEye: 0, map: '' };
+  const twin = p.grips.length > 0;
+  const R = p.scoped ? LENS : twin ? TWIN_WINDOW : WINDOW;
+  const floor = p.handgun && !twin ? HANDGUN_FLOOR : -Infinity;
+  const seen: Seen = { window: 0, above: 0, nearest: Infinity, gunAtEye: 0, map: '', tops: [-1, -1], cells: [0, 0] };
   // Depth-buffer z back to metres in front of the eye.
   const n = camera.near, f = camera.far;
   const metres = (z: number) => (2 * n * f) / (f + n - z * (f - n));
@@ -276,13 +304,23 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
       const i = y * W + x;
       const nx = ((x + 0.5) / W) * 2 - 1, ny = ((y + 0.5) / ROWS) * 2 - 1;
       const r = Math.hypot(nx * aspect, ny);
-      const shows = body.z[i] < gun.z[i];
+      // A pair's crosshair is clear of everything: its own guns as much as the hands.
+      const shows = twin ? body.z[i] < Infinity || gun.z[i] < Infinity : body.z[i] < gun.z[i];
       const inWindow = r <= R && ny > floor;
+      if (twin) {
+        const right = gun.z[i] < body.z[i], left = body.z[i] < gun.z[i] && body.tag[i] === OFFHAND_TAG;
+        for (const [k, on] of [[0, right], [1, left]] as const) {
+          if (!on) continue;
+          seen.cells[k]++;
+          seen.tops[k] = Math.max(seen.tops[k], y);
+        }
+      }
       if (shows && inWindow) seen.window++;
       else if (shows && ny > BORE) seen.above++;
       if (shows && (inWindow || ny > BORE)) seen.nearest = Math.min(seen.nearest, r);
       if (r <= R && gun.z[i] < Infinity && metres(gun.z[i]) < GUN_CLEAR) seen.gunAtEye++;
-      if (map) row += shows ? (inWindow || ny > BORE ? '+' : bones ? BONE_CH[body.tag[i]] : '#') : gun.z[i] < Infinity ? '=' : Math.abs(r - R) < 0.03 ? '.' : ' ';
+      const front = body.z[i] < gun.z[i];
+      if (map) row += front ? (shows && (inWindow || ny > BORE) ? '+' : bones ? BONE_CH[body.tag[i]] : '#') : gun.z[i] < Infinity ? (twin && inWindow ? '+' : '=') : Math.abs(r - R) < 0.03 ? '.' : ' ';
     }
     rows.push(row);
   }
@@ -292,10 +330,15 @@ function see(p: Pose, aspect: number, map: boolean): Seen {
 
 console.log('Sight pictures (aiming down the sights, first person)');
 for (const c of CASES) {
+  if (only && !c.label.includes(only)) continue;
   for (const b of BODIES) {
     const stances = [...(proneOnly ? [] : PITCHES.map((pitch) => ({ pitch, prone: false }))), ...PRONE_PITCHES.map((pitch) => ({ pitch, prone: true }))];
     for (const { pitch, prone } of stances) {
       const pose = aim(c, b.look, pitch, prone);
+      if (pose.grips.length) {
+        const where = `${c.label}, ${b.name}, ${prone ? 'prone, ' : ''}pitch ${pitch}`;
+        check(Math.max(...pose.grips) < TWIN_GRIP, `${where}: each fist closed on its own gun's grip (${pose.grips.map((g) => (g * 100).toFixed(1)).join(' / ')} cm off)`);
+      }
       for (const [screen, aspect] of Object.entries(SCREENS)) {
         const drawMap = mapFilter !== null && c.label.includes(mapFilter) && b === BODIES[0] && pitch === mapPitch && screen === 'desktop' && prone === proneOnly;
         const s = see(pose, aspect, drawMap);
@@ -304,6 +347,10 @@ for (const c of CASES) {
         check(s.window === 0, `${where}: ${pose.scoped ? 'scope lens' : 'sight window'} clear of hands and arms${s.window ? ` (${s.window} cells show the body, nearest ${s.nearest.toFixed(2)} from the middle)` : ''}`);
         check(s.above === 0, `${where}: nothing of the body above the gun${s.above ? ` (${s.above} cells)` : ''}`);
         check(s.gunAtEye === 0, `${where}: the eye is clear of the gun's own stock and comb${s.gunAtEye ? ` (${s.gunAtEye} cells of gun within ${GUN_CLEAR * 100} cm)` : ''}`);
+        if (pose.grips.length) {
+          check(Math.min(...s.cells) > 60, `${where}: both guns of the pair in view (${s.cells.join(' / ')} cells)`);
+          check(Math.abs(s.tops[0] - s.tops[1]) <= TWIN_LEVEL, `${where}: the two guns held level (tops on rows ${s.tops.join(' / ')})`);
+        }
       }
     }
   }
