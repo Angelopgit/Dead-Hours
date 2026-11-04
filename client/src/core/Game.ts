@@ -21,7 +21,7 @@ import { setSnowing, weather } from '../environment/Weather';
 import { HOLIDAY } from './Holiday';
 import { weatherUniforms } from '../lighting/WetShader';
 import { LoadingScreen } from '../ui/LoadingScreen';
-import { compileForPost, compileScene, nextFrame, pinPrograms, uploadTextures } from './Preload';
+import { compileForPost, compileScene, keepShaderSources, nextFrame, pinPrograms, uploadTextures } from './Preload';
 
 type State = 'menu' | 'session';
 
@@ -254,6 +254,7 @@ export class Game {
         }
         await nextFrame();
       }
+      keepShaderSources(r, this.engine.scene, this.engine.camera);
       pinPrograms(r);
     } finally {
       treesBack();

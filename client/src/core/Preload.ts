@@ -135,3 +135,51 @@ export function pinPrograms(renderer: THREE.WebGLRenderer): number {
   }
   return n;
 }
+
+/** A never-disposed stand-in for each custom shader seen so far, by its two sources (see keepShaderSources). */
+const keepers = new Map<string, THREE.ShaderMaterial>();
+
+/**
+ * Keeps each custom shader's program findable for the rest of the visit (pinPrograms alone does not). three names a
+ * ShaderMaterial's program by ids it gives the two shader sources, and forgets a source, id and all, once the last
+ * material using it is disposed. So every night's decals, particles, smoke, fire and rings came back with new ids:
+ * their programs compiled again behind the loading screen and the pinned copies from the night before were never
+ * used again (8 more programs every night). A copy of each such material, compiled once on the same object and never
+ * disposed, keeps the ids, and later nights find their programs. Call it once the night's shaders are compiled,
+ * before pinPrograms. Returns how many shaders it started keeping.
+ */
+export function keepShaderSources(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): number {
+  const found: { object: THREE.Mesh; material: THREE.ShaderMaterial; keeper: THREE.ShaderMaterial }[] = [];
+  scene.traverse((o) => {
+    const object = o as THREE.Mesh;
+    const material = object.material as THREE.ShaderMaterial | undefined;
+    if (!material || Array.isArray(material) || !material.isShaderMaterial) return;
+    const key = `${material.vertexShader}\u0000${material.fragmentShader}`;
+    if (keepers.has(key)) return;
+    // Uniforms and userData don't name the program: left out, so the night's textures don't stay alive with it.
+    const { uniforms, userData } = material;
+    material.uniforms = {};
+    material.userData = {};
+    let keeper: THREE.ShaderMaterial;
+    try {
+      keeper = material.clone();
+    } finally {
+      material.uniforms = uniforms;
+      material.userData = userData;
+    }
+    keeper.onBeforeCompile = material.onBeforeCompile;
+    keeper.customProgramCacheKey = material.customProgramCacheKey;
+    keepers.set(key, keeper);
+    found.push({ object, material, keeper });
+  });
+  // On the same object for the same lights and target, the copy asks for the very program the night compiled.
+  for (const f of found) {
+    f.object.material = f.keeper;
+    try {
+      compileForPost(renderer, f.object, camera, scene);
+    } finally {
+      f.object.material = f.material;
+    }
+  }
+  return found.length;
+}
