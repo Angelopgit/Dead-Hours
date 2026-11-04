@@ -484,5 +484,49 @@ console.log('Flesh chunks build without three.js warnings');
   else console.log(`  ok   no warnings; the lump is ${g.attributes.position.count / 3} facets`);
 }
 
+console.log('The opening shot keeps clear of the poles, streetlights and wires');
+{
+  // It flew 0.24 m past the utility pole at x -8 and level with the wires 4 m in front of them: at the start of
+  // every night a pole and thick black bars swept across the screen.
+  const { introTimeline } = await import('../src/gameplay/IntroShot');
+  const { wireCurves } = await import('../src/environment/Wires');
+  const solid: { a: THREE.Vector3; b: THREE.Vector3; r: number; what: string }[] = [];
+  const wires: { a: THREE.Vector3; b: THREE.Vector3; r: number; what: string }[] = [];
+  const lines = new Map<number, { x: number; z: number }[]>();
+  for (const p of map.props) {
+    const at = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyAxisAngle(new THREE.Vector3(0, 1, 0), p.rotY).add(new THREE.Vector3(p.x, p.y ?? 0, p.z));
+    if (p.kind === 'utilityPole') {
+      solid.push({ a: at(0, 0, 0), b: at(0, 9, 0), r: 0.17, what: `the pole at x ${p.x}` }, { a: at(0, 8.45, -1), b: at(0, 8.45, 1), r: 0.1, what: `the crossarm at x ${p.x}` });
+      lines.set(p.variant ?? 0, [...(lines.get(p.variant ?? 0) ?? []), p]);
+    }
+    if (p.kind === 'streetlight') solid.push({ a: at(0, 0, 0), b: at(0, 6.2, 0), r: 0.13, what: `the streetlight at x ${p.x}` }, { a: at(0, 6.05, 0), b: at(0, 6.05, 1.65), r: 0.34, what: `the streetlight head at x ${p.x}` });
+  }
+  for (const curve of [...lines.values()].flatMap((l) => wireCurves(l))) {
+    const pts = curve.getPoints(32);
+    for (let i = 1; i < pts.length; i++) wires.push({ a: pts[i - 1], b: pts[i], r: 0.018, what: `a wire near x ${pts[i].x.toFixed(0)}` });
+  }
+  const cam = { px: 0, py: 0, pz: 0, tx: 0, ty: 0, tz: 0 };
+  const tl = introTimeline(cam, { x: 0, z: -18 }, { opacity: 0 }, () => {}).pause();
+  const seg = new THREE.Line3(), q = new THREE.Vector3(), c = new THREE.Vector3();
+  const nearest = (list: typeof solid) => {
+    let best = { d: Infinity, what: '', t: 0 };
+    // The establishing shot and the start of the glide; the glide then lands in the safehouse's yard on purpose.
+    for (let t = 0; t <= 4.6; t += 0.02) {
+      tl.seek(t);
+      c.set(cam.px, cam.py, cam.pz);
+      for (const o of list) {
+        seg.set(o.a, o.b).closestPointToPoint(c, true, q);
+        const d = q.distanceTo(c) - o.r;
+        if (d < best.d) best = { d, what: o.what, t };
+      }
+    }
+    return best;
+  };
+  const s = nearest(solid), w = nearest(wires);
+  if (s.d < 2) fail(`the opening shot passes ${s.d.toFixed(2)} m from ${s.what} at ${s.t.toFixed(1)} s (keep 2 m)`);
+  else if (w.d < 1.5) fail(`the opening shot passes ${w.d.toFixed(2)} m from ${w.what} at ${w.t.toFixed(1)} s (keep 1.5 m)`);
+  else console.log(`  ok   ${s.d.toFixed(1)} m from the nearest pole or streetlight (${s.what}), ${w.d.toFixed(1)} m from the wires (${solid.length / 2} poles and lights, ${wires.length} wire pieces)`);
+}
+
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
 process.exit(failures ? 1 : 0);

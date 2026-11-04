@@ -4,7 +4,7 @@ import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
 import { LampGlare, patchLens } from './LampGlare';
-import { WIRE_RADIUS, wireMaterial } from './Wires';
+import { WIRE_RADIUS, wireCurves, wireMaterial } from './Wires';
 import { settings } from '../core/Settings';
 import { Kit, jitter, type PropBuildResult, type Surface } from './props/Kit';
 import { INTERIOR } from './props/interior';
@@ -92,7 +92,7 @@ export class PropFactory {
       else this.buildStreetProp(kit, result);
       if (p.kind === 'utilityPole') {
         const line = poles.get(p.variant ?? 0) ?? [];
-        line.push(new THREE.Vector3(p.x, 8.4, p.z));
+        line.push(new THREE.Vector3(p.x, 0, p.z));
         poles.set(p.variant ?? 0, line);
       }
       batch.addObject(root);
@@ -195,18 +195,8 @@ export class PropFactory {
   }
 
   private buildWires(poles: THREE.Vector3[], batch: StaticBatcher): void {
-    poles.sort((a, b) => a.x - b.x);
     const mat = wireMaterial(this.lib);
-    for (let i = 0; i < poles.length - 1; i++) {
-      for (const off of [-0.7, 0, 0.7]) {
-        const a = poles[i].clone().add(new THREE.Vector3(0, 0, off));
-        const b = poles[i + 1].clone().add(new THREE.Vector3(0, 0, off));
-        const mid = a.clone().lerp(b, 0.5);
-        mid.y -= 0.9;
-        const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
-        batch.add(new THREE.TubeGeometry(curve, 16, WIRE_RADIUS, 3, false), mat, false, false);
-      }
-    }
+    for (const curve of wireCurves(poles)) batch.add(new THREE.TubeGeometry(curve, 16, WIRE_RADIUS, 3, false), mat, false, false);
   }
 
   private buildStreetProp(k: Kit, out: PropBuildResult): void {

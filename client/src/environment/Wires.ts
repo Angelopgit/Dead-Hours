@@ -17,6 +17,28 @@ export const WIRE_RADIUS = 0.018;
  */
 export const WIRE_MIN_PX = 0.67;
 
+/** Where the wires leave a pole (its top) and across its crossarm; they sag half of WIRE_DIP midway. */
+export const WIRE_TOP = 8.4;
+export const WIRE_OFFSETS = [-0.7, 0, 0.7];
+/** How far below the two ends each span's curve control point sits. */
+export const WIRE_DIP = 0.9;
+
+/** The wires along one line of poles, pole to pole in order of x. */
+export function wireCurves(poles: { x: number; z: number }[]): THREE.QuadraticBezierCurve3[] {
+  const tops = poles.map((p) => new THREE.Vector3(p.x, WIRE_TOP, p.z)).sort((a, b) => a.x - b.x);
+  const out: THREE.QuadraticBezierCurve3[] = [];
+  for (let i = 0; i < tops.length - 1; i++) {
+    for (const off of WIRE_OFFSETS) {
+      const a = tops[i].clone().add(new THREE.Vector3(0, 0, off));
+      const b = tops[i + 1].clone().add(new THREE.Vector3(0, 0, off));
+      const mid = a.clone().lerp(b, 0.5);
+      mid.y -= WIRE_DIP;
+      out.push(new THREE.QuadraticBezierCurve3(a, mid, b));
+    }
+  }
+  return out;
+}
+
 /** The shared wire material: dark metal, grown in the vertex shader to stay a pixel wide. */
 export function wireMaterial(lib: MaterialLibrary): THREE.MeshStandardMaterial {
   return lib.custom('power-wire', () => {

@@ -65,6 +65,7 @@ import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import { GRASS_TRAMPLERS, trampleGrass, type GrassFoot } from '../environment/Grass';
 import { FirstNight } from './FirstNight';
+import { introTimeline } from './IntroShot';
 
 /**
  * 'loading': built but not yet shown (Game gets it ready behind its loading screen; keys and
@@ -734,19 +735,8 @@ export class GameSession {
     this.phase = 'intro';
     richText(this.skip, this.skipHint());
     this.ui.append(...this.letterbox, this.skip);
-    const c = this.introCam;
-    const p = this.player.position;
-    Object.assign(c, { px: -18, py: 9, pz: 14, tx: 0, ty: 3, tz: -18 });
-    const fade = document.getElementById('fade')!;
-    gsap.set(fade, { opacity: 1 });
     void from;
-    this.intro = gsap.timeline({ onComplete: () => this.finishIntro() })
-      .to(fade, { opacity: 0, duration: 1.4, ease: 'power2.out' }, 0)
-      .to(c, { px: -6, py: 5.5, pz: 6, duration: 4.5, ease: 'sine.inOut' }, 0)
-      .to(c, { tx: 1, ty: 2.2, tz: -15, duration: 4.5, ease: 'sine.inOut' }, 0)
-      .to(c, { px: 2.8, py: 2.1, pz: -11.5, tx: p.x, ty: 1.4, tz: p.z, duration: 2.6, ease: 'power2.inOut' }, 4.2)
-      .to(fade, { opacity: 1, duration: 0.45, ease: 'power1.in' }, 6.4)
-      .to(fade, { opacity: 0, duration: 0.6, ease: 'power1.out' }, 6.95);
+    this.intro = introTimeline(this.introCam, this.player.position, document.getElementById('fade')!, () => this.finishIntro());
     this.engine.camera.fov = 48;
     this.engine.camera.updateProjectionMatrix();
   }
