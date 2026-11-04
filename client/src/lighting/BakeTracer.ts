@@ -1,4 +1,8 @@
-import { isDrivable, propColliders, propOccluders, type MapDefinition, type Rect } from '@dead-hours/shared';
+import type { MapDefinition, Rect } from '@dead-hours/shared';
+// Straight from their modules, not the package's index: the light bake's workers import this
+// file, and the index would bring the physics engine and the whole simulation into them.
+import { isDrivable } from '@dead-hours/shared/src/config/vehicles';
+import { propColliders, propOccluders } from '@dead-hours/shared/src/map/colliders';
 
 /**
  * A small CPU ray tracer over the map's static collision (boxes rotated about Y, plus

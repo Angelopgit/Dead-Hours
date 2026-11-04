@@ -140,7 +140,7 @@ export class OnlineMenu {
     return h('div', { class: 'room-row' },
       h('div', {}, h('b', {}, r.name.toUpperCase()), h('small', {}, `HOST ${r.host.toUpperCase()}, ${r.players}/${r.maxPlayers}, ${state}`)),
       // Only rooms that can be joined get a button.
-      open ? this.button(playing ? 'DROP IN' : 'JOIN', () => void this.join(() => net.client().joinById(r.roomId, joinOptions()))) : h('span', { class: 'room-state' }, r.players >= r.maxPlayers ? 'FULL' : state),
+      open ? this.button(playing ? 'DROP IN' : 'JOIN', () => void this.join(async () => (await net.client()).joinById(r.roomId, joinOptions()))) : h('span', { class: 'room-state' }, r.players >= r.maxPlayers ? 'FULL' : state),
     );
   }
 
@@ -155,7 +155,7 @@ export class OnlineMenu {
       const { roomId } = await net.api<{ roomId: string }>(`/api/code/${code}`).catch((e: unknown) => {
         throw (e as { status?: number })?.status === 404 ? new Error('not found') : e;
       });
-      return net.client().joinById(roomId, joinOptions());
+      return (await net.client()).joinById(roomId, joinOptions());
     });
   }
 
@@ -178,7 +178,7 @@ export class OnlineMenu {
       h('p', {}, `Up to ${GAME.maxPlayers} survivors. You start the night when everyone is in; the zombies are run by the server, so everyone sees the same night.`),
       h('div', { class: 'actions' },
         this.button('BACK', () => { this.view = 'browse'; this.say(''); this.render(); }),
-        this.button('CREATE GAME', () => void this.join(() => net.client().create(ROOMS.survival, { ...joinOptions(), lobbyName: title.value, private: hidden })), 'btn primary'),
+        this.button('CREATE GAME', () => void this.join(async () => (await net.client()).create(ROOMS.survival, { ...joinOptions(), lobbyName: title.value, private: hidden })), 'btn primary'),
       ),
     );
   }

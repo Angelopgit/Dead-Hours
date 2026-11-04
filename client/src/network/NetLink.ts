@@ -130,7 +130,7 @@ export class NetLink {
       const until = now() + RECONNECT_FOR;
       while (!this.left && now() < until) {
         try {
-          const back = await net.client().reconnect(room.reconnectionToken);
+          const back = await (await net.client()).reconnect(room.reconnectionToken);
           if (this.left) {
             void back.leave(true).catch(() => undefined);
             return;

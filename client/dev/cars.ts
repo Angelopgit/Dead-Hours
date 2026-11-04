@@ -36,6 +36,7 @@ const map = NEIGHBORHOOD;
 const at = (kind: string, x: number, z: number) => map.props.findIndex((p) => p.kind === kind && Math.abs(p.x - x) < 0.5 && Math.abs(p.z - z) < 0.5);
 const picks = [at('car', -38, 2.8), at('policeCar', -5.5, 1.6), at('armoredTruck', -113.5, 1.4)];
 const lib = new MaterialLibrary(256, 1);
+lib.paintProcedural();
 const factory = new PropFactory(lib);
 const result: PropBuildResult = { dynamic: [], anchors: [], landmarks: {}, vehicles: [] };
 const kit = new Kit(lib, result);

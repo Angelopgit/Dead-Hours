@@ -1,4 +1,4 @@
-import { Client } from 'colyseus.js';
+import type { Client } from 'colyseus.js';
 
 const configured = (import.meta.env.VITE_SERVER_URL as string | undefined)?.trim().replace(/\/+$/, '');
 
@@ -20,7 +20,7 @@ export class ApiError extends Error {
 
 let status: ServerStatus = HTTP_URL ? 'unknown' : 'offline';
 let checking: Promise<boolean> | null = null;
-let client: Client | null = null;
+let client: Promise<Client> | null = null;
 
 export const net = {
   get status(): ServerStatus {
@@ -47,9 +47,14 @@ export const net = {
     return checking;
   },
 
-  client(): Client {
-    if (!WS_URL) throw new Error('No game server configured');
-    client ??= new Client(WS_URL);
+  /** The matchmaking client; its library loads with the first call (the menu never needs it). */
+  client(): Promise<Client> {
+    if (!WS_URL) return Promise.reject(new Error('No game server configured'));
+    const url = WS_URL;
+    client ??= import('colyseus.js').then((m) => new m.Client(url)).catch((e) => {
+      client = null;
+      throw e;
+    });
     return client;
   },
 

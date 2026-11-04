@@ -49,8 +49,36 @@ export type TextureKey =
   | 'asphalt' | 'sidewalk' | 'concrete' | 'grass' | 'siding' | 'brick' | 'plaster' | 'wood' | 'roof' | 'fence'
   | 'gravel' | 'dirt' | 'tile' | 'carpet' | 'metal';
 
+const TEXTURE_KEYS = [
+  'asphalt', 'sidewalk', 'concrete', 'grass', 'siding', 'brick', 'plaster', 'wood', 'roof', 'fence',
+  'gravel', 'dirt', 'tile', 'carpet', 'metal',
+] as const satisfies readonly TextureKey[];
+
+/**
+ * The detail maps, painted only when something is going to show them: the compressed PBR sets
+ * replace every one of them once they load, and painting all fifteen takes most of a second. The
+ * texture objects exist from the start (materials are built with them); `paint` draws them, always
+ * the same way.
+ */
+export function createTextures(size: number): { textures: Record<TextureKey, THREE.Texture>; paint: (anisotropy: number) => void } {
+  const textures = Object.fromEntries(TEXTURE_KEYS.map((k) => [k, new THREE.Texture()])) as Record<TextureKey, THREE.Texture>;
+  let painted = false;
+  return {
+    textures,
+    paint(anisotropy) {
+      if (painted) return;
+      painted = true;
+      const real = paintTextures(size, anisotropy);
+      for (const k of TEXTURE_KEYS) {
+        textures[k].copy(real[k]);
+        textures[k].needsUpdate = true;
+      }
+    },
+  };
+}
+
 /** Grayscale detail maps: multiplied with the material color so one texture serves many tints. */
-export function createTextures(size: number, anisotropy: number): Record<TextureKey, THREE.Texture> {
+function paintTextures(size: number, anisotropy: number): Record<TextureKey, THREE.Texture> {
   const r = rng(1337);
 
   const asphalt = (() => {

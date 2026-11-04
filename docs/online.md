@@ -32,7 +32,7 @@ Main menu → Play → **Host game** makes a room on the game server: give it a 
 
 ## Deploying
 
-The client is a static site (`npm run build`, publish `client/dist`). The server is a Node process (`npm start`); several can share the games (see Running many games).
+The client is a static site (`npm run build`, publish `client/dist`; its `_headers` file sets long caching for the hashed files on Cloudflare Pages and Netlify, other hosts should do the same for `assets/`). The server is a Node process (`npm start`); several can share the games (see Running many games).
 
 | Variable | Where | What |
 | --- | --- | --- |

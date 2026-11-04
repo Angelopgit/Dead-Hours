@@ -62,11 +62,21 @@ function fnv(str: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
+/** Hands the page back for a moment; resolves with how long the next stretch of work may run (ms). */
+function pause(urgent: boolean): Promise<number> {
+  if (urgent) return new Promise((r) => setTimeout(() => r(30), 0));
+  // Idle moments only: what the frame leaves before the next one is due.
+  if (typeof requestIdleCallback === 'function') return new Promise((r) => requestIdleCallback((d) => r(Math.max(1, d.timeRemaining() - 2))));
+  return new Promise((r) => setTimeout(() => r(4), 32));
+}
+
 /**
  * The zombie navigation grid: loaded from IndexedDB when the map hasn't changed, otherwise
- * built from the collision world in slices so the loading screen keeps animating.
+ * built from the collision world in slices. While `urgent()` is false (the menu is showing) it
+ * works only in the page's idle moments, so the menu keeps its frame rate; once a night waits on
+ * it, it takes longer slices that leave just enough room for a loading screen to animate.
  */
-export async function loadNavGrid(physics: Physics, map: MapDefinition, onProgress: (f: number) => void): Promise<NavGrid> {
+export async function loadNavGrid(physics: Physics, map: MapDefinition, onProgress: (f: number) => void, urgent: () => boolean = () => true): Promise<NavGrid> {
   const { solids, props, doors, excavations, playerSpawns } = map;
   const key = `v${NAV_VERSION}:${fnv(JSON.stringify({ solids, props, doors, excavations, playerSpawns })).toString(16)}`;
   const cached = await get(key);
@@ -74,8 +84,9 @@ export async function loadNavGrid(physics: Physics, map: MapDefinition, onProgre
     onProgress(1);
     return new NavGrid(cached);
   }
-  const it = buildNavGrid(physics, map);
+  let budget = await pause(urgent());
   let last = performance.now();
+  const it = buildNavGrid(physics, map);
   for (;;) {
     const r = it.next();
     if (r.done) {
@@ -84,8 +95,8 @@ export async function loadNavGrid(physics: Physics, map: MapDefinition, onProgre
       return r.value;
     }
     onProgress(r.value);
-    if (performance.now() - last > 30) {
-      await new Promise((res) => setTimeout(res, 0));
+    if (performance.now() - last > budget) {
+      budget = await pause(urgent());
       last = performance.now();
     }
   }

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p . && vite build",
+    "build:single": "tsc -p . && vite build --mode single",
     "preview": "vite preview",
     "typecheck": "tsc -p .",
     "check:audio": "tsx tests/audio.check.ts"

@@ -13,6 +13,7 @@
     "dev:server": "npm run dev -w server",
     "start": "npm start -w server",
     "build": "npm run build -w client",
+    "build:single": "npm run build:single -w client",
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
     "lint": "eslint shared/src shared/tests client/src client/tests client/dev server/src server/tests",
     "check": "node scripts/check-all.mjs",

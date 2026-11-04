@@ -72,6 +72,54 @@ export interface MaterialEntry {
   texScale: number;
 }
 
+const PBR_BASE = `${import.meta.env.BASE_URL}textures/world/`;
+
+async function pbrManifest(): Promise<PbrManifest> {
+  const res = await fetch(`${PBR_BASE}manifest.json`);
+  if (!res.ok) throw new Error(`manifest ${res.status}`);
+  return (await res.json()) as PbrManifest;
+}
+
+/** With no transcoder path, three loads its own copy of the Basis transcoder (a hashed build file, cached for good). */
+function ktx2Loader(renderer: THREE.WebGLRenderer): KTX2Loader {
+  return new KTX2Loader().detectSupport(renderer);
+}
+
+/** Fetches and transcodes these sets' color, normal and packed maps for a quality. */
+async function loadPbrSets(loader: KTX2Loader, manifest: PbrManifest, quality: Quality, keys: TextureKey[]): Promise<(readonly [TextureKey, PbrSet])[]> {
+  const tier = manifest.tiers[quality];
+  const get = async (key: TextureKey, map: 'color' | 'normal' | 'orm', size: number | undefined, srgb: boolean) => {
+    if (!size) return null;
+    const t = await loader.loadAsync(`${PBR_BASE}${key}/${map}_${size}.ktx2?v=${manifest.version}`);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    t.name = `${key}-${map}-${size}`;
+    return t;
+  };
+  return Promise.all(keys.map(async (key) => {
+    const [map, normalMap, orm] = await Promise.all([
+      get(key, 'color', tier.color, true), get(key, 'normal', tier.normal, false), get(key, 'orm', tier.orm, false),
+    ]);
+    return [key, { map: map!, normalMap, orm, colored: !!manifest.sets[key]?.colored }] as const;
+  }));
+}
+
+/** Texture sets started before any library exists (preloadPbr), taken by the first loadPbr of that quality. */
+let early: { quality: Quality; renderer: THREE.WebGLRenderer; loader: KTX2Loader; sets: Promise<(readonly [TextureKey, PbrSet])[]> } | null = null;
+
+/**
+ * Starts downloading and transcoding every PBR set for a quality right away, so the files stream in
+ * while the world is generated rather than after it. The library's loadPbr then picks them up.
+ */
+export function preloadPbr(renderer: THREE.WebGLRenderer, quality: Quality): void {
+  if (early) return;
+  const loader = ktx2Loader(renderer);
+  const sets = pbrManifest().then((m) => loadPbrSets(loader, m, quality, Object.keys(m.sets) as TextureKey[]));
+  // Failures surface (and are handled) in loadPbr.
+  sets.catch(() => undefined);
+  early = { quality, renderer, loader, sets };
+}
+
 /** Central material library. Materials are shared to keep draw state changes low. */
 export class MaterialLibrary {
   readonly textures: Record<TextureKey, THREE.Texture>;
@@ -84,10 +132,12 @@ export class MaterialLibrary {
   private loader: KTX2Loader | null = null;
   private readonly originals = new Map<THREE.MeshStandardMaterial, Original>();
   private anisotropy: number;
+  private readonly procedural: ReturnType<typeof createTextures>;
 
   constructor(textureSize: number, anisotropy: number) {
     this.anisotropy = anisotropy;
-    this.textures = createTextures(textureSize, anisotropy);
+    this.procedural = createTextures(textureSize);
+    this.textures = this.procedural.textures;
     for (const [key, def] of Object.entries(DEFS) as [MaterialKey, MatDef][]) {
       const m = new THREE.MeshStandardMaterial({
         color: def.color,
@@ -152,6 +202,7 @@ export class MaterialLibrary {
     this.pbrQuality = quality;
     const load = this.fetchPbr(renderer, quality).catch((e) => {
       console.warn('PBR textures unavailable, keeping procedural maps:', e);
+      this.paintProcedural();
       return false;
     });
     this.pbrLoad = load;
@@ -159,35 +210,26 @@ export class MaterialLibrary {
   }
 
   private async fetchPbr(renderer: THREE.WebGLRenderer, quality: Quality): Promise<boolean> {
-    const base = `${import.meta.env.BASE_URL}textures/world/`;
-    const res = await fetch(`${base}manifest.json`);
-    if (!res.ok) throw new Error(`manifest ${res.status}`);
-    const manifest = (await res.json()) as PbrManifest;
-    if (!this.loader) {
-      this.loader = new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}basis/`).detectSupport(renderer);
-    }
-    const loader = this.loader;
-    const tier = manifest.tiers[quality];
     const used = new Set<TextureKey>();
     for (const m of this.allStandard()) {
       const key = this.procKey(m);
-      if (key && manifest.sets[key]) used.add(key);
+      if (key) used.add(key);
     }
-    const get = async (key: TextureKey, map: 'color' | 'normal' | 'orm', size: number | undefined, srgb: boolean) => {
-      if (!size) return null;
-      const t = await loader.loadAsync(`${base}${key}/${map}_${size}.ktx2?v=${manifest.version}`);
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.anisotropy = this.anisotropy;
-      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-      t.name = `${key}-${map}-${size}`;
-      return t;
-    };
-    const sets = await Promise.all([...used].map(async (key) => {
-      const [map, normalMap, orm] = await Promise.all([
-        get(key, 'color', tier.color, true), get(key, 'normal', tier.normal, false), get(key, 'orm', tier.orm, false),
-      ]);
-      return [key, { map: map!, normalMap, orm, colored: !!manifest.sets[key]?.colored }] as const;
-    }));
+    // Started before the world was built (preloadPbr): take its sets, drop any this map doesn't use.
+    const pre = early && early.quality === quality && early.renderer === renderer ? early : null;
+    let sets: (readonly [TextureKey, PbrSet])[];
+    if (pre) {
+      early = null;
+      this.loader ??= pre.loader;
+      const all = await pre.sets;
+      sets = all.filter(([key]) => used.has(key));
+      for (const [key, set] of all) if (!used.has(key)) for (const t of [set.map, set.normalMap, set.orm]) t?.dispose();
+    } else {
+      this.loader ??= ktx2Loader(renderer);
+      const manifest = await pbrManifest();
+      sets = await loadPbrSets(this.loader, manifest, quality, [...used].filter((k) => manifest.sets[k]));
+    }
+    for (const [, set] of sets) for (const t of [set.map, set.normalMap, set.orm]) if (t) t.anisotropy = this.anisotropy;
     // A newer quality was asked for while this one loaded: drop this one.
     if (this.pbrQuality !== quality) {
       for (const [, s] of sets) for (const t of [s.map, s.normalMap, s.orm]) t?.dispose();
@@ -198,6 +240,25 @@ export class MaterialLibrary {
     for (const m of this.allStandard()) this.applyPbr(m);
     for (const s of Object.values(old)) for (const t of [s.map, s.normalMap, s.orm]) t?.dispose();
     return true;
+  }
+
+  /** Draws the procedural detail maps (they start blank: the PBR sets normally replace them). */
+  paintProcedural(): void {
+    this.procedural.paint(this.anisotropy);
+  }
+
+  /**
+   * Paints the procedural maps if anything under `root` still shows one (no PBR set for it, or a
+   * material made outside the library): call before compiling or drawing a scene.
+   */
+  paintIfShown(root: THREE.Object3D): void {
+    const procedural = new Set<THREE.Texture>(Object.values(this.textures));
+    let shown = false;
+    root.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      if (!shown && m) for (const mat of Array.isArray(m) ? m : [m]) if (procedural.has((mat as THREE.MeshStandardMaterial).map as THREE.Texture)) shown = true;
+    });
+    if (shown) this.paintProcedural();
   }
 
   /** The procedural texture key a material was built with (null for untextured materials). */

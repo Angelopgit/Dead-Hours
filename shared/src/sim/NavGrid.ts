@@ -517,7 +517,8 @@ export function* buildNavGrid(physics: Physics, map: MapDefinition): Generator<n
           indoor.push(floorsAt[i + 1] === 1);
         }
       }
-      if (iz % 25 === 0) yield (iz / rows) * 0.9;
+      // Every row, so a page can build the grid in short idle moments between frames.
+      yield (iz / rows) * 0.9;
     }
     colStart[cols * rows] = ys.length;
     const n = ys.length;
@@ -549,6 +550,7 @@ export function* buildNavGrid(physics: Physics, map: MapDefinition): Generator<n
           }
         }
       }
+      if (iz % 8 === 0) yield 0.9 + (iz / rows) * 0.05;
     }
     // Diagonals only where both orthogonal steps connect (no corner cutting).
     for (let i = 0; i < n; i++) {

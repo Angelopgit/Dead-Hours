@@ -8,6 +8,7 @@ npm run dev            # client on http://localhost:5173
 npm run dev:server     # game server on http://localhost:2567 (restarts on changes)
 npm start              # game server, as deployed
 npm run build          # production client build into client/dist
+npm run build:single   # the same game as one script and one stylesheet, for a single self-contained page
 npm run typecheck      # shared + client + server
 npm run lint           # ESLint over every workspace's code
 npm run check          # every headless check below, one after another
@@ -32,6 +33,10 @@ Headless checks (run the ones that touch what you changed, `typecheck` and `lint
 Benches: `npm run load -w server` (bot lobbies against real server processes, CPU per lobby count; `SERVERS=3` for several), `npm run bench -w server` (one game's server work without the network), `npm run bench:physics -w server`, `npm run spawns -w server`, `npm run balance -w server` and `npm run balance:guns`.
 
 In development the client finds the server on port 2567 of the same host. A production build needs `VITE_SERVER_URL` (see [online.md](online.md)); without it the online menu items stay disabled and say SERVER OFFLINE, and solo play works as before.
+
+### First load
+
+The page shows the menu before it has everything a night needs. Only the engine, the world, the light bake and the menu are on the way to the menu; the night's code (`GameSession` and what it pulls in) is a separate chunk fetched when the browser is idle or when you press Play, the online client (Colyseus) loads with the first online action, and the navigation grid for the zombies is built in idle time after the menu shows (or at full speed on the loading card if Play comes first). The compressed textures start downloading as soon as the renderer exists, the procedural detail maps are only painted when something would show them, and `client/public/_headers` lets a static host (Cloudflare Pages, Netlify) keep the hashed build files cached for a year. The boot sets `performance` marks `dh:boot`, `dh:world`, `dh:lighting` and `dh:menu`. When timing it headless with SwiftShader, pass `--disable-accelerated-2d-canvas`: software GPU raster of the canvas textures adds seconds that a real GPU doesn't.
 
 ## Layout
 

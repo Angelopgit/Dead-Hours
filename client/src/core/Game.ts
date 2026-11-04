@@ -7,10 +7,11 @@ import { Physics, initPhysics } from './Physics';
 import { loadNavGrid } from './NavLoader';
 import { GRAPHICS_PRESETS, settings } from './Settings';
 import { Neighborhood } from '../environment/Neighborhood';
+import { preloadPbr } from '../rendering/Materials';
 import { DoorSystem } from '../gameplay/Doors';
 import { MenuCinematic } from '../gameplay/MenuCinematic';
 import { VehicleView } from '../gameplay/VehicleView';
-import { GameSession } from '../gameplay/GameSession';
+import type { GameSession } from '../gameplay/GameSession';
 import type { NetLink } from '../network/NetLink';
 import { MainMenu } from '../ui/MainMenu';
 import { audio } from '../audio/AudioEngine';
@@ -25,6 +26,25 @@ import { PadStatus } from '../ui/PadStatus';
 import { compileForPost, compileScene, keepShaderSources, nextFrame, pinPrograms, uploadTextures } from './Preload';
 
 type State = 'menu' | 'session';
+
+/**
+ * The night's code (GameSession and everything only a night uses) is a chunk of its own: the menu
+ * shows without it, and it loads in the background once the menu is up.
+ */
+let sessionCode: Promise<typeof import('../gameplay/GameSession')> | null = null;
+function loadSessionCode(): Promise<typeof import('../gameplay/GameSession')> {
+  sessionCode ??= import('../gameplay/GameSession').catch((e: unknown) => {
+    sessionCode = null;
+    throw e;
+  });
+  return sessionCode;
+}
+
+/** Runs `fn` when the page is idle (soon after, where the browser can't tell). */
+function whenIdle(fn: () => void): void {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => fn(), { timeout: 4000 });
+  else setTimeout(fn, 1500);
+}
 
 /** The loading screen's line for an online night: the room's name. */
 function lobbyCaption(link: NetLink): string {
@@ -50,7 +70,13 @@ export class Game {
   private emittersAdded = false;
   private field!: LightField;
   private exposure!: AutoExposure;
-  private nav!: NavGrid;
+  /** The zombies' navigation grid, made once: in idle moments over the menu, or when a night first needs it. */
+  private nav: NavGrid | null = null;
+  private navLoad: Promise<NavGrid> | null = null;
+  /** Whether the grid may take the page's full attention (a night waits on it) or only idle moments. */
+  private navUrgent = false;
+  private navProgress: (f: number) => void = () => undefined;
+  private SessionClass: typeof GameSession | null = null;
   private flashlight!: Flashlight;
   /** Every drivable vehicle as drawn (parked in the menu, wherever the night takes them). */
   private vehicles!: VehicleView;
@@ -58,13 +84,16 @@ export class Game {
 
   async boot(): Promise<void> {
     const canvas = document.getElementById('viewport') as HTMLCanvasElement;
+    performance.mark('dh:boot');
     await initPhysics();
     this.engine = new Engine(canvas);
+    // The compressed textures download and transcode (off the page) while the world is generated.
+    preloadPbr(this.engine.renderer, settings.value.graphics.textureQuality);
     this.input = new Input(canvas);
     this.physics = new Physics(NEIGHBORHOOD);
     this.world = new Neighborhood(NEIGHBORHOOD, this.engine.scene, this.engine.renderer.capabilities.getMaxAnisotropy());
     this.world.lighting.onThunder = (delay, power) => audio.thunder(delay, power);
-    // Compressed PBR texture sets stream in while the lighting bakes.
+    performance.mark('dh:world');
     const pbr = this.world.lib.loadPbr(this.engine.renderer, settings.value.graphics.textureQuality);
     const label = document.querySelector('.boot');
     let lastLabel = '';
@@ -72,6 +101,7 @@ export class Game {
       const next = `${text} ${Math.round(f * 100)}%`;
       if (label && next !== lastLabel) label.textContent = lastLabel = next;
     });
+    performance.mark('dh:lighting');
     // The vehicles' own meshes and probes (before the environment map is handed out: their paint reflects it).
     this.vehicles = new VehicleView(this.engine.scene, this.world.props.vehicles, this.field);
     this.world.buildEnvironment(this.engine.renderer);
@@ -80,11 +110,6 @@ export class Game {
     this.exposure = new AutoExposure(this.field);
     this.doors = new DoorSystem(NEIGHBORHOOD, this.physics, this.world.root);
     this.doors.applyProbes(this.field);
-    // Zombie navigation is built from the same collision (cached between visits).
-    this.nav = await loadNavGrid(this.physics, NEIGHBORHOOD, (f) => {
-      const next = `MAPPING STREETS ${Math.round(f * 100)}%`;
-      if (label && next !== lastLabel) label.textContent = lastLabel = next;
-    });
     // In the scene from the start (at zero), so turning it on never recompiles materials.
     this.flashlight = new Flashlight(this.engine.scene, this.physics);
     setFlashlight(this.flashlight);
@@ -107,6 +132,8 @@ export class Game {
       this.input.endFrame();
     };
     await pbr;
+    // Procedural maps are drawn only if something still shows one (the PBR sets normally replace them all).
+    this.world.lib.paintIfShown(this.engine.scene);
     this.holidaySnow();
     // Warm up shader compilation before the first visible frame.
     this.menuCine.update(0.016);
@@ -119,10 +146,31 @@ export class Game {
     this.menu.show(this.ui);
     // Button hints under the menus and a note when a controller comes or goes, on every screen from here on.
     new PadStatus(this.ui);
+    performance.mark('dh:menu');
+    // What a night needs and the menu doesn't, got ready while the menu is up: the night's code,
+    // then the zombies' navigation (from the cache, or built in idle moments between frames).
+    whenIdle(() => {
+      void loadSessionCode().catch(() => undefined);
+      void this.navGrid();
+    });
     if (import.meta.env.DEV) {
       Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
       if (new URLSearchParams(location.search).has('trailer')) void this.startTrailer();
     }
+  }
+
+  /**
+   * The navigation grid, loaded or built once. Over the menu it is built only in idle moments
+   * between frames; `urgent` (a night is waiting on it) gives it the page until it is done.
+   */
+  private navGrid(urgent = false, onProgress?: (f: number) => void): Promise<NavGrid> {
+    if (urgent) this.navUrgent = true;
+    if (onProgress) this.navProgress = onProgress;
+    this.navLoad ??= loadNavGrid(this.physics, NEIGHBORHOOD, (f) => this.navProgress(f), () => this.navUrgent).then((nav) => (this.nav = nav), (e: unknown) => {
+      this.navLoad = null;
+      throw e;
+    });
+    return this.navLoad;
   }
 
   /**
@@ -207,6 +255,11 @@ export class Game {
       screen.step('night', 0);
       await nextFrame();
       if (stop()) return 'stopped';
+      // The night's code and the zombies' navigation, if the menu hasn't finished getting them.
+      this.SessionClass ??= (await loadSessionCode()).GameSession;
+      await this.navGrid(true, (f) => screen.step('night', f * 0.5));
+      this.navProgress = () => undefined;
+      if (stop()) return 'stopped';
       session = make();
       screen.step('night', 1);
       try {
@@ -243,6 +296,7 @@ export class Game {
     try {
       if (stop()) return;
       const r = this.engine.renderer;
+      this.world.lib.paintIfShown(this.engine.scene);
       await compileScene(r, this.engine.scene, this.engine.camera, this.engine.scene, (f) => screen.step('shaders', f), stop);
       if (stop()) return;
       await uploadTextures(r, this.engine.scene, (f) => screen.step('textures', f), stop);
@@ -274,7 +328,8 @@ export class Game {
   }
 
   private createSession(pose: { position: THREE.Vector3; target: THREE.Vector3 }, skipIntro: boolean, online?: { link: NetLink; begin: BeginMsg }, trailer?: { seed: number }): GameSession {
-    return new GameSession(
+    if (!this.SessionClass || !this.nav) throw new Error('the night\'s code or navigation is not loaded');
+    return new this.SessionClass(
       this.engine, this.input, this.physics, this.doors, this.vehicles, this.field, this.nav, this.ui,
       () => void this.quitToMenu(), () => void this.retry(), pose,
       { skipIntro, online, onLobby: online ? () => void this.backToLobby() : undefined, trailer: !!trailer, seed: trailer?.seed },

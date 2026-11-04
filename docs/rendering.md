@@ -2,7 +2,7 @@
 
 ## Baked lighting
 
-Static lighting is baked in the browser on first load and cached in IndexedDB (about 3 seconds on a laptop, instant afterwards). A small BVH ray tracer over the map's boxes computes, per vertex and for a 512² ground lightmap:
+Static lighting is baked in the browser on first load and cached in IndexedDB (a few seconds on a laptop, instant afterwards). The bake runs on Web Workers, one per core up to eight (`client/src/lighting/BakePool.ts`, kernels in `BakeKernels.ts`), and falls back to short slices on the page where workers can't start; both give exactly the same light. A small BVH ray tracer over the map's boxes computes, per vertex and for a 512² ground lightmap:
 
 - ambient occlusion (cosine-weighted hemisphere rays),
 - direct light from every static lamp with ray-traced shadows (same falloff as Three.js physical lights),

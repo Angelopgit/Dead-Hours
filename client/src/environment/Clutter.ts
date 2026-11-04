@@ -19,10 +19,44 @@ const BOOK_COLORS = [0x5a1e1a, 0x1e3a5a, 0x2e4a2a, 0x6a5a3a, 0x3a2a4a, 0x8a7a5a]
 
 interface Spot { x: number; y: number; z: number }
 
+/** Largest margin `clear` is asked for: the buckets below are padded by it. */
+const MAX_MARGIN = 0.1;
+
+/**
+ * Items bucketed by the 4 m cells their footprint touches, so a point asks only the few nearby
+ * instead of the whole map. Lookups return a superset of what can contain the point; the exact
+ * tests stay with the caller, so results are the same as scanning everything.
+ */
+class Buckets<T> {
+  private static readonly CELL = 4;
+  private readonly cells = new Map<number, T[]>();
+  private static key(ix: number, iz: number): number {
+    return (ix + 4096) * 8192 + (iz + 4096);
+  }
+  add(item: T, x0: number, z0: number, x1: number, z1: number): void {
+    const c = Buckets.CELL, pad = 0.01;
+    for (let ix = Math.floor((x0 - pad) / c); ix <= Math.floor((x1 + pad) / c); ix++) {
+      for (let iz = Math.floor((z0 - pad) / c); iz <= Math.floor((z1 + pad) / c); iz++) {
+        const k = Buckets.key(ix, iz);
+        let list = this.cells.get(k);
+        if (!list) this.cells.set(k, (list = []));
+        list.push(item);
+      }
+    }
+  }
+  at(x: number, z: number): readonly T[] {
+    return this.cells.get(Buckets.key(Math.floor(x / Buckets.CELL), Math.floor(z / Buckets.CELL))) ?? [];
+  }
+}
+
 export class Clutter {
   private readonly r = rng(9173);
   private readonly blockers: OrientedBox[] = [];
   private readonly colliding: StaticBox[];
+  /** Solids that can be stood on, collidable solids and prop colliders, by where they are. */
+  private readonly floorsNear = new Buckets<StaticBox>();
+  private readonly collidingNear = new Buckets<StaticBox>();
+  private readonly blockersNear = new Buckets<OrientedBox>();
   private readonly paint: THREE.MeshStandardMaterial;
   private readonly paper: THREE.MeshStandardMaterial;
   private readonly glass: THREE.MeshStandardMaterial;
@@ -34,6 +68,19 @@ export class Clutter {
   constructor(private readonly map: MapDefinition, lib: MaterialLibrary, private readonly batch: StaticBatcher, private readonly density: number) {
     for (const p of map.props) if (!p.forest) this.blockers.push(...propColliders(p));
     this.colliding = map.solids.filter((s) => s.collide !== false);
+    for (const s of map.solids) {
+      if (s.mat === 'invisible' || s.rotX || s.rotZ) continue;
+      // Thin non-colliding overlays (road asphalt, tiled floors) are still what the pieces lie on.
+      if (s.collide === false && s.h > 0.05) continue;
+      this.floorsNear.add(s, s.x - s.w / 2, s.z - s.d / 2, s.x + s.w / 2, s.z + s.d / 2);
+    }
+    for (const s of this.colliding) {
+      this.collidingNear.add(s, s.x - s.w / 2 - MAX_MARGIN, s.z - s.d / 2 - MAX_MARGIN, s.x + s.w / 2 + MAX_MARGIN, s.z + s.d / 2 + MAX_MARGIN);
+    }
+    for (const b of this.blockers) {
+      const r = Math.hypot(b.hx + MAX_MARGIN, b.hz + MAX_MARGIN);
+      this.blockersNear.add(b, b.x - r, b.z - r, b.x + r, b.z + r);
+    }
     const make = (id: string, o: THREE.MeshStandardMaterialParameters) =>
       lib.custom(id, () => new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, ...o }));
     this.paint = make('clutter-paint', { roughness: 0.92, side: THREE.DoubleSide });
@@ -55,10 +102,7 @@ export class Clutter {
   /** Top of the walkable surface under (x, z) at or below `maxY` (the lawn is y = 0). */
   private surface(x: number, z: number, maxY: number, minY = -10): number {
     let best = minY <= 0 && maxY >= 0 ? 0 : -Infinity;
-    for (const s of this.map.solids) {
-      if (s.mat === 'invisible' || s.rotX || s.rotZ) continue;
-      // Thin non-colliding overlays (road asphalt, tiled floors) are still what the pieces lie on.
-      if (s.collide === false && s.h > 0.05) continue;
+    for (const s of this.floorsNear.at(x, z)) {
       if (Math.abs(x - s.x) > s.w / 2 || Math.abs(z - s.z) > s.d / 2) continue;
       const top = s.y + s.h / 2;
       if (top <= maxY + 0.02 && top >= minY && top > best) best = top;
@@ -68,12 +112,13 @@ export class Clutter {
 
   /** Nothing solid in the first 1.2 m above the spot (walls, counters, furniture, cars). */
   private clear(x: number, y: number, z: number, margin = 0.08): boolean {
-    for (const s of this.colliding) {
+    const near = margin <= MAX_MARGIN;
+    for (const s of near ? this.collidingNear.at(x, z) : this.colliding) {
       const bottom = s.y - s.h / 2, top = s.y + s.h / 2;
       if (top <= y + 0.03 || bottom > y + 1.2) continue;
       if (Math.abs(x - s.x) < s.w / 2 + margin && Math.abs(z - s.z) < s.d / 2 + margin) return false;
     }
-    for (const b of this.blockers) {
+    for (const b of near ? this.blockersNear.at(x, z) : this.blockers) {
       if (b.y + b.hy <= y || b.y - b.hy > y + 1.2) continue;
       const dx = x - b.x, dz = z - b.z;
       const c = Math.cos(b.rotY), s = Math.sin(b.rotY);

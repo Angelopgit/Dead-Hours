@@ -14,6 +14,11 @@
 - Moving the mouse or touching the screen hands control back, and any button or a firm push on a stick takes it again. A button held when a menu closes no longer acts in play.
 - Chat from the pause menu with the on-screen keyboard in online nights.
 
+### Loading
+
+- The game opens to the menu about twice as fast on a first visit. The lighting is worked out on every core of your computer instead of one, and what only a night needs (its code and the zombies' paths) is got ready while you are on the menu. The online client loads when you first go online.
+- The page downloads less than half as much script before the menu, and a host that reads `_headers` keeps the files cached between visits.
+
 ## 0.5.0 (2026-11-04)
 
 ### A night with a point
