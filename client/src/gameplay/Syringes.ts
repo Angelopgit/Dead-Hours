@@ -218,6 +218,8 @@ export class SyringePickups {
     const model = new SyringeModel(kind);
     model.setCap(true);
     const r = model.root;
+    // Lying indoors under a roof and a couple of centimetres thick: no moon shadow to see (five shadow draws saved each).
+    r.traverse((o) => { o.castShadow = false; });
     // Lying flat (the flange too), lifted by the thumb rest's radius.
     r.position.set(at.x, at.y + 0.013 * SCALE, at.z);
     r.rotation.set(0, yaw, 0);

@@ -87,7 +87,8 @@ export class Door {
       for (const py of [0.55, 1.55]) for (const side of [-1, 1]) panels.push(new THREE.BoxGeometry(spec.w * 0.7, 0.7, 0.02).translate(spec.w / 2, py, side * (thickness / 2 + 0.005)));
       flat(parts(panels, panel));
       const knob = mat(0x8d7a4a, 0.3, 0.9);
-      parts([-1, 1].map((side) => new THREE.SphereGeometry(0.035, 8, 6).translate(spec.w - 0.12, 1.0, side * 0.06)), knob);
+      // Knobs cast no moon shadow: 7 cm across, a texel or two of shadow on the door at most (a draw per door saved).
+      parts([-1, 1].map((side) => new THREE.SphereGeometry(0.035, 8, 6).translate(spec.w - 0.12, 1.0, side * 0.06)), knob).castShadow = false;
     } else if (style === 'glass') {
       const frame = mat(0x2a2c2e, 0.45, 0.6);
       const fw = 0.08;

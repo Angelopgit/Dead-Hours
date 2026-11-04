@@ -445,10 +445,12 @@ console.log('A door is a few draws, not one per part');
   const most = { wood: 3, glass: 4, rollup: 3 };
   let total = 0, shadow = 0, worst = '';
   for (const d of doors.doors) {
-    let n = 0;
-    d.pivot.traverse((o) => { if ((o as THREE.Mesh).isMesh) { n++; total++; if (o.castShadow) shadow++; } });
+    let n = 0, cast = 0;
+    d.pivot.traverse((o) => { if ((o as THREE.Mesh).isMesh) { n++; total++; if (o.castShadow) { shadow++; cast++; } } });
     const style = d.spec.style ?? 'wood';
     if (n > most[style] && !worst) worst = `a ${style} door takes ${n} draws`;
+    // The knobs are too small to show a moon shadow: a wooden door's shadow is the slab and its panels.
+    if (style === 'wood' && cast > 2) worst ||= `a wooden door casts ${cast} shadow draws (its knobs should cast none)`;
     if (style === 'rollup') {
       const panel = d.pivot.children.find((c) => !(c as THREE.Mesh).isMesh);
       if (!panel || panel.children.length !== 3) worst ||= 'the garage door\'s slats, seams and handle should be the three meshes on its sliding panel';
@@ -463,7 +465,7 @@ console.log('A door is a few draws, not one per part');
     }
   }
   if (worst) fail(worst);
-  else console.log(`  ok   ${doors.doors.length} doors: ${total} draws and ${shadow} shadow draws (was 336 and 335), panels on the leaf's damage map`);
+  else console.log(`  ok   ${doors.doors.length} doors: ${total} draws and ${shadow} shadow draws (was 336 and 335), knobs cast no shadow, panels on the leaf's damage map`);
 }
 
 console.log('Flesh chunks build without three.js warnings');
