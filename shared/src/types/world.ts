@@ -38,7 +38,7 @@ export interface StaticBox {
   collide?: boolean;
   /** Defaults to true. */
   visible?: boolean;
-  /** Window glass: blocks movement but lets baked light through. Breakable in Phase 6. */
+  /** Window glass: blocks movement but lets baked light through, until shots or zombies break it. */
   glass?: boolean;
   /** Tilt for ramps (stairs collision), radians about the X or Z axis. */
   rotX?: number;
@@ -79,7 +79,7 @@ export interface HouseSpec {
   label?: string;
 }
 
-/** A window opening. Glass is a collider until it breaks (barricading arrives in Phase 6). */
+/** A window opening. Glass is a collider until it breaks. */
 export interface WindowSpec {
   id: string;
   houseId: string;
@@ -148,7 +148,7 @@ export interface PropSpec {
   flag?: boolean;
   /** Signs: text painted on the face. */
   text?: string;
-  /** Can be picked up and placed as a barricade (Phase 6). */
+  /** Furniture light enough to drag (marked on the map; nothing moves it yet). */
   movable?: boolean;
   /** Stairs: rise over the run (along local +X). */
   rise?: number;

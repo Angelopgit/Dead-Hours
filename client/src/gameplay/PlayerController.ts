@@ -93,7 +93,7 @@ export interface Pillion {
 /**
  * Locally simulated third-person character on Rapier's kinematic character controller.
  * Runs at the physics fixed rate; the visual is interpolated between fixed steps.
- * In Phase 4 the same step function drives client-side prediction against server state.
+ * Online it runs the same way and the server checks the result (speed, walls, map bounds).
  */
 export class PlayerController {
   readonly character: Humanoid;

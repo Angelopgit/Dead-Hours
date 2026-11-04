@@ -276,7 +276,7 @@ function cone(d: Vec3, deg: number, rand: () => number): Vec3 {
 /**
  * Authoritative combat and survival simulation: players' weapons and health, zombies, noise,
  * interactables and the phase clock. Runs at the physics rate; the caller steps the Rapier
- * world after each step. Solo play runs it in the browser, the Phase 4 room on the server.
+ * world after each step. Solo play runs it in the browser, online rooms on the server.
  */
 export class Simulation {
   readonly physics: Physics;
@@ -2223,7 +2223,7 @@ export class Simulation {
     return this.phase === 'survival' && inLull(this.lull, this.phaseTime);
   }
 
-  /** Target population for the basic spawner (the Phase 5 director replaces this). */
+  /** Target population for the spawner. */
   get populationTarget(): number {
     if (this.phase !== 'survival') return 0;
     const solo = SPAWNING.basePopulation + (SPAWNING.growthPerMinute * this.threatTime) / 60;

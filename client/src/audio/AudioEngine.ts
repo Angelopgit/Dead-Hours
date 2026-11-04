@@ -199,7 +199,7 @@ export class AudioEngine {
   /** The lamp buzzes and hazard clicks (see Emitters.ts); `on` while connected. */
   private readonly spatial: { panner: PannerNode; gain: GainNode; level: () => number; pos: THREE.Vector3; at: THREE.Vector3; on: boolean }[] = [];
   private unsub: (() => void) | null = null;
-  /** 0..1 musical tension, driven by the survival director from Phase 5. */
+  /** 0..1 musical tension (stays 0 until something drives it). */
   tension = 0;
 
   /**

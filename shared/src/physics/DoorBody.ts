@@ -15,7 +15,7 @@ const OPEN_GROUPS = groups(GROUP.dynamic, 0xffff & ~GROUP.zombie);
 /**
  * The physical part of an exterior door: a kinematic leaf that characters collide with,
  * its open/closed state and how hard zombies have pounded on it. The client wraps it with
- * the visible leaf; the server (Phase 4) runs the same object.
+ * the visible leaf; the server runs the same object.
  */
 export class DoorBody {
   readonly body: RAPIER.RigidBody;
@@ -30,7 +30,7 @@ export class DoorBody {
   /** Outward normal of the wall the door sits in. */
   readonly normal: { x: number; z: number };
   readonly thickness: number;
-  /** Accumulated pounding, 0..1. The door bursts open at 1 (barricades extend this in Phase 6). */
+  /** Accumulated pounding, 0..1. The door bursts open at 1. */
   strain = 0;
   /** A wooden leaf: rounds go through it and blows knock pieces out of it (see DOOR_WOOD). */
   readonly wooden: boolean;

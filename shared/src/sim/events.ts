@@ -19,7 +19,7 @@ export interface PelletTrace {
 
 /**
  * Everything observable that happened during a simulation step. The solo client renders these
- * directly; in Phase 4 the server broadcasts them to every client.
+ * directly; online the server broadcasts them to every client.
  */
 export type SimEvent =
   | { type: 'phase'; phase: SimPhase }

@@ -14,9 +14,9 @@ let plainWood: THREE.DataTexture | null = null;
 
 /**
  * Exterior doors of enterable buildings. Each leaf is a kinematic Rapier body so the
- * character controller (and later zombies) collide with it while it moves. Hinged doors
+ * character controller and zombies collide with it while it moves. Hinged doors
  * swing away from whoever opens them; roll-up garage doors slide up into the header.
- * Barricading/reinforcement attaches to these in Phase 6.
+ * Boards nailed across them are drawn by BarricadeView.
  */
 const tmp = new THREE.Vector3();
 

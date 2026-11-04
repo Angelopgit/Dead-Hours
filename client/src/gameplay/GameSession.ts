@@ -1567,7 +1567,7 @@ export class GameSession {
     this.handleInteraction(dt);
   }
 
-  /** Intents for this fixed step (the Phase 4 client sends these as messages). */
+  /** Intents for this fixed step (online they go to the server as messages). */
   private sendIntents(step: number): void {
     const sim = this.sim;
     if (!this.me.up) return;

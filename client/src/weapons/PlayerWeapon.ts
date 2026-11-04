@@ -442,8 +442,8 @@ const seg = (p: number, a: number, b: number) => THREE.MathUtils.clamp((p - a) /
 /**
  * Third-person weapon handling for one character: places the held weapon from the aim,
  * ready, sprint, reload, draw, melee and bandage poses, adds recoil, and puts both wrists on
- * it with IK. Holstered weapons ride on the back, thigh and hip. Used for the local player
- * now and for remote players and AI teammates in Phase 4.
+ * it with IK. Holstered weapons ride on the back, thigh and hip. Used for the local player,
+ * the other survivors online and the van raiders.
  */
 export class PlayerWeapon {
   private readonly models = new Map<WeaponId, WeaponModel>();

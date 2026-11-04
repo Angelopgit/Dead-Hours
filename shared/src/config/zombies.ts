@@ -33,7 +33,7 @@ export interface ZombieDef {
  * Zombie types. Walkers are most of the dead; runners sprint once they spot someone (still
  * slower than a sprinting survivor); brutes are slow, take a magazine to put down, hit hard
  * and break doors in a few blows. Crawlers are legless walkers dragging themselves along (any zombie
- * whose leg is shot off becomes one; the Phase 5 director can also spawn them). Screamers are
+ * whose leg is shot off becomes one). Screamers are
  * frail and quick, and stop to call the dead down on whoever they see; bloaters are slow, swollen
  * and burst when killed (see SPECIALS).
  */
@@ -112,7 +112,7 @@ export const SPECIALS = {
   },
 } as const;
 
-/** Survival tuning that Phase 5's director will replace with a full escalation model. */
+/** Spawner tuning: how many of the dead are out at once, and how that grows over a night. */
 export const SPAWNING = {
   /**
    * Population when the outbreak starts, and how it grows (for one survivor). Kept low on purpose:
