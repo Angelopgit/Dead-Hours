@@ -107,7 +107,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     stats: { damage: 0.4, fireRate: 0.8, handling: 0.6, range: 0.4 },
   },
   machete: {
-    id: 'machete', name: 'Machete', model: 'Machete', slot: 'melee',
+    id: 'machete', name: 'Machete', model: 'MACHETE', slot: 'melee',
     description: 'Silent. Never runs out of ammunition.',
     damage: 55, pellets: 1, fireRate: 80, magazine: 0, startReserve: 0, reloadTime: 0,
     hipSpread: 0, aimSpread: 0, recoil: 0, range: 2, auto: false,

@@ -237,5 +237,13 @@ check(none === null, 'nothing near: full speed');
     wrong.length ? wrong.join('; ') : 'lifetime time survived reads hours past the first (274:20:54, not 16460:54); runs stay mm:ss');
 }
 
+// A weapon's model is its label in the HUD strip, prompts, notices and the feed, all in capitals. The machete's
+// read "Machete" beside "M4A1" and "M17" ("LEFT THE Machete BEHIND").
+{
+  const { WEAPONS } = await import('@dead-hours/shared');
+  const mixed = Object.values(WEAPONS).filter((w) => w.model !== w.model.toUpperCase()).map((w) => `${w.id} "${w.model}"`);
+  check(!mixed.length, mixed.length ? `weapon labels not in capitals: ${mixed.join(', ')}` : `all ${Object.keys(WEAPONS).length} weapon labels are in capitals, as the HUD shows them`);
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);
