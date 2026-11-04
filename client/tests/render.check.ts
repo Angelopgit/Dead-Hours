@@ -12,6 +12,7 @@ import { VolumeBatch } from '../src/effects/Volume';
 import { Flames } from '../src/effects/Flames';
 import { Casings } from '../src/effects/Casings';
 import { WoodDebris } from '../src/effects/WoodDebris';
+import { patchWire, WIRE_MIN_PX, WIRE_RADIUS } from '../src/environment/Wires';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -176,6 +177,39 @@ console.log('Empty effect pools send nothing to the GPU and are not drawn');
   }
   if (bad) fail(bad);
   else ok(`${pools.map((p) => p.name).join(', ')}: not drawn and nothing sent while empty, drawn with only the live slots sent once something is in them`);
+}
+
+console.log('Power lines stay at least a pixel wide');
+{
+  // 3.6 cm wires went under a pixel 10 to 20 m out and broke into dotted trails against the sky.
+  let bad = '';
+  const mat = new THREE.MeshStandardMaterial({ flatShading: true });
+  const plainKey = mat.customProgramCacheKey();
+  patchWire(mat, WIRE_RADIUS);
+  const src = THREE.ShaderLib.physical;
+  const shader = { vertexShader: src.vertexShader, fragmentShader: src.fragmentShader, uniforms: THREE.UniformsUtils.clone(src.uniforms) } as unknown as THREE.WebGLProgramParametersWithUniforms;
+  mat.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+  const vs = shader.vertexShader;
+  const at = vs.indexOf('#include <project_vertex>');
+  const grow = vs.indexOf('mvPosition.xyz += normalize(transformedNormal) * grow;');
+  if (!vs.includes('uniform float uWirePx;') || !('uWirePx' in shader.uniforms)) bad ||= 'the wire shader has no pixel-size uniform';
+  else if (at < 0 || grow < at || !vs.slice(grow).includes('gl_Position = projectionMatrix * mvPosition;')) bad ||= 'the wire is not grown after project_vertex (three renamed the chunk?)';
+  else if (vs.indexOf('#include <defaultnormal_vertex>') < 0 || vs.indexOf('#include <defaultnormal_vertex>') > at) bad ||= 'transformedNormal is not set before the wire grows';
+  else if (mat.customProgramCacheKey() === plainKey) bad ||= 'the wire program shares its cache key with plain standard materials';
+  // The pixel size follows the camera and viewport that draw it (the phone's 540 rows, a 70 degree view).
+  const cam = new THREE.PerspectiveCamera(70, 16 / 9, 0.1, 500);
+  const renderer = { getCurrentViewport: (v: THREE.Vector4) => v.set(0, 0, 960, 540) } as unknown as THREE.WebGLRenderer;
+  mat.onBeforeRender(renderer, new THREE.Scene(), cam, new THREE.BufferGeometry(), new THREE.Mesh(), null);
+  const px = (shader.uniforms.uWirePx as { value: number }).value;
+  const want = (2 * Math.tan((35 * Math.PI) / 180)) / 540;
+  if (Math.abs(px - want) > want * 1e-6) bad ||= `uWirePx is ${px}, not ${want} radians per pixel`;
+  // A 3-sided tube is at least 1.5 corner radii across, so the smallest radius drawn must give a pixel.
+  if (1.5 * WIRE_MIN_PX < 1) bad ||= `a ${WIRE_MIN_PX} px radius draws a 3-sided wire under a pixel wide`;
+  const props = readFileSync(new URL('../src/environment/Props.ts', import.meta.url), 'utf8');
+  if (!/wireMaterial\(this\.lib\)/.test(props) || !/TubeGeometry\(curve, \d+, WIRE_RADIUS, 3,/.test(props)) bad ||= 'Props.buildWires no longer uses the pixel-wide wire material and radius';
+  const near = WIRE_RADIUS / (WIRE_MIN_PX * want);
+  if (bad) fail(bad);
+  else ok(`grown to ${WIRE_MIN_PX} px radius past ${near.toFixed(0)} m on a phone (${(near * 2).toFixed(0)} m at 1080p), untouched closer`);
 }
 
 if (failures) {
