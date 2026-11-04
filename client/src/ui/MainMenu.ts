@@ -106,7 +106,7 @@ export class MainMenu {
     this.el = h('div', { class: HOLIDAY ? 'menu holiday' : 'menu' },
       h('div', { class: 'menu-shade' }),
       this.main,
-      h('div', { class: 'menu-footer' }, 'BUILD 0.4.1 — MAPLE HOLLOW'),
+      h('div', { class: 'menu-footer' }, `BUILD ${GAME.version} — MAPLE HOLLOW`),
       h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'TOUCH CONTROLS ON · PLAY SIDEWAYS'), 'HEADPHONES RECOMMENDED'),
     );
     window.addEventListener('keydown', this.onKey);
@@ -245,10 +245,12 @@ export class MainMenu {
     return h('div', { class: 'panel credits' },
       h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closePanel(); } }, 'CLOSE ✕'),
       h('h2', {}, 'CREDITS'),
-      h('p', { class: 'role' }, 'Design'), h('p', {}, 'Angelo'),
-      h('p', { class: 'role' }, 'Engineering, art & audio'), h('p', {}, 'Built with Claude Code'),
-      h('p', { class: 'role' }, 'Technology'), h('p', {}, 'Three.js · Rapier · Colyseus · GSAP · Vite · TypeScript'),
-      h('p', { class: 'role' }, 'Audio'), h('p', {}, 'All sound and music is synthesized live with the Web Audio API.'),
+      h('p', { class: 'role' }, 'A game by'), h('p', {}, 'Angelo'),
+      h('p', { class: 'role' }, 'Recorded sound'), h('p', {},
+        'Gunshots, hits and the flashlight click from Freesound (CC0): DledeSOUND, michorvath, kyles, mrrap4food, areniporgen, kvgarlic, '
+        + 'ajhartman42295, u1769092, nebulasnails, magnuswaker, Pablobd, janbezouska, realgtro. Reloads from The Free '
+        + 'Firearm Sound Library (CC0). Everything else is synthesized in the browser.'),
+      h('p', { class: 'role' }, 'Built with'), h('p', {}, 'Three.js · Rapier · Colyseus · GSAP · Vite · TypeScript'),
       h('p', { class: 'role' }, 'Typefaces'), h('p', {}, 'Oswald (Vernon Adams) · Inter (Rasmus Andersson), SIL Open Font License'),
     );
   }

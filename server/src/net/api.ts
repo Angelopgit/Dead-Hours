@@ -8,8 +8,6 @@ import { MAX_ROOMS, forwarded, localGames } from './scale';
 import { cleanAppearance, cleanBuildsWire, cleanName, cleanPrimary } from './clean';
 import { accountView, authProviders, exchange, logout, ownerFor } from './auth';
 
-const VERSION = '0.4.1';
-
 /** The game is played from another address (the static site): every route allows any origin. */
 function cors(res: ServerResponse): void {
   res.setHeader('access-control-allow-origin', '*');
@@ -109,7 +107,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const path = url.pathname;
   if (path === '/health') {
     // Also this process's games against its cap, for load tests and dashboards.
-    send(res, 200, { ok: true, version: VERSION, store: services.store?.kind ?? null, games: localGames(), maxGames: MAX_ROOMS, forwarded: forwarded() });
+    send(res, 200, { ok: true, version: GAME.version, store: services.store?.kind ?? null, games: localGames(), maxGames: MAX_ROOMS, forwarded: forwarded() });
     return true;
   }
   if (!path.startsWith('/api/')) return false;
