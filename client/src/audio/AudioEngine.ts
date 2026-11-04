@@ -10,6 +10,7 @@ import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordingBytes, tri
 import { ShotVoices } from './ShotVoices';
 import { RECORDED_FILES } from './recordedFiles';
 import { weather } from '../environment/Weather';
+import { EMITTER, emitterOn, type EmitterKind } from './Emitters';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 /** Guns voiced by another's sounds: the akimbo pair is two M17s. */
@@ -195,7 +196,8 @@ export class AudioEngine {
   private nextAmbientEvent = 0;
   private nextPulse = 0;
   private time = 0;
-  private readonly spatial: { panner: PannerNode; gain: GainNode; level: () => number; pos: THREE.Vector3; at: THREE.Vector3 }[] = [];
+  /** The lamp buzzes and hazard clicks (see Emitters.ts); `on` while connected. */
+  private readonly spatial: { panner: PannerNode; gain: GainNode; level: () => number; pos: THREE.Vector3; at: THREE.Vector3; on: boolean }[] = [];
   private unsub: (() => void) | null = null;
   /** 0..1 musical tension, driven by the survival director from Phase 5. */
   tension = 0;
@@ -821,11 +823,12 @@ export class AudioEngine {
   }
 
   /** Persistent spatial emitters (streetlight buzz, car hazard tick). */
-  addEmitter(kind: 'buzz' | 'alarm', position: THREE.Vector3, level: () => number): void {
+  addEmitter(kind: EmitterKind, position: THREE.Vector3, level: () => number): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const panner = this.makePanner(position);
-    panner.refDistance = kind === 'buzz' ? 1.5 : 2;
+    panner.refDistance = EMITTER[kind].refDistance;
+    panner.rolloffFactor = EMITTER.rolloff;
     const gain = ctx.createGain();
     gain.gain.value = 0;
     gain.connect(panner).connect(this.ambient);
@@ -838,7 +841,7 @@ export class AudioEngine {
       bp.frequency.value = 2400;
       bp.Q.value = 3;
       const og = ctx.createGain();
-      og.gain.value = 0.05;
+      og.gain.value = EMITTER.buzz.gain;
       o.connect(bp).connect(og).connect(gain);
       o.start();
     } else {
@@ -850,11 +853,11 @@ export class AudioEngine {
       hp.type = 'highpass';
       hp.frequency.value = 2000;
       const og = ctx.createGain();
-      og.gain.value = 0.04;
+      og.gain.value = EMITTER.alarm.gain;
       o.connect(hp).connect(og).connect(gain);
       o.start();
     }
-    this.spatial.push({ panner, gain, level, pos: position, at: position.clone() });
+    this.spatial.push({ panner, gain, level, pos: position, at: position.clone(), on: true });
   }
 
   update(dt: number, camera: THREE.Camera): void {
@@ -884,6 +887,21 @@ export class AudioEngine {
       }
     }
     for (const s of this.spatial) {
+      // Out of earshot a chain is cut off, so the audio thread stops working its panner (Emitters.ts).
+      const on = emitterOn(s.on, s.pos.distanceToSquared(p));
+      if (on !== s.on) {
+        s.on = on;
+        if (on) {
+          s.gain.gain.cancelScheduledValues(ctx.currentTime);
+          s.gain.gain.setValueAtTime(0, ctx.currentTime);
+          s.gain.connect(s.panner);
+          s.panner.connect(this.ambient);
+        } else {
+          s.gain.disconnect();
+          s.panner.disconnect();
+        }
+      }
+      if (!on) continue;
       s.gain.gain.setTargetAtTime(s.level(), ctx.currentTime, 0.015);
       // One on something that moves (a car with its hazards on) follows it.
       if (s.at.distanceToSquared(s.pos) > 0.01) {

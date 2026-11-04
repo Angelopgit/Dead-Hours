@@ -22,6 +22,7 @@ import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupReco
 import { RELOAD_STEPS, dueCues, reloadTimeline } from '../src/weapons/reloadScript';
 import { AKIMBO_TIMES } from '../src/weapons/PlayerWeapon';
 import { MAX_SHOTS, PER_GUN, RESPACE, RESPACE_MAX, ShotVoices, type ShotVoice } from '../src/audio/ShotVoices';
+import { EMITTER, emitterGain, emitterOn } from '../src/audio/Emitters';
 
 const SR = 44100;
 let failures = 0;
@@ -372,6 +373,42 @@ else ok('the Free Firearm Sound Library (reloads) credited in the README');
   const engine = readFileSync(new URL('../src/audio/AudioEngine.ts', import.meta.url), 'utf8');
   if (/L\.(position|forward|up)[XYZ]\.(setTargetAtTime|linearRampToValueAtTime|exponentialRampToValueAtTime)/.test(engine)) fail('AudioEngine automates the listener: set its values directly');
   else if (failures === before) ok('the listener is set directly, never automated');
+}
+
+console.log('Lamp buzzes and hazard clicks');
+{
+  // The 19 of them each ran an HRTF panner all game, heard or not (about 5% of a core); now one is cut off past
+  // EMITTER.off and joined again within EMITTER.on.
+  const before = failures;
+  const db = (g: number) => 20 * Math.log10(g);
+  for (const kind of ['buzz', 'alarm'] as const) {
+    const far = db(emitterGain(kind, EMITTER.off)), near = db(emitterGain(kind, 3));
+    if (far > -55) fail(`a ${kind} is cut off ${EMITTER.off} m away while still at ${far.toFixed(1)} dB`);
+    if (near < -40) fail(`a ${kind} 3 m away is only ${near.toFixed(1)} dB`);
+  }
+  // Out to 80 m and back: off once past `off`, on again once within `on`.
+  let on = true, flips = 0, offAt = NaN, onAt = NaN;
+  for (let i = 0; i <= 1600; i++) {
+    const d = i <= 800 ? i * 0.1 : (1600 - i) * 0.1;
+    const now = emitterOn(on, d * d);
+    if (now !== on) { flips++; if (now) onAt = d; else offAt = d; }
+    on = now;
+  }
+  if (flips !== 2 || !(offAt >= EMITTER.off) || !(onAt < EMITTER.on)) fail(`walking out and back switched ${flips} times (off at ${offAt}, on at ${onAt})`);
+  // Standing near the edge, swaying 1.5 m either way, it settles and stays.
+  for (const edge of [EMITTER.on, EMITTER.off]) {
+    let state = emitterOn(true, edge * edge), n = 0;
+    for (let i = 0; i < 600; i++) {
+      const d = edge + 1.5 * Math.sin(i * 0.3);
+      const now = emitterOn(state, d * d);
+      if (now !== state) n++;
+      state = now;
+    }
+    if (n > 1) fail(`swaying round ${edge} m switched it ${n} times`);
+  }
+  const engine = readFileSync(new URL('../src/audio/AudioEngine.ts', import.meta.url), 'utf8');
+  if (!/emitterOn\(s\.on,/.test(engine) || !/s\.gain\.disconnect\(\);\s*s\.panner\.disconnect\(\);/.test(engine)) fail('AudioEngine.update no longer cuts far emitters off the graph');
+  if (failures === before) ok(`cut off past ${EMITTER.off} m (buzz ${db(emitterGain('buzz', EMITTER.off)).toFixed(0)} dB there, ${db(emitterGain('buzz', 3)).toFixed(0)} dB at 3 m), back within ${EMITTER.on} m, no flapping at the edge`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL AUDIO CHECKS PASSED');
