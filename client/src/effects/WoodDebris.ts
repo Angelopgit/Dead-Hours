@@ -124,8 +124,15 @@ export class WoodDebris {
       this.mesh.setColorAt(i, c.color);
     }
     this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    if (n === 0) return;
+    // Only the live slots go to the GPU, not the whole pool.
+    const color = this.mesh.instanceColor;
+    for (const [a, size] of [[this.mesh.instanceMatrix, 16], [color, 3]] as const) {
+      if (!a) continue;
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, n * size);
+      a.needsUpdate = true;
+    }
   }
 
   private readonly tmpS = new THREE.Vector3();

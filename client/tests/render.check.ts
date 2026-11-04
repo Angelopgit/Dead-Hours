@@ -7,6 +7,11 @@ import * as THREE from 'three';
 import { FrameGate } from '../src/core/FrameGate';
 import { LIGHT_LOOP_PATCHED } from '../src/rendering/LightLoop';
 import { keepShaderSources } from '../src/core/Preload';
+import { ParticleBatch } from '../src/effects/Particles';
+import { VolumeBatch } from '../src/effects/Volume';
+import { Flames } from '../src/effects/Flames';
+import { Casings } from '../src/effects/Casings';
+import { WoodDebris } from '../src/effects/WoodDebris';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -107,6 +112,62 @@ console.log('Custom shaders keep their programs from night to night');
   else if (!restored) fail("the night's own material, uniforms and userData should be back on the object");
   else if (again !== 0 || compiled.length) fail(`a later night kept ${again} more and compiled ${compiled.length}`);
   else ok('one copy per shader, compiled on an object that uses it; the night keeps its own material; later nights add none');
+}
+
+console.log('Empty effect pools send nothing to the GPU');
+{
+  // three reads an update range of length 0 as "to the end of the array" (WebGL's bufferSubData), so a pool with
+  // nothing live re-sent its whole buffer every frame: about 350 KB a frame on a quiet night, all of it unused.
+  const instanced = (root: THREE.Object3D) => {
+    const out: { name: string; a: THREE.BufferAttribute }[] = [];
+    root.traverse((o) => {
+      const m = o as THREE.InstancedMesh;
+      if (!m.isMesh) return;
+      for (const [name, a] of Object.entries(m.geometry.attributes)) if ((a as THREE.InstancedBufferAttribute).isInstancedBufferAttribute) out.push({ name, a: a as THREE.BufferAttribute });
+      if (m.isInstancedMesh) {
+        out.push({ name: 'instanceMatrix', a: m.instanceMatrix });
+        if (m.instanceColor) out.push({ name: 'instanceColor', a: m.instanceColor });
+      }
+    });
+    return out;
+  };
+  const v3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+  const particles = new ParticleBatch(300, false), volume = new VolumeBatch(200, false), flames = new Flames(300, 24);
+  const casings = new Casings(40), wood = new WoodDebris(40);
+  const cam = new THREE.PerspectiveCamera();
+  let lit = false;
+  const pools: { name: string; root: THREE.Object3D; step: () => void; add: () => void; live: number }[] = [
+    { name: 'particles', root: particles.mesh, step: () => particles.update(1 / 60), live: 1,
+      add: () => particles.emit({ x: 0, y: 1, z: 0, vx: 0, vy: 0, vz: 0, life: 2, size: 0.1, r: 1, g: 1, b: 1, alpha: 1 }) },
+    { name: 'smoke', root: volume.mesh, step: () => volume.update(1 / 60, cam), live: 1,
+      add: () => volume.emit({ x: 0, y: 1, z: 0, vx: 0, vy: 0, vz: 0, life: 2, size: 0.5, size1: 1 }) },
+    { name: 'flames', root: flames.root, step: () => { flames.begin(); if (lit) flames.flame(0, 0, 0, 0.3, 0.6, 1, 1, 1); flames.end(1 / 60); }, live: 1,
+      add: () => { lit = true; } },
+    { name: 'casings', root: casings.mesh, step: () => casings.update(1 / 60), live: 1,
+      add: () => casings.eject(v3(0, 1, 0), v3(1, 0, 0), 0, false, v3()) },
+    { name: 'wood debris', root: wood.mesh, step: () => wood.update(1 / 60), live: 2,
+      add: () => wood.burst(v3(0, 1, 0), v3(1, 0, 0), v3(0, 0, 1), 0.2, 0.2, 2) },
+  ];
+  let bad = '';
+  for (const pool of pools) {
+    const attrs = instanced(pool.root);
+    const before = attrs.map(({ a }) => a.version);
+    for (let i = 0; i < 3; i++) pool.step();
+    const sent = attrs.filter(({ a }, i) => a.version !== before[i]).map(({ name }) => name);
+    if (!attrs.length) bad ||= `found no instanced buffers on the ${pool.name}`;
+    else if (sent.length) bad ||= `the empty ${pool.name} pool flagged ${sent.join(', ')} for upload`;
+    pool.add();
+    pool.step();
+    // With something live, the update covers just the live slots, never an open-ended range.
+    for (const { name, a } of attrs) {
+      if (a.version === before[attrs.findIndex((x) => x.a === a)]) continue;
+      const r = a.updateRanges;
+      if (r.length !== 1 || r[0].start !== 0 || r[0].count !== pool.live * a.itemSize) bad ||= `the ${pool.name} pool's ${name} sends ${JSON.stringify(r)}, not its ${pool.live} live slot(s)`;
+    }
+    if (attrs.every(({ a }, i) => a.version === before[i])) bad ||= `the ${pool.name} pool sent nothing with something live in it`;
+  }
+  if (bad) fail(bad);
+  else ok(`${pools.map((p) => p.name).join(', ')}: nothing sent while empty, only the live slots once something is in them`);
 }
 
 if (failures) {

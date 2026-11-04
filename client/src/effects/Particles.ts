@@ -239,6 +239,8 @@ export class ParticleBatch {
     }
     const g = this.geometry;
     g.instanceCount = n;
+    // Nothing to send when empty: a zero-length update range would make three upload the whole pool.
+    if (n === 0) return;
     for (const name of ['iPos', 'iVel', 'iColor', 'iParams']) {
       const a = g.getAttribute(name) as THREE.InstancedBufferAttribute;
       a.clearUpdateRanges();

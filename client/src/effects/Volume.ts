@@ -283,6 +283,8 @@ export class VolumeBatch {
     }
     const g = this.geometry;
     g.instanceCount = n;
+    // Nothing to send when empty: a zero-length update range would make three upload the whole pool.
+    if (n === 0) return;
     for (const name of ['a0', 'a1', 'a2', 'a3']) {
       const a = g.getAttribute(name) as THREE.InstancedBufferAttribute;
       a.clearUpdateRanges();

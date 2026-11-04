@@ -201,6 +201,8 @@ export class Flames {
     for (const [b, n] of [[this.flames, this.n], [this.glows, this.g]] as const) {
       b.mat.uniforms.uTime.value += dt;
       b.geo.instanceCount = n;
+      // Nothing to send when empty: a zero-length update range would make three upload the whole pool.
+      if (n === 0) continue;
       for (const name of ['a0', 'a1']) {
         const a = b.geo.getAttribute(name) as THREE.InstancedBufferAttribute;
         a.clearUpdateRanges();
