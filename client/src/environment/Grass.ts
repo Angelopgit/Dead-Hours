@@ -472,6 +472,8 @@ export class Grass {
     sentinel.receiveShadow = true;
     sentinel.raycast = () => {};
     this.root.add(sentinel);
+    // The one live field, for the module's shared wind and trample helpers.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     current = this;
   }
 

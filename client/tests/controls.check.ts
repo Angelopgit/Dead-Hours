@@ -167,7 +167,7 @@ check(none === null, 'nothing near: full speed');
   // size at the bottom of a band. `node client/dev/menu-sweep.cjs` measures it in a browser.
   const bands = [...css.matchAll(/@media \(min-width: 601px\) and \(min-height: (\d+)px\)[^{]*\{/g)].map((m) => {
     let depth = 1, i = m.index + m[0].length;
-    while (depth && i < css.length) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0, i++;
+    while (depth && i < css.length) { depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0; i++; }
     const body = css.slice(m.index + m[0].length, i - 1);
     const fit = (sel: string) => Number(body.match(new RegExp(`(?:^|[\\n}])\\s*${sel.replace(/\./g, '\\.')}\\s*\\{\\s*--menu-fit:\\s*(\\d+);`))?.[1]);
     const top = Number(m[0].match(/max-height: (\d+)px/)?.[1] ?? Infinity);
@@ -215,7 +215,7 @@ check(none === null, 'nothing near: full speed');
   const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
   const blockWith = (rule: RegExp) => [...css.matchAll(/@media \(max-(height|width): (\d+)px\) \{/g)].map((m) => {
     let depth = 1, i = m.index + m[0].length;
-    while (depth && i < css.length) depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0, i++;
+    while (depth && i < css.length) { depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0; i++; }
     return { side: m[1], px: Number(m[2]), body: css.slice(m.index + m[0].length, i - 1) };
   }).filter((b) => rule.test(b.body));
   const compact = blockWith(/\.results \.title \{ font-size: 2\.4em; \}/);

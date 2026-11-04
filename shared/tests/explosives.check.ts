@@ -101,7 +101,6 @@ section('Flight');
   check(Math.abs(f.pos.y - THROWABLES.frag.radius - g) < 0.06, `lies on the ground (${(f.pos.y - g).toFixed(3)} m above it)`);
   // Thrown at the safehouse wall from close by: it does not pass through.
   const sim = fresh();
-  const p = sim.players.get('p1')!;
   const wallZ = (() => {
     const d = physics.raycast(STREET.x, STREET.y + 1.2, STREET.z, 0, 0, -1, 40);
     return d === null ? null : STREET.z - d;

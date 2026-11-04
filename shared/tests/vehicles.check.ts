@@ -9,7 +9,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, createDoorBodies, buildNavGrid, Simulation, Mirror, captureSnapshot, packDrive, unpackDrive,
-  VEHICLE, VEHICLES, DRIVE_FLAG, RAPIER, driveStep, hullShape, hullY, isDrivable, vehicleKindOf, seatWorld, outsideBy, groups, GROUP,
+  VEHICLE, VEHICLES, DRIVE_FLAG, RAPIER, driveStep, hullY, isDrivable, vehicleKindOf, seatWorld, outsideBy, groups, GROUP,
   type DriveBody, type DriveInput, type SimEvent, type NavGrid, type Vec3, type Vehicle, type SimPlayer,
 } from '../src/index';
 
@@ -105,7 +105,7 @@ section('Which props drive');
   check(sim.vehicles.list.length === drivable.length && drivable.length >= 6 && drivable.length <= all.length / 2, `only some of the ${all.length} cars, cruisers, wrecks and trucks drive (${drivable.length}, the ones the map marks)`);
   const elm = drivable.filter((p) => Math.abs(p.z) < 30).length;
   const oak = drivable.filter((p) => p.z > 75 && p.z < 112 && p.x > -55).length;
-  check(elm >= 2 && oak >= 2, `a few on each street (Elm ${elm}, Oak ${oak})`);
+  check(elm >= 2 && oak >= 2, `a few on each street (Hale ${elm}, Kinney ${oak})`);
   check(map.props.filter((p) => p.kind === 'wreckedCar').every((p) => vehicleKindOf(p) === null && vehicleKindOf({ ...p, drive: false }) === null), 'every wreck stays parked');
   check(overturned.length > 0 && overturned.every((p) => vehicleKindOf({ ...p, drive: true }) === null), `wrecks on their roofs never drive, even marked (${overturned.length})`);
   check(sim.vehicles.list.some((v) => v.kind === 'truck') && sim.vehicles.list.some((v) => v.kind === 'police') && sim.vehicles.list.some((v) => v.kind === 'car'), 'cars, cruisers and the armored truck are all there');

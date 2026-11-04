@@ -1,0 +1,13 @@
+Copyright (c) 2026 Angelo. All rights reserved.
+
+The source code, art, level data and text of Dead Hours are not licensed for reuse,
+redistribution or modification without written permission. You may read the code
+and run the game locally for your own use.
+
+Third-party parts keep their own licenses:
+
+- Libraries in package.json (Three.js, Rapier, Colyseus, GSAP, Vite and others):
+  see each package's license in node_modules.
+- Typefaces (Big Shoulders Display, Barlow Semi Condensed, Special Elite):
+  SIL Open Font License 1.1.
+- Recorded sounds and music: CC0, credited in README.md under Credits > Sound.

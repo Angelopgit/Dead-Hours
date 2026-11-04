@@ -10,7 +10,7 @@
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, createDoorBodies, buildNavGrid, Simulation, Mirror, captureSnapshot, packMotion, unpackMotion,
-  BICYCLE, NAV_INDOOR, PLAYER, outsideBy, rng, type SimEvent, type NavGrid, type Vec3,
+  BICYCLE, NAV_INDOOR, outsideBy, rng, type SimEvent, type NavGrid, type Vec3,
 } from '../src/index';
 
 let failures = 0;

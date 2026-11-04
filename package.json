@@ -14,6 +14,8 @@
     "start": "npm start -w server",
     "build": "npm run build -w client",
     "typecheck": "npm run typecheck -w shared && npm run typecheck -w client && npm run typecheck -w server",
+    "lint": "eslint shared/src shared/tests client/src client/tests client/dev server/src server/tests",
+    "check": "node scripts/check-all.mjs",
     "check:world": "tsx client/tests/world.check.ts",
     "check:houses": "tsx client/tests/houses.check.ts",
     "check:grass": "tsx client/tests/grass.check.ts",
@@ -38,5 +40,10 @@
     "trailer:cut": "node client/tools/trailer/assemble.mjs",
     "textures": "node client/tools/textures/generate.mjs && node client/tools/textures/encode.mjs",
     "textures:cc0": "node client/tools/textures/generate.mjs && node client/tools/textures/fetch-cc0.mjs && node client/tools/textures/encode.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "typescript-eslint": "8.71.2"
   }
 }
