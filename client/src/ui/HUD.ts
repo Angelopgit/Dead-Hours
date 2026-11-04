@@ -1,5 +1,6 @@
 import gsap from 'gsap';
 import { h } from './dom';
+import { pad } from './clock';
 import { actionLabel, inputDevice } from '../core/Input';
 import { settings, type Action } from '../core/Settings';
 
@@ -47,8 +48,7 @@ interface BoostChip {
   shown: string;
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
-export const clock = (s: number) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
+export { clock } from './clock';
 
 /**
  * In-game HUD: vitals, weapon panel (model, magazine / reserve, fire mode, reload progress),

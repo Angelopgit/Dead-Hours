@@ -226,5 +226,16 @@ check(none === null, 'nothing near: full speed');
     `the results stats keep three columns down to ${(two[0]?.px ?? 0) + 1} px wide (half-screen laptop windows)`);
 }
 
+// The survivor tab's lifetime TIME SURVIVED was a run clock in minutes: 274 hours read "16460:54". Totals past an
+// hour read h:mm:ss now; a single run still reads mm:ss.
+{
+  const { clock, longClock } = await import('../src/ui/clock');
+  const cases: [number, string][] = [[0, '00:00'], [754, '12:34'], [3599, '59:59'], [3600, '1:00:00'], [5025, '1:23:45'], [987654, '274:20:54']];
+  const wrong = cases.filter(([s, want]) => longClock(s) !== want).map(([s, want]) => `${s} s read ${longClock(s)}, not ${want}`);
+  const board = readFileSync(new URL('../src/ui/LeaderboardPanel.ts', import.meta.url), 'utf8');
+  check(!wrong.length && clock(3599) === '59:59' && /stat\('TIME SURVIVED', longClock\(/.test(board),
+    wrong.length ? wrong.join('; ') : 'lifetime time survived reads hours past the first (274:20:54, not 16460:54); runs stay mm:ss');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

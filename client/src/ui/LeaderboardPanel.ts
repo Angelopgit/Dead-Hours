@@ -1,5 +1,5 @@
 import { h } from './dom';
-import { clock } from './HUD';
+import { clock, longClock } from './clock';
 import { audio } from '../audio/AudioEngine';
 import { net } from '../network/Net';
 import { account, type Provider } from '../network/Account';
@@ -122,7 +122,7 @@ export class LeaderboardPanel {
             stat('KILLS', String(p.stats.kills)),
             stat('HEADSHOTS', String(p.stats.headshots)),
             stat('ARMS TORN OFF', String(p.stats.limbsSevered)),
-            stat('TIME SURVIVED', clock(p.stats.timeSurvived)),
+            stat('TIME SURVIVED', longClock(p.stats.timeSurvived)),
             stat('SURVIVAL PLACE', p.rankSurvival ? `#${p.rankSurvival}` : '—'),
             stat('KILLS PLACE', p.rankKills ? `#${p.rankKills}` : '—'),
           ))
