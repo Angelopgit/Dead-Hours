@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { rng } from '@dead-hours/shared';
 import { GROUP, groups, type Physics } from '../core/Physics';
 
 /**
@@ -57,17 +58,6 @@ const smooth = (x: number, a: number, b: number) => {
   return t * t * (3 - 2 * t);
 };
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-function rng(seed: number): () => number {
-  let s = seed >>> 0 || 1;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** Where a landed canopy lies: the direction it fell (world yaw), how much room it had, its ground. */
 interface Layout {
@@ -144,7 +134,7 @@ export class Parachute {
   private readonly v3 = new THREE.Vector3();
 
   constructor(readonly seed: number) {
-    const rand = rng(seed * 2654435761);
+    const rand = rng((seed * 2654435761) >>> 0 || 1);
     for (let i = 0; i < GORES; i++) this.jitter[i] = rand();
     for (let i = 0; i < this.ph.length; i++) this.ph[i] = rand() * Math.PI * 2;
     this.spin = this.ph[7];
@@ -454,7 +444,7 @@ export class Parachute {
   lay(at: { x: number; y: number; z: number }, inYaw: number, crateYaw: number, fall: number, physics: Physics | null): void {
     if (this.layout) return;
     this.landSpin = this.spinAt(fall);
-    const rand = rng(this.seed * 40503 + 17);
+    const rand = rng((this.seed * 40503 + 17) >>> 0 || 1);
     const base = inYaw + (rand() - 0.5) * 0.3;
     const tries = [0, Math.PI, 0.45, -0.45, Math.PI - 0.45, Math.PI + 0.45, 0.9, -0.9, Math.PI - 0.9, Math.PI + 0.9, Math.PI / 2, -Math.PI / 2];
     let yaw = base, room = -1;

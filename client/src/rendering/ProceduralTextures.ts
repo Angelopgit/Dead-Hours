@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { rng } from '@dead-hours/shared';
 
 /**
  * Small procedural textures generated on a canvas at startup. They add surface breakup
@@ -9,16 +10,6 @@ function canvas(size: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   return [c, c.getContext('2d')!];
-}
-
-function mulberry(seed: number) {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 function speckle(ctx: CanvasRenderingContext2D, size: number, count: number, alpha: number, r: () => number, light = false) {
@@ -60,7 +51,7 @@ export type TextureKey =
 
 /** Grayscale detail maps: multiplied with the material color so one texture serves many tints. */
 export function createTextures(size: number, anisotropy: number): Record<TextureKey, THREE.Texture> {
-  const r = mulberry(1337);
+  const r = rng(1337);
 
   const asphalt = (() => {
     const [c, x] = canvas(size);

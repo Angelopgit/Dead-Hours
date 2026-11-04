@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { MapDefinition } from '@dead-hours/shared';
+import { rng, type MapDefinition } from '@dead-hours/shared';
 import { bakeUniforms } from '../lighting/BakeShader';
 import { weatherUniforms } from '../lighting/WetShader';
 import type { GrassQuality } from '../core/Settings';
@@ -65,17 +65,6 @@ let current: Grass | null = null;
 /** The night's survivors, zombies and bodies in the grass this frame (nearest the camera first). */
 export function trampleGrass(feet: readonly GrassFoot[], count = feet.length): void {
   current?.setTramplers(feet, count);
-}
-
-/** Small deterministic generator (the same lawns for everyone in a room). */
-function rng(seed: number): () => number {
-  let s = seed | 0;
-  return () => {
-    s = (s + 0x6d2b79f5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 const VERTEX_PARS = /* glsl */ `

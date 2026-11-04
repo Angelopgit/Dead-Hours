@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { propColliders, type MapDefinition, type OrientedBox, type StaticBox } from '@dead-hours/shared';
+import { propColliders, rng, type MapDefinition, type OrientedBox, type StaticBox } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 
@@ -16,17 +16,6 @@ const LEAF_COLORS = [0x6b3f1c, 0x7d5222, 0x5a3418, 0x8a5a24, 0x4a3a1c, 0x6e2a16,
 const PAPER_COLORS = [0xa8a496, 0x9a947f, 0xb0aa9a, 0x8c897e, 0xa49b78];
 const CAN_COLORS = [0x8c1d18, 0x9aa0a6, 0x1d3f8c, 0x2a5a2a, 0xc0a020];
 const BOOK_COLORS = [0x5a1e1a, 0x1e3a5a, 0x2e4a2a, 0x6a5a3a, 0x3a2a4a, 0x8a7a5a];
-
-/** Small deterministic generator (the same clutter for everyone in a room). */
-function rng(seed: number): () => number {
-  let s = seed | 0;
-  return () => {
-    s = (s + 0x6d2b79f5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 interface Spot { x: number; y: number; z: number }
 

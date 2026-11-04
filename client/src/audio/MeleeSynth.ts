@@ -5,8 +5,7 @@
  * the body's thump, bone giving way, blood) and rendered once into a sample buffer. Pure math
  * with no Web Audio, so Node can render the same buffers to check them.
  */
-import type { MeleeId } from '@dead-hours/shared';
-import { rng } from './GunSynth';
+import { rng, type MeleeId } from '@dead-hours/shared';
 
 /** [frequency Hz, decay time constant s, level] of one ringing mode. */
 type Mode = [number, number, number];

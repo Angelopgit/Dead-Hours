@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { rng } from '@dead-hours/shared';
 import { LEAF_CELL, type LeafCell } from './TreeTextures';
 
 /**
@@ -27,16 +28,6 @@ export interface TreeModel {
   /** Where the light probes sit (m above the base): low and high in the crown. */
   probeLow: number;
   probeHigh: number;
-}
-
-function rng(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);

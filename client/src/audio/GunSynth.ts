@@ -4,22 +4,11 @@
  * muzzle blast pressure wave, the gas jet, the bullet's supersonic crack, the steel ringing and the
  * ground bounce. Pure math with no Web Audio, so Node can render the same buffers to check them.
  */
+import { rng } from '@dead-hours/shared';
 
 export type Channels = Float32Array<ArrayBuffer>[];
 /** [frequency Hz, decay time constant s, level] of one vibration mode. */
 export type Mode = [number, number, number];
-
-/** Seeded PRNG (mulberry32) so every variant renders the same way each time. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 type FilterKind = 'lowpass' | 'highpass' | 'bandpass';
 
