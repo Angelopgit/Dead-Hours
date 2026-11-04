@@ -2,7 +2,7 @@
 
 Co-op zombie survival that runs in the browser. Hold a house in a small town through the night, alone or with up to three friends. No install, and solo play needs no server.
 
-![A horde of walkers, runners and brutes coming down Elm Street](docs/screenshots/hero.jpg)
+![A horde of walkers, runners and brutes coming down Hale Street](docs/screenshots/hero.jpg)
 
 | | |
 | --- | --- |
@@ -11,6 +11,7 @@ Co-op zombie survival that runs in the browser. Hold a house in a small town thr
 
 ## What's in it
 
+- **A night with a point.** Three goals each night, from boarding up to holding off a horde, paid out in XP, and a guided first night.
 - **One town, one night.** Three streets, a gas station, a park and a police checkpoint. Every house can be entered and some have basements. You get 45 seconds to gear up, then the dead keep coming, with horde waves, a raider van and short lulls when a supply helicopter comes in.
 - **Guns.** Ten of them, from the M17 pistol to a .50 cal and a rocket launcher, plus found melee weapons. Aim down real sights, attachments unlocked by levelling up, recorded gunshots and reloads, and sound that changes with the room you're in.
 - **Zombies you can take apart.** Walkers, runners, brutes, screamers, bloaters and crawlers. Shoot off arms and legs, pick an arm up and club with it, blow heads apart.
@@ -55,6 +56,8 @@ Everything can be rebound in Settings → Controls. On a skateboard, Space ollie
 ## Docs
 
 - [docs/development.md](docs/development.md): running, checks and benches, code layout
+- [docs/style.md](docs/style.md): how the game looks and talks
+- [CHANGELOG.md](CHANGELOG.md): what changed in each version
 - [docs/gameplay.md](docs/gameplay.md): combat, gore, sound, barricades, vehicles, progression, survivors
 - [docs/rendering.md](docs/rendering.md): baked lighting, volumetric fog, rain, post-processing
 - [docs/online.md](docs/online.md): rooms, accounts, voice and chat, deploying, running many games
@@ -63,7 +66,7 @@ Everything can be rebound in Settings → Controls. On a skateboard, Space ollie
 
 ## Credits
 
-Made by Angelo. Built on [three.js](https://threejs.org), [Rapier](https://rapier.rs), [Colyseus](https://colyseus.io), [GSAP](https://gsap.com) and [Vite](https://vite.dev). Typefaces: Oswald (Vernon Adams) and Inter (Rasmus Andersson), SIL Open Font License.
+Made by Angelo. Built on [three.js](https://threejs.org), [Rapier](https://rapier.rs), [Colyseus](https://colyseus.io), [GSAP](https://gsap.com) and [Vite](https://vite.dev). Typefaces: Big Shoulders Display (Patric King), Barlow Semi Condensed (Jeremy Tribby) and Special Elite (Astigmatic), SIL Open Font License and Apache License 2.0. The theme, "Count the Hours", is written for the game and played by its own synth.
 
 ### Sound
 

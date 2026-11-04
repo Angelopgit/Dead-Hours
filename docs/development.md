@@ -9,9 +9,11 @@ npm run dev:server     # game server on http://localhost:2567 (restarts on chang
 npm start              # game server, as deployed
 npm run build          # production client build into client/dist
 npm run typecheck      # shared + client + server
+npm run lint           # ESLint over every workspace's code
+npm run check          # every headless check below, one after another
 ```
 
-Headless checks (run the ones that touch what you changed, and `typecheck`, before pushing):
+Headless checks (run the ones that touch what you changed, `typecheck` and `lint` before pushing; CI runs all of them on every push):
 
 | Script | What it checks |
 | --- | --- |
@@ -24,6 +26,7 @@ Headless checks (run the ones that touch what you changed, and `typecheck`, befo
 | `check:render`, `check:trees`, `check:grass` | FPS limiter and the light-loop shader patch, tree models and LOD budgets, where lawn grass grows |
 | `check:controls`, `check:sights`, `check:melee` | aim assist and stick curves, aim-down-sights alignment, melee grips |
 | `check:raid`, `check:explosives`, `check:windows`, `check:boosts` | van raid, grenades and Molotovs, window vaulting, boost syringes |
+| `check:goals` | night goals: picking from the seed, counting, team scaling, XP, the snapshot copy |
 | `check:skate`, `check:bike`, `check:vehicles` | skateboards, bicycles, cars (shared sim, server and client) |
 
 Benches: `npm run load -w server` (bot lobbies against real server processes, CPU per lobby count; `SERVERS=3` for several), `npm run bench -w server` (one game's server work without the network), `npm run bench:physics -w server`, `npm run spawns -w server`, `npm run balance -w server` and `npm run balance:guns`.
@@ -35,8 +38,9 @@ In development the client finds the server on port 2567 of the same host. A prod
 ```
 shared/   map data, weapons, player tuning, network protocol, combat simulation (used by client and server)
   src/config       weapons, zombies, player tuning, survivor appearance catalog (appearance.ts)
-  src/map          Maple Hollow layout, map builder (houses, stairs, walls with openings), prop colliders
-  src/sim          authoritative simulation: arsenal, hit zones, zombie AI, navigation grid, events
+  src/map          Vesper layout, map builder (houses, stairs, walls with openings), prop colliders
+  src/sim          authoritative simulation: arsenal, hit zones, zombie AI, navigation grid, events;
+                   Airdrops.ts runs supply drops, Contracts.ts the night goals
   src/protocol     room messages, compact snapshots and the client's mirror of the server's simulation
 client/   Vite + Three.js game
   src/core         engine loop, input + rebinding, settings, Rapier physics
@@ -44,15 +48,17 @@ client/   Vite + Three.js game
   src/lighting     moonlight rig, lightning, light baker (ray tracer, light field, probes, auto exposure)
   src/environment  neighborhood builder, houses, sky, atmosphere; props/ holds the procedural prop kit
   src/characters   skinned low-poly humanoid (procedural animation, two-bone IK, wounds, eyes) and ragdolls;
-                   Outfit.ts builds faces, hair, clothes and accessories, CharacterPreview.ts is the dressing room
+                   Outfit.ts builds clothes and accessories, OutfitHead.ts faces, hair and headwear, OutfitKit.ts
+                   their shared helpers; CharacterPreview.ts is the dressing room
   src/weapons      weapon models, hand poses, reload/melee/bandage animation, recoil
   src/effects      particles, decals (holes, blood), shell casings, muzzle light
   src/zombies      zombie rendering: pooled bodies, interpolation, hit reactions, corpses
   src/gameplay     player controller, shoulder camera, doors, weapon table, menu cinematic, the game session
-                   (solo and online) and the other survivors online (RemoteSurvivors.ts)
+                   (solo and online), the other survivors online (RemoteSurvivors.ts) and the first-night steps (FirstNight.ts)
   src/network      server address and health (Net.ts), the room connection (NetLink.ts), player key and saved survivor (Account.ts)
-  src/audio        Web Audio engine: recorded gun and flesh-hit sounds (recorded/, CC0, see the sound credits in the README), synthesized everything else
-  src/ui           main menu, settings, loadout, HUD, pause, inventory, weapon table, results,
+  src/audio        Web Audio engine: recorded gun and flesh-hit sounds (recorded/, CC0, see the sound credits in the README), synthesized everything else;
+                   WheelSounds.ts for skateboards, bikes and cars, Score.ts for the written theme
+  src/ui           logo, main menu, settings, loadout, HUD, pause, inventory, weapon table, results,
                    online menu (host, join, lobby) and leaderboards
   tests/           headless checks (world collision, houses, audio, controls, sights, melee, trees, grass...)
   dev/             dev-only pages and scripts for tuning and measuring (outfit lineup, gun clips, HUD audit...),
