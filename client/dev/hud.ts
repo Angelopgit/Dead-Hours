@@ -64,7 +64,7 @@ root.append(tcs.el);
 hud.onPrompt = (action, text) => tcs.setUse(action, text);
 
 hud.setHealth(64, 100);
-hud.setTimer('DOWNTIME — 00:45 LEFT · SURVIVED 59:59', true);
+hud.setTimer('QUIET FOR 00:45 · SURVIVED 59:59', true);
 hud.setWarning('OUT OF AMMUNITION · USE YOUR HOCKEY STICK');
 for (const line of ['SOMEONE ELSE GOT TO THAT SKATEBOARD', 'HANDS ON THE BARS · USE TO GET OFF', 'LEFT THE M107 .50 CAL BEHIND', `${MATE} REVIVED ${NAME}`]) hud.feedLine(line);
 hud.weapon({

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../../rendering/Materials';
 
@@ -71,7 +72,7 @@ function textCanvas(lines: string[], w: number, h: number, bg: string, fg: strin
   x.textAlign = 'center';
   x.textBaseline = 'middle';
   const size = Math.min((h * 0.72) / lines.length, (w * 1.5) / Math.max(...lines.map((l) => l.length)));
-  x.font = `700 ${size}px Oswald, Impact, sans-serif`;
+  x.font = `800 ${size}px "Big Shoulders Display", Impact, sans-serif`;
   lines.forEach((l, i) => x.fillText(l, w / 2, (h * (i + 0.5)) / lines.length + size * 0.04));
   // Weathering.
   for (let i = 0; i < 260; i++) {
@@ -167,6 +168,12 @@ export class Kit {
   /** Box whose bottom sits at y. */
   block(w: number, h: number, d: number, m: Surface, x = 0, y = 0, z = 0, o: PartOptions = {}): THREE.Mesh {
     return this.box(w, h, d, m, x, y + h / 2, z, o);
+  }
+
+  /** Upholstery: a box with rounded edges (radius `r`) whose bottom sits at y. Use with a smooth paint (mat(..., false)). */
+  soft(w: number, h: number, d: number, r: number, m: Surface, x = 0, y = 0, z = 0, o: PartOptions = {}): THREE.Mesh {
+    const radius = Math.min(r, w / 2, h / 2, d / 2) * 0.999;
+    return this.add(new RoundedBoxGeometry(w, h, d, 2, radius), m, x, y + h / 2, z, o);
   }
 
   cyl(rTop: number, rBottom: number, h: number, seg: number, m: Surface, x = 0, y = 0, z = 0, o: PartOptions = {}): THREE.Mesh {

@@ -171,11 +171,11 @@ route(phys, 'street -> gas station store', [70, 0.05, 0], [[85, -5], [92, -30], 
 route(phys, 'street -> park gazebo', [86, 0.05, 4], [[88, 10], [92, 30], [100, 39]]);
 route(phys, 'street -> checkpoint chicane', [-80, 0.05, -2], [[-90, 2.8], [-96, 3.0], [-100, 3.0], [-101.6, -4.6], [-106, -4.6], [-108.6, -0.4], [-109.5, -0.4]]);
 route(phys, 'safehouse back door -> north alley via gate', [-2.4, 0.05, -26.0], [[-3.7, -26.3], [-3.7, -29], [-2, -40], [-2, -47]]);
-// Oak Street, the next street over: down Birch Lane, through the shared alley, and in from the park.
-route(phys, 'Elm Street -> Oak Street via Birch Lane', [-65, 0.05, 6], [[-65, 30], [-65, 62], [-70.5, 70], [-70.5, 80], [-66, 92], [-50, 93], [-20, 93], [-10, 95.5], [5, 95.5], [14, 92], [32, 92], [50, 94], [62, 96], [84, 96], [92, 94]]);
-route(phys, 'Elm south alley -> Oak Street through a back gate and side yard', [2, 0.05, 46], [[4, 49], [4, 54], [12.5, 64], [12.5, 84], [12.5, 88.5]]);
-route(phys, 'park -> Oak Street dead end down the trail', [88, 0.05, 30], [[89, 40], [89, 52], [89, 70], [89, 86], [89, 92]]);
-route(phys, 'Oak Street -> past a parked car, out the back gate to the woods', [21.5, 0.05, 99.5], [[21.5, 104], [21.5, 120], [10, 134], [10, 138], [10, 142]]);
+// Kinney Street, the next street over: down Pell Lane, through the shared alley, and in from the park.
+route(phys, 'Hale Street -> Kinney Street via Pell Lane', [-65, 0.05, 6], [[-65, 30], [-65, 62], [-70.5, 70], [-70.5, 80], [-66, 92], [-50, 93], [-20, 93], [-10, 95.5], [5, 95.5], [14, 92], [32, 92], [50, 94], [62, 96], [84, 96], [92, 94]]);
+route(phys, 'Hale south alley -> Kinney Street through a back gate and side yard', [2, 0.05, 46], [[4, 49], [4, 54], [12.5, 64], [12.5, 84], [12.5, 88.5]]);
+route(phys, 'park -> Kinney Street dead end down the trail', [88, 0.05, 30], [[89, 40], [89, 52], [89, 70], [89, 86], [89, 92]]);
+route(phys, 'Kinney Street -> past a parked car, out the back gate to the woods', [21.5, 0.05, 99.5], [[21.5, 104], [21.5, 120], [10, 134], [10, 138], [10, 142]]);
 
 console.log('Door leaves block when closed and clear when open');
 {
@@ -258,13 +258,13 @@ console.log('Acoustics: the space around each place, and walls between gun and e
   const ac = new Acoustics(phys);
   const ear = (x: number, y: number, z: number): [number, number, number] => [x, y + 1.6, z];
   const places: [string, [number, number, number], Space][] = [
-    ['Elm Street', ear(-40, 0.15, -4.6), 'street'],
+    ['Hale Street', ear(-40, 0.15, -4.6), 'street'],
     ['safehouse living room', ear(4.8, 0.32, -22.3), 'room'],
     ['safehouse basement', ear(-3.5, -2.68, -21), 'basement'],
     ['safehouse garage', ear(10, 0.15, -19), 'hall'],
-    ['Quik-Stop shop floor', ear(92, 0.2, -36), 'hall'],
+    ['Rudy’s shop floor', ear(92, 0.2, -36), 'hall'],
     ['park gazebo', ear(100, 0.4, 39), 'street'],
-    ['Oak Street', ear(-20, 0.15, OAK.z - 1), 'street'],
+    ['Kinney Street', ear(-20, 0.15, OAK.z - 1), 'street'],
     ['Oyelaran living room', ear(10, 0.32, 113.5), 'room'],
     ['Oyelaran basement', ear(7, -2.68, 113.5), 'basement'],
   ];
@@ -297,7 +297,7 @@ console.log('Flashlight lights a room without burning the nearest wall white');
     return { power, hit, glow: lit(power), was: lit(1) };
   };
   // Safehouse living room, the lamp at chest height beside the windows: the north wall 2.5 m off,
-  // then half a metre, then the room's length (7 m) the other way; down Elm Street nothing is near.
+  // then half a metre, then the room's length (7 m) the other way; down Hale Street nothing is near.
   const chest = 0.35 + 1.3;
   const rows: [string, ReturnType<typeof shine>][] = [
     ['wall 0.5 m', shine(3.5, chest, -24.25, 0, 0, -1)],
@@ -312,12 +312,12 @@ console.log('Flashlight lights a room without burning the nearest wall white');
     else console.log(`  ok   ${what}`);
   }
   const street = shine(-40, 1.5, -4.6, 1, -0.06, 0);
-  if (street.power < 1) fail(`down Elm Street the beam is turned down to ${(street.power * 100).toFixed(0)}%`);
-  else console.log('  ok   down Elm Street: full power');
+  if (street.power < 1) fail(`down Hale Street the beam is turned down to ${(street.power * 100).toFixed(0)}%`);
+  else console.log('  ok   down Hale Street: full power');
   if (!(rows[0][1].power < rows[1][1].power && rows[1][1].power < rows[2][1].power)) fail('nearer walls should turn the beam down further');
 
   // A Molotov's light (Pyro: 45 cd a metre over the fire, 13 m, decay 2) beside the safehouse's
-  // north wall, and in the middle of Elm Street with no car parked beside it.
+  // north wall, and in the middle of Hale Street with no car parked beside it.
   const fire = new THREE.PointLight(0xffffff, 0, 13, 2);
   const byWall = new THREE.Vector3(3.5, 0.35 + 1, -24.3);
   const wallPower = lampPower(phys, fire, 45, byWall);
@@ -327,8 +327,8 @@ console.log('Flashlight lights a room without burning the nearest wall white');
   if (wallGlow > HOTSPOT_NEAR + 1e-6 || wallPower >= 1) fail(`${what}: brighter than the bloom cap ${HOTSPOT_NEAR}`);
   else console.log(`  ok   ${what}`);
   const openPower = lampPower(phys, fire, 45, new THREE.Vector3(25, 1, 0));
-  if (openPower < 1) fail(`a Molotov in the middle of Elm Street is turned down to ${(openPower * 100).toFixed(0)}%`);
-  else console.log('  ok   Molotov in the middle of Elm Street: full power');
+  if (openPower < 1) fail(`a Molotov in the middle of Hale Street is turned down to ${(openPower * 100).toFixed(0)}%`);
+  else console.log('  ok   Molotov in the middle of Hale Street: full power');
 }
 
 console.log('Wet reflections and fire-lit bodies stay under a soft ceiling');

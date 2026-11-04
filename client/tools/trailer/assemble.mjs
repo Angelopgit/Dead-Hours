@@ -42,7 +42,7 @@ const span = (name) => {
 
 /** What goes over which shot: the line, a sub line, and when (seconds into the shot). */
 const CARDS = [
-  { shot: 'street', kind: 'open', title: 'MAPLE HOLLOW · AFTER DARK', at: 1.6, dur: 3.6 },
+  { shot: 'street', kind: 'open', title: 'VESPER, OHIO. AFTER DARK', at: 1.6, dur: 3.6 },
   { shot: 'stand', kind: 'feature', title: 'CO-OP ZOMBIE SURVIVAL', sub: 'IN YOUR BROWSER', at: 0.8, dur: 4.4 },
   { shot: 'windows', kind: 'feature', title: 'BOARD UP THE HOUSES', at: 0.8, dur: 4.2 },
   { shot: 'fire', kind: 'feature', title: 'MOLOTOVS · GRENADES · MELEE', at: 1.4, dur: 3.8 },

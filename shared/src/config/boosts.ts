@@ -25,7 +25,7 @@ export interface BoostDef {
 export const BOOSTS = {
   /** The dead's hits do `damageTaken` of their damage; melee blows land `meleeDamage` times as hard. */
   strength: {
-    name: 'Strength shot', short: 'STRENGTH', blurb: 'The dead hit you half as hard · your swings hit harder',
+    name: 'Strength shot', short: 'STRENGTH', blurb: 'The dead hit you half as hard and your swings hit harder',
     color: 0xd8443a, duration: 75, damageTaken: 0.5, meleeDamage: 1.4,
   },
   /** Walking and sprinting speed up; firing or swinging holds the sprint back for `sprintBlock` as long. */

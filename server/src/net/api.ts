@@ -74,6 +74,9 @@ function plausibleSolo(body: unknown): { survived: number; stats: PlayerStats } 
     if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e7) return null;
     stats[k] = k === 'damageDealt' || k === 'damageTaken' ? Math.round(v) : Math.floor(v);
   }
+  // Night goals came later: older clients leave them out.
+  const goals = b.stats.goals;
+  stats.goals = typeof goals === 'number' && Number.isFinite(goals) ? Math.max(0, Math.min(3, Math.floor(goals))) : 0;
   const played = survived + GAME.preparationSeconds + 5;
   if (stats.kills > 3 + survived * 1.5) return null;
   if (stats.headshots > stats.kills || stats.limbKills > stats.kills || stats.shotsHit > stats.shotsFired) return null;

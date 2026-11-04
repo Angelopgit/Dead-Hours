@@ -12,7 +12,7 @@ import { net } from '../network/Net';
 import { account } from '../network/Account';
 import type { NetLink } from '../network/NetLink';
 import { HOLIDAY } from '../core/Holiday';
-import { holidayTitle } from './HolidayTitle';
+import { logo } from './Logo';
 import { nameField, unnamed, type NameField } from './NameField';
 
 const PEN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 2.2a1.5 1.5 0 0 1 2.1 0l.4.4a1.5 1.5 0 0 1 0 2.1L6 12.5 2.5 13.5l1-3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M10 3.5l2.5 2.5" stroke="currentColor" stroke-width="1.2"/></svg>';
@@ -66,38 +66,37 @@ export class MainMenu {
     };
 
     this.sub = h('div', { class: 'menu-sub', style: 'height:0' },
-      item('SOLO', () => this.cb.onSolo(), { tag: 'SURVIVE ALONE' }),
-      item('HOST GAME', () => this.openOnline('host'), { tag: 'PLAY WITH FRIENDS', online: true }),
-      item('JOIN GAME', () => this.openOnline('browse'), { tag: 'CODE OR OPEN GAMES', online: true }),
+      item('SOLO', () => this.cb.onSolo(), { tag: 'on your own' }),
+      item('HOST GAME', () => this.openOnline('host'), { tag: 'with friends', online: true }),
+      item('JOIN GAME', () => this.openOnline('browse'), { tag: 'by code, or an open game', online: true }),
     );
 
-    // Other players and the leaderboards see it, so it is out here and not only in the creator: tucked away
-    // in there, players tended never to change it and played as "Survivor".
+    // Other players and the leaderboards see the name, so it sits on the menu where it is hard to miss.
     this.name = nameField('menu-name-input', () => this.nameHint());
     this.nameRow = h('label', { class: 'menu-name', title: 'Other players and the leaderboards see this name' },
       // Both labels take the same room, so the box doesn't shift when the name is picked.
-      h('span', { class: 'menu-name-label' }, h('span', { class: 'ask' }, 'PICK A NAME'), h('span', { class: 'have' }, 'YOUR NAME')),
+      h('span', { class: 'menu-name-label' }, h('span', { class: 'ask' }, 'Pick a name'), h('span', { class: 'have' }, 'Your name')),
       h('span', { class: 'menu-name-box' },
         this.name.el,
         h('span', { class: 'menu-name-pen', html: PEN }),
       ),
-      h('span', { class: 'menu-name-hint' }, 'OTHER PLAYERS AND THE LEADERBOARDS SEE IT'),
+      h('span', { class: 'menu-name-hint' }, 'Other players and the leaderboards see it.'),
     );
     this.name.el.addEventListener('mouseenter', () => audio.ui('hover'));
     this.name.el.addEventListener('focus', () => audio.unlock());
     this.nameHint();
 
     this.main = h('div', { class: 'menu-main' },
-      HOLIDAY ? holidayTitle(GAME.title) : h('h1', { class: 'title' }, GAME.title),
+      logo(GAME.title, HOLIDAY),
       h('div', { class: 'subtitle' }, GAME.subtitle),
       this.nameRow,
       h('nav', { class: 'menu-list' },
         item('PLAY', () => this.togglePlay()),
         this.sub,
-        item('SURVIVOR', () => this.openCreator(), { tag: 'CUSTOMIZE' }),
-        item('LOADOUT', () => this.openArmory(), { tag: 'GUNSMITH' }),
+        item('SURVIVOR', () => this.openCreator()),
+        item('LOADOUT', () => this.openArmory()),
         item('LEADERBOARDS', () => this.openBoards('survival'), { online: true }),
-        this.accountItem = item('ACCOUNT', () => this.openBoards('you'), { tag: 'GUEST · SIGN IN', online: true }),
+        this.accountItem = item('ACCOUNT', () => this.openBoards('you'), { tag: 'guest, sign in', online: true }),
         item('SETTINGS', () => this.openPanel(new SettingsPanel(this.input, () => this.closePanel()).el)),
         item('CREDITS', () => this.openPanel(this.credits())),
       ),
@@ -106,8 +105,8 @@ export class MainMenu {
     this.el = h('div', { class: HOLIDAY ? 'menu holiday' : 'menu' },
       h('div', { class: 'menu-shade' }),
       this.main,
-      h('div', { class: 'menu-footer' }, `BUILD ${GAME.version} — MAPLE HOLLOW`),
-      h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'TOUCH CONTROLS ON · PLAY SIDEWAYS'), 'HEADPHONES RECOMMENDED'),
+      h('div', { class: 'menu-footer' }, `Build ${GAME.version}`),
+      h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'Touch controls on. Turn your phone sideways.'), 'Best with headphones.'),
     );
     window.addEventListener('keydown', this.onKey);
     this.sizes?.observe(this.el);
@@ -124,7 +123,7 @@ export class MainMenu {
   private accountTag(show = true): void {
     const me = account.signedIn;
     const b = this.accountItem;
-    b.dataset.tag = me ? (me.name || 'SIGNED IN').toUpperCase() : 'GUEST · SIGN IN';
+    b.dataset.tag = me ? (me.name || 'signed in') : 'guest, sign in';
     if (show && !b.disabled) b.querySelector('.tag')!.textContent = b.dataset.tag;
   }
 
@@ -141,7 +140,7 @@ export class MainMenu {
       for (const b of this.needServer) {
         b.disabled = st !== 'online';
         const tag = b.querySelector('.tag')!;
-        tag.textContent = st === 'online' ? b.dataset.tag ?? '' : st === 'unknown' ? 'CONNECTING…' : 'SERVER OFFLINE';
+        tag.textContent = st === 'online' ? b.dataset.tag ?? '' : st === 'unknown' ? 'connecting…' : 'server offline';
       }
     };
     set();
@@ -243,15 +242,15 @@ export class MainMenu {
 
   private credits(): HTMLElement {
     return h('div', { class: 'panel credits' },
-      h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closePanel(); } }, 'CLOSE ✕'),
+      h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closePanel(); } }, 'Close ✕'),
       h('h2', {}, 'CREDITS'),
       h('p', { class: 'role' }, 'A game by'), h('p', {}, 'Angelo'),
       h('p', { class: 'role' }, 'Recorded sound'), h('p', {},
         'Gunshots, hits and the flashlight click from Freesound (CC0): DledeSOUND, michorvath, kyles, mrrap4food, areniporgen, kvgarlic, '
         + 'ajhartman42295, u1769092, nebulasnails, magnuswaker, Pablobd, janbezouska, realgtro. Reloads from The Free '
         + 'Firearm Sound Library (CC0). Everything else is synthesized in the browser.'),
-      h('p', { class: 'role' }, 'Built with'), h('p', {}, 'Three.js · Rapier · Colyseus · GSAP · Vite · TypeScript'),
-      h('p', { class: 'role' }, 'Typefaces'), h('p', {}, 'Oswald (Vernon Adams) · Inter (Rasmus Andersson), SIL Open Font License'),
+      h('p', { class: 'role' }, 'Built with'), h('p', {}, 'Three.js, Rapier, Colyseus, GSAP, Vite and TypeScript'),
+      h('p', { class: 'role' }, 'Typefaces'), h('p', {}, 'Big Shoulders Display (Patric King), Barlow Semi Condensed (Jeremy Tribby), Special Elite (Astigmatic), SIL Open Font License'),
     );
   }
 
@@ -297,7 +296,7 @@ export class MainMenu {
   show(parent: HTMLElement): void {
     parent.append(this.el);
     this.refreshServer(net.status !== 'online');
-    gsap.fromTo(this.main.querySelector('.title'), { opacity: 0, letterSpacing: '0.5em' }, { opacity: 1, letterSpacing: '0.22em', duration: 2.4, ease: 'power3.out' });
+    gsap.fromTo(this.main.querySelector('.title'), { opacity: 0, letterSpacing: '0.12em' }, { opacity: 1, letterSpacing: '0.01em', duration: 2.4, ease: 'power3.out' });
     gsap.fromTo(this.main.querySelectorAll('.subtitle, .menu-name, .menu-list > .menu-item'), { opacity: 0, y: 8 },
       { opacity: 1, y: 0, duration: 0.8, stagger: 0.08, delay: 0.7, ease: 'power2.out' });
   }

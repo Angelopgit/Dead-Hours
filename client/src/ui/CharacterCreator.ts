@@ -151,7 +151,7 @@ export class CharacterCreator {
       h('div', { class: 'creator-turn' },
         h('button', { class: 'creator-btn round', 'aria-label': 'Turn left', onclick: () => this.preview.turn(-Math.PI / 4) }, '⟲'),
         // Touch has no zoom and a controller can only use the two buttons, so they see less of the hint.
-        h('span', { class: 'creator-hint' }, 'DRAG TO TURN', h('span', { class: 'creator-zoom' }, ' · SCROLL TO ZOOM')),
+        h('span', { class: 'creator-hint' }, 'DRAG TO TURN', h('span', { class: 'creator-zoom' }, ', SCROLL TO ZOOM')),
         h('button', { class: 'creator-btn round', 'aria-label': 'Turn right', onclick: () => this.preview.turn(Math.PI / 4) }, '⟳'),
       ),
     );
@@ -203,7 +203,7 @@ export class CharacterCreator {
       } else {
         const title = s.when ? s.when(this.a) : s.title;
         if (title === false) continue;
-        out.push(this.colorSection(s.key, s.palette, s.when && title !== 'Color' ? `${s.title} · ${title}` : s.title));
+        out.push(this.colorSection(s.key, s.palette, s.when && title !== 'Color' ? `${s.title}: ${title}` : s.title));
       }
     }
     this.optionsEl.replaceChildren(...out);

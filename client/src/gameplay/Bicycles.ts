@@ -304,7 +304,7 @@ export class BicycleView {
       v.probe.update(dt, v.pos, camera, 0.6);
     }
     for (const id of [...this.views.keys()]) if (!seen.has(id)) this.remove(id);
-    audio.bikeRoll(this.rolls);
+    audio.wheels.bikeRoll(this.rolls);
   }
 
   /** One bike of every look standing for the loading screen's shader pass (see GameSession.prewarm). */
@@ -343,7 +343,7 @@ export class BicycleView {
       v.ease = 0;
       if (b.rider) {
         v.fall = -1;
-        audio.bikeMount(pose?.pos ?? _v.set(b.pos.x, b.pos.y, b.pos.z));
+        audio.wheels.bikeMount(pose?.pos ?? _v.set(b.pos.x, b.pos.y, b.pos.z));
       } else if (was) {
         v.fall = 0;
         v.fallFrom = v.roll;
@@ -351,7 +351,7 @@ export class BicycleView {
       v.air = false;
     }
     if (b.passenger !== v.passenger) {
-      if (b.passenger) audio.bikePeg(v.pos);
+      if (b.passenger) audio.wheels.bikePeg(v.pos);
       v.passenger = b.passenger;
     }
     v.ease = Math.min(1, v.ease + dt / 0.3);
@@ -369,7 +369,7 @@ export class BicycleView {
       v.roll = v.fallFrom + (LIE - v.fallFrom) * v.fall * v.fall;
       if (v.fall >= 1) {
         v.fall = -1;
-        audio.bikeDrop(v.pos);
+        audio.wheels.bikeDrop(v.pos);
       }
     } else v.roll += (LIE - v.roll) * (1 - Math.exp(-dt * 8));
     const lying = THREE.MathUtils.clamp(v.roll / LIE, 0, 1);
@@ -401,7 +401,7 @@ export class BicycleView {
     }
     // Sounds: landing a hop, the tyres, the freewheel when coasting, a skid when braking hard.
     if (pose.air) v.airT += dt;
-    if (v.air && !pose.air && v.airT > 0.2) audio.bikeLand(v.pos, Math.min(1, v.airT / 0.6));
+    if (v.air && !pose.air && v.airT > 0.2) audio.wheels.bikeLand(v.pos, Math.min(1, v.airT / 0.6));
     if (!pose.air) v.airT = 0;
     v.air = pose.air;
     v.surfaceT -= dt;
@@ -414,7 +414,7 @@ export class BicycleView {
         v.seam -= Math.abs(along);
         if (v.seam <= 0) {
           v.seam = 1.5;
-          audio.bikeSeam(v.pos, Math.min(1, v.speed / 8), (B.frontAxle - B.rearAxle) / Math.max(1, v.speed));
+          audio.wheels.bikeSeam(v.pos, Math.min(1, v.speed / 8), (B.frontAxle - B.rearAxle) / Math.max(1, v.speed));
         }
       }
       const skid = pose.brake > B.skidBrake && v.speed > B.skidSpeed ? (pose.brake - B.skidBrake) / (1 - B.skidBrake) : 0;
@@ -440,6 +440,6 @@ export class BicycleView {
   dispose(): void {
     for (const id of [...this.views.keys()]) this.remove(id);
     this.root.removeFromParent();
-    audio.bikeRoll([]);
+    audio.wheels.bikeRoll([]);
   }
 }

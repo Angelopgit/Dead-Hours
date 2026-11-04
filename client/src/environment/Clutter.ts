@@ -217,8 +217,8 @@ export class Clutter {
   /** Sidewalks, gutters, lawns and the leaf drifts under street trees. */
   private streets(): void {
     this.curbs();
-    // Lawn litter over the streets' blocks, not out in the woods: 900 pieces over Elm Street's block
-    // (the whole width, 70 m either side of the road), the same density over Oak Street's.
+    // Lawn litter over the streets' blocks, not out in the woods: 900 pieces over Hale Street's block
+    // (the whole width, 70 m either side of the road), the same density over Kinney Street's.
     const b = this.map.bounds;
     const x0 = b.x0 * 0.95, x1 = b.x1 * 0.95, z0 = -70, z1 = Math.min(b.z1 - 30, 140);
     const target = Math.round(900 * ((z1 - z0) / 140) * this.density);

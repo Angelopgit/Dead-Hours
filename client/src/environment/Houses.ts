@@ -100,7 +100,7 @@ function flatRoof(h: HouseSpec, top: number, lib: MaterialLibrary, batch: Static
     x.fillStyle = '#7a1612';
     x.fillRect(0, 0, 1024, 128);
     x.fillStyle = '#f6efe0';
-    x.font = '700 92px Oswald, Impact, sans-serif';
+    x.font = '800 92px "Big Shoulders Display", Impact, sans-serif';
     x.textAlign = 'center';
     x.textBaseline = 'middle';
     x.fillText(h.label, 512, 70);
@@ -158,8 +158,8 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
       batch.add(worldBox(h.x, slab + (top - slab) / 2, h.z, h.w - 0.02, top - slab, h.d - 0.02, siding.texScale, { groundY: slab, strength: 0.4 }, BAKE_CELL), siding.material);
     }
     if (h.floors === 2) {
-      // Band between the storeys: four strips sunk into the walls' siding. (One box over the whole
-      // footprint used to hide inside the floor and show as a slab over the stairwell.)
+      // Band between the storeys: four strips sunk into the walls' siding, not one box over the
+      // footprint, which would show as a slab over the stairwell.
       const y = slab + ground + STORY.floorThickness / 2;
       for (const s of [-1, 1]) {
         batch.add(worldBox(h.x, y, h.z + s * (h.d / 2 - BAND_DEPTH / 2 + BAND_OUT), h.w + BAND_OUT * 2, 0.22, BAND_DEPTH, 1, null), trim);

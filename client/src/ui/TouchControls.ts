@@ -296,9 +296,9 @@ export class TouchControls {
   }
 }
 
-/** First words of a prompt ("OPEN DOOR", "TAKE AMMUNITION · 3 LEFT" → "TAKE AMMUNITION"). */
+/** First words of a prompt ("OPEN DOOR", "TAKE AMMUNITION, 3 LEFT" → "TAKE AMMUNITION"). */
 function shortUse(text: string): string {
-  return text.split('·')[0].trim().split(' ').slice(0, 2).join(' ');
+  return text.split(/[·,.:]/)[0].trim().split(' ').slice(0, 2).join(' ');
 }
 
 /** The screen's safe-area insets (a notch, the home bar) in px. */

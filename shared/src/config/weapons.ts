@@ -149,7 +149,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   // A one-off custom build: suppressed, bolt-action, in .338 Lapua.
   wraith: {
-    id: 'wraith', name: 'Custom Sniper', model: 'WRAITH .338', slot: 'primary', exclusive: true,
+    id: 'wraith', name: 'Custom Sniper', model: 'LR-338', slot: 'primary', exclusive: true,
     description: 'Custom suppressed bolt-action .338. Quiet enough that the dead barely turn; one round, one kill.',
     damage: 190, pellets: 1, fireRate: 48, magazine: 5, startReserve: 25, reloadTime: 3.1,
     hipSpread: 6.5, aimSpread: 0.04, recoil: 1.5, range: 300, auto: false,

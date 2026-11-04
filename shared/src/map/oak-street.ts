@@ -4,12 +4,12 @@ import { divider, fenceLine, streetlight } from './dressing';
 import { buildHome, type HomePlan } from './homes';
 
 /**
- * Oak Street: the next street over, one block south of Elm Street.
+ * Kinney Street: the next street over, one block south of Hale Street.
  *
- * It tees into Birch Lane at the west end. Its north row backs onto Elm Street's south alley, so
+ * It tees into Pell Lane at the west end. Its north row backs onto Hale Street's south alley, so
  * that alley serves both streets; its south row backs onto the woods. To the east the road runs
  * out past the last lot and dead-ends in the woods, where a dirt trail comes down from the park's
- * back gate. Ten family homes, built from the same floor plans as Elm Street's, five with
+ * back gate. Ten family homes, built from the same floor plans as Hale Street's, five with
  * basements.
  *
  * Axes: +X east, +Z south, +Y up (as in maple-hollow.ts).
@@ -22,7 +22,7 @@ const CURB = STREET.curbHeight;
 export const OAK = {
   /** The road's centre line. */
   z: 94,
-  /** Birch Lane's centre line, where Oak Street tees in. */
+  /** Pell Lane's centre line, where Kinney Street tees in. */
   birch: -68,
   /** Where the asphalt ends (the dead end's curb runs from here). */
   end: 95,
@@ -31,11 +31,11 @@ export const OAK = {
   /** Back fences: the north row's on the shared alley, the south row's on the woods. */
   northFence: 52,
   southFence: 136,
-  /** Lots run east from Birch Lane's sidewalk to here. */
+  /** Lots run east from Pell Lane's sidewalk to here. */
   lotsEnd: 64,
 } as const;
 
-/** West edge of the lots (just past Birch Lane's sidewalk). */
+/** West edge of the lots (just past Pell Lane's sidewalk). */
 const LOTS_START = OAK.birch + RW + SW + 0.6;
 /** Front walls of the two rows. */
 const FRONT_N = OAK.z - 14.5;
@@ -56,7 +56,7 @@ function lot(row: 'n' | 's', spec: Omit<HouseSpec, 'z' | 'facing' | 'enterable' 
   return { ...plan, spec: { ...spec, z, facing: row === 'n' ? 'south' : 'north', enterable: true } };
 }
 
-/** The family homes on both sides of Oak Street. */
+/** The family homes on both sides of Kinney Street. */
 export function oakHomes(): HomeEntry[] {
   return [
     lot('n', { id: 'oak-n1', x: -48, w: 11, d: 10, floors: 1, siding: 'sidingBlue', roofColor: 0x2a2a28, litWindows: 1, seed: 131, label: 'THE PATEL HOUSE' },
@@ -89,7 +89,7 @@ function home(b: MapBuilder, e: HomeEntry): void {
   b.frontage(e.spec, doorAt, north ? edge - 0.6 : edge + 0.6, e.driveX, edge);
 }
 
-/** The road, its sidewalks and the dead end. Birch Lane's sidewalk breaks for the junction (maple-hollow.ts). */
+/** The road, its sidewalks and the dead end. Pell Lane's sidewalk breaks for the junction (maple-hollow.ts). */
 function roads(b: MapBuilder): void {
   const { z, end } = OAK;
   const x0 = OAK.birch + RW;
@@ -102,9 +102,9 @@ function roads(b: MapBuilder): void {
   // The trail: from the park's back gate across the woods to the north sidewalk, and on into the park.
   b.boxMinMax(OAK.trailX - 1, 0, 36, OAK.trailX + 1, 0.015, WALK_N, 'dirt', { collide: false });
 
-  // The junction: Oak Street stops for Birch Lane.
+  // The junction: Kinney Street stops for Pell Lane.
   b.prop('stopSign', x0 + 0.6, z - RW - 0.6, Math.PI / 2);
-  b.prop('streetSign', x0 + 0.6, z + RW + 0.6, Math.PI, { text: 'BIRCH LN|OAK ST' });
+  b.prop('streetSign', x0 + 0.6, z + RW + 0.6, Math.PI, { text: 'PELL LN|KINNEY ST' });
   // The dead end.
   b.prop('boardSign', end + 1.3, z, -Math.PI / 2, { text: 'DEAD END|NO OUTLET' });
   b.prop('jerseyBarrier', end - 1.4, z - 2.1, Math.PI / 2 + 0.06);
@@ -114,11 +114,11 @@ function roads(b: MapBuilder): void {
 
 function streetDressing(b: MapBuilder): void {
   const { z } = OAK;
-  // Lights alternate sides, as on Elm; one has died.
+  // Lights alternate sides, as on Hale; one has died.
   for (const x of [-35, 17]) streetlight(b, x, LIGHT_N, 0);
   streetlight(b, 64, LIGHT_N, 0, 'dead');
   for (const x of [-4, 45, 82]) streetlight(b, x, LIGHT_S, Math.PI);
-  // Birch Lane gets one past the junction.
+  // Pell Lane gets one past the junction.
   streetlight(b, OAK.birch + RW + 0.55, 118, -Math.PI / 2);
 
   // Utility line along the south side (its own wire run).
@@ -198,7 +198,7 @@ function backyards(b: MapBuilder): void {
   b.prop('patioTable', 57, 124.5, 0.2, { movable: true });
   b.prop('chair', 58.2, 124.2, -Math.PI / 2 - 0.3, { movable: true });
 
-  // The shared alley gets a lamp on the Oak side and a little more junk.
+  // The shared alley gets a lamp on the Kinney side and a little more junk.
   b.light({ kind: 'point', x: -4, y: 6.0, z: 45.25, color: 0xffb36b, intensity: 18, range: 13, decay: 1.8, fixture: 'none' });
   b.prop('trashBin', 6.8, 50.6, 0.1, { variant: 2, movable: true });
   b.prop('pallet', 47, 50.4, 0.4, { movable: true });
@@ -223,17 +223,17 @@ function frontYards(b: MapBuilder): void {
   bushes.forEach(([x, z], i) => b.prop('bush', x, z, i + 0.3, { variant: i + 3 }));
 }
 
-/** Builds Oak Street into the map. Call before the woods, which leave its lots, road and trail clear. */
+/** Builds Kinney Street into the map. Call before the woods, which leave its lots, road and trail clear. */
 export function oakStreet(b: MapBuilder): void {
   roads(b);
   for (const e of oakHomes()) home(b, e);
   streetDressing(b);
   backyards(b);
   frontYards(b);
-  b.area('OAK STREET', LOTS_START - 0.6, OAK.end + SW + 2, FRONT_N - 1, FRONT_S + 1);
+  b.area('KINNEY STREET', LOTS_START - 0.6, OAK.end + SW + 2, FRONT_N - 1, FRONT_S + 1);
 }
 
-/** Ground the woods keep clear for Oak Street: its lots, the road out to the dead end, the trail. */
+/** Ground the woods keep clear for Kinney Street: its lots, the road out to the dead end, the trail. */
 export function oakClear(x: number, z: number): boolean {
   if (x > LOTS_START - 1.5 && x < OAK.lotsEnd + 1.5 && z > OAK.northFence - 3 && z < OAK.southFence + 1.5) return true;
   if (x > OAK.lotsEnd - 2 && x < OAK.end + SW + 3 && Math.abs(z - OAK.z) < RW + SW + 3.5) return true;

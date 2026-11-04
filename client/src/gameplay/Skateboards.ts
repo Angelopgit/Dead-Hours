@@ -284,7 +284,7 @@ export class SkateboardView {
       v.probe.update(dt, v.pos, camera, 0.3);
     }
     for (const id of [...this.views.keys()]) if (!seen.has(id)) this.remove(id);
-    audio.skateRoll(this.rolls);
+    audio.wheels.skateRoll(this.rolls);
   }
 
   private create(b: Skateboard): View {
@@ -308,8 +308,8 @@ export class SkateboardView {
       v.rider = b.rider;
       v.ease = 0;
       const at = pose?.pos ?? _q.set(b.pos.x, b.pos.y, b.pos.z);
-      if (b.rider) audio.skateMount(at);
-      else if (was) audio.skateOff(at);
+      if (b.rider) audio.wheels.skateMount(at);
+      else if (was) audio.wheels.skateOff(at);
       v.air = false;
       v.push = -1;
     }
@@ -322,13 +322,13 @@ export class SkateboardView {
       const spin = SKATE_TRICKS[v.trick].spin;
       const halves = pose ? spin : Math.round(spin * turned(v.trickU));
       if (halves % 2) v.half = v.half ? 0 : Math.PI;
-      if (pose) audio.skateCatch(v.pos);
+      if (pose) audio.wheels.skateCatch(v.pos);
       v.trick = null;
     }
     if (kind && !v.trick) {
       v.trick = kind;
       v.trickToe = pose!.toe;
-      audio.skateFlick(v.pos, SKATE_TRICKS[kind].flip !== 0);
+      audio.wheels.skateFlick(v.pos, SKATE_TRICKS[kind].flip !== 0);
     }
     const tyaw = (pose ? pose.yaw : b.yaw) + v.half;
     v.pos.x += (tx - v.pos.x) * k;
@@ -385,11 +385,11 @@ export class SkateboardView {
     // Sounds: the kick, the pop and the landing, and the wheels.
     const air = pose.air;
     if (air) v.airT += dt;
-    if (!v.air && air && pose.pop >= 0 && pose.pop < 0.15) audio.skatePop(v.pos);
-    if (v.air && !air && v.airT > 0.2) audio.skateLand(v.pos, Math.min(1, v.airT / 0.6));
+    if (!v.air && air && pose.pop >= 0 && pose.pop < 0.15) audio.wheels.skatePop(v.pos);
+    if (v.air && !air && v.airT > 0.2) audio.wheels.skateLand(v.pos, Math.min(1, v.airT / 0.6));
     if (!air) v.airT = 0;
     v.air = air;
-    if (v.push >= 0 && pose.push >= SKATEBOARD.pushFrom && v.push < SKATEBOARD.pushFrom) audio.skateKick(v.pos);
+    if (v.push >= 0 && pose.push >= SKATEBOARD.pushFrom && v.push < SKATEBOARD.pushFrom) audio.wheels.skateKick(v.pos);
     v.push = pose.push;
     v.surfaceT -= dt;
     if (v.surfaceT <= 0) {
@@ -402,7 +402,7 @@ export class SkateboardView {
         v.seam -= Math.abs(along);
         if (v.seam <= 0) {
           v.seam = 1.5;
-          audio.skateSeam(v.pos, Math.min(1, v.speed / 7));
+          audio.wheels.skateSeam(v.pos, Math.min(1, v.speed / 7));
         }
       }
       this.rolls.push({ id: v.id, pos: v.pos.clone(), speed: v.speed, rough: v.rough });
@@ -427,6 +427,6 @@ export class SkateboardView {
   dispose(): void {
     for (const id of [...this.views.keys()]) this.remove(id);
     this.root.removeFromParent();
-    audio.skateRoll([]);
+    audio.wheels.skateRoll([]);
   }
 }

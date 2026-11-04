@@ -82,7 +82,7 @@ export class LoadoutPanel {
     const cur = isPrimary ? profile.primary : SECONDARY_WEAPONS.includes(profile.secondary as WeaponId) ? profile.secondary : 'pistol';
     const what = isPrimary ? 'PRIMARY' : 'SIDEARM';
     this.carry.replaceChildren(
-      h('span', { class: 'lbl' }, `${WEAPONS[id].name.toUpperCase()} · ${WEAPONS[id].model}`),
+      h('span', { class: 'lbl' }, `${WEAPONS[id].name.toUpperCase()}, ${WEAPONS[id].model}`),
       h('button', {
         class: `creator-btn ${cur === id ? 'primary' : ''}`,
         onclick: () => {
@@ -102,7 +102,7 @@ export class LoadoutPanel {
     const rows = unlockTrack().map((t) => h('li', { class: owns(t.option, u) ? 'got' : '' },
       h('b', {}, `LV ${t.level}`), h('span', {}, SLOT_LABELS[t.slot]), h('span', {}, t.option.label)));
     this.track.replaceChildren(
-      h('h3', {}, `Unlocks · level ${level}`),
+      h('h3', {}, `Unlocks (you are level ${level})`),
       h('ol', {}, ...rows),
       h('p', { class: 'gs-hint' }, account.profile
         ? 'XP comes from every night: time survived, kills, headshots, arms torn off and supplies found. Supporter finishes come with the Supporter Pack.'

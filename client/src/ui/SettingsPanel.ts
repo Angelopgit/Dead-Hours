@@ -60,14 +60,14 @@ function matchesPreset(p: GraphicsPreset): boolean {
 /** The fixed controller layout, as a reference card. */
 function padLayout(): HTMLElement[] {
   const rows: [string, string][] = [
-    ['Left stick', 'Move · click to sprint'], ['Right stick', 'Look'],
+    ['Left stick', 'Move, click to sprint'], ['Right stick', 'Look'],
     [PAD_LABELS.fire!, ACTION_LABELS.fire], [PAD_LABELS.aim!, ACTION_LABELS.aim],
-    [PAD_LABELS.jump!, ACTION_LABELS.jump], [PAD_LABELS.crouch!, 'Crouch on / off · hold: prone · sprinting: dive'],
+    [PAD_LABELS.jump!, ACTION_LABELS.jump], [PAD_LABELS.crouch!, 'Crouch on or off. Hold to go prone, or dive while sprinting'],
     [PAD_LABELS.reload!, ACTION_LABELS.reload], ['Y', 'Switch weapon'],
     [PAD_LABELS.interact!, ACTION_LABELS.interact], [PAD_LABELS.heal!, ACTION_LABELS.heal],
-    [PAD_LABELS.melee!, ACTION_LABELS.melee], ['D-pad ↑', 'Flashlight · hold: switch shoulder'], ['D-pad ↓', ACTION_LABELS.barricade], ['View', 'Inventory (hold)'],
+    [PAD_LABELS.melee!, ACTION_LABELS.melee], ['D-pad ↑', 'Flashlight. Hold to switch shoulder'], ['D-pad ↓', ACTION_LABELS.barricade], ['View', 'Inventory (hold)'],
     ['D-pad ← / →', 'Push to talk / Team radio'], ['Start', 'Pause'],
-    ['Menus', 'D-pad moves · A selects · B back · LB/RB tabs'],
+    ['Menus', 'D-pad moves, A picks, B goes back, LB and RB switch tabs'],
   ];
   return rows.map(([k, v]) => h('div', {}, h('span', { class: 'k' }, k), v));
 }

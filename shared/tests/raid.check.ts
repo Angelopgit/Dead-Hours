@@ -214,9 +214,9 @@ section('How hard they hit');
 
 section('Survivors in a house');
 {
-  // At the Henderson house's front window, looking out at the street.
+  // At the Mercer house's front window, looking out at the street.
   const front = map.windows.find((w) => w.houseId === 'house-ne' && w.axis === 'x' && w.outward === 1);
-  check(!!front, `found the Henderson house front window (${front?.id})`);
+  check(!!front, `found the Mercer house front window (${front?.id})`);
   if (front) {
     const inside = { x: front.x, y: 0.3, z: front.z - (front.axis === 'x' ? front.outward : 0) * 1.0 };
     const res = raidOn(5, inside, 60, (_s, _r, ev) => ev.some((e) => e.type === 'playerHurt'));

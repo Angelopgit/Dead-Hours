@@ -4,7 +4,7 @@ import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type W
 import { GAME } from '../config/game';
 import { DIVE, DOWNED, PLAYER, PRONE } from '../config/player';
 import { HORDES, LULLS, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
-import { SERUM, SUPPLY_DROPS, caseSpot } from '../config/drops';
+import { SERUM, SUPPLY_DROPS } from '../config/drops';
 import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, type LegZone } from '../config/limbs';
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
 import { GORE, isGoreGun, shotgunReach } from '../config/gore';
@@ -17,7 +17,7 @@ import { decodeAppearance, encodeAppearance } from '../config/appearance';
 import { encodeBuild, type Loadout, type WeaponBuild } from '../config/progression';
 import type { MapDefinition } from '../types/world';
 import { Arsenal, type ArsenalTick, type HeldLimb } from './Arsenal';
-import { NAV_INDOOR, NAV_NEAR_WALL, NAV_REACHABLE, type NavGrid } from './NavGrid';
+import { NAV_INDOOR, NAV_REACHABLE, type NavGrid } from './NavGrid';
 import { rayZones, along, type ZoneShape } from './hitzones';
 import { ZOMBIE_STEP, Zombie } from './Zombie';
 import { Raid } from './Raid';
@@ -34,6 +34,9 @@ import { Vehicles, type DriveState } from './Vehicles';
 import { VEHICLE } from '../config/vehicles';
 import { Bicycles } from './Bicycles';
 import { BICYCLE } from '../config/bicycles';
+import { Contracts } from './Contracts';
+import { Airdrops } from './Airdrops';
+
 
 /** Movement state of a player, fed from the character controller every step. */
 export interface PlayerMotion {
@@ -77,6 +80,8 @@ export interface PlayerStats {
   limbKills: number;
   /** Teammates picked back up. */
   revives: number;
+  /** Night goals the team finished while this survivor was in the night (Contracts). */
+  goals: number;
 }
 
 export class SimPlayer {
@@ -84,12 +89,12 @@ export class SimPlayer {
   alive = true;
   readonly arsenal: Arsenal;
   bandages: number = COMBAT.startBandages;
-  /** Lazarus serum armor left: soaks up part of every zombie hit (SERUM). */
+  /** Halberg serum armor left: soaks up part of every zombie hit (SERUM). */
   armor = 0;
   /** Boost syringes running: simulation time each wears off (see BOOSTS). */
   boosts: Partial<Record<BoostId, number>> = {};
   readonly motion: PlayerMotion;
-  readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0, revives: 0 };
+  readonly stats: PlayerStats = { kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0, damageDealt: 0, suppliesCollected: 0, damageTaken: 0, limbsSevered: 0, limbKills: 0, revives: 0, goals: 0 };
   /** The crosshair ray the last melee swing was aimed with (decides what it lands on). */
   meleeAim: { origin: Vec3; dir: Vec3 } | null = null;
   /** Where the throw in progress goes (the crosshair ray when it was started). */
@@ -199,7 +204,7 @@ export interface SupplyDrop {
   /** Exclusive weapon in a case beside the crate (rare), and that case's interactable (-1 until landed). */
   weapon: WeaponId | null;
   caseItem: number;
-  /** A Lazarus serum on the crate's other side (rare), and its interactable (-1 until landed). */
+  /** A Halberg serum on the crate's other side (rare), and its interactable (-1 until landed). */
   serum: boolean;
   serumItem: number;
   /** Grenades and Molotovs packed in the crate. */
@@ -300,16 +305,21 @@ export class Simulation {
   private pathBudget = 0;
   /** Steps run while zombies were held (see step()): their path searches are saved up for the next. */
   private heldSteps = 0;
-  private stepDt = 1 / 60;
-  private readonly rand: () => number;
-  private readonly outdoorNodes: Int32Array;
+  /** Shared with Airdrops. */
+  stepDt = 1 / 60;
+  /** Shared with Airdrops. */
+  readonly rand: () => number;
+  /** Shared with Airdrops. */
+  readonly outdoorNodes: Int32Array;
   private readonly zones: ZoneShape[] = [];
   private lookCounter = 0;
   readonly drops: SupplyDrop[] = [];
   /** Survival time of the next supply drop. */
-  private nextDropAt: number = SUPPLY_DROPS.firstAt;
+  /** Shared with Airdrops. */
+  nextDropAt: number = SUPPLY_DROPS.firstAt;
   /** Things a drop must not come down on: tree crowns, lamp arms, poles, canopies. */
-  private readonly overhead: { x: number; z: number; r: number }[] = [];
+  /** Shared with Airdrops. */
+  readonly overhead: { x: number; z: number; r: number }[] = [];
   /** Severed arms, loose or held. */
   readonly limbs: SimLimb[] = [];
   /** The van raid (once a night, see Raid.ts). */
@@ -352,6 +362,10 @@ export class Simulation {
   readonly vehicles: Vehicles;
   /** Bicycles lying about, who rides which and who stands on whose pegs. */
   readonly bicycles: Bicycles;
+  /** Tonight's three team goals. */
+  readonly contracts: Contracts;
+  /** The helicopter supply drops (sim/Airdrops.ts). */
+  readonly airdrops = new Airdrops(this);
 
   constructor(opts: SimOptions) {
     this.physics = opts.physics;
@@ -362,6 +376,7 @@ export class Simulation {
     this.pickRand = rng(((opts.seed ?? 1) * 7919 + 13) >>> 0);
     this.boostRand = rng(((opts.seed ?? 1) * 6271 + 29) >>> 0);
     this.raid = new Raid(this, opts.seed ?? 1);
+    this.contracts = new Contracts(this, opts.seed ?? 1);
     this.phaseTime = opts.preparation ?? GAME.preparationSeconds;
     const controller = (step: boolean) => {
       const ctrl = this.physics.world.createCharacterController(0.02);
@@ -413,6 +428,8 @@ export class Simulation {
 
   emit(e: SimEvent): void {
     this.events.push(e);
+    // Unset only while the constructor runs.
+    this.contracts?.observe(e);
   }
 
   /** Events since the last drain, oldest first. */
@@ -1463,7 +1480,7 @@ export class Simulation {
       if (it.supply <= 0) return false;
       const taken = it.takenBy?.get(id) ?? 0;
       if (taken >= SUPPLY_DROPS.perPlayerLimit) {
-        this.emit({ type: 'notice', player: id, text: 'YOU TOOK YOUR SHARE', sub: 'The rest is for the others' });
+        this.emit({ type: 'notice', player: id, text: 'YOU TOOK YOUR SHARE', sub: 'The rest is for the others.' });
         return false;
       }
       // Universal rounds: whatever the survivor carries, every weapon is filled up.
@@ -1901,7 +1918,7 @@ export class Simulation {
     });
     if (!open.length) return null;
     // The gas station is the likeliest place, then basements, then bedrooms (there are many: with
-    // Oak Street's the store needs 8 to keep its sixth of the draws).
+    // Kinney Street's the store needs 8 to keep its sixth of the draws).
     const weightOf = (r: PickupRoom) => (r.room === 'store' ? 8 : r.room === 'basement' ? 1.6 : 1);
     let x = this.pickRand() * open.reduce((s, r) => s + weightOf(r), 0);
     let room = open[open.length - 1];
@@ -2102,7 +2119,7 @@ export class Simulation {
     if (it.supply <= 0 || !kind || this.revivingOf(p.id)) return false;
     const def = BOOSTS[kind];
     if (this.boostLeft(p, kind) > def.duration * BOOST_PICKUPS.refreshBelow) {
-      this.emit({ type: 'notice', player: p.id, text: `${def.short} STILL RUNNING`, sub: 'Save this one for later, or for someone else' });
+      this.emit({ type: 'notice', player: p.id, text: `${def.short} STILL RUNNING`, sub: 'Save this one for later, or for someone else.' });
       return false;
     }
     if (a.action === 'inject' || a.action === 'melee' || a.action === 'throw') return false;
@@ -2328,7 +2345,7 @@ export class Simulation {
       this.runHordes();
       this.runLulls();
       this.runSpawner();
-      this.runDrops();
+      this.airdrops.runDrops();
       this.raid.update(dt, zombies);
     }
 
@@ -2654,171 +2671,9 @@ export class Simulation {
     }
   }
 
-  // ---------------------------------------------------------------- supply drops
-
-  private runDrops(): void {
-    const D = SUPPLY_DROPS;
-    if (this.phaseTime >= this.nextDropAt) {
-      const flight = this.planFlight();
-      if (flight) {
-        const id = this.drops.length;
-        const weapon = this.rollExclusive();
-        const serum = this.forceSerum || this.rand() < D.serumChance;
-        this.forceSerum = false;
-        const frags = this.rand() < D.fragChance;
-        const molotovs = this.rand() < D.molotovChance;
-        this.drops.push({ id, flight, stage: 'inbound', interactable: -1, body: null, weapon, caseItem: -1, serum, serumItem: -1, frags, molotovs });
-        this.emit({ type: 'heli', drop: id, flight, ...(weapon ? { weapon } : {}), ...(serum ? { serum } : {}) });
-        const packed = ['Universal ammo', frags ? 'grenades' : '', molotovs ? 'Molotovs' : ''].filter(Boolean).join(' · ');
-        const extras = [weapon ? `${WEAPONS[weapon].model} aboard` : '', serum ? `${SERUM.name} aboard` : ''].filter(Boolean);
-        if (extras.length) this.emit({ type: 'notice', player: null, text: 'RARE SUPPLY DROP INBOUND', sub: `${packed} · ${extras.join(' · ')}` });
-        else this.emit({ type: 'notice', player: null, text: 'SUPPLY DROP INBOUND', sub: frags || molotovs ? packed : 'Universal ammo · refills every weapon' });
-        const [lo, hi] = D.interval;
-        this.nextDropAt = this.phaseTime + lo + this.rand() * (hi - lo);
-      } else {
-        this.nextDropAt = this.phaseTime + 5;
-      }
-    }
-    for (const d of this.drops) {
-      const f = d.flight;
-      if (d.stage === 'inbound') {
-        if (this.time >= f.arrive && this.time - this.lastDt() < f.arrive) this.noise(f.ground, D.hoverNoise, null);
-        if (this.time >= f.release) {
-          d.stage = 'falling';
-          this.noise(f.ground, D.hoverNoise, null);
-          this.emit({ type: 'supplyDrop', drop: d.id, stage: 'released', pos: { x: f.over.x, y: f.ground.y + f.releaseHeight, z: f.over.z } });
-        }
-      } else if (d.stage === 'falling' && this.time >= f.land) {
-        d.stage = 'landed';
-        const g = f.ground;
-        const alive = [...this.players.values()].filter((p) => p.alive).length;
-        d.interactable = this.interactables.length;
-        this.interactables.push({
-          id: d.interactable, kind: 'supply', pos: { x: g.x, y: g.y + 0.5, z: g.z },
-          supply: D.baseUses + alive, range: 2.1, takenBy: new Map(),
-          ...(d.frags ? { frags: true } : {}), ...(d.molotovs ? { molotovs: true } : {}),
-        });
-        // A solid crate: people walk around it, not through it.
-        const w = this.physics.world;
-        d.body = w.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(g.x, g.y + 0.36, g.z));
-        w.createCollider(RAPIER.ColliderDesc.cuboid(0.55, 0.36, 0.38).setCollisionGroups(groups(GROUP.dynamic, 0xffff)), d.body);
-        if (d.weapon) {
-          const c = caseSpot(f);
-          d.caseItem = this.interactables.length;
-          this.interactables.push({ id: d.caseItem, kind: 'exclusive', pos: { x: c.x, y: c.y + 0.2, z: c.z }, supply: 1, range: 1.9, weapon: d.weapon });
-        }
-        if (d.serum) {
-          const c = caseSpot(f, -1);
-          d.serumItem = this.interactables.length;
-          this.interactables.push({ id: d.serumItem, kind: 'serum', pos: { x: c.x, y: c.y + 0.2, z: c.z }, supply: 1, range: 1.9 });
-        }
-        this.noise(g, D.landNoise, null);
-        this.emit({ type: 'supplyDrop', drop: d.id, stage: 'landed', pos: { ...g } });
-      } else if (d.stage === 'landed' && this.time - f.land > D.lifetime) {
-        this.removeDrop(d);
-      }
-    }
-  }
-
-  /** Whether this drop carries an exclusive weapon, and which: rarely before three minutes survived. */
-  private rollExclusive(): WeaponId | null {
-    const D = SUPPLY_DROPS;
-    if (this.forceExclusive) {
-      const w = this.forceExclusive;
-      this.forceExclusive = null;
-      return w;
-    }
-    if (this.rand() >= (this.phaseTime < D.exclusiveAfter ? D.exclusiveEarly : D.exclusiveChance)) return null;
-    const total = D.exclusiveWeights.reduce((s, [, k]) => s + k, 0);
-    let x = this.rand() * total;
-    for (const [w, k] of D.exclusiveWeights) if ((x -= k) < 0) return w;
-    return D.exclusiveWeights[D.exclusiveWeights.length - 1][0];
-  }
-
-  private lastDt(): number {
-    return this.stepDt;
-  }
-
-  private removeDrop(d: SupplyDrop): void {
-    if (d.stage === 'gone') return;
-    d.stage = 'gone';
-    if (d.interactable >= 0) this.interactables[d.interactable].supply = 0;
-    if (d.caseItem >= 0) this.interactables[d.caseItem].supply = 0;
-    if (d.serumItem >= 0) this.interactables[d.serumItem].supply = 0;
-    if (d.body) this.physics.world.removeRigidBody(d.body);
-    d.body = null;
-    this.emit({ type: 'supplyDrop', drop: d.id, stage: 'gone', pos: { ...d.flight.ground } });
-  }
-
-  /** Open ground for a crate to land on: flat walkable cells all around, nothing overhead. */
-  private openGround(pos: Vec3): boolean {
-    const nav = this.nav;
-    const r = SUPPLY_DROPS.clearRadius;
-    for (let dz = -r; dz <= r; dz += 0.5) {
-      for (let dx = -r; dx <= r; dx += 0.5) {
-        if (dx * dx + dz * dz > r * r) continue;
-        const m = nav.nodeAt(pos.x + dx, pos.y, pos.z + dz, 0);
-        if (!nav.reachable(m) || nav.flags[m] & (NAV_INDOOR | NAV_NEAR_WALL) || Math.abs(nav.nodeY[m] - pos.y) > 0.2) return false;
-      }
-    }
-    for (const o of this.overhead) if (Math.hypot(o.x - pos.x, o.z - pos.z) < o.r + 1.4) return false;
-    for (const [dx, dz] of [[0, 0], [1.2, 0], [-1.2, 0], [0, 1.2], [0, -1.2]]) {
-      if (this.physics.raycast(pos.x + dx, pos.y + 0.6, pos.z + dz, 0, 1, 0, 60) !== null) return false;
-    }
-    return true;
-  }
-
-  /** Picks a landing spot near the survivors and plans the helicopter's flight over it. */
-  private planFlight(): HeliFlight | null {
-    const D = SUPPLY_DROPS;
-    const alive = [...this.players.values()].filter((p) => p.alive);
-    if (!alive.length || !this.outdoorNodes.length) return null;
-    for (let tries = 0; tries < 200; tries++) {
-      // Somewhere in the distance band around one of the survivors.
-      const who = alive[Math.floor(this.rand() * alive.length)].motion.pos;
-      const ang = this.rand() * Math.PI * 2, dd = D.minDistance + this.rand() * (D.maxDistance - D.minDistance);
-      const n = this.nav.nodeAt(who.x + Math.cos(ang) * dd, 0.1, who.z + Math.sin(ang) * dd, 0.5);
-      if (!this.nav.reachable(n) || this.nav.flags[n] & NAV_INDOOR) continue;
-      const pos = this.nav.nodePos(n);
-      let nearest = Infinity;
-      for (const p of alive) nearest = Math.min(nearest, dist2D(p.motion.pos, pos));
-      if (nearest < D.minDistance || nearest > D.maxDistance) continue;
-      if (!this.openGround(pos)) continue;
-      const a = this.rand() * Math.PI * 2;
-      const b = a + (this.rand() < 0.5 ? -1 : 1) * (0.5 + this.rand() * 0.6);
-      const reach = this.map.halfExtent + 45;
-      const over = { x: pos.x, y: pos.y + D.altitude, z: pos.z };
-      const from = { x: over.x - Math.cos(a) * reach, y: over.y + 6, z: over.z - Math.sin(a) * reach };
-      const to = { x: over.x + Math.cos(b) * reach, y: over.y + 10, z: over.z + Math.sin(b) * reach };
-      const start = this.time;
-      // Cruise, then a few seconds slowing into the hover (the client eases the same way).
-      const arrive = start + dist2D(from, over) / D.speed + 2.5;
-      const release = arrive + D.hover;
-      const leave = release + D.linger;
-      const end = leave + dist2D(over, to) / D.speed + 2.5;
-      return {
-        from, over, to, start, arrive, release, leave, end,
-        ground: { x: pos.x, y: pos.y, z: pos.z }, land: release + D.releaseHeight / D.fallSpeed, releaseHeight: D.releaseHeight,
-      };
-    }
-    return null;
-  }
-
-  /** The next drop carries this weapon whatever the roll (debugging and tests). */
-  forceExclusive: WeaponId | null = null;
-
-  /** The next drop carries a Lazarus serum whatever the roll (debugging and tests). */
-  forceSerum = false;
-
-  /** Starts a supply drop now (debugging and tests); `weapon` puts an exclusive in it, `serum` a serum. */
+  /** A supply drop now (debugging and tests): see Airdrops.callSupplyDrop. */
   callSupplyDrop(weapon?: WeaponId, serum = false): SupplyDrop | null {
-    if (weapon && WEAPONS[weapon]?.exclusive) this.forceExclusive = weapon;
-    if (serum) this.forceSerum = true;
-    if (this.phase !== 'survival') return null;
-    this.nextDropAt = this.phaseTime;
-    this.runDrops();
-    const d = this.drops[this.drops.length - 1];
-    return d && d.stage === 'inbound' && d.flight.start === this.time ? d : null;
+    return this.airdrops.callSupplyDrop(weapon, serum);
   }
 
   private onArsenal(p: SimPlayer, t: ArsenalTick): void {

@@ -54,8 +54,8 @@ const smooth = (x: number, a: number, b: number): number => {
 };
 
 /**
- * 0 on the streets' lawns, 1 on the forest floor. North of Elm and along the sides the forest
- * floor starts on a straight line; south of Elm it follows the trees, so Oak Street's lots keep
+ * 0 on the streets' lawns, 1 on the forest floor. North of Hale and along the sides the forest
+ * floor starts on a straight line; south of Hale it follows the trees, so Kinney Street's lots keep
  * their grass. Past the edge of the map it's all woods.
  */
 export function woodsAt(map: MapDefinition): (x: number, z: number) => number {

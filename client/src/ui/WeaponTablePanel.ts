@@ -36,7 +36,7 @@ export class WeaponTablePanel {
       },
         h('div', {}, h('span', { class: 'wname' }, w.name.toUpperCase()), h('span', { class: 'wmodel' }, w.model), h('span', { class: 'carried' }, 'CARRIED')),
         h('div', { class: 'wdesc' }, w.description),
-        h('div', { class: 'wspec' }, `${w.magazine} RDS · ${w.mode} · ${w.fireRate} RPM`),
+        h('div', { class: 'wspec' }, `${w.magazine} rounds, ${w.mode.toLowerCase()}, ${w.fireRate} rounds a minute`),
         stat('Damage', w.stats.damage), stat('Fire rate', w.stats.fireRate), stat('Handling', w.stats.handling), stat('Range', w.stats.range),
       );
       this.cards.set(id, card);
@@ -48,7 +48,7 @@ export class WeaponTablePanel {
       h('p', {}, 'Swap your primary. Ammunition carries over in proportion. Your M17 pistol and machete stay holstered.'),
       grid,
       cb.onGunsmith ? h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', onclick: () => cb.onGunsmith?.(), onmouseenter: () => audio.ui('hover') }, 'GUNSMITH · ATTACHMENTS & FINISHES ▸'),
+        h('button', { class: 'btn primary', onclick: () => cb.onGunsmith?.(), onmouseenter: () => audio.ui('hover') }, 'GUNSMITH ▸'),
       ) : null,
       h('p', { class: 'table-hint' }, tableHint()),
     );

@@ -60,6 +60,7 @@ import { h } from '../ui/dom';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import { GRASS_TRAMPLERS, trampleGrass, type GrassFoot } from '../environment/Grass';
+import { FirstNight } from './FirstNight';
 
 /**
  * 'loading': built but not yet shown (Game gets it ready behind its loading screen; keys and
@@ -307,6 +308,8 @@ export class GameSession {
   /** Session time the last horde was outlasted (a lull starting with it says so). */
   private hordeOverAt = -Infinity;
   private hordeOverWave = 0;
+  /** The first nights' getting-ready steps on the goal card. */
+  private readonly firstNight = new FirstNight(true);
   /** First arm torn off / first picked up: say once what can be done with it. */
   private limbHinted = false;
   private crawlHinted = false;
@@ -750,8 +753,8 @@ export class GameSession {
     this.phase = 'playing';
     this.cam.snapNext();
     this.hud.setVisible(true);
-    if (this.opts.online?.begin.late) this.hud.notify('MAPLE HOLLOW', 'YOU JOINED A NIGHT UNDER WAY · FIND YOUR TEAM', 3.6);
-    else this.hud.notify('MAPLE HOLLOW', 'THE SAFEHOUSE · 21:47 · GEAR UP BEFORE THEY ARRIVE', 3.2);
+    if (this.opts.online?.begin.late) this.hud.notify(GAME.town.toUpperCase(), 'The night is already under way. Find your team.', 3.6);
+    else this.hud.notify(GAME.town.toUpperCase(), 'The safehouse, 9:47 pm. Gear up and board the windows before they come.', 3.2);
     this.input.enabled = true;
     if (this.input.device === 'mouse') this.input.requestLock();
     this.promptClick();
@@ -838,7 +841,7 @@ export class GameSession {
     this.fireHeld = false;
     this.fireBuffer = 0;
     const k = mate.reviver === this.myId ? Math.min(1, mate.revive / DOWNED.reviveTime) : 0;
-    this.hud.setPrompt('interact', `REVIVING ${mate.name.toUpperCase()} · ${Math.round(k * 100)}%`);
+    this.hud.setPrompt('interact', `REVIVING ${mate.name.toUpperCase()}, ${Math.round(k * 100)}%`);
     return true;
   }
 
@@ -856,7 +859,7 @@ export class GameSession {
       this.hud.setPrompt(null);
       this.hud.setScope(0);
       const last = this.me.downs >= DOWNED.maxDowns;
-      this.hud.notify('YOU ARE DOWN', last ? 'ONE MORE AND YOU ARE DEAD · HOLD ON' : 'HOLD ON · A TEAMMATE CAN GET YOU UP', 3, 'danger');
+      this.hud.notify('YOU ARE DOWN', last ? 'Once more and you are dead. Hold on.' : 'Hold on. A teammate can get you up.', 3, 'danger');
       this.downPanel.replaceChildren(this.downText, h('div', { class: 'dp-bar' }, this.downFill));
       this.ui.append(this.downPanel);
       audio.playerHurt(1);
@@ -873,7 +876,7 @@ export class GameSession {
     const helper = me.reviver ? this.sim.players.get(me.reviver) : null;
     const text = helper
       ? `${helper.name.toUpperCase()} IS GETTING YOU UP`
-      : `BLEEDING OUT · ${Math.max(0, Math.ceil(me.bleed))}`;
+      : `BLEEDING OUT, ${Math.max(0, Math.ceil(me.bleed))}`;
     if (this.downText.textContent !== text) this.downText.textContent = text;
     const k = helper ? me.revive / DOWNED.reviveTime : me.bleed / DOWNED.bleedOut;
     this.downFill.style.width = `${(THREE.MathUtils.clamp(k, 0, 1) * 100).toFixed(1)}%`;
@@ -990,7 +993,7 @@ export class GameSession {
     const code = encodeBuild(build);
     if (this.link) {
       if (!this.me.arsenal.refit(id, build)) {
-        panel?.setNote('HANDS ARE BUSY · TRY AGAIN IN A MOMENT');
+        panel?.setNote('Your hands are busy. Try again in a moment.');
         return;
       }
       this.act({ a: 'refit', weapon: id, build: code });
@@ -998,7 +1001,7 @@ export class GameSession {
       // Should the server refuse, the next snapshot after this puts the real build back.
       this.later.push({ t: 1.5, fn: () => this.mirror?.forgetBuilds(this.myId) });
     } else if (!this.sim.refit(this.myId, id, build)) {
-      panel?.setNote('HANDS ARE BUSY · TRY AGAIN IN A MOMENT');
+      panel?.setNote('Your hands are busy. Try again in a moment.');
       return;
     }
     // Saved to the profile: the next night starts with it too.
@@ -1324,7 +1327,7 @@ export class GameSession {
     const key = talking.map(([n, radio]) => `${n}${radio ? '*' : ''}`).join('|');
     if (key !== this.voxKey && this.voxList) {
       this.voxKey = key;
-      this.voxList.replaceChildren(...talking.map(([name, radio]) => h('div', { class: `vox${radio ? ' radio' : ''}` }, h('i'), radio ? `${name} · RADIO` : name)));
+      this.voxList.replaceChildren(...talking.map(([name, radio]) => h('div', { class: `vox${radio ? ' radio' : ''}` }, h('i'), radio ? `${name}, RADIO` : name)));
     }
   }
 
@@ -1478,7 +1481,10 @@ export class GameSession {
         this.chatBox.open();
         input.clear();
       }
-      if (input.held('inventory')) this.inventory.show(this.ui, this.me, this.timerText());
+      if (input.held('inventory')) {
+        this.inventory.show(this.ui, this.me, this.timerText());
+        this.firstNight.mark('gear');
+      }
       else this.inventory.hide();
       this.handleInteraction(dt);
       return;
@@ -1556,7 +1562,7 @@ export class GameSession {
     const hands: Action[] = ['reload', 'weapon1', 'weapon2', 'weapon3', 'melee', 'grenade', 'molotov', 'heal', 'gunsmith'];
     if ((wheel !== 0 || hands.some((k) => input.pressed(k))) && this.netNow - this.handsHintAt > 1.5) {
       this.handsHintAt = this.netNow;
-      this.hud.feedLine(`HANDS ON THE BARS · ${actionLabel('interact') || 'USE'} TO GET OFF`);
+      this.hud.feedLine(`HANDS ON THE BARS, ${actionLabel('interact') || 'USE'} TO GET OFF`);
     }
     if (input.pressed('chat') && this.chatBox && !this.chatBox.isOpen) {
       this.chatBox.open();
@@ -1878,12 +1884,12 @@ export class GameSession {
       const what = own.kind === 'door' ? 'DOOR' : 'WINDOW';
       const count = `${own.boards}/${own.max}`;
       if (own.boards > 0) {
-        this.hud.setPrompt('interact', `PRY A BOARD OFF THE ${what} · ${count}${own.boards < own.max ? ` · HOLD ${key('barricade')} TO ADD ONE` : ''}`);
+        this.hud.setPrompt('interact', `PRY A BOARD OFF THE ${what}, ${count}${own.boards < own.max ? `, HOLD ${key('barricade')} TO ADD ONE` : ''}`);
         return;
       }
       if (!best) {
-        const out = plan && vault?.slot === own ? ` · ${key('jump').toUpperCase()} ${plan.smash ? 'SMASH THROUGH' : 'VAULT OUT'}` : '';
-        this.hud.setPrompt('barricade', `HOLD TO BOARD UP THE ${what}${own.kind === 'window' && !own.glass ? ' · GLASS SMASHED' : ''}${out}`);
+        const out = plan && vault?.slot === own ? `, ${key('jump').toUpperCase()} ${plan.smash ? 'SMASH THROUGH' : 'VAULT OUT'}` : '';
+        this.hud.setPrompt('barricade', `HOLD TO BOARD UP THE ${what}${own.kind === 'window' && !own.glass ? ', GLASS SMASHED' : ''}${out}`);
         return;
       }
     }
@@ -1898,47 +1904,47 @@ export class GameSession {
     }
     if (best.kind === 'door') {
       const locked = this.sim.doorLocked(best.door!.body.index);
-      const hint = own && !best.door!.open ? ` · HOLD ${key('barricade')} TO BOARD UP` : '';
+      const hint = own && !best.door!.open ? `, HOLD ${key('barricade')} TO BOARD UP` : '';
       this.hud.setPrompt('interact', locked ? 'BOARDED UP FROM INSIDE' : `${best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR'}${hint}`);
     }
-    else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION · ${best.it!.supply} LEFT`);
-    else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES · ${best.it!.supply} LEFT`);
+    else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION, ${best.it!.supply} LEFT`);
+    else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES, ${best.it!.supply} LEFT`);
     else if (best.kind === 'supply') {
       const it = best.it!;
       const what = ['UNIVERSAL AMMO', it.frags ? 'GRENADES' : '', it.molotovs ? 'MOLOTOVS' : ''].filter(Boolean).join(' + ');
-      this.hud.setPrompt('interact', `TAKE ${what} · ${it.supply} LEFT`);
+      this.hud.setPrompt('interact', `TAKE ${what}, ${it.supply} LEFT`);
     }
-    else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()} · ARMOR AGAINST THE DEAD`);
+    else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()}, ARMOR AGAINST THE DEAD`);
     else if (best.kind === 'boost') {
       const b = BOOSTS[best.it!.boost ?? 'strength'];
       const left = boostLeft(this.me.boosts, best.it!.boost ?? 'strength', this.sim.time);
       this.hud.setPrompt('interact', left > b.duration * 0.5
-        ? `${b.name.toUpperCase()} · YOURS IS STILL RUNNING`
-        : `INJECT ${b.name.toUpperCase()} · ${b.blurb.toUpperCase()} · ${b.duration}S`);
+        ? `${b.name.toUpperCase()}, YOURS IS STILL RUNNING`
+        : `INJECT ${b.name.toUpperCase()}, ${b.blurb.toUpperCase()}, ${b.duration}S`);
     }
     else if (best.kind === 'melee') {
       const mine = this.me.arsenal.meleeId;
       const what = WEAPONS[best.it!.weapon ?? 'machete'].model;
       const pair = best.it!.weapon === 'katana' && mine === 'katana';
-      this.hud.setPrompt('interact', pair ? 'PICK UP SECOND KATANA · DUAL WIELD'
+      this.hud.setPrompt('interact', pair ? 'PICK UP A SECOND KATANA FOR TWO HANDS'
         : best.it!.weapon === 'katana' && mine === 'katanas' ? 'BOTH HANDS HOLD A KATANA'
         : mine === 'machete' ? `PICK UP ${what}` : `SWAP ${WEAPONS[mine].model} FOR ${what}`);
     }
-    else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model} · REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
+    else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model}, REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'board') this.hud.setPrompt('interact', 'RIDE THE SKATEBOARD');
     else if (best.kind === 'vehicle') {
       const v = best.vehicle!;
       const gas = v.gas <= 0 ? 'NO GAS' : `GAS ${Math.max(1, Math.round(v.gas * 100))}%`;
-      this.hud.setPrompt('interact', `${v.seats[0] === null ? 'DRIVE' : 'GET IN'} THE ${v.def.name} · ${gas}`);
+      this.hud.setPrompt('interact', `${v.seats[0] === null ? 'DRIVE' : 'GET IN'} THE ${v.def.name}, ${gas}`);
     }
     else if (best.kind === 'bike') {
       const rider = best.seat === 'peg' && best.bike!.rider ? this.sim.players.get(best.bike!.rider) : undefined;
-      this.hud.setPrompt('interact', best.seat === 'peg' ? `HOP ON THE PEGS${rider ? ` · ${rider.name.toUpperCase()} RIDES` : ''}` : 'GET ON THE BIKE');
+      this.hud.setPrompt('interact', best.seat === 'peg' ? `HOP ON THE PEGS${rider ? `, ${rider.name.toUpperCase()} RIDES` : ''}` : 'GET ON THE BIKE');
     }
     else if (best.kind === 'limb') {
       const l = best.limb!;
       const what = LIMB_NAME[l.cut];
-      this.hud.setPrompt('interact', `${this.me.arsenal.limb ? 'SWAP FOR' : 'PICK UP'} ${what} · ${l.wear} HIT${l.wear === 1 ? '' : 'S'}`);
+      this.hud.setPrompt('interact', `${this.me.arsenal.limb ? 'SWAP FOR' : 'PICK UP'} ${what}, ${l.wear} HIT${l.wear === 1 ? '' : 'S'}`);
     } else this.hud.setPrompt('interact', 'SELECT WEAPON');
     if (!this.input.pressed('interact')) return;
     if (best.kind === 'door') {
@@ -2048,10 +2054,10 @@ export class GameSession {
       const d = this.input.device;
       const k = (a: Action, alt: string) => actionLabel(a) || alt;
       this.hud.notify('SKATEBOARD', d === 'touch'
-        ? 'STICK UP PUSHES · DOWN BRAKES · SIDEWAYS CARVES · JUMP OLLIES · USE HOPS OFF'
+        ? 'STICK UP PUSHES, DOWN BRAKES, SIDEWAYS CARVES, JUMP OLLIES, USE HOPS OFF'
         : d === 'pad'
-          ? `LEFT STICK PUSH · BRAKE · CARVE · ${k('jump', 'A')} OLLIE · ${k('sprint', 'L3')} PUSH HARDER · ${k('interact', 'RB')} HOP OFF`
-          : `${k('forward', 'W')} PUSH · ${k('back', 'S')} BRAKE · ${k('left', 'A')}/${k('right', 'D')} CARVE · ${k('jump', 'SPACE')} OLLIE · ${k('sprint', 'SHIFT')} PUSH HARDER · ${k('interact', 'E')} HOP OFF`,
+          ? `LEFT STICK PUSH, BRAKE, CARVE, ${k('jump', 'A')} OLLIE, ${k('sprint', 'L3')} PUSH HARDER, ${k('interact', 'RB')} HOP OFF`
+          : `${k('forward', 'W')} PUSH, ${k('back', 'S')} BRAKE, ${k('left', 'A')}/${k('right', 'D')} CARVE, ${k('jump', 'SPACE')} OLLIE, ${k('sprint', 'SHIFT')} PUSH HARDER, ${k('interact', 'E')} HOP OFF`,
         4.5);
     }
   }
@@ -2067,7 +2073,7 @@ export class GameSession {
     const stick = d === 'pad' || d === 'touch';
     const [l, r, b] = stick ? ['←', '→', '↓'] : [k('left', 'A'), k('right', 'D'), k('back', 'S')];
     const [bl, br] = stick ? ['↙', '↘'] : [`${b}+${l}`, `${b}+${r}`];
-    this.hud.notify('FLIP TRICKS', `${jump} + ${stick ? 'STICK ' : ''}${l} KICKFLIP · ${r} HEELFLIP · ${b} SHOVE-IT · ${bl} 360 FLIP · ${br} VARIAL HEELFLIP`, 5);
+    this.hud.notify('FLIP TRICKS', `${jump} + ${stick ? 'STICK ' : ''}${l} KICKFLIP, ${r} HEELFLIP, ${b} SHOVE-IT, ${bl} 360 FLIP, ${br} VARIAL HEELFLIP`, 5);
   }
 
   /** Steps off (or, `bail`, is thrown off by a wall): the board comes to rest on the floor where the session put it. */
@@ -2102,7 +2108,7 @@ export class GameSession {
 
   /** Thrown off the deck: the board clatters away, the view jolts. */
   private bailFeedback(pos: THREE.Vector3): void {
-    audio.skateBail(pos);
+    audio.wheels.skateBail(pos);
     this.cam.addTrauma(0.35);
     this.input.rumble(0.5, 220);
     this.hud.feedLine('THROWN OFF THE SKATEBOARD');
@@ -2217,14 +2223,14 @@ export class GameSession {
     const d = this.input.device;
     const k = (a: Action, alt: string) => actionLabel(a) || alt;
     if (!driver) {
-      this.hud.notify('PASSENGER', d === 'touch' ? 'SHOOT FROM THE WINDOWS · SEAT MOVES OVER · USE GETS OUT' : `SHOOT FROM THE WINDOWS · ${k('barricade', 'G')} CHANGE SEAT · ${k('interact', 'E')} GET OUT`, 4);
+      this.hud.notify('PASSENGER', d === 'touch' ? 'SHOOT FROM THE WINDOWS, SEAT MOVES OVER, USE GETS OUT' : `SHOOT FROM THE WINDOWS, ${k('barricade', 'G')} CHANGE SEAT, ${k('interact', 'E')} GET OUT`, 4);
       return;
     }
-    this.hud.notify('DRIVING · WATCH THE GAS', d === 'touch'
-      ? 'STICK UP GAS · DOWN BRAKE AND REVERSE · SIDEWAYS STEERS · BRAKE BUTTON HANDBRAKE · HORN · USE GETS OUT'
+    this.hud.notify('DRIVING', d === 'touch'
+      ? 'STICK UP GAS, DOWN BRAKE AND REVERSE, SIDEWAYS STEERS, BRAKE BUTTON HANDBRAKE, HORN, USE GETS OUT'
       : d === 'pad'
-        ? `RT GAS · LT BRAKE · LEFT STICK STEERS · ${k('jump', 'A')} HANDBRAKE · ${k('melee', 'R3')} HORN · ${k('flashlight', '↑')} LIGHTS · ${k('interact', 'RB')} GET OUT`
-        : `${k('forward', 'W')} GAS · ${k('back', 'S')} BRAKE AND REVERSE · ${k('left', 'A')}/${k('right', 'D')} STEER · ${k('jump', 'SPACE')} HANDBRAKE · ${k('melee', 'F')} HORN · ${k('flashlight', 'L')} LIGHTS · ${k('interact', 'E')} GET OUT`,
+        ? `RT GAS, LT BRAKE, LEFT STICK STEERS, ${k('jump', 'A')} HANDBRAKE, ${k('melee', 'R3')} HORN, ${k('flashlight', '↑')} LIGHTS, ${k('interact', 'RB')} GET OUT`
+        : `${k('forward', 'W')} GAS, ${k('back', 'S')} BRAKE AND REVERSE, ${k('left', 'A')}/${k('right', 'D')} STEER, ${k('jump', 'SPACE')} HANDBRAKE, ${k('melee', 'F')} HORN, ${k('flashlight', 'L')} LIGHTS, ${k('interact', 'E')} GET OUT`,
       5);
   }
 
@@ -2312,7 +2318,7 @@ export class GameSession {
     const speed = Math.abs(this.driving ? this.driving.body.speed : v.speed);
     const free = v.seats.includes(null);
     const key = (a: Action, alt: string) => actionLabel(a) || alt;
-    const seatHint = free ? ` · ${key('barricade', 'SEAT')} CHANGE SEAT` : '';
+    const seatHint = free ? `, ${key('barricade', 'SEAT')} CHANGE SEAT` : '';
     if (speed > VEHICLE.exitSpeed) this.hud.setPrompt('interact', `SLOW DOWN TO GET OUT${seatHint}`);
     else this.hud.setPrompt('interact', `GET OUT${seatHint}`);
     if (this.input.pressed('barricade') && free) {
@@ -2392,7 +2398,7 @@ export class GameSession {
       near.sort((a, b) => a.d - b.d);
       for (let i = 0; i < near.length && i < 3; i++) list.push(near[i]);
     }
-    audio.engines(list);
+    audio.wheels.engines(list);
   }
 
   /** Something happened to a vehicle: doors, the starter, the engine catching or dying, a crash. */
@@ -2404,31 +2410,31 @@ export class GameSession {
     const inside = this.player.seated?.vehicle === e.vehicle;
     switch (e.stage) {
       case 'in':
-        audio.carDoor(at);
+        audio.wheels.carDoor(at);
         break;
       case 'out':
       case 'thrown':
         // Online this is heard before the seat sync puts them out; solo they are out already.
         this.exitSpot.heard(e, this.myId, this.player.seated?.vehicle ?? null);
-        audio.carDoor(e.pos ? v3(e.pos, this.tmpB) : at);
+        audio.wheels.carDoor(e.pos ? v3(e.pos, this.tmpB) : at);
         break;
       case 'crank':
-        audio.starter(at, v.def.crank);
+        audio.wheels.starter(at, v.def.crank);
         break;
       case 'start':
-        audio.engineCatch(at, v.kind === 'truck');
+        audio.wheels.engineCatch(at, v.kind === 'truck');
         break;
       case 'dry':
-        audio.sputter(at);
-        if (mine) this.hud.notify('THE TANK IS DRY', 'THIS ONE WON\'T START · FIND ANOTHER CAR', 2.6, 'danger');
+        audio.wheels.sputter(at);
+        if (mine) this.hud.notify('THE TANK IS DRY', 'This one won\'t start. Find another car.', 2.6, 'danger');
         break;
       case 'empty':
-        audio.sputter(at);
-        if (inside) this.hud.notify('OUT OF GAS', 'THE ENGINE DIED · FIND ANOTHER CAR', 2.6, 'danger');
+        audio.wheels.sputter(at);
+        if (inside) this.hud.notify('OUT OF GAS', 'The engine died. Find another car.', 2.6, 'danger');
         break;
       case 'crash': {
         const k = e.strength ?? VEHICLE.crashSound;
-        audio.carCrash(at, k);
+        audio.wheels.carCrash(at, k);
         // The driver felt it already; the others in the car feel it now.
         if (inside && !this.driving) this.cam.addTrauma(Math.min(0.8, 0.15 + k * 0.03));
         break;
@@ -2475,14 +2481,14 @@ export class GameSession {
     if (seat === 'rider' && !this.bikeHinted) {
       this.bikeHinted = true;
       this.hud.notify('BICYCLE', d === 'touch'
-        ? 'STICK UP PEDALS · DOWN BRAKES · SIDEWAYS STEERS · JUMP HOPS · FIRE RINGS THE BELL · USE GETS OFF'
+        ? 'STICK UP PEDALS, DOWN BRAKES, SIDEWAYS STEERS, JUMP HOPS, FIRE RINGS THE BELL, USE GETS OFF'
         : d === 'pad'
-          ? `LEFT STICK PEDAL · BRAKE · STEER · ${k('jump', 'A')} HOP · ${k('sprint', 'L3')} STAND ON THE PEDALS · ${k('fire', 'RT')} BELL · ${k('interact', 'RB')} GET OFF`
-          : `${k('forward', 'W')} PEDAL · ${k('back', 'S')} BRAKE · ${k('left', 'A')}/${k('right', 'D')} STEER · ${k('jump', 'SPACE')} HOP · ${k('sprint', 'SHIFT')} STAND ON THE PEDALS · ${k('fire', 'FIRE')} BELL · ${k('interact', 'E')} GET OFF`,
+          ? `LEFT STICK PEDAL, BRAKE, STEER, ${k('jump', 'A')} HOP, ${k('sprint', 'L3')} STAND ON THE PEDALS, ${k('fire', 'RT')} BELL, ${k('interact', 'RB')} GET OFF`
+          : `${k('forward', 'W')} PEDAL, ${k('back', 'S')} BRAKE, ${k('left', 'A')}/${k('right', 'D')} STEER, ${k('jump', 'SPACE')} HOP, ${k('sprint', 'SHIFT')} STAND ON THE PEDALS, ${k('fire', 'FIRE')} BELL, ${k('interact', 'E')} GET OFF`,
         5);
     } else if (seat === 'peg' && !this.pegHinted) {
       this.pegHinted = true;
-      this.hud.notify('ON THE PEGS', `AIM AND SHOOT WHILE THEY PEDAL · ${d === 'touch' ? 'USE' : k('interact', d === 'pad' ? 'RB' : 'E')} HOPS OFF`, 4);
+      this.hud.notify('ON THE PEGS', `AIM AND SHOOT WHILE THEY PEDAL, ${d === 'touch' ? 'USE' : k('interact', d === 'pad' ? 'RB' : 'E')} HOPS OFF`, 4);
     }
   }
 
@@ -2551,7 +2557,7 @@ export class GameSession {
 
   /** Thrown off (or knocked off) a bike: it clatters down, the view jolts. */
   private bikeBailFeedback(pos: THREE.Vector3, line: string): void {
-    audio.bikeCrash(pos);
+    audio.wheels.bikeCrash(pos);
     this.cam.addTrauma(0.38);
     this.input.rumble(0.55, 240);
     this.hud.feedLine(line);
@@ -2563,7 +2569,7 @@ export class GameSession {
     this.bellAt = this.netNow;
     if (this.link) {
       this.link.act({ a: 'bell' });
-      audio.bikeBell(this.bellPos(this.tmpE), true);
+      audio.wheels.bikeBell(this.bellPos(this.tmpE), true);
     } else this.sim.ringBell(this.myId);
   }
 
@@ -2751,7 +2757,7 @@ export class GameSession {
     const pct = Math.min(99, Math.round((t / total) * 100));
     const what = slot.kind === 'door' ? 'DOOR' : 'WINDOW';
     this.hud.setPrompt(want === 'board' ? 'barricade' : 'interact',
-      want === 'board' ? `NAILING BOARD ${slot.boards + 1}/${slot.max} ON THE ${what} · ${pct}%` : `PRYING A BOARD OFF · ${slot.boards}/${slot.max} · ${pct}%`);
+      want === 'board' ? `NAILING BOARD ${slot.boards + 1}/${slot.max} ON THE ${what}, ${pct}%` : `PRYING A BOARD OFF, ${slot.boards}/${slot.max}, ${pct}%`);
     return true;
   }
 
@@ -2953,7 +2959,7 @@ export class GameSession {
           audio.meleeHit(e.weapon, A, { kill: e.killed, head: e.zone === 'head', damage: e.damage });
         } else if (e.vehicle !== undefined) {
           // Run down: the thump into the bodywork, and what it does to them.
-          audio.carHit(A, Math.min(1, e.damage / 120));
+          audio.wheels.carHit(A, Math.min(1, e.damage / 120));
           audio.flesh(A, { damage: e.damage, head: false, own: e.by === this.myId, melee: true });
         } else {
           audio.flesh(A, { damage: e.damage, head: e.zone === 'head', own: e.by === this.myId, melee: e.melee, power });
@@ -2985,7 +2991,7 @@ export class GameSession {
           this.gripHinted = true;
           const k = (a: 'fire' | 'melee' | 'weapon1' | 'weapon2') => actionLabel(a) || (a === 'fire' ? 'FIRE' : a === 'melee' ? 'MELEE' : 'SWAP');
           const drop = this.input.device === 'mouse' ? `${k('weapon1')} / ${k('weapon2')}` : k('weapon1');
-          this.hud.notify('BEAT THEM WITH IT', `${k('fire')} OR ${k('melee')} SWING · ${drop} DROP IT FOR A GUN`, 3.2);
+          this.hud.notify('BEAT THEM WITH IT', `${k('fire')} OR ${k('melee')} SWING, ${drop} DROP IT FOR A GUN`, 3.2);
         }
         break;
       case 'limbDropped':
@@ -3010,7 +3016,7 @@ export class GameSession {
           }
           if (this.link && this.netNow - this.bailSentAt < this.link.rtt + 1) break;
           this.bailFeedback(A);
-        } else audio.skateBail(A);
+        } else audio.wheels.skateBail(A);
         break;
       }
       case 'draw': {
@@ -3026,8 +3032,8 @@ export class GameSession {
         const p = this.player;
         if (e.stage === 'bell') {
           // (Online this survivor's own ring played when it was pressed.)
-          if (e.player === this.myId) audio.bikeBell(this.bellPos(A), true);
-          else audio.bikeBell(this.remotes?.positionOf(e.player, A)?.setY(A.y - 0.1) ?? A.setY(A.y + BICYCLE.grips.y));
+          if (e.player === this.myId) audio.wheels.bikeBell(this.bellPos(A), true);
+          else audio.wheels.bikeBell(this.remotes?.positionOf(e.player, A)?.setY(A.y - 0.1) ?? A.setY(A.y + BICYCLE.grips.y));
           break;
         }
         if (e.player === this.myId) {
@@ -3052,7 +3058,7 @@ export class GameSession {
           }
           break;
         }
-        if (e.stage === 'bail' && e.seat === 'rider') audio.bikeCrash(A);
+        if (e.stage === 'bail' && e.seat === 'rider') audio.wheels.bikeCrash(A);
         // Someone hopped on this survivor's pegs (or off them).
         const mine = this.player.cycle;
         if (mine && mine.bike === e.bike && e.seat === 'peg') {
@@ -3066,10 +3072,10 @@ export class GameSession {
         audio.meleePickup(e.weapon, A);
         if (e.player !== this.myId) break;
         if (e.weapon === 'katanas') {
-          this.hud.notify('DUAL KATANAS', `${actionLabel('melee') || 'MELEE'} TO SWING · ${actionLabel('weapon3') || 'SWAP'} TO HOLD THEM OUT`, 3.2);
+          this.hud.notify('DUAL KATANAS', `${actionLabel('melee') || 'MELEE'} TO SWING, ${actionLabel('weapon3') || 'SWAP'} TO HOLD THEM OUT`, 3.2);
         } else if (!this.meleeHinted) {
           this.meleeHinted = true;
-          this.hud.notify(`${WEAPONS[e.weapon].model} IN HAND`, `${actionLabel('melee') || 'MELEE'} TO SWING · ${actionLabel('weapon3') || 'SWAP'} TO HOLD IT OUT`, 3.2);
+          this.hud.notify(`${WEAPONS[e.weapon].model} IN HAND`, `${actionLabel('melee') || 'MELEE'} TO SWING, ${actionLabel('weapon3') || 'SWAP'} TO HOLD IT OUT`, 3.2);
         }
         if (e.swapped) this.hud.feedLine(`LEFT THE ${WEAPONS[e.swapped].model} BEHIND`);
         break;
@@ -3134,7 +3140,7 @@ export class GameSession {
           this.hud.feedLine(e.fresh > 0 ? 'A SCREAMER CALLED THE HORDE' : 'A SCREAMER GAVE YOU AWAY');
           if (!this.screamHinted) {
             this.screamHinted = true;
-            this.hud.notify('SCREAMER', 'SHOOT THEM BEFORE THEY CALL · A HIT CUTS THE SCREAM SHORT', 3, 'danger');
+            this.hud.notify('SCREAMER', 'Shoot it before it calls the others. A hit cuts the scream short.', 3, 'danger');
           }
         }
         break;
@@ -3182,6 +3188,7 @@ export class GameSession {
       case 'barricade': {
         audio.board(v3(e.pos, A), e.change);
         if (e.player === this.myId && this.work) this.work.t = 0;
+        if (e.player === this.myId && e.change === 'nailed') this.firstNight.mark('board');
         if (e.change === 'broken') {
           const slot = this.sim.barricades.slots[e.slot];
           // Splinters fly into the room.
@@ -3243,7 +3250,7 @@ export class GameSession {
       case 'playerDowned':
         if (e.player !== this.myId) {
           const who = this.sim.players.get(e.player);
-          if (who && this.me.up) this.hud.notify(`${who.name.toUpperCase()} IS DOWN`, 'GET TO THEM AND HOLD INTERACT TO REVIVE', 2.4, 'danger');
+          if (who && this.me.up) this.hud.notify(`${who.name.toUpperCase()} IS DOWN`, 'Get to them and hold interact to pick them up.', 2.4, 'danger');
         }
         break;
       case 'playerRevived': {
@@ -3301,13 +3308,14 @@ export class GameSession {
       case 'pickup':
         if (e.player !== this.myId) break;
         audio.pickup(e.item);
+        this.firstNight.mark('stock');
         if (e.item === 'ammo') this.hud.feedLine(`AMMUNITION +${e.amount}`);
         else if (e.item === 'supply') {
           this.hud.feedLine(`UNIVERSAL AMMO +${e.amount}`);
-          this.hud.notify('ALL WEAPONS RESUPPLIED', 'Every gun you carry is full', 2.2);
+          this.hud.notify('ALL WEAPONS RESUPPLIED', 'Every gun you carry is full.', 2.2);
         }
         else if (e.item === 'bandage') this.hud.feedLine(`BANDAGE +${e.amount}`);
-        else if (e.item === 'serum') this.hud.notify(`${SERUM.name.toUpperCase()} INJECTED`, `The dead's hits do ${Math.round((1 - SERUM.absorb) * 100)}% damage until it is used up`, 3, 'rare');
+        else if (e.item === 'serum') this.hud.notify(`${SERUM.name.toUpperCase()} INJECTED`, `The dead's hits do ${Math.round((1 - SERUM.absorb) * 100)}% damage until it wears off.`, 3, 'rare');
         else if (e.weapon && WEAPONS[e.weapon].exclusive) this.hud.notify(`${WEAPONS[e.weapon].model} EQUIPPED`, WEAPONS[e.weapon].description, 3, 'rare');
         else if (e.weapon) this.hud.feedLine(`${WEAPONS[e.weapon].model} EQUIPPED`);
         break;
@@ -3317,6 +3325,7 @@ export class GameSession {
           else if (e.text === 'RARE SUPPLY DROP INBOUND') this.hud.notify(e.text, e.sub ?? '', 4.2, 'rare');
           else if (e.text === 'VEHICLE APPROACHING' || e.text === 'HOSTILE SURVIVORS') this.hud.notify(e.text, e.sub ?? '', 4, 'danger');
           else if (e.text === 'RAIDERS ELIMINATED') this.hud.notify(e.text, e.sub ?? '', 3.6);
+          else if (e.text === 'GOAL DONE') this.hud.notify(e.text, e.sub ?? '', 3.6, 'rare');
           else this.hud.feedLine(e.text);
         }
         break;
@@ -3341,7 +3350,8 @@ export class GameSession {
       case 'phase':
         if (e.phase === 'survival' && !this.outbreakAnnounced) {
           this.outbreakAnnounced = true;
-          this.hud.notify('THE OUTBREAK HAS BEGUN', 'SURVIVE AS LONG AS YOU CAN', 3.6, 'danger');
+          this.firstNight.over();
+          this.hud.notify('HERE THEY COME', 'Stay alive as long as you can.', 3.6, 'danger');
           audio.outbreak();
         }
         break;
@@ -3389,10 +3399,10 @@ export class GameSession {
     this.hud.feedLine(leg ? (killed ? (cut === 'hip' ? 'LEG BLOWN OFF' : 'SHIN BLOWN OFF') : 'LEG BLOWN OFF, STILL CRAWLING') : cut === 'shoulder' ? 'ARM TORN OFF' : 'FOREARM TORN OFF');
     if (leg && !killed && !this.crawlHinted) {
       this.crawlHinted = true;
-      this.hud.notify('LEG BLOWN OFF', 'IT IS STILL COMING. FINISH IT', 2.8);
+      this.hud.notify('LEG BLOWN OFF', 'It is still coming. Finish it.', 2.8);
     } else if (!this.limbHinted) {
       this.limbHinted = true;
-      this.hud.notify(leg ? 'LEG BLOWN OFF' : 'ARM TORN OFF', 'PICK IT UP AND BEAT THEM WITH IT', 2.8);
+      this.hud.notify(leg ? 'LEG BLOWN OFF' : 'ARM TORN OFF', 'Pick it up and beat them with it.', 2.8);
     }
   }
 
@@ -3597,7 +3607,7 @@ export class GameSession {
   }
 
   private readonly spectateLine = h('div', { class: 'spectate' });
-  private readonly reconnectLine = h('div', { class: 'spectate net-lost' }, 'CONNECTION LOST · RECONNECTING');
+  private readonly reconnectLine = h('div', { class: 'spectate net-lost' }, 'Connection lost. Reconnecting…');
   private framesDrawn = 0;
 
   /** The connection dropped and is being restored (the night goes on without this survivor meanwhile). */
@@ -3614,7 +3624,7 @@ export class GameSession {
     this.results?.dispose();
     this.results = null;
     const back = this.input.device === 'pad' ? 'B' : this.input.device === 'touch' ? 'TAP HERE' : 'ESC';
-    this.spectateLine.textContent = `WATCHING ${next.name.toUpperCase()} · ${back} FOR RESULTS`;
+    this.spectateLine.textContent = `WATCHING ${next.name.toUpperCase()}, ${back} FOR RESULTS`;
     this.ui.append(this.spectateLine);
   }
 
@@ -3650,14 +3660,14 @@ export class GameSession {
   private onHorde(wave: number, stage: 'warning' | 'surge' | 'over', at: number): void {
     if (!this.me.alive) return;
     if (stage === 'warning') {
-      this.hud.notify(`HORDE ${wave} INCOMING`, `${Math.round(at - this.sim.phaseTime)} SECONDS · FIND COVER, RELOAD`, 3.4, 'danger');
+      this.hud.notify(`HORDE ${wave} INCOMING`, `${Math.round(at - this.sim.phaseTime)} seconds. Get inside and reload.`, 3.4, 'danger');
       audio.hordeWarning();
     } else if (stage === 'surge') {
-      this.hud.notify(`HORDE ${wave}`, `HOLD OUT ${clock(at - this.sim.phaseTime)}`, 2.6, 'danger');
+      this.hud.notify(`HORDE ${wave}`, `Hold out for ${clock(at - this.sim.phaseTime)}.`, 2.6, 'danger');
       audio.hordeSurge(wave);
       this.cam.addTrauma(0.18);
     } else {
-      this.hud.notify(`HORDE ${wave} SURVIVED`, `SUPPLY DROP IN ${HORDES.dropAfter} SECONDS`, 3.2);
+      this.hud.notify(`HORDE ${wave} SURVIVED`, `A supply drop is coming in ${HORDES.dropAfter} seconds.`, 3.2);
       audio.hordeOver();
       this.hordeOverAt = this.sim.time;
       this.hordeOverWave = wave;
@@ -3668,6 +3678,21 @@ export class GameSession {
    * Downtime: the dead fall back for a minute or two. Announced when it starts (how long, and what
    * it is for), warned before it ends, and called when they are coming again.
    */
+  /** The goal card: getting ready on the first nights, tonight's goals the rest of the time. */
+  private updateCard(): void {
+    const s = this.sim;
+    if (s.phase === 'over' || !this.me.alive) {
+      this.hud.setCard('', []);
+      return;
+    }
+    if (s.phase === 'preparation' && this.firstNight.active) {
+      this.hud.setCard('BEFORE THEY COME', this.firstNight.rows((a) => actionLabel(a) || (a === 'barricade' ? 'BOARD' : 'GEAR')));
+      return;
+    }
+    const c = s.contracts;
+    this.hud.setCard('TONIGHT', c.goals.map((g) => ({ text: c.text(g), meta: c.done(g) ? '' : `${g.progress}/${g.target}`, done: c.done(g) })));
+  }
+
   private onLull(n: number, stage: 'start' | 'ending' | 'over', at: number, back: readonly string[]): void {
     const mine = back.includes(this.myId);
     if (!this.me.alive && !mine) return;
@@ -3675,19 +3700,19 @@ export class GameSession {
     if (stage === 'start') {
       // Straight after a wave the two go together (the wave's chord has just played).
       const afterWave = this.sim.time - this.hordeOverAt < 1.5;
-      const why = mine ? 'YOU ARE BACK · ' : afterWave ? `HORDE ${this.hordeOverWave} HELD OFF · ` : 'THE DEAD FALL BACK · ';
-      const fallen = back.filter((id) => id !== this.myId).map((id) => this.sim.players.get(id)?.name.toUpperCase()).filter(Boolean);
-      const rise = fallen.length === 1 ? ` · ${fallen[0]} IS BACK` : fallen.length ? ` · THE FALLEN ARE BACK` : '';
-      this.hud.notify(`DOWNTIME · ${clock(Math.round(left))}`, `${why}REGROUP, GATHER AMMO, HEAL UP${rise}`, 5.5, 'calm');
+      const why = mine ? 'You are back. ' : afterWave ? `Horde ${this.hordeOverWave} held off. ` : 'The dead fall back. ';
+      const fallen = back.filter((id) => id !== this.myId).map((id) => this.sim.players.get(id)?.name).filter(Boolean);
+      const rise = fallen.length === 1 ? ` ${fallen[0]} is back.` : fallen.length ? ' The fallen are back.' : '';
+      this.hud.notify(`QUIET FOR ${clock(Math.round(left))}`, `${why}Regroup, gather ammo, heal up.${rise}`, 5.5, 'calm');
       this.hud.feedLine(`Downtime: no zombies coming for ${clock(Math.round(left))}`);
-      for (const name of fallen) this.hud.feedLine(`${name} IS BACK IN THE FIGHT`);
+      for (const name of fallen) this.hud.feedLine(`${name!.toUpperCase()} IS BACK IN THE FIGHT`);
       if (!back.length && n === 1 && this.sim.players.size > 1) this.hud.feedLine('Every downtime brings back the fallen');
       audio.lullStart(afterWave);
     } else if (stage === 'ending') {
-      this.hud.notify('DOWNTIME ENDING', `THE DEAD RETURN IN ${Math.round(left)} SECONDS · GET READY`, 3.4, 'danger');
+      this.hud.notify('THE QUIET IS ENDING', `The dead come back in ${Math.round(left)} seconds. Get ready.`, 3.4, 'danger');
       audio.lullEnding();
     } else {
-      this.hud.notify('THEY ARE COMING BACK', 'DOWNTIME OVER', 2.2, 'danger');
+      this.hud.notify('THEY ARE COMING BACK', '', 2.2, 'danger');
     }
   }
 
@@ -3743,7 +3768,7 @@ export class GameSession {
     } else if (stage === 'start') {
       audio.syringe('inject', kind, where);
       if (mine) {
-        this.hud.notify(b.short, `${b.blurb} · ${b.duration} s`, 2.4, 'calm');
+        this.hud.notify(b.short, `${b.blurb}. ${b.duration} s.`, 2.4, 'calm');
         this.hud.boostFlash(b.color);
         this.cam.addTrauma(0.1);
         this.input.rumble(0.35, 120);
@@ -3786,16 +3811,16 @@ export class GameSession {
 
   private timerText(): string {
     const s = this.sim;
-    if (s.phase === 'preparation') return `OUTBREAK IMMINENT — ${clock(Math.ceil(s.phaseTime))}`;
+    if (s.phase === 'preparation') return `THEY COME IN ${clock(Math.ceil(s.phaseTime))}`;
     const survived = `SURVIVED ${clock(s.phaseTime)}`;
     if (s.phase !== 'survival') return survived;
     const lull = lullLeft(s.lull, s.phaseTime);
-    if (lull > 0) return `DOWNTIME — ${clock(Math.ceil(lull))} LEFT · ${survived}`;
+    if (lull > 0) return `QUIET FOR ${clock(Math.ceil(lull))}\u2003${survived}`;
     // The horde schedule runs on the threat clock (it stood still through the lulls).
     const t = s.threatTime;
     const w = hordeAt(t);
-    if (w.stage === 'surge') return `HORDE ${w.wave} — HOLD OUT ${clock(Math.ceil(w.end - t))}`;
-    return `${survived} · HORDE ${w.wave} IN ${clock(Math.ceil(w.start - t))}`;
+    if (w.stage === 'surge') return `HORDE ${w.wave}: HOLD OUT FOR ${clock(Math.ceil(w.end - t))}`;
+    return `${survived}\u2003HORDE ${w.wave} IN ${clock(Math.ceil(w.start - t))}`;
   }
 
   private updateHud(dt: number): void {
@@ -3832,6 +3857,8 @@ export class GameSession {
     const w = s.phase === 'survival' ? hordeAt(s.threatTime).stage : 'calm';
     const lull = s.phase === 'survival' ? lullLeft(s.lull, s.phaseTime) : 0;
     hud.setTimer(this.timerText(), (s.phase === 'preparation' && s.phaseTime <= 10) || (lull > 0 ? lull <= LULLS.warning : w !== 'calm'), lull > LULLS.warning);
+    audio.scene = w === 'calm' || lull > 0 ? 'night' : 'fight';
+    this.updateCard();
 
     this.updateWaypoint();
 
@@ -3840,7 +3867,7 @@ export class GameSession {
     const allEmpty = total(a.primary) === 0 && total(a.secondary) === 0;
     const critical = total(a.weapon) <= def.magazine && def.mode !== 'MELEE';
     // (Not while the hands are full of something else to fight with.)
-    hud.setWarning(limb || a.meleeOut ? '' : allEmpty ? `OUT OF AMMUNITION · USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
+    hud.setWarning(limb || a.meleeOut ? '' : allEmpty ? `OUT OF AMMUNITION. USE YOUR ${WEAPONS[a.meleeId].model}` : critical && me.alive ? 'AMMUNITION CRITICAL' : '');
 
     // Dynamic crosshair: gap follows the real spread cone (rolling on a skateboard is smooth).
     const hv = Math.hypot(p.velocity.x, p.velocity.z) * (p.ride ? SKATEBOARD.spreadSpeed : p.seated ? VEHICLE.spreadSpeed : p.pillion ? BICYCLE.spreadSpeed : 1);
@@ -3897,7 +3924,7 @@ export class GameSession {
       angle = Math.atan2(x, y);
     }
     const label = m.stage === 'landed' ? 'UNIVERSAL AMMO' : 'SUPPLY DROP';
-    this.hud.setWaypoint(true, (x + 1) / 2, (1 - y) / 2, off, angle, `${label} · ${Math.round(dist)} M`);
+    this.hud.setWaypoint(true, (x + 1) / 2, (1 - y) / 2, off, angle, `${label}, ${Math.round(dist)} M`);
   }
 
   // ------------------------------------------------------------------ debugging (dev hook)
@@ -3933,6 +3960,7 @@ export class GameSession {
   };
 
   dispose(): void {
+    audio.scene = 'menu';
     trampleGrass([]);
     this.abort.abort();
     this.doors.onPiece = null;
@@ -3960,7 +3988,7 @@ export class GameSession {
     this.reconnectLine.remove();
     this.remotes?.dispose();
     flashlight()?.placeRemotes([], this.engine.camera.position);
-    audio.engines([]);
+    audio.wheels.engines([]);
     this.vehicleView.reset();
     this.skates.dispose();
     this.bikes.dispose();

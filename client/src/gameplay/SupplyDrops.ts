@@ -216,7 +216,7 @@ function stencilTexture(): THREE.CanvasTexture | null {
   g.fillStyle = 'rgba(0,0,0,0.18)';
   for (let i = 0; i < 6; i++) g.fillRect(0, i * 22 + 4, 256, 2);
   g.fillStyle = '#d6b23a';
-  g.font = 'bold 30px Oswald, Impact, sans-serif';
+  g.font = '800 30px "Big Shoulders Display", Impact, sans-serif';
   g.textAlign = 'center';
   g.fillText('UNIVERSAL', 128, 54);
   g.fillText('AMMUNITION', 128, 92);
@@ -301,7 +301,7 @@ function caseTexture(weapon: WeaponId): THREE.CanvasTexture | null {
   g.fillStyle = 'rgba(255,255,255,0.05)';
   for (let i = 0; i < 9; i++) g.fillRect(0, i * 14 + 3, 512, 3);
   g.fillStyle = '#e6c35a';
-  g.font = 'bold 46px Oswald, Impact, sans-serif';
+  g.font = '800 46px "Big Shoulders Display", Impact, sans-serif';
   g.textAlign = 'center';
   g.fillText(WEAPONS[weapon].model, 256, 72);
   g.fillRect(60, 94, 392, 6);
@@ -383,7 +383,7 @@ class WeaponCase {
 }
 
 /**
- * A Lazarus serum: a small olive medical case lying open on the far side of the crate, the
+ * A Halberg serum: a small olive medical case lying open on the far side of the crate, the
  * autoinjector glowing teal on its foam. The injector goes when someone takes it.
  */
 class SerumKit {
@@ -460,7 +460,7 @@ interface Drop {
   /** The exclusive weapon's case (rare drops), shown once the crate is down. */
   weapon: WeaponCase | null;
   weaponLeft: boolean;
-  /** A Lazarus serum (rare), shown once the crate is down. */
+  /** A Halberg serum (rare), shown once the crate is down. */
   serum: SerumKit | null;
   serumLeft: boolean;
   landed: boolean;

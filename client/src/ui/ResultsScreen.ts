@@ -60,16 +60,16 @@ function xpLine(el: HTMLElement, gained: number, before: number, after: number, 
     el.textContent = offline ? '' : 'NO XP SAVED FOR THIS RUN';
     return;
   }
-  const parts = runXp(run.survived, run.stats).parts.map((p) => `${p.label} +${p.xp}`).join(' · ');
+  const parts = runXp(run.survived, run.stats).parts.map((p) => `${p.label} +${p.xp}`).join(', ');
   const from = levelFor(before), to = levelFor(after);
   const opened = unlockedBetween(from, to);
   el.replaceChildren(
     h('span', { class: 'xp-gain' }, `+${gained.toLocaleString()} XP`),
-    ...(to > from ? [h('span', {}, `LEVEL UP · ${to}`)] : []),
-    ...(offline ? [h('span', {}, ' · SAVED IN THIS BROWSER (OFFLINE)')] : []),
+    ...(to > from ? [h('span', {}, `LEVEL ${to}`)] : []),
+    ...(offline ? [h('span', {}, ' SAVED IN THIS BROWSER (OFFLINE)')] : []),
     h('span', { class: 'xp-parts' }, parts),
     levelBar(after),
-    ...(opened.length ? [h('span', { class: 'xp-unlocks' }, `UNLOCKED: ${opened.map((o) => o.label.toUpperCase()).join(' · ')} — FIT THEM IN THE LOADOUT OR WITH THE GUNSMITH`)] : []),
+    ...(opened.length ? [h('span', { class: 'xp-unlocks' }, `UNLOCKED: ${opened.map((o) => o.label.toUpperCase()).join(', ')}. FIT THEM IN THE LOADOUT OR WITH THE GUNSMITH`)] : []),
   );
   gsap.fromTo(el, { opacity: 0 }, { opacity: 1, duration: 0.6 });
 }
@@ -77,7 +77,7 @@ function xpLine(el: HTMLElement, gained: number, before: number, after: number, 
 const placeText = (r: RunRanks): string => [
   r.rankSurvival ? `#${r.rankSurvival} LONGEST SURVIVAL` : '',
   r.rankKills ? `#${r.rankKills} MOST KILLS` : '',
-].filter(Boolean).join(' · ');
+].filter(Boolean).join(', ');
 
 /**
  * How many horde waves were outlasted, as a line: `n` when known, else what a survival time with no
@@ -100,7 +100,7 @@ export class ResultsScreen {
     this.el = h('div', { class: 'results', role: 'dialog', 'aria-label': 'Results' },
       h('div', { class: 'results-main' },
         h('h1', { class: 'title' }, 'YOU DIED'),
-        h('div', { class: 'subtitle' }, subtitle ?? (r.outbreak ? 'Maple Hollow belongs to them now.' : 'The outbreak had not even begun.')),
+        h('div', { class: 'subtitle' }, subtitle ?? (r.outbreak ? 'Vesper belongs to them now.' : 'The outbreak had not even begun.')),
         h('div', { class: 'results-time' }, 'SURVIVED', h('b', {}, clock(r.survived)), h('div', { class: 'results-hordes' }, hordeLine(r.outbreak ? r.survived : 0, r.outbreak ? r.hordes : 0)), this.ranks),
         h('div', { class: 'results-stats' },
           cell('KILLS', String(s.kills)),

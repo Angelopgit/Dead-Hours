@@ -160,6 +160,8 @@ export class GunsmithPanel {
     for (const s of slots) {
       const el = h('button', {
         class: `gs-label ${s === this.slot ? 'on' : ''}`,
+        // Hidden until the stage has placed it over its fitting: new labels all sat in the top corner until then.
+        style: 'display:none',
         onclick: () => { audio.ui('click'); this.selectSlot(s); },
         onmouseenter: () => audio.ui('hover'),
       }, h('i'), SLOT_LABELS[s].toUpperCase());

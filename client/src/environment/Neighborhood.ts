@@ -240,17 +240,17 @@ export class Neighborhood {
       if ((x * 13) % 7 === 0 || inIntersection(x + 1.5)) continue; // worn-off segments
       batch.add(worldBox(x + 1.5, 0.022, 0, 3, 0.004, 0.14, 1, null), paint, false);
     }
-    // Birch Lane runs on past Oak Street to the edge of the map.
+    // Pell Lane runs on past Kinney Street to the edge of the map.
     for (let z = -150; z < this.map.bounds.z1 + 25; z += 6) {
       if ((z * 11) % 7 === 0 || Math.abs(z + 1.5) < 8 || Math.abs(z + 1.5 - OAK.z) < 8) continue;
       batch.add(worldBox(birch, 0.022, z + 1.5, 0.14, 0.004, 3, 1, null), paint, false);
     }
-    // Oak Street's centre line, from the junction to the dead end.
+    // Kinney Street's centre line, from the junction to the dead end.
     for (let x = birch + 8; x < OAK.end - 4; x += 6) {
       if ((Math.round(x) * 17) % 7 === 0) continue;
       batch.add(worldBox(x + 1.5, 0.022, OAK.z, 3, 0.004, 0.14, 1, null), paint, false);
     }
-    // Stop lines and crosswalks at the Birch Lane intersection.
+    // Stop lines and crosswalks at the Pell Lane intersection.
     batch.add(worldBox(birch + 2.25, 0.022, -5.6, 4.3, 0.004, 0.35, 1, null), white, false);
     batch.add(worldBox(birch - 2.25, 0.022, 5.6, 4.3, 0.004, 0.35, 1, null), white, false);
     for (const side of [-1, 1]) {
@@ -259,7 +259,7 @@ export class Neighborhood {
         batch.add(worldBox(birch - 4 + i, 0.022, side * 6.2, 0.5, 0.004, 1.6, 1, null), white, false);
       }
     }
-    // Oak Street's T-junction: a stop line behind a crosswalk on Oak, crosswalks over Birch either side.
+    // Kinney Street's T-junction: a stop line behind a crosswalk on Kinney, crosswalks over Pell either side.
     batch.add(worldBox(birch + 7.4, 0.022, OAK.z - 2.25, 0.35, 0.004, 4.3, 1, null), white, false);
     for (let i = 0; i < 9; i++) {
       batch.add(worldBox(birch + 6.2, 0.022, OAK.z - 4 + i, 1.6, 0.004, 0.5, 1, null), white, false);

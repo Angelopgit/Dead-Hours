@@ -28,7 +28,7 @@ type State = 'menu' | 'session';
 /** The loading screen's line for an online night: the room's name. */
 function lobbyCaption(link: NetLink): string {
   const name = link.lobby?.name;
-  return name ? `ONLINE · ${name.toUpperCase()}` : 'ONLINE';
+  return name ? `Online: ${name}` : 'Online';
 }
 
 /** Top-level orchestrator: boots the world once and switches between menu and play sessions. */
@@ -165,6 +165,7 @@ export class Game {
   async startSolo(): Promise<void> {
     if (this.state !== 'menu') return;
     this.state = 'session';
+    const backdrop = await this.engine.snapshot();
     const fade = document.getElementById('fade')!;
     await Promise.all([
       this.menu.hide(),
@@ -172,7 +173,7 @@ export class Game {
     ]);
     const pose = this.menuCine.pose();
     this.menuCine.setActive(false);
-    await this.launched(await this.launch(() => this.createSession(pose, false), 'SOLO'));
+    await this.launched(await this.launch(() => this.createSession(pose, false), 'Solo', backdrop));
   }
 
   /**
@@ -184,11 +185,11 @@ export class Game {
    * server only streams the night once it has drawn its first frames after this.
    * 'stopped': abandoned on the way (left, disconnected); 'failed': the night could not be built.
    */
-  private async launch(make: () => GameSession, caption: string): Promise<'ready' | 'stopped' | 'failed'> {
+  private async launch(make: () => GameSession, caption: string, backdrop: HTMLCanvasElement | null = null): Promise<'ready' | 'stopped' | 'failed'> {
     const token = {};
     this.launching = token;
     const stop = () => this.launching !== token;
-    const screen = new LoadingScreen(caption);
+    const screen = new LoadingScreen(caption, backdrop);
     screen.show();
     // Nothing draws while shaders compile behind the screen (a draw would wait on them).
     this.engine.paused = true;
@@ -318,6 +319,7 @@ export class Game {
       reconnecting: (on) => this.session?.setReconnecting(on),
       closed: () => void this.connectionLost(link),
     };
+    const backdrop = await this.engine.snapshot();
     const fade = document.getElementById('fade')!;
     await Promise.all([
       this.menu.hide(),
@@ -328,7 +330,7 @@ export class Game {
       await this.quitToMenu();
       return;
     }
-    await this.launched(await this.launch(() => this.createSession(this.menuCine.pose(), true, { link, begin }), lobbyCaption(link)), link);
+    await this.launched(await this.launch(() => this.createSession(this.menuCine.pose(), true, { link, begin }), lobbyCaption(link), backdrop), link);
   }
 
   private async restartOnline(link: NetLink, begin: BeginMsg): Promise<void> {
@@ -366,7 +368,7 @@ export class Game {
     const pose = this.menuCine.pose();
     this.session.dispose();
     this.session = null;
-    await this.launched(await this.launch(() => this.createSession(pose, true), 'SOLO'));
+    await this.launched(await this.launch(() => this.createSession(pose, true), 'Solo'));
   }
 
   private async quitToMenu(): Promise<void> {

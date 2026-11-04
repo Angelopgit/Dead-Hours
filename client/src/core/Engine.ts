@@ -156,6 +156,29 @@ export class Engine {
   }
   private pixels: Uint8Array<ArrayBuffer> | null = null;
 
+  /**
+   * A small copy of the next frame drawn (null if none is drawn within 1.5 s, e.g. while paused).
+   * Copied in the same task as the draw, while the drawing buffer still holds it.
+   */
+  snapshot(width = 640): Promise<HTMLCanvasElement | null> {
+    return new Promise((resolve) => {
+      const done = (c: HTMLCanvasElement | null) => { clearTimeout(timer); this.wantShot = null; resolve(c); };
+      const timer = setTimeout(() => done(null), 1500);
+      this.wantShot = () => {
+        const src = this.renderer.domElement;
+        if (!src.width || !src.height) return done(null);
+        const c = document.createElement('canvas');
+        c.width = Math.min(width, src.width);
+        c.height = Math.round(c.width * src.height / src.width);
+        const x = c.getContext('2d');
+        if (!x) return done(null);
+        x.drawImage(src, 0, 0, c.width, c.height);
+        done(c);
+      };
+    });
+  }
+  private wantShot: (() => void) | null = null;
+
   /** While true the loop keeps time but neither updates nor draws (a full-screen menu covers the view). */
   paused = false;
   /** Runs every frame while paused (the controller still drives the menu in front). */
@@ -174,6 +197,7 @@ export class Engine {
     this.time += dt;
     for (const cb of this.callbacks) cb(dt, this.time);
     this.post.render(dt);
+    this.wantShot?.();
     this.trackPerformance(dt);
   };
 

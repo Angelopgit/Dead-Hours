@@ -72,14 +72,14 @@ export class Inventory {
       return code ? codeLabel(code) : '—';
     };
     // The key after a slot name is its own span: phones and pads have no keyboard, so they hide it.
-    const slot = (name: string, action: Action) => h('div', { class: 'slot' }, name, h('span', { class: 'inv-k' }, ` · ${k(action)}`));
+    const slot = (name: string, action: Action) => h('div', { class: 'slot' }, name, h('span', { class: 'inv-k' }, ` ${k(action)}`));
     const card = (slotEl: HTMLElement, id: WeaponId, ammo: { mag: number; reserve: number } | null, active: boolean) => {
       const w = WEAPONS[id];
       const stat = (label: string, v: number) => h('div', { class: 'stat' }, label, h('div', { class: 'bar' }, h('i', { style: `width:${Math.round(v * 100)}%` })));
       return h('div', { class: `inv-card ${active ? 'active' : ''}` },
         slotEl,
         h('span', { class: 'wname' }, w.name.toUpperCase()),
-        h('span', { class: 'wmodel' }, `${w.model} · ${w.mode}`),
+        h('span', { class: 'wmodel' }, `${w.model}, ${w.mode}`),
         h('div', { class: 'ammo' }, ammo ? `${ammo.mag} / ${ammo.reserve}` : '—', h('small', {}, ammo ? `MAX ${w.maxReserve}` : isMelee(id) && MELEE[id].sever > 0 ? 'BLADE' : 'BLUNT')),
         stat('Damage', w.stats.damage), stat('Fire rate', w.stats.fireRate), stat('Handling', w.stats.handling), stat('Range', w.stats.range),
       );
@@ -91,7 +91,7 @@ export class Inventory {
         ? h('div', { class: 'inv-card active' },
           slot('MELEE', 'melee'),
           h('span', { class: 'wname' }, LIMB_NAME[limb.cut]),
-          h('span', { class: 'wmodel' }, `TORN OFF A ${limb.kind.toUpperCase()} · CLUB`),
+          h('span', { class: 'wmodel' }, `${limb.kind.toUpperCase()}, TORN OFF`),
           h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
           h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
         )

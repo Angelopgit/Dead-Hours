@@ -13,7 +13,7 @@ const isLetter = (c: string) => c.toLowerCase() !== c.toUpperCase();
  * a game's name): A on a text box opens it over the bottom of the screen. The D-pad moves between keys
  * and A types; X deletes, Y types a space, B or Start closes it, and DONE closes it and sends Enter, so
  * a join code joins. What is typed goes into the box as a keyboard would put it there (its input event
- * fires). The box's text starts selected, as A used to select it: the first key replaces it (a new
+ * fires). The box's text starts selected: the first key replaces it (a new
  * name, not the old one deleted letter by letter) and DONE keeps it. Letters start a word in capitals,
  * as phone keyboards do; the shift key flips that.
  */
@@ -67,7 +67,7 @@ export class PadKeyboard {
         back,
         key('DONE', () => this.close(true), 'wide done'),
       ),
-      h('div', { class: 'osk-help' }, 'A TYPE · X DELETE · Y SPACE · B CLOSE'),
+      h('div', { class: 'osk-help' }, 'A types, X deletes, Y adds a space, B closes'),
     );
     this.shift = this.selected || this.wordStart();
     this.refresh();

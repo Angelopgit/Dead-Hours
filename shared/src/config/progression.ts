@@ -1,5 +1,6 @@
 import { WEAPONS, type WeaponDef, type WeaponId } from './weapons';
 import type { PlayerStats } from '../sim/Simulation';
+import { GOALS_PER_NIGHT } from '../sim/Contracts';
 
 /**
  * Progression between nights: XP for every run, levels, and what each level unlocks (weapon
@@ -26,11 +27,13 @@ export const XP = {
   limbSevered: 4,
   limbKill: 10,
   supply: 5,
+  /** Each night goal the team finished (sim/Contracts). */
+  goal: 150,
   /** Most a single run can award. */
   maxPerRun: 20000,
 } as const;
 
-export function runXp(survived: number, s: Pick<PlayerStats, 'kills' | 'headshots' | 'limbsSevered' | 'limbKills' | 'suppliesCollected'>): RunXp {
+export function runXp(survived: number, s: Pick<PlayerStats, 'kills' | 'headshots' | 'limbsSevered' | 'limbKills' | 'suppliesCollected'> & { goals?: number }): RunXp {
   const parts = [
     { label: 'Survived', xp: Math.floor(Math.max(0, survived) * XP.perSecond) },
     { label: 'Kills', xp: s.kills * XP.kill },
@@ -38,6 +41,7 @@ export function runXp(survived: number, s: Pick<PlayerStats, 'kills' | 'headshot
     { label: 'Arms severed', xp: s.limbsSevered * XP.limbSevered },
     { label: 'Arm kills', xp: s.limbKills * XP.limbKill },
     { label: 'Supplies', xp: s.suppliesCollected * XP.supply },
+    { label: 'Night goals', xp: Math.min(GOALS_PER_NIGHT, s.goals ?? 0) * XP.goal },
   ].filter((p) => p.xp > 0);
   const total = Math.min(XP.maxPerRun, parts.reduce((n, p) => n + p.xp, 0));
   return { total, parts };

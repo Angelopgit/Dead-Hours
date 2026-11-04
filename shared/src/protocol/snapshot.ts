@@ -52,7 +52,7 @@ export interface SnapPlayer {
   al: number;
   b: number;
   dt: number;
-  /** Lazarus serum armor ×10 (left out when none). */
+  /** Halberg serum armor ×10 (left out when none). */
   ar?: number;
   /** Boost syringes running: [boost (BOOST_IDS), ms left, ...] (left out when none). */
   bo?: number[];
@@ -107,6 +107,8 @@ export interface Snapshot {
   vh?: (number | string)[][];
   /** Bicycles: [id, x, y, z (cm), yaw (mrad), rider id or 0, passenger id or 0, look]. */
   bk?: (number | string)[][];
+  /** Tonight's goals: [kind (GOAL_KINDS), progress, target] for each (sim/Contracts). */
+  ct?: number[];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -233,6 +235,7 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
     ]);
   }
   if (cars.length) snap.vh = cars;
+  snap.ct = sim.contracts.pack();
   if (wear.length) snap.dw = wear;
   const raid = sim.raid;
   const van = raid.van;
@@ -392,7 +395,9 @@ export class Mirror {
   /** Snapshots applied so far. */
   count = 0;
 
-  constructor(readonly sim: Simulation, readonly me: string) {}
+  constructor(readonly sim: Simulation, readonly me: string) {
+    sim.contracts.mirrored = true;
+  }
 
   get synced(): boolean {
     return this.count > 0;
@@ -734,6 +739,7 @@ export class Mirror {
       });
     }
     this.applyRaid(s, T, span);
+    if (s.ct) sim.contracts.sync(s.ct);
     const lu = s.lu;
     sim.lull = lu ? { count: lu[0], start: lu[1] / 1000, end: lu[2] / 1000, paused: lu[3] / 1000 } : noLulls();
 

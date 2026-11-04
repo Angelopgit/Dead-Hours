@@ -660,7 +660,8 @@ export class Humanoid {
     ];
     this.root.updateMatrixWorld(true);
 
-    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, flatShading: true });
+    // Smooth-shaded, like the rest of the world (faceted bodies read as a different game from the lit, foggy street).
+    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82 });
     this.bodyKey = JSON.stringify(look);
     if (this.zombie) this.decay = decayOf(look, (hashString(this.bodyKey) % 97) * 1.37, true);
     patchWounds(this.material, this.wounds, this.decay ?? undefined, { uGrime: { value: this.grime }, uRim: { value: this.zombie ? RIM.zombie : RIM.survivor } });
@@ -1129,7 +1130,7 @@ export class Humanoid {
     this.hips.rotation.set(0, -sin * 0.1 * moving + this.hipYaw, brute ? sin * 0.07 * moving : 0);
     // Spine: lean, look pitch, bladed stance, recoil, flinches and stagger.
     let spineX = lean + zLean - s.aim * 0.05 - this.lookPitch * LOOK_BEND + this.kick + ft[0].x * 0.08 - sv * this.staggerDir.y * 0.45;
-    let spineZ = -s.strafe * 0.06 * moving + ft[1].x * 0.08 + sv * this.staggerDir.x * 0.3;
+    const spineZ = -s.strafe * 0.06 * moving + ft[1].x * 0.08 + sv * this.staggerDir.x * 0.3;
     const swingY = z ? Math.sin(p * 0.5) * 0.1 : sin * 0.08 * moving * (1 - s.aim);
     let spineY = swingY + this.twist - this.hipYaw;
     if (z && this.attack >= 0) {

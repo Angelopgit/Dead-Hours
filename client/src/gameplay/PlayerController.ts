@@ -754,8 +754,8 @@ export class PlayerController {
     const wasGrounded = this.grounded;
     let grounded = this.controller.computedGrounded();
     if (!grounded && wasGrounded && this.intent.y <= 0) {
-      // Before Rapier 0.20 the controller reported "airborne" on flat floor every other step
-      // without a downward push; a short probe under the feet still guards against a stray one.
+      // A short probe under the feet: the controller can report one stray "airborne" step on flat
+      // floor, and a survivor standing still must not start falling.
       const t = this.body.translation();
       const feet = t.y + m.y - this.height / 2;
       if (this.physics.raycast(t.x + m.x, feet + 0.05, t.z + m.z, 0, -1, 0, 0.14) !== null) grounded = true;

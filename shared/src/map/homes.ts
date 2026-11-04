@@ -3,7 +3,7 @@ import { MapBuilder, STORY, door, doorway, seededRandom, upWin, win, type Openin
 import { propHalfExtents } from './colliders';
 
 /**
- * Floor plans for the family homes along Elm Street: a single-storey ranch and a two-storey
+ * Floor plans for the family homes along Hale Street: a single-storey ranch and a two-storey
  * colonial, each with an optional basement, furnished room by room.
  *
  * Plans are written in a house-local frame so one plan serves houses on both sides of the street

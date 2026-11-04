@@ -136,9 +136,9 @@ export class OnlineMenu {
     // A night under way can be joined too: the newcomer drops in at the safehouse.
     const open = r.status !== 'over' && r.players < r.maxPlayers;
     const playing = r.status === 'playing';
-    const state = playing ? `PLAYING${r.survived ? ` · ${clock(r.survived)}` : ''}` : r.players >= r.maxPlayers ? 'FULL' : 'IN THE LOBBY';
+    const state = playing ? `PLAYING${r.survived ? `, ${clock(r.survived)}` : ''}` : r.players >= r.maxPlayers ? 'FULL' : 'IN THE LOBBY';
     return h('div', { class: 'room-row' },
-      h('div', {}, h('b', {}, r.name.toUpperCase()), h('small', {}, `HOST ${r.host.toUpperCase()} · ${r.players}/${r.maxPlayers} · ${state}`)),
+      h('div', {}, h('b', {}, r.name.toUpperCase()), h('small', {}, `HOST ${r.host.toUpperCase()}, ${r.players}/${r.maxPlayers}, ${state}`)),
       // Only rooms that can be joined get a button.
       open ? this.button(playing ? 'DROP IN' : 'JOIN', () => void this.join(() => net.client().joinById(r.roomId, joinOptions()))) : h('span', { class: 'room-state' }, r.players >= r.maxPlayers ? 'FULL' : state),
     );
@@ -283,7 +283,7 @@ export class OnlineMenu {
     const underWay = m.status !== 'lobby';
     const draw = () => this.body.replaceChildren(
       h('h2', {}, m.name.toUpperCase()),
-      h('div', { class: 'code-box' }, h('span', {}, m.private ? 'PRIVATE · JOIN CODE' : 'JOIN CODE'), codeEl, copy),
+      h('div', { class: 'code-box' }, h('span', {}, m.private ? 'PRIVATE JOIN CODE' : 'JOIN CODE'), codeEl, copy),
       h('h3', {}, `Survivors ${m.players.length}/${GAME.maxPlayers}`),
       h('div', { class: 'lobby-list' }, ...players),
       ...(underWay ? [] : [h('div', { class: 'actions' },

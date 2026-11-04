@@ -38,6 +38,7 @@ export * from './sim/Vault';
 export * from './sim/MeleePickups';
 export * from './sim/BoostPickups';
 export * from './sim/Raid';
+export * from './sim/Contracts';
 export * from './sim/Simulation';
 export * from './protocol/snapshot';
 export * from './config/throwables';

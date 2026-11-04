@@ -5,19 +5,19 @@ import { buildHome, type HomePlan } from './homes';
 import { OAK, oakClear, oakStreet } from './oak-street';
 
 /**
- * Maple Hollow: a 250 x 300 m suburban neighbourhood on the edge of town.
+ * Vesper: a 250 x 300 m suburban neighbourhood on the edge of town.
  *
- * Elm Street runs east-west along z = 0 and Birch Lane crosses it north-south at x = -68.
- * The safehouse sits on the north side of Elm, the gas station and the park on the east end,
- * the police checkpoint closes Elm to the west, gravel alleys run behind both rows of
- * backyards, and woods close the map to the north and south. Oak Street, the next street over,
- * tees into Birch Lane 94 m south of Elm and shares Elm's south alley (oak-street.ts).
+ * Hale Street runs east-west along z = 0 and Pell Lane crosses it north-south at x = -68.
+ * The safehouse sits on the north side of Hale, the gas station and the park on the east end,
+ * the police checkpoint closes Hale to the west, gravel alleys run behind both rows of
+ * backyards, and woods close the map to the north and south. Kinney Street, the next street over,
+ * tees into Pell Lane 94 m south of Hale and shares Hale's south alley (oak-street.ts).
  *
  * Axes: +X east, +Z south, +Y up.
  */
 
 const HALF = 125;
-/** The south edge sits past Oak Street's back fences and a belt of woods. */
+/** The south edge sits past Kinney Street's back fences and a belt of woods. */
 const SOUTH = 175;
 const RW = STREET.roadHalfWidth;
 const SW = STREET.sidewalkWidth;
@@ -41,7 +41,7 @@ function roads(b: MapBuilder): void {
     b.boxMinMax(x0, 0, RW, x1, CURB, RW + SW, 'sidewalk');
   }
   for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, farSouth]]) b.boxMinMax(BIRCH - RW - SW, 0, z0, BIRCH - RW, CURB, z1, 'sidewalk');
-  // The east side breaks for Oak Street's junction as well as Elm's.
+  // The east side breaks for Kinney Street's junction as well as Hale's.
   for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, OAK.z - RW - SW], [OAK.z + RW + SW, farSouth]]) {
     b.boxMinMax(BIRCH + RW, 0, z0, BIRCH + RW + SW, CURB, z1, 'sidewalk');
   }
@@ -52,12 +52,12 @@ function roads(b: MapBuilder): void {
   // Intersection signage.
   b.prop('stopSign', BIRCH + RW + 0.6, -RW - 0.6, Math.PI / 2);
   b.prop('stopSign', BIRCH - RW - 0.6, RW + 0.6, -Math.PI / 2);
-  b.prop('streetSign', BIRCH - RW - 0.6, -RW - 0.6, 0, { text: 'ELM ST|BIRCH LN' });
-  b.prop('streetSign', BIRCH + RW + 0.6, RW + 0.6, Math.PI, { text: 'BIRCH LN|ELM ST' });
+  b.prop('streetSign', BIRCH - RW - 0.6, -RW - 0.6, 0, { text: 'HALE ST|PELL LN' });
+  b.prop('streetSign', BIRCH + RW + 0.6, RW + 0.6, Math.PI, { text: 'PELL LN|HALE ST' });
 }
 
 function streetDressing(b: MapBuilder): void {
-  // Elm Street lights alternate sides; Birch Lane has a few of its own.
+  // Hale Street lights alternate sides; Pell Lane has a few of its own.
   for (const x of [-84, -40, 46, 86]) streetlight(b, x, -LIGHT_OFFSET, 0);
   streetlight(b, 6, -LIGHT_OFFSET, 0, 'flicker');
   for (const x of [-62, -18, 26, 66]) streetlight(b, x, LIGHT_OFFSET, Math.PI);
@@ -67,7 +67,7 @@ function streetDressing(b: MapBuilder): void {
   streetlight(b, BIRCH + LIGHT_OFFSET, -64, -Math.PI / 2, 'dead');
   streetlight(b, BIRCH - LIGHT_OFFSET, 66, Math.PI / 2);
 
-  // Utility lines: Elm (0), north alley (1), south alley (2).
+  // Utility lines: Hale (0), north alley (1), south alley (2).
   for (const x of [-110, -88, -56, -32, -8, 16, 40, 62, 84, 108]) b.prop('utilityPole', x, RW + SW + 0.9, 0, { variant: 0 });
   for (const x of [-56, -30, -4, 22, 48, 70]) b.prop('utilityPole', x, -44.3, Math.PI, { variant: 1, flag: x === -30 });
   for (const x of [-56, -30, -4, 22, 48]) b.prop('utilityPole', x, 44.3, 0, { variant: 2, flag: x === 22 || x === -4 });
@@ -87,14 +87,14 @@ function streetDressing(b: MapBuilder): void {
   b.prop('car', BIRCH - 2.6, 33, Math.PI / 2, { variant: 0 });
   b.prop('wreckedCar', BIRCH + 1.4, 74, -Math.PI / 2 + 0.5, { variant: 1, flag: false });
 
-  // East end: a pile-up closes Elm Street.
+  // East end: a pile-up closes Hale Street.
   b.prop('wreckedCar', 117, -2.2, 1.25, { variant: 4 });
   b.prop('wreckedCar', 119.5, 1.6, -0.85, { variant: 1 });
   b.prop('wreckedCar', 115.6, 3.6, 0.3, { variant: 12 });
   b.prop('roadblock', 112.5, -0.8, Math.PI / 2 + 0.2);
   b.prop('cone', 111.6, 2.6, 0);
   b.prop('cone', 111.2, -3.1, 0);
-  // Birch Lane dead-ends in the woods both ways.
+  // Pell Lane dead-ends in the woods both ways.
   b.prop('wreckedCar', BIRCH + 0.8, -117, 0.4, { variant: 5 });
   b.prop('wreckedCar', BIRCH - 1.9, -119.8, -1.1, { variant: 11 });
   b.prop('roadblock', BIRCH, -112, 0.1);
@@ -114,7 +114,7 @@ interface HomeEntry extends HomePlan {
   driveX: number | null;
 }
 
-/** The family homes on both sides of Elm Street (the safehouse and the Hendersons' are built by hand). */
+/** The family homes on both sides of Hale Street (the safehouse and the Mercers' are built by hand). */
 function homes(): HomeEntry[] {
   const base = { enterable: true, litWindows: 1 } as const;
   return [
@@ -311,7 +311,7 @@ function safehouse(b: MapBuilder): void {
 function houseNe(b: MapBuilder): void {
   const spec: HouseSpec = {
     id: 'house-ne', x: 27, z: -18.5, w: 12, d: 9, floors: 1, facing: 'south', siding: 'sidingGreen',
-    roofColor: 0x2e2a27, enterable: true, litWindows: 0.5, seed: 33, label: 'THE HENDERSON HOUSE',
+    roofColor: 0x2e2a27, enterable: true, litWindows: 0.5, seed: 33, label: 'THE MERCER HOUSE',
   };
   b.house(
     spec,
@@ -331,7 +331,7 @@ function houseNe(b: MapBuilder): void {
   b.prop('crate', 22.4, -16.0, 0.6, { movable: true });
   b.prop('firstAid', 24.4, -22.69, 0, { y: 1.5 });
   b.light({ kind: 'point', x: 28.5, y: 2.85, z: -18.0, color: WARM_BULB, intensity: 6.5, range: 11, decay: 1.7, fixture: 'bulb' });
-  b.area('THE HENDERSON HOUSE', 21, 33, -23, -14, -0.1, 6);
+  b.area('THE MERCER HOUSE', 21, 33, -23, -14, -0.1, 6);
 }
 
 function gasStation(b: MapBuilder): void {
@@ -358,7 +358,7 @@ function gasStation(b: MapBuilder): void {
   const store: HouseSpec = {
     id: 'store', x: 92, z: -38, w: 18, d: 10, floors: 1, facing: 'south', siding: 'brick',
     roofColor: 0x2a2b2e, enterable: true, litWindows: 1, seed: 115, slab: 0.2, groundHeight: 3.6,
-    roof: 'flat', interior: 'interiorWall', floorMat: 'tile', label: 'QUIK-STOP',
+    roof: 'flat', interior: 'interiorWall', floorMat: 'tile', label: 'RUDY’S',
   };
   b.house(
     store,
@@ -419,20 +419,20 @@ function park(b: MapBuilder): void {
   trees.forEach(([x, z], i) => b.prop(i % 3 === 2 ? 'pine' : 'tree', x, z, i * 1.9, { variant: i + 3 }));
   for (const [x, z] of [[67.5, 20], [67.5, 31], [111, 40], [86, 47]]) b.prop('bush', x, z, x, { variant: Math.round(z) });
 
-  // Iron fence with an entrance off Elm Street and a back gate to the woods.
+  // Iron fence with an entrance off Hale Street and a back gate to the woods.
   b.prop('ironFence', 76, 8.6, 0, { length: 20 });
   b.prop('ironFence', 101, 8.6, 0, { length: 22 });
   b.prop('ironFence', 66, 25.3, Math.PI / 2, { length: 33.4 });
   b.prop('ironFence', 112, 30.3, Math.PI / 2, { length: 43.4 });
   b.prop('ironFence', 76, 52, 0, { length: 20 });
   b.prop('ironFence', 102, 52, 0, { length: 20 });
-  b.prop('boardSign', 92.4, 9.6, Math.PI, { text: 'MAPLE HOLLOW PARK', variant: 1 });
+  b.prop('boardSign', 92.4, 9.6, Math.PI, { text: 'VESPER PARK', variant: 1 });
 
-  b.area('MAPLE HOLLOW PARK', 66, 112, 8, 52);
+  b.area('VESPER PARK', 66, 112, 8, 52);
 }
 
 function checkpoint(b: MapBuilder): void {
-  // Jersey-barrier chicane across Elm Street.
+  // Jersey-barrier chicane across Hale Street.
   for (const z of [-3.0, 0.0]) b.prop('jerseyBarrier', -98, z, Math.PI / 2);
   for (const z of [0.0, 3.0]) b.prop('jerseyBarrier', -104, z, Math.PI / 2);
   b.prop('jerseyBarrier', -110.5, -2.6, Math.PI / 2 + 0.08);
@@ -547,7 +547,7 @@ function frontYards(b: MapBuilder): void {
 }
 
 /**
- * Instanced woodland closing the map, with trunk colliders. Leaves the road corridors and Oak
+ * Instanced woodland closing the map, with trunk colliders. Leaves the road corridors and Kinney
  * Street (its lots, road and trail) clear.
  */
 function woods(b: MapBuilder): void {
@@ -568,7 +568,7 @@ function woods(b: MapBuilder): void {
     if (oakClear(jx, jz)) return;
     b.prop('pine', jx, jz, rot, { variant, forest: true });
   };
-  // The original square, then the belt past Oak Street on the same grid with its own stream.
+  // The original square, then the belt past Kinney Street on the same grid with its own stream.
   const r = seededRandom(4242);
   let z = -HALF + 2;
   for (let x = -HALF + 2; x < HALF - 1; x += spacing) {
@@ -596,11 +596,11 @@ function build(): MapDefinition {
   frontYards(b);
   oakStreet(b);
   woods(b);
-  b.area('BIRCH LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, SOUTH);
-  b.area('ELM STREET', -HALF, HALF, -16, 16);
-  b.area('MAPLE HOLLOW', -HALF, HALF, -HALF, SOUTH);
+  b.area('PELL LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, SOUTH);
+  b.area('HALE STREET', -HALF, HALF, -16, 16);
+  b.area('VESPER', -HALF, HALF, -HALF, SOUTH);
 
-  return b.finish('Maple Hollow', { x0: -HALF, x1: HALF, z0: -HALF, z1: SOUTH }, [
+  return b.finish('Vesper', { x0: -HALF, x1: HALF, z0: -HALF, z1: SOUTH }, [
     { x: 4.8, y: 0.35, z: -22.3, yaw: Math.PI },
     { x: 3.0, y: 0.35, z: -17.0, yaw: Math.PI },
     { x: 5.1, y: 0.35, z: -17.3, yaw: Math.PI },

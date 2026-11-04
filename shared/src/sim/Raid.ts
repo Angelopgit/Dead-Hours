@@ -674,7 +674,7 @@ export class Raid {
       van.speed = 0;
       sim.noise(van.pos, 40, null);
       sim.emit({ type: 'raid', stage: 'arrived', route: van.route, pos: { ...van.pos }, count: this.crew.length });
-      sim.emit({ type: 'notice', player: null, text: 'HOSTILE SURVIVORS', sub: `${this.crew.length} armed raiders · take them out` });
+      sim.emit({ type: 'notice', player: null, text: 'HOSTILE SURVIVORS', sub: `${this.crew.length} armed raiders. Take them out.` });
     }
   }
 
@@ -708,7 +708,7 @@ export class Raid {
     this.stage = 'over';
     const van = this.van;
     sim.emit({ type: 'raid', stage: 'over', route: van?.route ?? 0, pos: van ? { ...van.pos } : v3(), count: 0 });
-    sim.emit({ type: 'notice', player: null, text: 'RAIDERS ELIMINATED', sub: 'Their van still has supplies in the back' });
+    sim.emit({ type: 'notice', player: null, text: 'RAIDERS ELIMINATED', sub: 'Their van still has supplies in the back.' });
     if (!van) return;
     // Their supplies, in the back of the van.
     const c = vanLocal(van, RAID.van.cargo.x, RAID.van.cargo.z - 0.6);
@@ -871,7 +871,7 @@ export class Raid {
     this.killed++;
     this.sim.emit({ type: 'raiderDied', raider: r.id, zone, dir: { ...dir }, by: by?.id ?? null, weapon: r.weapon, left: this.remaining });
     const left = this.remaining;
-    if (left > 0) this.sim.emit({ type: 'notice', player: null, text: `RAIDER DOWN · ${left} LEFT` });
+    if (left > 0) this.sim.emit({ type: 'notice', player: null, text: `RAIDER DOWN, ${left} LEFT` });
   }
 
   /** A raider at a closed door: opens it, or kicks at it while it is barricaded. True when it gives. */

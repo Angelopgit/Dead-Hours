@@ -62,7 +62,7 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
   streetSign(k) {
     const pole = k.mat(0x6a6d70, 0.5, 0.6);
     k.cyl(0.04, 0.04, 3.0, 6, pole, 0, 1.5, 0);
-    const [a, b] = lines(k.p.text, 'ELM ST|BIRCH LN');
+    const [a, b] = lines(k.p.text, 'HALE ST|PELL LN');
     const blade = (t: string) => k.text([t], { w: 512, h: 96, bg: '#1f5a36', fg: '#e8efe6', border: '#e8efe6' });
     k.box(0.95, 0.18, 0.02, blade(a), 0, 2.86, 0);
     k.box(0.95, 0.18, 0.02, blade(b), 0, 3.08, 0, { ry: Math.PI / 2 });

@@ -33,7 +33,7 @@ export interface Shot {
   setup(d: TrailerDirector): void;
 }
 
-/** Elm Street's road runs along x at z in -4.5..4.5; the safehouse stands north of it at (0, -20), its door at (2.4, -15). */
+/** Hale Street's road runs along x at z in -4.5..4.5; the safehouse stands north of it at (0, -20), its door at (2.4, -15). */
 const ROAD = -1;
 
 /** The police car in front of the safehouse (its nose points east), found where it is parked. */
@@ -45,7 +45,7 @@ let car = -1;
 
 export const SHOTS: Shot[] = [
   {
-    // Elm Street at night, drifting west over the road past the flickering lamp, a few of the dead about.
+    // Hale Street at night, drifting west over the road past the flickering lamp, a few of the dead about.
     name: 'street',
     seconds: 6,
     lead: 2,
@@ -143,7 +143,7 @@ export const SHOTS: Shot[] = [
     },
   },
   {
-    // The police car down Elm Street through the dead, a passenger firing out of the window; a chase camera behind it.
+    // The police car down Hale Street through the dead, a passenger firing out of the window; a chase camera behind it.
     name: 'drive',
     seconds: 7,
     lead: 3,
@@ -217,7 +217,7 @@ export const SHOTS: Shot[] = [
     },
   },
   {
-    // The van raid: headlights down Elm Street, the crew out and shooting.
+    // The van raid: headlights down Hale Street, the crew out and shooting.
     name: 'raid',
     seconds: 8,
     lead: 0.3,

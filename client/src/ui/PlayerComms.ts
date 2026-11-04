@@ -17,7 +17,7 @@ export function micLine(link: NetLink): string {
   if (mic === 'asking') return 'WAITING FOR MICROPHONE PERMISSION…';
   const sending = link.voice.sending;
   if (sending) return sending === 'radio' ? 'ON THE RADIO' : 'TALKING';
-  return v.mode === 'vad' ? `VOICE ACTIVATION · ${key('radio')} FOR RADIO` : `HOLD ${key('talk')} TO TALK · ${key('radio')} FOR RADIO`;
+  return v.mode === 'vad' ? `YOUR MIC OPENS WHEN YOU TALK. ${key('radio')} FOR RADIO` : `HOLD ${key('talk')} TO TALK, ${key('radio')} FOR RADIO`;
 }
 
 /**

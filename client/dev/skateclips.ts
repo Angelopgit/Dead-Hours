@@ -52,16 +52,16 @@ function clips(): Clip[] {
         const s = ride(t);
         const at = new THREE.Vector3(s.x, 0, 0);
         chase(cam, at);
-        if (s.kick) eng.skateKick(at.clone().add(new THREE.Vector3(-0.2, 0, 0.17)));
+        if (s.kick) eng.wheels.skateKick(at.clone().add(new THREE.Vector3(-0.2, 0, 0.17)));
         if (rough < 0.7) {
           seam -= s.x - lastX;
           if (seam <= 0) {
             seam = 1.5;
-            eng.skateSeam(at, Math.min(1, s.v / 7));
+            eng.wheels.skateSeam(at, Math.min(1, s.v / 7));
           }
         }
         lastX = s.x;
-        eng.skateRoll(s.v > 0.3 ? [{ id: 0, pos: at, speed: s.v, rough }] : []);
+        eng.wheels.skateRoll(s.v > 0.3 ? [{ id: 0, pos: at, speed: s.v, rough }] : []);
       },
     });
   }
@@ -73,12 +73,12 @@ function clips(): Clip[] {
       const at = new THREE.Vector3(x, 0, 0);
       chase(cam, at);
       const k = Math.round(t * FPS);
-      if (k === 1) eng.skateMount(at);
-      if (k === Math.round(1.6 * FPS)) eng.skatePop(at);
-      if (k === Math.round(2.1 * FPS)) eng.skateLand(at, 0.8);
-      if (k === Math.round(3.4 * FPS)) eng.skateOff(at);
+      if (k === 1) eng.wheels.skateMount(at);
+      if (k === Math.round(1.6 * FPS)) eng.wheels.skatePop(at);
+      if (k === Math.round(2.1 * FPS)) eng.wheels.skateLand(at, 0.8);
+      if (k === Math.round(3.4 * FPS)) eng.wheels.skateOff(at);
       const air = t >= 1.6 && t < 2.1;
-      eng.skateRoll(t > 0.4 && t < 3.4 && !air ? [{ id: 0, pos: at, speed: 8, rough: 1 }] : []);
+      eng.wheels.skateRoll(t > 0.4 && t < 3.4 && !air ? [{ id: 0, pos: at, speed: 8, rough: 1 }] : []);
     },
   });
   // Rolling at 7 m/s: a kickflip (pop, flick, catch, land), then a pop shove-it (the scoop).
@@ -89,14 +89,14 @@ function clips(): Clip[] {
       chase(cam, at);
       const k = Math.round(t * FPS);
       const trick = (from: number, flip: boolean, time: number) => {
-        if (k === Math.round(from * FPS)) eng.skatePop(at);
-        if (k === Math.round((from + 0.05) * FPS)) eng.skateFlick(at, flip);
-        if (k === Math.round((from + 0.05 + time) * FPS)) eng.skateCatch(at);
-        if (k === Math.round((from + 0.51) * FPS)) eng.skateLand(at, 0.85);
+        if (k === Math.round(from * FPS)) eng.wheels.skatePop(at);
+        if (k === Math.round((from + 0.05) * FPS)) eng.wheels.skateFlick(at, flip);
+        if (k === Math.round((from + 0.05 + time) * FPS)) eng.wheels.skateCatch(at);
+        if (k === Math.round((from + 0.51) * FPS)) eng.wheels.skateLand(at, 0.85);
         return t >= from && t < from + 0.51;
       };
       const air = trick(0.8, true, 0.36) || trick(2.5, false, 0.32);
-      eng.skateRoll(air ? [] : [{ id: 0, pos: at, speed: 7, rough: 1 }]);
+      eng.wheels.skateRoll(air ? [] : [{ id: 0, pos: at, speed: 7, rough: 1 }]);
     },
   });
   // Someone else rolls past at 9 m/s, 4 m out, while this survivor stands on the sidewalk.
@@ -107,8 +107,8 @@ function clips(): Clip[] {
       cam.lookAt(0, 1.5, 4);
       cam.updateMatrixWorld();
       const at = new THREE.Vector3(-18 + t * 9, 0, 0);
-      if (Math.round(t * FPS) % 15 === 0) eng.skateKick(at);
-      eng.skateRoll([{ id: 3, pos: at, speed: 9, rough: 1 }]);
+      if (Math.round(t * FPS) % 15 === 0) eng.wheels.skateKick(at);
+      eng.wheels.skateRoll([{ id: 3, pos: at, speed: 9, rough: 1 }]);
     },
   });
   out.push({
@@ -117,8 +117,8 @@ function clips(): Clip[] {
       cam.position.set(0, 1.75, -6);
       cam.lookAt(0, 1.5, 0);
       cam.updateMatrixWorld();
-      if (Math.round(t * FPS) === 3) eng.skateBail(new THREE.Vector3(0, 0, 0));
-      eng.skateRoll([]);
+      if (Math.round(t * FPS) === 3) eng.wheels.skateBail(new THREE.Vector3(0, 0, 0));
+      eng.wheels.skateRoll([]);
     },
   });
   // The yardstick: a survivor's own running footsteps (2.6 a second).

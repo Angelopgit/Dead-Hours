@@ -108,11 +108,11 @@ const yardPoints = (cz: number, x0: number, x1: number) => {
   return { grass, n };
 };
 for (const [name, cz, x0, x1] of [
-  ['Elm Street north yards', -11, -60, 60],
-  ['Elm Street south yards', 11, -60, 60],
-  ['Oak Street north yards', OAK.z - 11, OAK.birch + 12, OAK.lotsEnd],
-  ['Oak Street south yards', OAK.z + 11, OAK.birch + 12, OAK.lotsEnd],
-  ['Maple Hollow Park', 30, 70, 108],
+  ['Hale Street north yards', -11, -60, 60],
+  ['Hale Street south yards', 11, -60, 60],
+  ['Kinney Street north yards', OAK.z - 11, OAK.birch + 12, OAK.lotsEnd],
+  ['Kinney Street south yards', OAK.z + 11, OAK.birch + 12, OAK.lotsEnd],
+  ['Vesper Park', 30, 70, 108],
 ] as const) {
   const { grass, n } = yardPoints(cz, x0, x1);
   const share = n ? grass / n : 0;

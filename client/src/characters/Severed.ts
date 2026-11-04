@@ -128,7 +128,7 @@ export class SeveredArm {
     const leg = isLeg(spec.arm);
     const whole = spec.cut === 'shoulder' || spec.cut === 'hip';
     this.grip = leg ? SHIN : FORE;
-    this.skin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, flatShading: true });
+    this.skin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78 });
     const look = zombieLookOf(spec.kind === 'crawler' ? 'walker' : spec.kind, spec.look % kindLooks(spec.kind));
     this.decay = decayOf(look, spec.look * 1.37, false);
     patchWounds(this.skin, this.wounds, this.decay);

@@ -1,8 +1,8 @@
 import type { MapBuilder } from './builder';
 
 /**
- * Street furniture and yard fencing shared by every street of the neighbourhood, so a new street
- * is dressed exactly like the old ones.
+ * Street furniture and yard fencing shared by every street of the neighbourhood, so every street
+ * is dressed alike.
  */
 
 const STREETLIGHT = { color: 0xffb36b, intensity: 260, range: 24, angle: 0.95, penumbra: 0.65, decay: 1.6 } as const;

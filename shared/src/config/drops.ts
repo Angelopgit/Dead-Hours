@@ -43,7 +43,7 @@ export const SUPPLY_DROPS = {
   exclusiveWeights: [['lmg', 0.25], ['battle', 0.2], ['rpg', 0.25], ['wraith', 0.15], ['sniper', 0.15]] as [WeaponId, number][],
   /** The case lies this far from the crate's centre, across the helicopter's way in. */
   caseOffset: 1.15,
-  /** Chance that a drop also carries one Lazarus serum (see SERUM), lying on the crate's other side. */
+  /** Chance that a drop also carries one Halberg serum (see SERUM), lying on the crate's other side. */
   serumChance: 0.1,
   /**
    * Throwables packed in with the ammunition, each rolled on its own per drop: a crate with
@@ -57,12 +57,12 @@ export const SUPPLY_DROPS = {
 } as const;
 
 /**
- * Lazarus serum: an experimental immunity shot from the supply drops. Injected, it hardens the
+ * Halberg serum: an experimental immunity shot from the supply drops. Injected, it hardens the
  * survivor against the dead: `absorb` of every zombie hit (claws, bites, a bloater bursting)
  * comes off an armor pool of `armor` points instead of their health, until the pool is spent.
  */
 export const SERUM = {
-  name: 'Lazarus Serum',
+  name: 'Halberg Serum',
   armor: 100,
   absorb: 0.6,
 } as const;

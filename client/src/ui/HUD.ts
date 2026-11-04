@@ -93,7 +93,7 @@ export class HUD {
   private waypointShown = false;
   private promptKey = '';
   private health = 100;
-  /** Lazarus serum armor: a teal bar under the health bar while it lasts. */
+  /** Halberg serum armor: a teal bar under the health bar while it lasts. */
   private readonly armorRow: HTMLElement;
   private readonly armorFill: HTMLElement;
   private readonly armorText: HTMLElement;
@@ -141,6 +141,9 @@ export class HUD {
     this.warning = h('div', { class: 'warning' });
     this.arcs = h('div', { class: 'damage-arcs' });
     this.feed = h('div', { class: 'feed' });
+    this.cardTitle = h('div', { class: 'goals-head' });
+    this.cardList = h('ol', { class: 'goals-list' });
+    this.card = h('div', { class: 'goals', style: 'display:none' }, this.cardTitle, this.cardList);
     this.trick = h('div', { class: 'trick-call' });
     this.waypointText = h('span', { class: 'wp-text' });
     this.waypoint = h('div', { class: 'waypoint' }, h('i', { class: 'wp-icon' }), this.waypointText);
@@ -158,7 +161,7 @@ export class HUD {
     this.armorFill = h('i');
     this.armorText = h('span', {}, '0');
     this.armorRow = h('div', { class: 'armor', style: 'display:none' },
-      h('div', { class: 'armor-label' }, h('span', {}, 'LAZARUS SERUM'), this.armorText),
+      h('div', { class: 'armor-label' }, h('span', {}, 'HALBERG SERUM'), this.armorText),
       h('div', { class: 'abar' }, this.armorFill));
     this.boostRow = h('div', { class: 'boosts' });
     this.flash = h('div', { class: 'boost-flash' });
@@ -188,6 +191,7 @@ export class HUD {
       h('div', { class: 'hud-top' }, this.timer, this.warning, this.notice),
       this.trick,
       this.feed,
+      this.card,
       h('div', { class: 'vitals' },
         this.boostRow,
         h('div', { class: 'name' }, h('span', {}, name.toUpperCase()), this.hp),
@@ -329,7 +333,7 @@ export class HUD {
     this.wReserve.style.marginLeft = club ? '0.45em' : '';
     this.wMag.classList.toggle('low', club ? r.hits! <= 2 : r.magazine > 0 && r.mag <= Math.max(1, Math.floor(r.magazine * 0.25)));
     this.wReserve.classList.toggle('low', !club && r.reserve === 0);
-    this.wMode.textContent = r.reload !== null ? 'RELOADING' : club ? 'MELEE · CLUB' : r.mode;
+    this.wMode.textContent = r.reload !== null ? 'RELOADING' : club ? 'MELEE, CLUB' : r.mode;
     // The bar: reload or bandage progress, or how much is left of the arm.
     const bar = r.reload ?? r.healing ?? (club && r.healing === null ? r.wear! : null);
     this.wBar.classList.toggle('show', bar !== null);
@@ -361,7 +365,7 @@ export class HUD {
     this.lightLine.classList.toggle('none', !r.light);
   }
 
-  /** "SURVIVED 18:42" or "OUTBREAK IMMINENT — 00:45"; `calm` for downtime. */
+  /** "SURVIVED 18:42" or "THEY COME IN 00:45"; `calm` for downtime. */
   setTimer(text: string, urgent = false, calm = false): void {
     if (text === this.timerText) return;
     this.timerText = text;
@@ -377,6 +381,28 @@ export class HUD {
     this.warning.textContent = text;
     this.warning.classList.toggle('show', text !== '');
   }
+
+  /**
+   * The card at the top left: the first night's steps while getting ready, then tonight's goals.
+   * Rows are ticked when done; an empty list hides it.
+   */
+  setCard(title: string, rows: { text: string; meta?: string; done: boolean }[]): void {
+    const key = title + '|' + rows.map((r) => `${r.text}${r.meta ?? ''}${r.done ? '+' : ''}`).join('|');
+    if (key === this.cardKey) return;
+    const was = this.cardKey.split('|')[0] === title ? new Set(Array.from(this.cardList.children).filter((c) => c.classList.contains('done')).map((c) => c.firstChild?.textContent)) : null;
+    this.cardKey = key;
+    this.card.style.display = rows.length ? '' : 'none';
+    this.cardTitle.textContent = title;
+    this.cardList.replaceChildren(...rows.map((r) => {
+      const li = h('li', { class: r.done ? 'done' : '' }, h('span', {}, r.text), r.meta ? h('em', {}, r.meta) : null);
+      if (r.done && was && !was.has(r.text)) gsap.fromTo(li, { backgroundColor: 'rgba(232, 145, 58, 0.35)' }, { backgroundColor: 'rgba(232, 145, 58, 0)', duration: 1.2 });
+      return li;
+    }));
+  }
+  private readonly card: HTMLElement;
+  private readonly cardTitle: HTMLElement;
+  private readonly cardList: HTMLElement;
+  private cardKey = '';
 
   /** Small line in the pickup feed (bottom right, above the weapon panel). */
   feedLine(text: string): void {
@@ -466,7 +492,7 @@ export class HUD {
     this.el.classList.toggle('driving', v?.seat === 'DRIVING');
     this.el.classList.toggle('riding', !!v && v.seat !== 'DRIVING');
     if (!v) return;
-    this.carName.textContent = `${v.name} · ${v.seat}`;
+    this.carName.textContent = `${v.name}, ${v.seat}`;
     this.carSpeed.textContent = String(Math.round(v.mph));
     const pct = Math.max(0, Math.min(100, Math.round(v.gas * 100)));
     this.carGas.style.width = `${pct}%`;
@@ -478,7 +504,7 @@ export class HUD {
   /** Frame rate (and the round trip to the server online), when the setting shows them. */
   setFps(fps: number, rtt: number | null = null): void {
     const show = settings.value.graphics.showFps;
-    this.fps.textContent = show ? `${Math.round(fps)} FPS${rtt !== null ? ` · ${Math.round(rtt * 1000)} MS` : ''}` : '';
+    this.fps.textContent = show ? `${Math.round(fps)} FPS${rtt !== null ? `, ${Math.round(rtt * 1000)} MS` : ''}` : '';
   }
 
   setVisible(v: boolean): void {

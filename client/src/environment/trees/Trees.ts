@@ -132,7 +132,7 @@ export class Trees {
       } else if (t.kind === 'pine') {
         model = 3 + (v % 3);
         if (t.forest) {
-          // The woods: the old forest's sizes (0.85..1.3, a little taller or squatter).
+          // The woods: sizes 0.85..1.3, a little taller or squatter than yard trees.
           k = 0.85 + (v % 6) * 0.09;
           ky = k * (0.9 + ((i * 7) % 5) * 0.06);
           k *= 0.92;

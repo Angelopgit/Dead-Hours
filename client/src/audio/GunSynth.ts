@@ -577,10 +577,10 @@ function enclosureIR(sr: number, seed: number, e: EnclosureSpec): Channels {
 }
 
 /**
- * The enclosed spaces of Maple Hollow, each answering a shot its own way (stereo, unit energy):
+ * The enclosed spaces of Vesper, each answering a shot its own way (stereo, unit energy):
  * - room: a furnished room in a house. Close plaster walls answer within milliseconds, the room
  *   booms at its own low resonances and soft furnishings kill the ring in well under a second.
- * - hall: the Quik-Stop's shop floor or a garage. Farther, harder walls: later reflections and a
+ * - hall: the Rudy’s's shop floor or a garage. Farther, harder walls: later reflections and a
  *   longer, brighter ring with weaker low modes.
  * - basement: poured concrete under a low ceiling. Hard, bright, immediate slaps, a long ring for
  *   a small room and a heavy low boom, the harshest place to fire a gun.

@@ -42,7 +42,7 @@ function seams(eng: AudioEngine, at: THREE.Vector3, v: number, moved: number, st
   state.seam -= moved;
   if (state.seam > 0) return;
   state.seam = 1.5;
-  eng.bikeSeam(at, Math.min(1, v / 8), (BICYCLE.frontAxle - BICYCLE.rearAxle) / Math.max(1, v));
+  eng.wheels.bikeSeam(at, Math.min(1, v / 8), (BICYCLE.frontAxle - BICYCLE.rearAxle) / Math.max(1, v));
 }
 
 function clips(): Clip[] {
@@ -59,7 +59,7 @@ function clips(): Clip[] {
         chase(cam, at);
         if (rough < 0.7) seams(eng, at, s.v, s.x - lastX, st);
         lastX = s.x;
-        eng.bikeRoll(s.v > 0.3 ? [{ id: 0, pos: at, speed: s.v, rough, coast: false, skid: 0 }] : []);
+        eng.wheels.bikeRoll(s.v > 0.3 ? [{ id: 0, pos: at, speed: s.v, rough, coast: false, skid: 0 }] : []);
       },
     });
   }
@@ -73,7 +73,7 @@ function clips(): Clip[] {
       const at = new THREE.Vector3(x, 0, 0);
       chase(cam, at);
       const skid = brake && v > BICYCLE.skidSpeed ? 1 : 0;
-      eng.bikeRoll(v > 0.3 ? [{ id: 0, pos: at, speed: v, rough: 1, coast: true, skid }] : []);
+      eng.wheels.bikeRoll(v > 0.3 ? [{ id: 0, pos: at, speed: v, rough: 1, coast: true, skid }] : []);
     },
   });
   // Pick it up, ride off, ring twice, hop and land, get off and let it fall.
@@ -84,12 +84,12 @@ function clips(): Clip[] {
       const at = new THREE.Vector3(Math.min(x, 7 * 3.7), 0, 0);
       chase(cam, at);
       const k = Math.round(t * FPS);
-      if (k === 1) eng.bikeMount(at);
-      if (k === Math.round(1.2 * FPS) || k === Math.round(1.8 * FPS)) eng.bikeBell(at.clone().add(new THREE.Vector3(0.5, 1.1, 0)), true);
-      if (k === Math.round(2.9 * FPS)) eng.bikeLand(at, 0.7);
-      if (k === Math.round(4.3 * FPS)) eng.bikeDrop(at);
+      if (k === 1) eng.wheels.bikeMount(at);
+      if (k === Math.round(1.2 * FPS) || k === Math.round(1.8 * FPS)) eng.wheels.bikeBell(at.clone().add(new THREE.Vector3(0.5, 1.1, 0)), true);
+      if (k === Math.round(2.9 * FPS)) eng.wheels.bikeLand(at, 0.7);
+      if (k === Math.round(4.3 * FPS)) eng.wheels.bikeDrop(at);
       const air = t >= 2.5 && t < 2.9;
-      eng.bikeRoll(t > 0.5 && t < 4.2 && !air ? [{ id: 0, pos: at, speed: 7, rough: 1, coast: t > 3.2, skid: 0 }] : []);
+      eng.wheels.bikeRoll(t > 0.5 && t < 4.2 && !air ? [{ id: 0, pos: at, speed: 7, rough: 1, coast: t > 3.2, skid: 0 }] : []);
     },
   });
   // Someone else rides past at 10 m/s, 4 m out, ringing, while this survivor stands on the sidewalk.
@@ -100,9 +100,9 @@ function clips(): Clip[] {
       cam.lookAt(0, 1.5, 4);
       cam.updateMatrixWorld();
       const at = new THREE.Vector3(-20 + t * 10, 0, 0);
-      if (Math.round(t * FPS) === Math.round(1.5 * FPS)) eng.bikeBell(at.clone().setY(1.1));
-      if (Math.round(t * FPS) === Math.round(0.6 * FPS)) eng.bikePeg(at);
-      eng.bikeRoll([{ id: 3, pos: at, speed: 10, rough: 1, coast: t > 2.5, skid: 0 }]);
+      if (Math.round(t * FPS) === Math.round(1.5 * FPS)) eng.wheels.bikeBell(at.clone().setY(1.1));
+      if (Math.round(t * FPS) === Math.round(0.6 * FPS)) eng.wheels.bikePeg(at);
+      eng.wheels.bikeRoll([{ id: 3, pos: at, speed: 10, rough: 1, coast: t > 2.5, skid: 0 }]);
     },
   });
   out.push({
@@ -111,8 +111,8 @@ function clips(): Clip[] {
       cam.position.set(0, 1.75, -6);
       cam.lookAt(0, 1.5, 0);
       cam.updateMatrixWorld();
-      if (Math.round(t * FPS) === 3) eng.bikeCrash(new THREE.Vector3(0, 0, 0));
-      eng.bikeRoll([]);
+      if (Math.round(t * FPS) === 3) eng.wheels.bikeCrash(new THREE.Vector3(0, 0, 0));
+      eng.wheels.bikeRoll([]);
     },
   });
   // The yardstick: a survivor's own running footsteps (2.6 a second).

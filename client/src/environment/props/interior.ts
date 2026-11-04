@@ -14,22 +14,23 @@ function legs(k: Kit, w: number, d: number, h: number, r: number, m: Surface, in
 
 export const INTERIOR: Partial<Record<PropKind, Builder>> = {
   sofa(k) {
-    const f = k.mat(FABRICS[(k.p.variant ?? Math.floor(k.rand(1) * 5)) % FABRICS.length], 0.95);
-    k.block(2.1, 0.42, 0.9, f, 0, 0.04, 0);
-    k.block(2.1, 0.5, 0.22, f, 0, 0.42, -0.34);
-    for (const sx of [-1, 1]) k.block(0.2, 0.62, 0.9, f, sx * 0.95, 0.04, 0);
+    // Upholstery is rounded and smooth-shaded; the frame and feet stay square.
+    const f = k.mat(FABRICS[(k.p.variant ?? Math.floor(k.rand(1) * 5)) % FABRICS.length], 0.95, 0, false);
+    k.soft(2.1, 0.42, 0.9, 0.06, f, 0, 0.04, 0);
+    k.soft(2.1, 0.5, 0.22, 0.08, f, 0, 0.42, -0.34);
+    for (const sx of [-1, 1]) k.soft(0.2, 0.62, 0.9, 0.08, f, sx * 0.95, 0.04, 0);
     const c = k.mat(0x2a2420, 0.7);
     for (const sx of [-1, 1]) k.block(0.08, 0.06, 0.08, c, sx * 0.95, 0, 0.36);
     for (let i = 0; i < 3; i++) {
-      const cush = k.block(0.56, 0.12, 0.62, f, -0.56 + i * 0.56, 0.44, 0.08);
+      const cush = k.soft(0.56, 0.12, 0.62, 0.05, f, -0.56 + i * 0.56, 0.44, 0.08);
       cush.rotation.z = (k.rand(i) - 0.5) * 0.06;
     }
   },
   armchair(k) {
-    const f = k.mat(FABRICS[(k.p.variant ?? Math.floor(k.rand(2) * 5) + 1) % FABRICS.length], 0.95);
-    k.block(0.9, 0.42, 0.9, f, 0, 0.04, 0);
-    k.block(0.9, 0.55, 0.22, f, 0, 0.42, -0.34);
-    for (const sx of [-1, 1]) k.block(0.16, 0.6, 0.9, f, sx * 0.37, 0.04, 0);
+    const f = k.mat(FABRICS[(k.p.variant ?? Math.floor(k.rand(2) * 5) + 1) % FABRICS.length], 0.95, 0, false);
+    k.soft(0.9, 0.42, 0.9, 0.06, f, 0, 0.04, 0);
+    k.soft(0.9, 0.55, 0.22, 0.08, f, 0, 0.42, -0.34);
+    for (const sx of [-1, 1]) k.soft(0.16, 0.6, 0.9, 0.07, f, sx * 0.37, 0.04, 0);
   },
   coffeeTable(k) {
     const w = k.mat(0x3a2a1e, 0.6);
@@ -46,12 +47,13 @@ export const INTERIOR: Partial<Record<PropKind, Builder>> = {
   bed(k) {
     const frame = k.mat(0x3a2a1e, 0.7);
     k.block(2.1, 0.3, 1.5, frame, 0, 0, 0);
-    k.block(2.0, 0.22, 1.42, k.mat(0xc8c2b4, 0.95), 0.03, 0.3, 0);
+    k.soft(2.0, 0.22, 1.42, 0.07, k.mat(0xc8c2b4, 0.95, 0, false), 0.03, 0.3, 0);
     k.block(0.08, 0.95, 1.55, frame, -1.06, 0, 0);
     const blanket = jitter(new THREE.BoxGeometry(1.4, 0.1, 1.48, 4, 1, 4), 0.04, Math.round(k.p.x * 7));
     k.add(blanket, k.mat(BLANKETS[(k.p.variant ?? 0) % BLANKETS.length], 0.95), 0.32, 0.56, 0);
-    k.block(0.4, 0.12, 0.6, k.mat(0xd8d2c4, 0.95), -0.78, 0.52, -0.33);
-    if ((k.p.variant ?? 0) === 0) k.block(0.4, 0.12, 0.6, k.mat(0xd8d2c4, 0.95), -0.78, 0.52, 0.33);
+    const pillow = k.mat(0xd8d2c4, 0.95, 0, false);
+    k.soft(0.4, 0.12, 0.6, 0.05, pillow, -0.78, 0.52, -0.33);
+    if ((k.p.variant ?? 0) === 0) k.soft(0.4, 0.12, 0.6, 0.05, pillow, -0.78, 0.52, 0.33);
   },
   wardrobe(k) {
     const w = k.mat(0x4a3626, 0.7);

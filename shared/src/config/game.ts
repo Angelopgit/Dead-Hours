@@ -2,7 +2,9 @@ export const GAME = {
   title: 'DEAD HOURS',
   /** Shown on the main menu and by the server's /health; keep in step with package.json. */
   version: '0.4.1',
-  subtitle: "Survive Until You Can't.",
+  subtitle: 'Board the windows. Count the hours.',
+  /** The town the night happens in (what players read; code names such as MAPLE_HOLLOW stay as they were). */
+  town: 'Vesper',
   minPlayers: 1,
   maxPlayers: 4,
   preparationSeconds: 45,

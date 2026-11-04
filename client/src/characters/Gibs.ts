@@ -90,7 +90,7 @@ const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _p = new THREE.Vect
  */
 export class Gibs {
   private readonly list: Gib[] = [];
-  private readonly skin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, flatShading: true });
+  private readonly skin = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 });
   private readonly gore = goreMaterial();
   private gored = true;
   onLand: ((pos: THREE.Vector3, strength: number) => void) | null = null;
