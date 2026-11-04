@@ -1,7 +1,5 @@
 import { PadKeyboard } from './PadKeyboard';
-
-/** Standard layout indices used by menu navigation. */
-const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, START = 9, UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15;
+import { PAD, glyph, menuButtons } from '../core/PadLayout';
 
 type Dir = 'up' | 'down' | 'left' | 'right';
 
@@ -17,6 +15,22 @@ const typable = (el: Element): el is HTMLInputElement => el instanceof HTMLInput
 const REPEAT_DELAY = 0.38;
 const REPEAT_EVERY = 0.11;
 
+/**
+ * Cut off by a box around it that doesn't scroll (a collapsed sub-menu: its items are laid out, at full
+ * size, under the items after it). Off the edge of a list that scrolls still counts: it scrolls into view.
+ */
+function clipped(el: Element, r: DOMRect): boolean {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const s = getComputedStyle(p);
+    if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
+    const b = p.getBoundingClientRect();
+    if (r.bottom > b.top + 1 && r.top < b.bottom - 1 && r.right > b.left + 1 && r.left < b.right - 1) continue;
+    const scrolls = /auto|scroll/.test(`${s.overflowX} ${s.overflowY}`) && (p.scrollHeight > p.clientHeight + 1 || p.scrollWidth > p.clientWidth + 1);
+    if (!scrolls) return true;
+  }
+  return false;
+}
+
 function visible(el: Element): boolean {
   const r = el.getBoundingClientRect();
   if (r.width === 0 || r.height === 0) return false;
@@ -25,7 +39,8 @@ function visible(el: Element): boolean {
     if (!el.closest('.panel')) return false;
   }
   const s = getComputedStyle(el);
-  return s.visibility !== 'hidden' && s.display !== 'none' && s.pointerEvents !== 'none' && Number(s.opacity) > 0.05;
+  if (s.visibility === 'hidden' || s.display === 'none' || s.pointerEvents === 'none' || Number(s.opacity) <= 0.05) return false;
+  return !clipped(el, r);
 }
 
 function key(code: string, keyName = code): void {
@@ -34,18 +49,56 @@ function key(code: string, keyName = code): void {
 }
 
 /**
+ * Something on screen the right stick turns while it is up (the survivor in the creator, a gun on the
+ * bench): `turn` gets the stick's lean scaled by time, and says whether it used the up-and-down too
+ * (otherwise that scrolls the panel).
+ */
+export interface PadTurner { el: () => Element | null; turn: (dx: number, dy: number) => boolean }
+const turners = new Set<PadTurner>();
+
+export function padTurner(t: PadTurner): () => void {
+  turners.add(t);
+  return () => turners.delete(t);
+}
+
+const shown = (t: PadTurner) => {
+  const el = t.el();
+  return !!el && el.isConnected && visible(el);
+};
+
+/** The button hints for the screen in front of the player (glyphs and words), told when they change. */
+let hintText = '';
+const hintListeners = new Set<(text: string) => void>();
+
+export function onMenuHints(fn: (text: string) => void): () => void {
+  hintListeners.add(fn);
+  fn(hintText);
+  return () => hintListeners.delete(fn);
+}
+
+function setHints(text: string): void {
+  if (text === hintText) return;
+  hintText = text;
+  for (const fn of hintListeners) fn(text);
+}
+
+/**
  * Menus with a controller: the D-pad or left stick moves focus to the nearest control in that
  * direction, A presses it, B and Start go back (as Escape does), left and right change sliders,
- * and the right stick scrolls long panels. A on a text box opens the on-screen keyboard
- * (PadKeyboard), where X deletes and Y types a space.
+ * the right stick turns a 3D preview (or scrolls long panels), and LB and RB step through tabs. A
+ * on a text box opens the on-screen keyboard (PadKeyboard), where X deletes and Y types a space. A
+ * Nintendo pad confirms with its right button and goes back with the bottom one, as its own menus do.
  */
 export class PadMenus {
   private heldDir: Dir | null = null;
   private heldT = 0;
+  /** Seconds until the hints are looked at again (they need every control measured, so not every frame). */
+  private hintsIn = 0;
 
-  update(dt: number, now: boolean[], edge: (i: number) => boolean, lx: number, ly: number, ry: number): void {
-    const dir: Dir | null = now[UP] || ly < -0.55 ? 'up' : now[DOWN] || ly > 0.55 ? 'down'
-      : now[LEFT] || lx < -0.55 ? 'left' : now[RIGHT] || lx > 0.55 ? 'right' : null;
+  update(dt: number, now: boolean[], edge: (i: number) => boolean, lx: number, ly: number, rx: number, ry: number): void {
+    const { ok, back } = menuButtons();
+    const dir: Dir | null = now[PAD.UP] || ly < -0.55 ? 'up' : now[PAD.DOWN] || ly > 0.55 ? 'down'
+      : now[PAD.LEFT] || lx < -0.55 ? 'left' : now[PAD.RIGHT] || lx > 0.55 ? 'right' : null;
     if (dir !== this.heldDir) {
       this.heldDir = dir;
       this.heldT = 0;
@@ -57,20 +110,53 @@ export class PadMenus {
         this.step(dir);
       }
     }
-    if (edge(A)) this.press();
+    if (edge(ok)) this.press();
+    if (dir || now.some((v, i) => v && edge(i))) this.hintsIn = 0.05;
     const osk = PadKeyboard.active;
-    if (osk && edge(X)) osk.backspace();
-    if (osk && edge(Y)) osk.space();
+    if (osk && edge(PAD.X)) osk.backspace();
+    if (osk && edge(PAD.Y)) osk.space();
     // Over a keyboard, back closes just the keyboard (an Escape would reach the menu behind it too).
-    if (edge(B) || edge(START)) {
+    if (edge(back) || edge(PAD.START)) {
       if (osk) osk.cancel();
       else key('Escape');
     }
-    if (edge(LB) || edge(RB)) this.tab(edge(RB) ? 1 : -1);
-    if (ry) {
+    if (edge(PAD.LB) || edge(PAD.RB)) this.tab(edge(PAD.RB) ? 1 : -1);
+    const turner = [...turners].reverse().find(shown);
+    let usedY = false;
+    if ((rx || ry) && turner) usedY = turner.turn(rx * dt, ry * dt);
+    if (ry && !usedY) {
       const scroller = this.scope().querySelector('.panel') ?? (this.scope().matches('.panel') ? this.scope() : null);
       (scroller as HTMLElement | null)?.scrollBy({ top: ry * dt * 900 });
     }
+    this.hintsIn -= dt;
+    if (this.hintsIn <= 0) {
+      this.hintsIn = 0.3;
+      this.hints(!!turner);
+    }
+  }
+
+  /** The bar of button hints: what A, B, the shoulders and the right stick do here. */
+  private hints(turner: boolean): void {
+    const { ok, back } = menuButtons();
+    const osk = PadKeyboard.active;
+    const parts: string[] = [];
+    // The on-screen keyboard has its own line of hints.
+    if (!osk) {
+      const scope = this.scope();
+      const cur = this.focused();
+      if (cur && (cur instanceof HTMLSelectElement || (cur instanceof HTMLInputElement && cur.type === 'range'))) parts.push(`${glyph(PAD.LEFT)}${glyph(PAD.RIGHT)} Change`);
+      if (this.candidates().length) parts.push(`${glyph(ok)} ${cur && typable(cur) ? 'Type' : 'Select'}`);
+      if (scope.matches(LAYERS)) parts.push(`${glyph(back)} Back`);
+      if (scope.querySelector('.tabs .tab')) parts.push(`${glyph(PAD.LB)}${glyph(PAD.RB)} Tabs`);
+      if (turner) parts.push(`${glyph(PAD.RS)} Turn`);
+    }
+    setHints(parts.join('   '));
+  }
+
+  /** Out of the menus (playing): no hints. */
+  idle(): void {
+    this.hintsIn = 0;
+    setHints('');
   }
 
   /** The topmost open layer, or the whole interface. */

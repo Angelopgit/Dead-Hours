@@ -12,6 +12,8 @@ export type VoiceMode = 'ptt' | 'vad';
 export type AimAssist = 'off' | 'low' | 'standard';
 /** On-screen thumb controls: shown on touch screens, or always, or never. */
 export type TouchMode = 'auto' | 'on' | 'off';
+/** Whose button names the prompts show: the connected controller's (auto), or one picked. */
+export type PadGlyphs = 'auto' | 'xbox' | 'playstation' | 'nintendo' | 'generic';
 export type GraphicsPreset = 'phone' | 'low' | 'medium' | 'high';
 /** Wind-swayed grass on the lawns: how dense and how far it reaches. */
 export type GrassQuality = 'off' | 'low' | 'medium' | 'high';
@@ -89,6 +91,19 @@ export interface SettingsData {
     aimAssist: AimAssist;
     /** Controller rumble and phone vibration on shots and hits. */
     vibration: boolean;
+    /** How strong the rumble is, 0..1. */
+    vibrationStrength: number;
+    /** Button names in prompts. */
+    padGlyphs: PadGlyphs;
+    /** Controller buttons moved about: physical index → the standard button it acts as (empty: the standard layout). */
+    padRemap: number[];
+    /** Move with the right stick and look with the left. */
+    padSwapSticks: boolean;
+    /** Up on the look stick looks down. */
+    padInvertY: boolean;
+    /** How far a stick must lean before it counts (0..1 of its throw), for moving and for looking. */
+    padDeadzoneMove: number;
+    padDeadzoneLook: number;
     touch: TouchMode;
     /** Size of the on-screen buttons. */
     touchScale: number;
@@ -167,6 +182,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   controls: {
     sensitivity: 1, invertY: false, aimMode: 'hold', aimView: 'sights', bindings: DEFAULT_BINDINGS,
     padSensitivity: 1, touchSensitivity: 1, aimAssist: 'standard', vibration: true, touch: 'auto', touchScale: 1,
+    vibrationStrength: 1, padGlyphs: 'auto', padRemap: [], padSwapSticks: false, padInvertY: false, padDeadzoneMove: 0.14, padDeadzoneLook: 0.14,
   },
   accessibility: { reducedShake: false, reducedFlashing: false, uiScale: 1 },
   profile: { name: 'Survivor', primary: 'ar', secondary: 'pistol', appearance: { ...DEFAULT_APPEARANCE }, builds: '1', offlineXp: 0 },
@@ -243,6 +259,8 @@ export class Settings {
         if (saved?.graphics && !('reflections' in saved.graphics)) {
           this.data.graphics.reflections = ({ low: 'off', medium: 'low', high: 'high' } as const)[this.data.graphics.fogQuality];
         }
+        // Saved when one invert setting served the mouse and the controller alike: the controller keeps what it had.
+        if (saved?.controls && !('padInvertY' in saved.controls)) this.data.controls.padInvertY = this.data.controls.invertY;
       }
       // First visit on a phone: start from the phone preset (it can be changed in Settings).
       else if (isPhone()) Object.assign(this.data.graphics, GRAPHICS_PRESETS.phone);

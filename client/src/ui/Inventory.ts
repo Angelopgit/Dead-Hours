@@ -1,7 +1,9 @@
 import gsap from 'gsap';
 import { COMBAT, LIMB_NAME, MELEE, WEAPONS, isMelee, type SimPlayer, type WeaponId } from '@dead-hours/shared';
 import { h } from './dom';
-import { codeLabel } from '../core/Input';
+import { codeLabel, inputDevice } from '../core/Input';
+import { PAD_ROWS, glyph, padLabel, physicalOf } from '../core/PadLayout';
+import { richNodes } from './Glyphs';
 import { settings, ACTION_LABELS, type Action } from '../core/Settings';
 
 const KEYS: Action[] = ['fire', 'aim', 'reload', 'interact', 'melee', 'weapon1', 'weapon2', 'weapon3', 'heal', 'flashlight', 'sprint', 'crouch', 'prone', 'jump', 'shoulder'];
@@ -63,7 +65,8 @@ export class Inventory {
     const a = p.arsenal;
     const s = p.stats;
     const limb = a.limb && !a.limb.broken ? a.limb : null;
-    const key = JSON.stringify([a.primary, a.secondary, a.active, p.bandages, p.health, s, survived, limb && [limb.id, limb.wear]]);
+    const pad = inputDevice() === 'pad';
+    const key = JSON.stringify([a.primary, a.secondary, a.active, p.bandages, p.health, s, survived, limb && [limb.id, limb.wear], pad]);
     if (key === this.last) return;
     this.last = key;
     this.title.textContent = survived;
@@ -71,8 +74,10 @@ export class Inventory {
       const code = settings.value.controls.bindings[action][0];
       return code ? codeLabel(code) : '—';
     };
-    // The key after a slot name is its own span: phones and pads have no keyboard, so they hide it.
-    const slot = (name: string, action: Action) => h('div', { class: 'slot' }, name, h('span', { class: 'inv-k' }, ` ${k(action)}`));
+    // The key after a slot name is its own span: phones have no keyboard, so they hide it; a controller shows its button
+    // (the weapons all share the switch button, so only the bandage's is worth showing).
+    const slot = (name: string, action: Action) => h('div', { class: 'slot' }, name,
+      pad ? (action === 'heal' ? h('span', { class: 'inv-k' }, ' ', ...richNodes(padLabel(action))) : null) : h('span', { class: 'inv-k' }, ` ${k(action)}`));
     const card = (slotEl: HTMLElement, id: WeaponId, ammo: { mag: number; reserve: number } | null, active: boolean) => {
       const w = WEAPONS[id];
       const stat = (label: string, v: number) => h('div', { class: 'stat' }, label, h('div', { class: 'bar' }, h('i', { style: `width:${Math.round(v * 100)}%` })));
@@ -121,6 +126,14 @@ export class Inventory {
 
   private renderKeys(): void {
     const b = settings.value.controls.bindings;
+    // With a controller, its layout (as moved about in Settings), its buttons drawn as buttons.
+    if (inputDevice() === 'pad') {
+      this.keys.classList.add('pad');
+      this.keys.replaceChildren(...PAD_ROWS.map((r) => h('div', {}, h('span', { class: 'pad' }, ...richNodes(glyph(physicalOf(r.button)))),
+        r.hold ? `${r.press}. Hold: ${r.hold.charAt(0).toLowerCase()}${r.hold.slice(1)}` : r.press)));
+      return;
+    }
+    this.keys.classList.remove('pad');
     this.keys.replaceChildren(...KEYS.map((a) => h('div', {}, h('span', {}, b[a][0] ? codeLabel(b[a][0]) : '—'), ACTION_LABELS[a])));
   }
 

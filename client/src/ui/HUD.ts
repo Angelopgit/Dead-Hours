@@ -2,6 +2,8 @@ import gsap from 'gsap';
 import { h } from './dom';
 import { pad } from './clock';
 import { actionLabel, inputDevice } from '../core/Input';
+import { GLYPH } from '../core/PadLayout';
+import { richNodes, richText } from './Glyphs';
 import { settings, type Action } from '../core/Settings';
 
 export interface WeaponReadout {
@@ -353,15 +355,15 @@ export class HUD {
     this.slot3.textContent = key3 ? `${key3}  ${m3}` : m3;
     this.slot3.style.display = m3 ? '' : 'none';
     this.slot3.classList.toggle('on', r.slot === 'melee');
-    this.bandages.textContent = r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? `${keyH}  ` : ''}BANDAGE × ${r.bandages}`;
+    richText(this.bandages, r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? `${keyH}  ` : ''}BANDAGE × ${r.bandages}`);
     this.bandages.classList.toggle('none', r.bandages === 0 && r.healing === null);
     const keyG = actionLabel('grenade'), keyM = actionLabel('molotov');
-    this.fragLine.textContent = `${keyG ? `${keyG}  ` : ''}GRENADE × ${r.frags ?? 0}`;
+    richText(this.fragLine, `${keyG ? `${keyG}  ` : ''}GRENADE × ${r.frags ?? 0}`);
     this.fragLine.classList.toggle('none', !r.frags);
-    this.molotovLine.textContent = `${keyM ? `${keyM}  ` : ''}MOLOTOV × ${r.molotovs ?? 0}`;
+    richText(this.molotovLine, `${keyM ? `${keyM}  ` : ''}MOLOTOV × ${r.molotovs ?? 0}`);
     this.molotovLine.classList.toggle('none', !r.molotovs);
     const keyL = actionLabel('flashlight');
-    this.lightLine.textContent = `${keyL ? `${keyL}  ` : ''}FLASHLIGHT ${r.light ? 'ON' : 'OFF'}`;
+    richText(this.lightLine, `${keyL ? `${keyL}  ` : ''}FLASHLIGHT ${r.light ? 'ON' : 'OFF'}`);
     this.lightLine.classList.toggle('none', !r.light);
   }
 
@@ -394,7 +396,7 @@ export class HUD {
     this.card.style.display = rows.length ? '' : 'none';
     this.cardTitle.textContent = title;
     this.cardList.replaceChildren(...rows.map((r) => {
-      const li = h('li', { class: r.done ? 'done' : '' }, h('span', {}, r.text), r.meta ? h('em', {}, r.meta) : null);
+      const li = h('li', { class: r.done ? 'done' : '' }, h('span', {}, ...richNodes(r.text)), r.meta ? h('em', {}, ...richNodes(r.meta)) : null);
       if (r.done && was && !was.has(r.text)) gsap.fromTo(li, { backgroundColor: 'rgba(232, 145, 58, 0.35)' }, { backgroundColor: 'rgba(232, 145, 58, 0)', duration: 1.2 });
       return li;
     }));
@@ -406,7 +408,7 @@ export class HUD {
 
   /** Small line in the pickup feed (bottom right, above the weapon panel). */
   feedLine(text: string): void {
-    const line = h('div', {}, text);
+    const line = h('div', {}, ...richNodes(text));
     this.feed.append(line);
     // Four lines at most, and (on a phone, where the feed ends above the thumb buttons) only as many as fit.
     while (this.feed.children.length > 4 || (this.feed.children.length > 1 && this.feed.scrollHeight > this.feed.clientHeight + 1)) {
@@ -417,7 +419,7 @@ export class HUD {
   }
 
   setStance(text: string): void {
-    if (this.stance.textContent !== text) this.stance.textContent = text;
+    richText(this.stance, text);
   }
 
   /** Told whenever the interaction prompt changes (the on-screen USE button follows it). */
@@ -433,7 +435,8 @@ export class HUD {
       this.prompt.classList.remove('show');
       return;
     }
-    this.prompt.replaceChildren(label ? h('span', { class: 'k' }, label) : '', text);
+    // A controller's button is drawn as the button; a key as a key cap.
+    this.prompt.replaceChildren(label ? h('span', { class: label.includes(GLYPH) ? 'k pad' : 'k' }, ...richNodes(label)) : '', ...richNodes(text));
     this.prompt.classList.add('show');
   }
 
@@ -448,7 +451,7 @@ export class HUD {
 
   /** Top-center contextual message, e.g. location titles or SUPPLY HELICOPTER INBOUND. */
   notify(title: string, sub = '', hold = 2.6, tone: '' | 'danger' | 'rare' | 'calm' = ''): void {
-    this.notice.replaceChildren(title, sub ? h('small', {}, sub) : '');
+    this.notice.replaceChildren(...richNodes(title), sub ? h('small', {}, ...richNodes(sub)) : '');
     this.notice.classList.toggle('danger', tone === 'danger');
     this.notice.classList.toggle('rare', tone === 'rare');
     this.notice.classList.toggle('calm', tone === 'calm');

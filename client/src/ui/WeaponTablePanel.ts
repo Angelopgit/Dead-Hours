@@ -2,12 +2,14 @@ import { h } from './dom';
 import { WEAPONS, PRIMARY_WEAPONS, type WeaponId } from '@dead-hours/shared';
 import { audio } from '../audio/AudioEngine';
 import { actionLabel, inputDevice } from '../core/Input';
+import { glyph, menuButtons } from '../core/PadLayout';
+import { richNodes } from './Glyphs';
 
 /** How to pick a gun and step away, in the words of the device in hand (a phone or a pad has no [E] or [Esc]). */
 function tableHint(): string {
   const d = inputDevice();
   if (d === 'touch') return 'Tap a card to equip it. CLOSE to step away.';
-  if (d === 'pad') return 'A on a card equips it. B to step away.';
+  if (d === 'pad') return `${glyph(menuButtons().ok)} on a card equips it. ${glyph(menuButtons().back)} to step away.`;
   const use = actionLabel('interact');
   return `Click a weapon on the bench or a card to equip it. ${use ? `[${use}] or ` : ''}[Esc] to step away.`;
 }
@@ -50,7 +52,7 @@ export class WeaponTablePanel {
       cb.onGunsmith ? h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: () => cb.onGunsmith?.(), onmouseenter: () => audio.ui('hover') }, 'GUNSMITH ▸'),
       ) : null,
-      h('p', { class: 'table-hint' }, tableHint()),
+      h('p', { class: 'table-hint' }, ...richNodes(tableHint())),
     );
     this.setCarried(carried);
   }

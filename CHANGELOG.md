@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Controllers
+
+- Button prompts are drawn as the buttons on your pad: Xbox, PlayStation (DualSense and DualShock), Nintendo or a generic pad, picked from the one plugged in or set by hand in Settings.
+- A bar along the bottom of every menu says what the buttons do there. A Nintendo pad confirms with A on the right and goes back with B, as its own menus do.
+- Every menu works with a pad alone, including the menu's folded sections, the armory, the creator and the settings. The right stick turns the gun or the survivor on screen.
+- Every action in a night has a button. Hold LB to ready a grenade and press Y while it is held to switch to a Molotov. Hold Y for the gunsmith, hold B to go prone, hold D-pad up to switch shoulders, and hold D-pad down at a window to board it up.
+- Move any button to another in Settings, or pick the Standard, Tactical or Southpaw layout. You can also swap sticks, set each stick's dead zone with a live meter, set look speed, and invert look apart from the mouse.
+- Rumble on shots, hits, blasts, hard landings, going down and dying, with a strength slider and a test button.
+- A short note when a pad is plugged in or goes away. Unplugging the pad you play with pauses the night.
+- Moving the mouse or touching the screen hands control back, and any button or a firm push on a stick takes it again. A button held when a menu closes no longer acts in play.
+- Chat from the pause menu with the on-screen keyboard in online nights.
+
 ## 0.5.0 (2026-11-04)
 
 ### A night with a point

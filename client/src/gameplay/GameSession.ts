@@ -10,6 +10,10 @@ import {
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
 import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
+import { PAD, glyph, menuButtons, physicalOf } from '../core/PadLayout';
+import { PadKeyboard } from '../ui/PadKeyboard';
+import { padTurner } from '../ui/PadMenus';
+import { richText, richNodes } from '../ui/Glyphs';
 import type { Physics } from '../core/Physics';
 import { settings, type Action } from '../core/Settings';
 import { PlayerController } from './PlayerController';
@@ -75,6 +79,8 @@ interface Smith {
   el: HTMLElement;
   /** Opened from the workbench (the weapon table's panel comes back on closing). */
   bench: boolean;
+  /** Lets go of the controller's right stick (which turns the gun while it is up). */
+  offTurn: () => void;
 }
 
 /** Name of the map area containing a point (areas are ordered most specific first). */
@@ -174,6 +180,8 @@ export class GameSession {
   private teamResults: TeamResults | null = null;
   /** Online, after dying: whose fight the camera follows. */
   private watching: string | null = null;
+  /** The throwable last readied: a controller's LB readies it again while there are any left. */
+  private throwKind: 'frag' | 'molotov' = 'frag';
   private readonly hud: HUD;
   private readonly pause: PauseMenu;
   private readonly inventory = new Inventory();
@@ -432,7 +440,10 @@ export class GameSession {
     this.zombies.gibs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     // Grenades and Molotovs: the blasts, the fires and the throws.
     this.pyro = new Pyro(engine.scene, physics, this.effects.decals);
-    this.pyro.onBlastNear = (k) => this.cam.addTrauma(0.15 + k * 0.75);
+    this.pyro.onBlastNear = (k) => {
+      this.cam.addTrauma(0.15 + k * 0.75);
+      this.input.rumble(0.3 + k * 0.7, 220 + k * 420, 'blast');
+    };
     this.throws = new Throwables(engine.scene, physics, this.pyro);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
@@ -460,7 +471,9 @@ export class GameSession {
     this.hud = new HUD(profile.name);
     this.hud.el.style.opacity = '0';
     ui.append(this.hud.el);
-    this.pause = new PauseMenu(input, () => this.resume(), () => this.quit(), !!online, online?.link ?? null);
+    this.pause = new PauseMenu(input, () => this.resume(), () => this.quit(), !!online, online?.link ?? null,
+      // A controller has no chat key: the menu opens the chat, with the on-screen keyboard.
+      online ? () => { this.resume(); this.chatBox?.open(this.input.device === 'pad'); } : undefined);
     if (online) {
       this.chatBox = new ChatBox(online.link, 'game', () => this.input.clear());
       this.voxList = h('div', { class: 'vox-list' });
@@ -474,6 +487,12 @@ export class GameSession {
     ui.append(this.touch.el);
     this.hud.onPrompt = (action, text) => this.touch.setUse(action, text);
     this.assist = new AimAssist(physics);
+    // What a controller's held LB readies: the last kind thrown while there are any, else whichever is in the pockets.
+    input.throwPick = () => {
+      const t = this.me.arsenal.throwables;
+      const kind = t[this.throwKind] > 0 ? this.throwKind : t.frag > 0 ? 'frag' : t.molotov > 0 ? 'molotov' : 'frag';
+      return kind === 'frag' ? 'grenade' : 'molotov';
+    };
     this.letterbox = [h('div', { class: 'letterbox top' }), h('div', { class: 'letterbox bottom' })];
     this.skip = h('div', { class: 'skip' });
     this.clickToPlay = h('div', { class: 'click-to-play' }, 'CLICK TO CONTINUE');
@@ -486,7 +505,7 @@ export class GameSession {
       // Back on the mouse mid-game: it has to be captured again with a click.
       if (d === 'mouse' && this.phase === 'playing' && !this.input.locked) this.ui.append(this.clickToPlay);
       else if (d !== 'mouse') this.clickToPlay.remove();
-      if (this.phase === 'intro') this.skip.textContent = this.skipHint();
+      if (this.phase === 'intro') richText(this.skip, this.skipHint());
     });
     this.abort.signal.addEventListener('abort', offDevice);
     // Tapping the spectator line brings the results back (as Escape does).
@@ -713,7 +732,7 @@ export class GameSession {
   /** Fade from black → exterior establishing shot → glide to the safehouse → hand over control. */
   private runIntro(from: { position: THREE.Vector3; target: THREE.Vector3 }): void {
     this.phase = 'intro';
-    this.skip.textContent = this.skipHint();
+    richText(this.skip, this.skipHint());
     this.ui.append(...this.letterbox, this.skip);
     const c = this.introCam;
     const p = this.player.position;
@@ -732,10 +751,15 @@ export class GameSession {
     this.engine.camera.updateProjectionMatrix();
   }
 
+  /** Which stick moves the survivor (a southpaw layout moves with the right one), for the riding and driving hints. */
+  private moveStick(): string {
+    return settings.value.controls.padSwapSticks ? 'RIGHT STICK' : 'LEFT STICK';
+  }
+
   /** What skips the opening shot here: any key, a tap anywhere (onCanvasClick), or B / Start (Escape from PadMenus). */
   private skipHint(): string {
     const d = this.input.device;
-    return d === 'touch' ? 'TAP TO SKIP' : d === 'pad' ? 'PRESS B TO SKIP' : 'PRESS ANY KEY TO SKIP';
+    return d === 'touch' ? 'TAP TO SKIP' : d === 'pad' ? `PRESS ${glyph(menuButtons().back)} TO SKIP` : 'PRESS ANY KEY TO SKIP';
   }
 
   private quickStart(): void {
@@ -775,6 +799,7 @@ export class GameSession {
     this.player.clearInput();
     this.clearIntents();
     this.inventory.hide();
+    this.input.stopRumble();
     this.pause.show(this.ui);
   }
 
@@ -853,6 +878,7 @@ export class GameSession {
     this.player.setDowned(down);
     if (down) {
       if (this.phase === 'table') this.closeTable();
+      this.input.rumble(0.8, 420, 'hit');
       this.clearIntents();
       this.inventory.hide();
       this.weapon.setVisible(false);
@@ -934,10 +960,11 @@ export class GameSession {
       h('div', { class: 'panel gunsmith-panel', role: 'dialog', 'aria-label': 'Gunsmith' },
         h('button', { class: 'panel-close', onclick: () => { audio.ui('back'); this.closeGunsmith(); } }, bench ? '◂ WEAPONS' : 'CLOSE ✕'),
         panel.el,
-        h('p', { class: 'gs-hint' }, this.gunsmithHint(bench)),
+        h('p', { class: 'gs-hint' }, ...richNodes(this.gunsmithHint(bench))),
       ),
     );
-    this.smith = { stage, panel, el, bench };
+    const offTurn = padTurner({ el: () => el, turn: (dx, dy) => { stage.turnBy(dx, dy); return true; } });
+    this.smith = { stage, panel, el, bench, offTurn };
     this.ui.append(el);
     gsap.fromTo(el.querySelector('.gunsmith-panel'), { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.35, ease: 'power3.out', clearProps: 'transform' });
     audio.ui('click');
@@ -947,7 +974,8 @@ export class GameSession {
   private gunsmithHint(bench: boolean): string {
     const d = this.input.device;
     const field = 'The night goes on: you stand still, and a hit closes this.';
-    if (d === 'pad') return bench ? 'A on an option fits it. B back to the weapon table.' : `${field} B to put it away.`;
+    const { ok, back } = menuButtons();
+    if (d === 'pad') return bench ? `${glyph(ok)} on an option fits it. ${glyph(back)} back to the weapon table.` : `${field} ${glyph(back)} to put it away. The right stick turns the gun.`;
     if (d === 'touch') return bench ? 'Drag the gun to turn it. Tap a label on it or pick below. ◂ WEAPONS goes back to the weapon table.' : `${field} Drag the gun to turn it. CLOSE puts it away.`;
     const key = actionLabel('gunsmith');
     return bench
@@ -960,6 +988,7 @@ export class GameSession {
     const s = this.smith;
     if (!s) return;
     this.smith = null;
+    s.offTurn();
     s.stage.dispose();
     s.el.remove();
     if (s.bench) {
@@ -969,7 +998,7 @@ export class GameSession {
     if (this.phase === 'gunsmith') {
       this.phase = 'playing';
       this.cam.snapNext();
-      this.input.requestLock();
+      if (this.input.device === 'mouse') this.input.requestLock();
       this.promptClick();
     }
   }
@@ -1086,7 +1115,8 @@ export class GameSession {
       return;
     }
 
-    this.input.uiNav = this.phase !== 'playing';
+    // The controller's on-screen keyboard (typing a chat line) works the menus' way too.
+    this.input.uiNav = this.phase !== 'playing' || !!PadKeyboard.active;
     const touchMode = settings.value.controls.touch;
     this.touch.setVisible(this.phase === 'playing' && touchMode !== 'off' && (touchMode === 'on' || this.input.device === 'touch'));
     // "CLICK TO CONTINUE" asks for a click back into play: it goes once the survivor is dead (it sat over the
@@ -1157,6 +1187,8 @@ export class GameSession {
       // On a board or a bike the wheels take the landing (its own clack or thump plays). A drop out
       // of an upstairs window lands hard.
       this.cam.addTrauma(p.ride ? 0.06 : p.cycle ? 0.08 : Math.min(0.45, 0.12 + Math.max(0, p.landAir - 0.35) * 0.6));
+      // A drop off a roof or out of a window: felt in the hands.
+      if (!p.ride && !p.cycle && p.landAir > 0.5) this.input.rumble(Math.min(0.7, 0.2 + (p.landAir - 0.5) * 0.9), 120);
       if (!p.ride && !p.cycle) audio.footstep(Math.min(1, 0.8 + p.landAir * 0.3), this.indoors);
     }
     if (p.vaultLanded) {
@@ -1795,7 +1827,7 @@ export class GameSession {
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.prone ? 0.6 : this.player.crouching ? 0.8 : 1) * steady;
     this.cam.addRecoil(kick, (Math.random() - 0.5) * def.recoil * 0.008 * steady);
     this.cam.addTrauma((0.04 + def.recoil * 0.05) * steady);
-    this.input.rumble(0.12 + def.recoil * 0.35, 60 + def.recoil * 60);
+    this.input.rumble(0.12 + def.recoil * 0.35, 60 + def.recoil * 60, 'shot');
     this.player.faceCamera(0.7);
     if (weapon === 'shotgun') this.later.push({ t: 0.3, fn: () => this.ejectCasing(true) });
     else if (weapon === 'wraith') {
@@ -2056,7 +2088,7 @@ export class GameSession {
       this.hud.notify('SKATEBOARD', d === 'touch'
         ? 'STICK UP PUSHES, DOWN BRAKES, SIDEWAYS CARVES, JUMP OLLIES, USE HOPS OFF'
         : d === 'pad'
-          ? `LEFT STICK PUSH, BRAKE, CARVE, ${k('jump', 'A')} OLLIE, ${k('sprint', 'L3')} PUSH HARDER, ${k('interact', 'RB')} HOP OFF`
+          ? `${this.moveStick()} PUSH, BRAKE, CARVE, ${k('jump', 'A')} OLLIE, ${k('sprint', 'L3')} PUSH HARDER, ${k('interact', 'RB')} HOP OFF`
           : `${k('forward', 'W')} PUSH, ${k('back', 'S')} BRAKE, ${k('left', 'A')}/${k('right', 'D')} CARVE, ${k('jump', 'SPACE')} OLLIE, ${k('sprint', 'SHIFT')} PUSH HARDER, ${k('interact', 'E')} HOP OFF`,
         4.5);
     }
@@ -2229,7 +2261,7 @@ export class GameSession {
     this.hud.notify('DRIVING', d === 'touch'
       ? 'STICK UP GAS, DOWN BRAKE AND REVERSE, SIDEWAYS STEERS, BRAKE BUTTON HANDBRAKE, HORN, USE GETS OUT'
       : d === 'pad'
-        ? `RT GAS, LT BRAKE, LEFT STICK STEERS, ${k('jump', 'A')} HANDBRAKE, ${k('melee', 'R3')} HORN, ${k('flashlight', '↑')} LIGHTS, ${k('interact', 'RB')} GET OUT`
+        ? `${k('fire', 'RT')} GAS, ${k('aim', 'LT')} BRAKE, ${this.moveStick()} STEERS, ${k('jump', 'A')} HANDBRAKE, ${k('melee', 'R3')} HORN, ${k('flashlight', '↑')} LIGHTS, ${k('interact', 'RB')} GET OUT`
         : `${k('forward', 'W')} GAS, ${k('back', 'S')} BRAKE AND REVERSE, ${k('left', 'A')}/${k('right', 'D')} STEER, ${k('jump', 'SPACE')} HANDBRAKE, ${k('melee', 'F')} HORN, ${k('flashlight', 'L')} LIGHTS, ${k('interact', 'E')} GET OUT`,
       5);
   }
@@ -2436,7 +2468,10 @@ export class GameSession {
         const k = e.strength ?? VEHICLE.crashSound;
         audio.wheels.carCrash(at, k);
         // The driver felt it already; the others in the car feel it now.
-        if (inside && !this.driving) this.cam.addTrauma(Math.min(0.8, 0.15 + k * 0.03));
+        if (inside && !this.driving) {
+          this.cam.addTrauma(Math.min(0.8, 0.15 + k * 0.03));
+          this.input.rumble(Math.min(1, 0.3 + k * 0.04), 200, 'hit');
+        }
         break;
       }
     }
@@ -2483,7 +2518,7 @@ export class GameSession {
       this.hud.notify('BICYCLE', d === 'touch'
         ? 'STICK UP PEDALS, DOWN BRAKES, SIDEWAYS STEERS, JUMP HOPS, FIRE RINGS THE BELL, USE GETS OFF'
         : d === 'pad'
-          ? `LEFT STICK PEDAL, BRAKE, STEER, ${k('jump', 'A')} HOP, ${k('sprint', 'L3')} STAND ON THE PEDALS, ${k('fire', 'RT')} BELL, ${k('interact', 'RB')} GET OFF`
+          ? `${this.moveStick()} PEDAL, BRAKE, STEER, ${k('jump', 'A')} HOP, ${k('sprint', 'L3')} STAND ON THE PEDALS, ${k('fire', 'RT')} BELL, ${k('interact', 'RB')} GET OFF`
           : `${k('forward', 'W')} PEDAL, ${k('back', 'S')} BRAKE, ${k('left', 'A')}/${k('right', 'D')} STEER, ${k('jump', 'SPACE')} HOP, ${k('sprint', 'SHIFT')} STAND ON THE PEDALS, ${k('fire', 'FIRE')} BELL, ${k('interact', 'E')} GET OFF`,
         5);
     } else if (seat === 'peg' && !this.pegHinted) {
@@ -2849,16 +2884,36 @@ export class GameSession {
         else if (a.limb) this.hud.feedLine('HANDS FULL');
         else if (a.action !== 'throw') {
           t.priming = kind;
+          this.throwKind = kind;
           audio.throwReady(kind, this.handPos());
         }
       }
       if (t.priming === kind && !input.held(action)) {
+        // The other one held as this one is let go (Y with a throw ready on a controller): it is readied instead.
+        const other = kind === 'frag' ? 'molotov' : 'frag';
+        const otherAction = other === 'frag' ? 'grenade' : 'molotov';
+        if (input.held(otherAction)) {
+          if (a.throwables[other] > 0) {
+            t.priming = other;
+            this.throwKind = other;
+            audio.throwReady(other, this.handPos());
+          } else if (input.pressed(otherAction)) this.hud.feedLine(other === 'frag' ? 'NO GRENADES' : 'NO MOLOTOVS');
+          continue;
+        }
         t.priming = null;
         this.wantThrow = kind;
       }
     }
     if (t.priming && (a.limb || a.action === 'melee' || a.action === 'bandage' || a.action === 'inject' || !this.me.alive || a.throwables[t.priming] <= 0)) t.priming = null;
     if (t.priming) this.player.blockSprint(0.1);
+  }
+
+  /** GRENADE READY (on a controller, with the button that switches to the other kind when there are any). */
+  private readyLine(kind: 'frag' | 'molotov'): string {
+    const line = kind === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT';
+    const other = kind === 'frag' ? 'molotov' : 'frag';
+    if (this.input.device !== 'pad' || this.me.arsenal.throwables[other] <= 0) return line;
+    return `${line}, ${glyph(physicalOf(PAD.Y))} ${other === 'frag' ? 'GRENADE' : 'MOLOTOV'}`;
   }
 
   /** A survivor's throwing hand (this one's, or another's as drawn). */
@@ -2953,10 +3008,15 @@ export class GameSession {
           this.effects.clubSplash(A, B);
           const held = e.by === this.myId ? this.weapon.heldLimb : null;
           if (held) this.effects.clubSplash(held.cutEnd(C), B);
-          if (e.by === this.myId) this.cam.addTrauma(0.1 + Math.min(0.1, e.damage / 400));
+          if (e.by === this.myId) {
+            this.cam.addTrauma(0.1 + Math.min(0.1, e.damage / 400));
+            this.input.rumble(0.45 + Math.min(0.3, e.damage / 150), 130, 'hit');
+          }
         } else if (e.weapon) {
           // A melee weapon: the blade's slice or the blunt weapon's crack and crunch.
           audio.meleeHit(e.weapon, A, { kill: e.killed, head: e.zone === 'head', damage: e.damage });
+          // The blow landing, in the hands.
+          if (e.by === this.myId) this.input.rumble(0.3 + Math.min(0.35, e.damage / 140) + (e.killed ? 0.1 : 0), e.killed ? 140 : 100, 'hit');
         } else if (e.vehicle !== undefined) {
           // Run down: the thump into the bodywork, and what it does to them.
           audio.wheels.carHit(A, Math.min(1, e.damage / 120));
@@ -3153,7 +3213,10 @@ export class GameSession {
         audio.bloaterBurst(at);
         const me = this.me.motion.pos;
         const d = Math.hypot(me.x - at.x, me.y - at.y, me.z - at.z);
-        if (d < 14) this.cam.addTrauma(Math.min(0.45, 0.5 * (1 - d / 14)));
+        if (d < 14) {
+          this.cam.addTrauma(Math.min(0.45, 0.5 * (1 - d / 14)));
+          this.input.rumble(0.15 + 0.6 * (1 - d / 14), 260, 'blast');
+        }
         if (e.by === this.myId) this.hud.feedLine('BLOATER BURST');
         break;
       }
@@ -3460,7 +3523,7 @@ export class GameSession {
     this.player.character.flinch('torso', -dx / len, -dz / len, Math.min(1, damage / 25));
     this.player.character.splatter(Math.min(0.12, damage * 0.004));
     this.cam.addTrauma(0.22 + Math.min(0.4, damage / 60));
-    this.input.rumble(0.45 + Math.min(0.5, damage / 50), 160);
+    this.input.rumble(0.45 + Math.min(0.5, damage / 50), 160, 'hit');
     this.hurtFlash = Math.min(1, this.hurtFlash + 0.35 + damage / 50);
     audio.playerHurt(Math.min(1, damage / 30));
     if (this.smith && !this.smith.bench) this.closeGunsmith();
@@ -3473,6 +3536,8 @@ export class GameSession {
     if (this.phase === 'table') this.closeTable();
     // Online the night goes on behind the pause menu, so death can come while it is open.
     this.pause.hide();
+    // One long last shudder.
+    this.input.rumble(1, 600, 'hit');
     this.phase = 'dead';
     this.shownDown = false;
     this.downPanel.remove();
@@ -3623,8 +3688,8 @@ export class GameSession {
     this.watching = next.id;
     this.results?.dispose();
     this.results = null;
-    const back = this.input.device === 'pad' ? 'B' : this.input.device === 'touch' ? 'TAP HERE' : 'ESC';
-    this.spectateLine.textContent = `WATCHING ${next.name.toUpperCase()}, ${back} FOR RESULTS`;
+    const back = this.input.device === 'pad' ? glyph(menuButtons().back) : this.input.device === 'touch' ? 'TAP HERE' : 'ESC';
+    richText(this.spectateLine, `WATCHING ${next.name.toUpperCase()}, ${back} FOR RESULTS`);
     this.ui.append(this.spectateLine);
   }
 
@@ -3666,6 +3731,7 @@ export class GameSession {
       this.hud.notify(`HORDE ${wave}`, `Hold out for ${clock(at - this.sim.phaseTime)}.`, 2.6, 'danger');
       audio.hordeSurge(wave);
       this.cam.addTrauma(0.18);
+      this.input.rumble(0.3, 320);
     } else {
       this.hud.notify(`HORDE ${wave} SURVIVED`, `A supply drop is coming in ${HORDES.dropAfter} seconds.`, 3.2);
       audio.hordeOver();
@@ -3880,7 +3946,7 @@ export class GameSession {
     // then, and the crosshair would strike through it.
     this.updateDownPanel();
     hud.setCrosshairVisible(this.phase === 'playing' && this.input.engaged && me.up && !p.sprinting && !p.cycle && a.action !== 'bandage' && a.action !== 'inject' && (this.cam.ads < 0.4 || WEAPONS[a.weapon.id].hold === 'akimbo') && !p.seated?.driver);
-    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : a.action === 'inject' ? 'INJECTING' : this.throws.priming ? (this.throws.priming === 'frag' ? 'GRENADE READY' : 'MOLOTOV LIT') : p.dive ? 'DIVING' : p.prone ? 'PRONE' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
+    hud.setStance(me.downed ? 'DOWN' : this.reviveTarget ? 'REVIVING' : a.action === 'bandage' ? 'BANDAGING' : a.action === 'inject' ? 'INJECTING' : this.throws.priming ? this.readyLine(this.throws.priming) : p.dive ? 'DIVING' : p.prone ? 'PRONE' : p.crouching ? 'CROUCHED' : p.sprinting ? 'SPRINTING' : '');
     this.touch.setStance(p.stance);
     hud.setFps(this.engine.fps, this.link ? this.link.rtt : null);
 
@@ -3975,8 +4041,11 @@ export class GameSession {
     this.touch.dispose();
     this.lamp.dispose();
     this.input.uiNav = true;
+    this.input.throwPick = null;
+    this.input.stopRumble();
     this.table?.el.remove();
     if (this.smith) {
+      this.smith.offTurn();
       this.smith.stage.dispose();
       this.smith.el.remove();
       this.smith.panel.labels.remove();

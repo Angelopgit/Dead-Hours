@@ -4,6 +4,7 @@ import {
   randomAppearance, sanitizeAppearance, type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type PaletteName, type ShapeKey,
 } from '@dead-hours/shared';
 import { h, wheelScrollsSideways } from './dom';
+import { padTurner } from './PadMenus';
 import { settings } from '../core/Settings';
 import { audio } from '../audio/AudioEngine';
 import { CharacterPreview, type PreviewFocus } from '../characters/CharacterPreview';
@@ -120,6 +121,8 @@ const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 export class CharacterCreator {
   readonly el: HTMLElement;
   private readonly preview = new CharacterPreview();
+  /** The right stick turns the survivor round. */
+  private readonly offTurn = padTurner({ el: () => this.el, turn: (dx) => { this.preview.turn(dx * 3); return false; } });
   private readonly tabsEl = h('nav', { class: 'creator-tabs', role: 'tablist', 'aria-label': 'Customization categories' });
   private readonly optionsEl = h('div', { class: 'creator-options' });
   /** The same name box as the main menu's: both show and save the profile's name. */
@@ -309,6 +312,7 @@ export class CharacterCreator {
 
   dispose(): void {
     cancelAnimationFrame(this.pending);
+    this.offTurn();
     this.name.dispose();
     this.preview.dispose();
     this.el.remove();

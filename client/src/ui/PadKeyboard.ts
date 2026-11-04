@@ -2,6 +2,8 @@ import gsap from 'gsap';
 import { h } from './dom';
 import { audio } from '../audio/AudioEngine';
 import { onDeviceChange } from '../core/Input';
+import { PAD, glyph, menuButtons } from '../core/PadLayout';
+import { richNodes } from './Glyphs';
 
 /** Character keys, row by row (letters are typed lower case unless shifted). */
 const ROWS = ['1234567890', 'qwertyuiop', "asdfghjkl'", 'zxcvbnm-._'];
@@ -25,9 +27,15 @@ export class PadKeyboard {
     return PadKeyboard.current;
   }
 
-  static open(input: HTMLInputElement): void {
+  /** `onClose` hears whether it closed with DONE (the in-game chat closes when it is backed out of). */
+  static open(input: HTMLInputElement, onClose?: (submitted: boolean) => void): void {
     PadKeyboard.current?.close(false);
-    PadKeyboard.current = new PadKeyboard(input);
+    PadKeyboard.current = new PadKeyboard(input, onClose);
+  }
+
+  /** Is a keyboard on screen typing into this box? */
+  static editing(input: HTMLInputElement): boolean {
+    return PadKeyboard.current?.input === input;
   }
 
   private readonly el: HTMLElement;
@@ -39,7 +47,7 @@ export class PadKeyboard {
   private selected: boolean;
   private readonly offDevice: () => void;
 
-  private constructor(private readonly input: HTMLInputElement) {
+  private constructor(private readonly input: HTMLInputElement, private readonly onClose?: (submitted: boolean) => void) {
     this.selected = input.value !== '';
     const key = (label: string, onPress: () => void, cls = '') => h('button', {
       class: `osk-key ${cls}`, type: 'button',
@@ -67,7 +75,7 @@ export class PadKeyboard {
         back,
         key('DONE', () => this.close(true), 'wide done'),
       ),
-      h('div', { class: 'osk-help' }, 'A types, X deletes, Y adds a space, B closes'),
+      h('div', { class: 'osk-help' }, ...richNodes(`${glyph(menuButtons().ok)} types, ${glyph(PAD.X)} deletes, ${glyph(PAD.Y)} adds a space, ${glyph(menuButtons().back)} closes`)),
     );
     this.shift = this.selected || this.wordStart();
     this.refresh();
@@ -76,7 +84,7 @@ export class PadKeyboard {
     // Starts on the first letter, so a name can be typed straight away.
     this.letters[0]?.focus({ preventScroll: true });
     // A real keyboard (or a touch) took over: it types into the box itself.
-    this.offDevice = onDeviceChange((d) => { if (d !== 'pad') this.close(false); });
+    this.offDevice = onDeviceChange((d) => { if (d !== 'pad') this.close(false, true); });
   }
 
   /** B or Start: closes the keyboard and nothing behind it (PadMenus calls this instead of sending Escape). */
@@ -139,8 +147,8 @@ export class PadKeyboard {
     this.shiftKey.classList.toggle('on', this.shift);
   }
 
-  /** Closes it; `submit` also sends Enter to the box (DONE). Focus goes back to the box. */
-  close(submit: boolean): void {
+  /** Closes it; `submit` also sends Enter to the box (DONE). Focus goes back to the box (where a real keyboard that took over types on). */
+  close(submit: boolean, keyboardTookOver = false): void {
     if (PadKeyboard.current !== this) return;
     PadKeyboard.current = null;
     this.offDevice();
@@ -150,5 +158,6 @@ export class PadKeyboard {
     if (submit) this.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
     // Back on the box, so the controller carries on from where it was (unless Enter took the box away).
     if (this.input.isConnected) this.input.focus({ preventScroll: true });
+    if (!keyboardTookOver) this.onClose?.(submit);
   }
 }

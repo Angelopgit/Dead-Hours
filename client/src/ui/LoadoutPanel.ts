@@ -5,7 +5,10 @@ import {
 } from '@dead-hours/shared';
 import { h } from './dom';
 import { settings } from '../core/Settings';
-import { codeLabel } from '../core/Input';
+import { codeLabel, inputDevice } from '../core/Input';
+import { PAD, PAD_PLAY, glyph, physicalOf } from '../core/PadLayout';
+import { richNodes } from './Glyphs';
+import { padTurner } from './PadMenus';
 import { audio } from '../audio/AudioEngine';
 import { account } from '../network/Account';
 import { GunsmithPanel } from './GunsmithPanel';
@@ -22,6 +25,8 @@ const GUNS: WeaponId[] = [...PRIMARY_WEAPONS, ...SECONDARY_WEAPONS];
 export class LoadoutPanel {
   readonly el: HTMLElement;
   private readonly preview = new WeaponPreview();
+  /** The right stick turns the gun on show. */
+  private readonly offTurn = padTurner({ el: () => this.el, turn: (dx, dy) => { this.preview.stage.turnBy(dx, dy); return true; } });
   private readonly gunsmith: GunsmithPanel;
   private readonly carry = h('div', { class: 'armory-carry' });
   private readonly track = h('div', { class: 'armory-track' });
@@ -59,7 +64,9 @@ export class LoadoutPanel {
       stage,
       h('div', { class: 'armory-side' },
         this.gunsmith.el,
-        h('p', { class: 'gs-hint' }, `Drag the gun to turn it, click a label or a part to pick that fitting. In a night, press ${codeLabel(settings.value.controls.bindings.gunsmith[0] ?? '') || 'the gunsmith key'} anywhere or use the safehouse workbench to change them on the fly.`),
+        h('p', { class: 'gs-hint' }, ...richNodes(inputDevice() === 'pad'
+          ? `The right stick turns the gun. In a night, hold ${glyph(physicalOf(PAD_PLAY.gunsmith?.button ?? PAD.Y))} anywhere or use the safehouse workbench to change them on the fly.`
+          : `Drag the gun to turn it, click a label or a part to pick that fitting. In a night, press ${codeLabel(settings.value.controls.bindings.gunsmith[0] ?? '') || 'the gunsmith key'} anywhere or use the safehouse workbench to change them on the fly.`)),
         this.track,
       ),
     );
@@ -112,6 +119,7 @@ export class LoadoutPanel {
 
   dispose(): void {
     this.unsub();
+    this.offTurn();
     this.preview.dispose();
     this.el.remove();
   }

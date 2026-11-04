@@ -1,6 +1,7 @@
 import type { LobbyPlayer } from '@dead-hours/shared';
 import { h } from './dom';
-import { codeLabel } from '../core/Input';
+import { actionLabel, codeLabel, inputDevice } from '../core/Input';
+import { plain } from '../core/PadLayout';
 import { settings } from '../core/Settings';
 import { audio } from '../audio/AudioEngine';
 import { comms } from '../network/Comms';
@@ -9,7 +10,8 @@ import type { NetLink } from '../network/NetLink';
 /** What this player's own microphone is doing, in a few words. */
 export function micLine(link: NetLink): string {
   const v = settings.value.voice;
-  const key = (a: 'talk' | 'radio') => codeLabel(settings.value.controls.bindings[a][0] ?? '') || '—';
+  // On a controller its D-pad (named plainly: this line is text, not drawn buttons).
+  const key = (a: 'talk' | 'radio') => (inputDevice() === 'pad' ? plain(actionLabel(a)) : codeLabel(settings.value.controls.bindings[a][0] ?? '')) || '—';
   if (!v.enabled) return 'VOICE OFF (SETTINGS → VOICE)';
   const mic = link.voice.micState;
   if (mic === 'denied') return 'MICROPHONE BLOCKED: ALLOW IT IN THE BROWSER';

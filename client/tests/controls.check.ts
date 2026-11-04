@@ -80,7 +80,10 @@ check(none === null, 'nothing near: full speed');
   register('data:text/javascript,' + encodeURIComponent('export async function resolve(s, c, next) { return /\\/audio\\/AudioEngine(\\.ts)?$/.test(s) '
     + "? { url: 'data:text/javascript,export const audio = new Proxy({}, { get: () => () => {} });', shortCircuit: true } : next(s, c); }"));
   const element = () => ({ style: {} });
-  g.document = { body: { classList: { toggle: noop, add: noop, remove: noop } }, addEventListener: noop, pointerLockElement: null, getElementById: () => null,
+  g.KeyboardEvent = class extends Event { constructor(type: string, init: EventInit) { super(type, init); } };
+  // (An empty page for the pad's menus: nothing to focus.)
+  g.document = { body: { classList: { toggle: noop, add: noop, remove: noop }, querySelectorAll: () => [], querySelector: () => null, matches: () => false },
+    addEventListener: noop, pointerLockElement: null, getElementById: () => null, activeElement: null,
     createElement: element, createElementNS: element, documentElement: { style: {} } };
   const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
   const pad = { buttons, axes: [0, 0, 0, 0], connected: true, index: 0, mapping: 'standard', id: 'test pad' };
@@ -108,6 +111,170 @@ check(none === null, 'nothing near: full speed');
   check(hold(0.12) === 'flashlight', 'controller: a tap of D-pad up switches the flashlight');
   check(hold(0.8) === 'shoulder', 'controller: holding D-pad up switches shoulders (and leaves the light alone)');
   check(hold(0.3) === 'flashlight', 'controller: a slow tap still switches the flashlight');
+
+  // Every action can be reached on a pad: a press or a hold of some button, or a menu (chat).
+  const { settings, ACTION_LABELS } = await import('../src/core/Settings');
+  const L = await import('../src/core/PadLayout');
+  const { PAD } = L;
+  const moves = ['forward', 'back', 'left', 'right', 'chat'];
+  const missing = Object.keys(ACTION_LABELS).filter((a) => !moves.includes(a) && !L.PAD_PLAY[a as keyof typeof L.PAD_PLAY]);
+  check(!missing.length, missing.length ? `actions with no controller button: ${missing.join(', ')}` : 'controller: every action has a button (moving is the stick, chat is in the pause menu)');
+  const taken = new Map<string, string>();
+  for (const [a, at] of Object.entries(L.PAD_PLAY)) {
+    // Weapon 1/2/3 all ride the one switch button, the throwables the one LB hold.
+    const k = `${at!.button}${at!.hold ? 'h' : ''}`;
+    const group = a.startsWith('weapon') ? 'weapon' : a === 'grenade' || a === 'molotov' ? 'throw' : a;
+    if (taken.has(k) && taken.get(k) !== group) check(false, `controller: ${a} and ${taken.get(k)} share ${k}`);
+    taken.set(k, group);
+  }
+  check(L.PAD_ROWS.every((r) => !L.FIXED_BUTTONS.includes(r.button)) && new Set(L.PAD_ROWS.map((r) => r.button)).size === L.PAD_ROWS.length,
+    `controller: the layout list in Settings has each movable button once (${L.PAD_ROWS.length})`);
+
+  // Whose button names: by vendor id first (Chrome), then by the name (Firefox, Safari).
+  const ids: [string, string][] = [
+    ['Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)', 'xbox'], ['xinput', 'xbox'], ['045e-02ea-Microsoft X-Box One S pad', 'xbox'],
+    ['DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)', 'playstation'], ['Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)', 'playstation'],
+    ['054c-05c4-Wireless Controller', 'playstation'], ['Pro Controller (STANDARD GAMEPAD Vendor: 057e Product: 2009)', 'nintendo'],
+    ['USB Gamepad (STANDARD GAMEPAD Vendor: 0079 Product: 0006)', 'generic'], ['8BitDo SN30 Pro (Vendor: 2dc8 Product: 6001)', 'generic'],
+  ];
+  const wrongIds = ids.filter(([id, want]) => L.styleOf(id) !== want).map(([id, want]) => `${id} read as ${L.styleOf(id)}, not ${want}`);
+  check(!wrongIds.length, wrongIds.length ? wrongIds.join('; ') : `controller: Xbox, PlayStation, Nintendo and other pads are told apart (${ids.length} ids)`);
+  const names = (style: 'auto' | 'xbox' | 'playstation' | 'nintendo' | 'generic') => {
+    settings.update((s) => { s.controls.padGlyphs = style; });
+    return [L.padLabel('jump'), L.padLabel('prone'), L.padLabel('fire'), L.padLabel('grenade')].map(L.plain).join(' ');
+  };
+  const want = { xbox: 'A HOLD B RT HOLD LB', playstation: '✕ HOLD ○ R2 HOLD L1', nintendo: 'B HOLD A ZR HOLD L', generic: '▼ HOLD ▶ R2 HOLD L1' } as const;
+  const wrongNames = (Object.keys(want) as (keyof typeof want)[]).filter((st) => names(st) !== want[st]).map((st) => `${st}: ${names(st)}`);
+  check(!wrongNames.length, wrongNames.length ? `prompt names: ${wrongNames.join('; ')}` : 'controller: prompts name buttons the Xbox, PlayStation, Nintendo or generic way');
+  L.setPadModel('DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)');
+  const auto = names('auto');
+  L.setPadModel('Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 05c4)');
+  const share = L.plain(L.padLabel('inventory'));
+  L.setPadModel('Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)');
+  check(auto === want.playstation && share === 'SHARE' && names('auto') === want.xbox,
+    `controller: Auto follows the pad plugged in (DualSense ${auto}, a DualShock 4's view button reads ${share})`);
+  check(L.menuButtons().ok === PAD.A && (settings.update((s) => { s.controls.padGlyphs = 'nintendo'; }), L.menuButtons().ok === PAD.B),
+    'controller: menus confirm with the bottom button, and with A (the right one) on a Nintendo pad');
+  settings.update((s) => { s.controls.padGlyphs = 'auto'; });
+
+  /** Runs frames with buttons held (by physical index) and sticks leaned; what was pressed and held, and the wheel. */
+  const frames = (secs: number, down: number[], axes = [0, 0, 0, 0]) => {
+    const pressed = new Set<string>(), held = new Set<string>();
+    let wheel = 0;
+    for (let t = 0; t < secs; t += 1 / 60) {
+      buttons.forEach((b, i) => { b.pressed = down.includes(i); b.value = b.pressed ? 1 : 0; });
+      pad.axes = axes;
+      input.poll(1 / 60);
+      for (const a of Object.keys(ACTION_LABELS) as (keyof typeof ACTION_LABELS)[]) {
+        if (input.pressed(a)) pressed.add(a);
+        if (input.held(a)) held.add(a);
+      }
+      wheel += input.consumeWheel();
+      input.endFrame();
+    }
+    return { pressed, held, wheel, move: { ...input.move }, turn: input.consumeTurn() };
+  };
+  const rest = () => frames(0.1, []);
+  rest();
+  const lbTap = frames(0.1, [PAD.LB]);
+  const lbTapUp = rest();
+  check(!lbTap.pressed.has('heal') && lbTapUp.pressed.has('heal') && !lbTapUp.pressed.has('grenade'), 'controller: a tap of LB puts on a bandage');
+  const ready = frames(0.5, [PAD.LB]);
+  check(ready.held.has('grenade') && !ready.pressed.has('heal'), 'controller: holding LB readies a grenade (no bandage)');
+  const switched = frames(0.15, [PAD.LB, PAD.Y]);
+  const back = frames(0.1, [PAD.LB]);
+  const thrown = rest();
+  check(switched.held.has('molotov') && !switched.held.has('grenade') && switched.wheel === 0 && !switched.pressed.has('gunsmith') && back.wheel === 0,
+    'controller: Y with a throw ready switches to the Molotov (and does not switch weapon)');
+  check(!thrown.held.has('molotov') && !thrown.held.has('grenade'), 'controller: letting go of LB throws it');
+  input.throwPick = () => 'molotov';
+  check(frames(0.5, [PAD.LB]).held.has('molotov') && (rest(), true), 'controller: LB readies whichever the game picks (the last kind thrown)');
+  input.throwPick = null;
+  frames(0.1, [PAD.Y]);
+  const yTap = rest();
+  const yHold = frames(0.9, [PAD.Y]);
+  const yHoldUp = rest();
+  check(yTap.wheel === 1 && yHold.pressed.has('gunsmith') && yHold.wheel === 0 && yHoldUp.wheel === 0, 'controller: a tap of Y switches weapon, holding it opens the gunsmith');
+  const bTap = frames(0.1, [PAD.B]);
+  rest();
+  const bHold = frames(0.6, [PAD.B]);
+  rest();
+  check(bTap.pressed.has('crouch') && !bTap.pressed.has('prone') && bHold.pressed.has('prone'), 'controller: B crouches, held it goes prone');
+  // B that skipped the opening shot (a menu's back) is still down as play begins: it must not crouch.
+  input.uiNav = true;
+  frames(0.1, [PAD.B, PAD.A]);
+  input.uiNav = false;
+  const carried = frames(0.6, [PAD.B, PAD.A]);
+  rest();
+  const fresh = frames(0.1, [PAD.B]);
+  rest();
+  check(!carried.pressed.has('crouch') && !carried.pressed.has('prone') && !carried.pressed.has('jump') && fresh.pressed.has('crouch'),
+    'controller: buttons still held from a menu do nothing in play until let go');
+
+  // Moving buttons about: Tactical puts crouch on the right stick's click and melee on B; Start never moves.
+  settings.update((s) => { s.controls.padRemap = L.presetMap('tactical'); });
+  const rsTactical = frames(0.1, [PAD.RS]);
+  rest();
+  const bTactical = frames(0.1, [PAD.B]);
+  rest();
+  check(rsTactical.pressed.has('crouch') && bTactical.pressed.has('melee') && L.currentPreset() === 'tactical' && L.plain(L.padLabel('crouch')) === 'R3',
+    'controller: the Tactical layout crouches on R3 and swings on B (and the prompts say so)');
+  const moved = L.moveButton(L.remap(), PAD.X, PAD.A);
+  settings.update((s) => { s.controls.padRemap = moved; });
+  const aReload = frames(0.1, [PAD.A]);
+  rest();
+  const xJump = frames(0.1, [PAD.X]);
+  rest();
+  check(aReload.pressed.has('reload') && xJump.pressed.has('jump') && L.currentPreset() === null, 'controller: a button moved onto another swaps the two');
+  check(L.moveButton(L.remap(), PAD.RT, PAD.START).every((v, i) => v === moved[i]) && L.moveButton(L.remap(), PAD.START, PAD.A).every((v, i) => v === moved[i]),
+    'controller: Start stays the pause button whatever is moved');
+  settings.update((s) => { s.controls.padRemap = [3, 3, 3]; });
+  check(L.remap().every((v, i) => v === i), 'controller: a broken saved layout falls back to the standard one');
+
+  // Sticks: dead zones, southpaw and invert.
+  settings.update((s) => { s.controls.padRemap = []; s.controls.padDeadzoneMove = 0.14; s.controls.padDeadzoneLook = 0.14; });
+  const creep = frames(0.1, [], [0, -0.1, 0, 0]);
+  const walk = frames(0.1, [], [0, -0.8, 0, 0]);
+  settings.update((s) => { s.controls.padDeadzoneMove = 0.3; });
+  const drift = frames(0.1, [], [0, -0.25, 0, 0]);
+  check(creep.move.y === 0 && walk.move.y > 0.7 && drift.move.y === 0, `controller: the move dead zone holds a resting stick still and can be raised for drift (${walk.move.y.toFixed(2)} at 0.8)`);
+  settings.update((s) => { s.controls.padDeadzoneMove = 0.14; s.controls.padSwapSticks = true; });
+  const south = frames(0.1, [], [0.9, 0, 0, -0.9]);
+  settings.update((s) => { s.controls.padSwapSticks = false; });
+  check(south.move.y > 0.7 && south.turn.x > 0 && Math.abs(south.turn.y) < 1e-9, 'controller: swapped sticks move with the right one and look with the left');
+  const up = frames(0.1, [], [0, 0, 0, -0.9]).turn.y;
+  settings.update((s) => { s.controls.padInvertY = true; });
+  const upInv = frames(0.1, [], [0, 0, 0, -0.9]).turn.y;
+  settings.update((s) => { s.controls.padInvertY = false; s.controls.invertY = true; });
+  const upMouseInv = frames(0.1, [], [0, 0, 0, -0.9]).turn.y;
+  settings.update((s) => { s.controls.invertY = false; });
+  check(up < 0 && upInv > 0 && upMouseInv < 0, 'controller: its own invert flips the look stick (the mouse invert leaves it alone)');
+
+  // Rumble: scaled by the strength setting, a weaker one never cuts a stronger one short, shots kick the trigger.
+  const { Rumble } = await import('../src/core/Rumble');
+  const played: { type: string; p: Record<string, number> }[] = [];
+  const actuated = { vibrationActuator: { effects: ['dual-rumble', 'trigger-rumble'], playEffect: (type: string, p: Record<string, number>) => { played.push({ type, p }); return Promise.resolve(); } } } as unknown as Gamepad;
+  const r = new Rumble();
+  settings.update((s) => { s.controls.vibrationStrength = 0.5; });
+  r.play(actuated, 1, 400, 'blast', 0);
+  const cut = r.play(actuated, 0.3, 80, 'shot', 100);
+  const after = r.play(actuated, 0.3, 80, 'shot', 500);
+  settings.update((s) => { s.controls.vibration = false; });
+  const off = r.play(actuated, 1, 100, '', 1000);
+  settings.update((s) => { s.controls.vibration = true; s.controls.vibrationStrength = 1; });
+  check(played[0]?.p.strongMagnitude === 0.5 && !cut && after && played[1]?.type === 'trigger-rumble' && played[1].p.rightTrigger > 0 && !off && played.length === 2,
+    'controller: rumble follows the strength setting, keeps a blast going through gunfire, kicks the trigger on shots, and stays off when off');
+
+  // Moving a button in Settings: the next button pressed is where it goes; Start leaves it.
+  let got: number | null = null;
+  input.capturePad = (b) => { got = b; };
+  frames(0.1, [PAD.DOWN]);
+  rest();
+  const first = got;
+  input.capturePad = (b) => { got = b; };
+  frames(0.1, [PAD.START]);
+  rest();
+  check(first === PAD.DOWN && got === -1, 'controller: Settings hears the next button pressed when one is being moved (Start backs out)');
 }
 
 // Online on a phone the chat and the speaking list sit over the move stick's zone. `#ui-root > *` hands

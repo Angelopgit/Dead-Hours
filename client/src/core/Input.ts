@@ -1,33 +1,33 @@
 import { settings, type Action } from './Settings';
 import { PadMenus } from '../ui/PadMenus';
+import { PAD, PAD_BUTTONS, padLabel, remap, setPadModel, styleOf, type GlyphStyle } from './PadLayout';
+import { Rumble, type RumbleKind } from './Rumble';
 
 /** What the survivor is played with right now (the last one touched). */
 export type Device = 'mouse' | 'pad' | 'touch';
 
-/** Standard Gamepad API layout (Xbox names; PlayStation pads report the same indices). */
-const B = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, BACK: 8, START: 9, LS: 10, RS: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 } as const;
-
-/** Fixed controller layout for play. Sprint is a click of the left stick (it stays on while moving). */
-const PAD_ACTIONS: [Action, number][] = [
-  ['fire', B.RT], ['aim', B.LT], ['jump', B.A], ['crouch', B.B], ['reload', B.X],
-  ['interact', B.RB], ['heal', B.LB], ['melee', B.RS], ['barricade', B.DOWN], ['inventory', B.BACK],
-  ['talk', B.LEFT], ['radio', B.RIGHT],
+/** Buttons whose action is held while the button is (by the standard layout's button; a remap moves them). */
+const PAD_HELD: [Action, number][] = [
+  ['fire', PAD.RT], ['aim', PAD.LT], ['jump', PAD.A], ['crouch', PAD.B], ['reload', PAD.X],
+  ['interact', PAD.RB], ['melee', PAD.RS], ['barricade', PAD.DOWN], ['inventory', PAD.BACK],
+  ['talk', PAD.LEFT], ['radio', PAD.RIGHT],
 ];
 
-/** Button names shown in prompts while a controller is in use. */
-export const PAD_LABELS: Partial<Record<Action, string>> = {
-  fire: 'RT', aim: 'LT', jump: 'A', crouch: 'B', prone: 'hold B', reload: 'X', interact: 'RB', heal: 'LB', melee: 'R3',
-  flashlight: '↑', shoulder: 'hold ↑', barricade: '↓', inventory: 'VIEW', talk: '←', radio: '→', sprint: 'L3', weapon1: 'Y', weapon2: 'Y', weapon3: 'Y',
-};
-
-const STICK_DEAD = 0.14;
 const TRIGGER_DOWN = 0.35;
+/** A stick has to lean this far to take over from the keyboard or the thumbs (drift never does). */
+const STICK_CLAIM = 0.5;
 /** Full right-stick tilt turns this fast (rad/s) at sensitivity 1. */
 const PAD_TURN = 3.5;
 /** D-pad up held this long switches shoulders; a shorter press switches the flashlight. */
 const UP_HOLD = 0.4;
 /** B held this long goes prone (a tap crouches, or stands back up). */
 export const PRONE_HOLD = 0.4;
+/** LB held this long readies a throw (a tap is a bandage). */
+export const THROW_HOLD = 0.22;
+/** Y held this long opens the gunsmith (a tap switches weapon). */
+export const GUNSMITH_HOLD = 0.6;
+/** Mouse travel (px) within a short while that counts as picking the mouse up again. */
+const MOUSE_CLAIM = 40;
 
 let current: Device = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
 const deviceListeners = new Set<(d: Device) => void>();
@@ -50,19 +50,30 @@ function setDevice(d: Device): void {
   for (const fn of deviceListeners) fn(d);
 }
 
+/** A controller came or went (`style` is how its buttons are named; `standard` is false for a layout the browser doesn't know). */
+export interface PadEvent { kind: 'connected' | 'disconnected'; id: string; style: GlyphStyle; standard: boolean }
+const padListeners = new Set<(e: PadEvent) => void>();
+
+export function onPadChange(fn: (e: PadEvent) => void): () => void {
+  padListeners.add(fn);
+  return () => padListeners.delete(fn);
+}
+
 /** Radial dead zone with the response rescaled to start at zero just past it. */
-function stick(x: number, y: number): [number, number] {
+export function stick(x: number, y: number, dead: number): [number, number] {
   const m = Math.hypot(x, y);
-  if (m < STICK_DEAD) return [0, 0];
-  const k = Math.min(1, (m - STICK_DEAD) / (1 - STICK_DEAD)) / m;
+  if (m < dead || m === 0) return [0, 0];
+  const k = Math.min(1, (m - dead) / (1 - dead)) / m;
   return [x * k, y * k];
 }
 
 /**
  * Keyboard/mouse, controller and touch input mapped to actions. Keys and mouse buttons are
  * rebindable ("Mouse<n>" for buttons); the controller and the on-screen thumb controls press
- * actions directly ("Pad:<action>", "Touch:<action>"). Look deltas accumulate between frames
- * and are consumed by the camera: mouse in pixels, sticks and thumbs in radians.
+ * actions directly ("Pad:<action>", "Touch:<action>"), the controller through its own layout
+ * (PadLayout: buttons can be moved about, and the prompts name them the way the pad does). Look
+ * deltas accumulate between frames and are consumed by the camera: mouse in pixels, sticks and
+ * thumbs in radians.
  */
 export class Input {
   private down = new Set<string>();
@@ -77,6 +88,8 @@ export class Input {
   private readonly abort = new AbortController();
   /** When set, the next key/button press is delivered here instead of to gameplay (rebinding). */
   captureNext: ((code: string) => void) | null = null;
+  /** When set, the next controller button pressed is delivered here (its physical index), not to the menus (moving a button). */
+  capturePad: ((button: number) => void) | null = null;
   /** Analog movement from a stick or thumb (x right, y forward, length ≤ 1); keys add to it. */
   readonly move = { x: 0, y: 0 };
   /** How far the controller's triggers are pulled, 0..1 (driving: throttle and brake). */
@@ -90,16 +103,34 @@ export class Input {
   stickLook = false;
   /** Menus are on screen: the controller moves focus and presses buttons instead of playing. */
   uiNav = true;
+  /**
+   * Which throwable a held LB readies (the game knows what is in the pockets): a grenade unless
+   * there are none and a Molotov is there.
+   */
+  throwPick: (() => 'grenade' | 'molotov') | null = null;
   private pauseWanted = false;
   private padIndex = -1;
+  /** Logical buttons down last frame (after the remap), and the physical ones. */
   private padPrev: boolean[] = [];
+  private physPrev: boolean[] = [];
   private padSprint = false;
   private padHold = 0;
-  /** Seconds D-pad up has been held (-1: not pressed, or its hold already fired). */
-  private upT = -1;
-  /** Seconds B has been held (-1: not pressed, or it already went prone). */
-  private proneT = -1;
+  /** Seconds each button with a hold has been down (-1: not pressed, or its hold already fired). */
+  private readonly holds = new Map<number, number>();
+  /** The throwable LB is holding ready, if it is. */
+  private throwDown: 'grenade' | 'molotov' | null = null;
+  /**
+   * Buttons still held from a menu (B that skipped the opening shot, A that pressed RESUME): play leaves
+   * them alone until they come up, or they would crouch or jump as play begins.
+   */
+  private padHeldOver: boolean[] = [];
+  /** When the controller was last read (ms), for timing holds through slow frames. */
+  private lastPoll = 0;
   private readonly menus = new PadMenus();
+  private readonly rumbler = new Rumble();
+  /** Recent mouse travel while something else is in use (px), and when it started. */
+  private mouseTravel = 0;
+  private mouseTravelAt = 0;
 
   constructor(target: HTMLElement) {
     this.target = target;
@@ -109,15 +140,47 @@ export class Input {
       if (e.pointerType === 'touch' || e.pointerType === 'pen') setDevice('touch');
       else if (e.pointerType === 'mouse') setDevice('mouse');
     }, { ...opts, capture: true });
-    window.addEventListener('gamepadconnected', (e) => { if (this.padIndex < 0) this.padIndex = e.gamepad.index; }, opts);
-    window.addEventListener('gamepaddisconnected', (e) => {
-      if (e.gamepad.index !== this.padIndex) return;
-      this.padIndex = -1;
-      this.releaseSource('Pad');
-      this.padMove.x = this.padMove.y = 0;
-      // The controller went away mid-game: stop and show the pause menu.
-      if (current === 'pad') this.pauseWanted = true;
+    // Picking the mouse up again (moving it a hand's width, not a nudge of the desk) brings its cursor and prompts back.
+    window.addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'mouse' || current === 'mouse') return;
+      const now = performance.now();
+      if (now - this.mouseTravelAt > 300) {
+        this.mouseTravel = 0;
+        this.mouseTravelAt = now;
+      }
+      this.mouseTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
+      if (this.mouseTravel > MOUSE_CLAIM) setDevice('mouse');
     }, opts);
+    window.addEventListener('gamepadconnected', (e) => {
+      const g = e.gamepad;
+      const standard = g.mapping === 'standard';
+      if (this.padIndex < 0 && standard) {
+        this.padIndex = g.index;
+        setPadModel(g.id);
+      }
+      for (const fn of padListeners) fn({ kind: 'connected', id: g.id, style: styleOf(g.id), standard });
+    }, opts);
+    window.addEventListener('gamepaddisconnected', (e) => {
+      const g = e.gamepad;
+      if (g.index === this.padIndex) {
+        this.padIndex = -1;
+        this.releasePad();
+        // The controller went away mid-game: stop and show the pause menu.
+        if (current === 'pad') this.pauseWanted = true;
+        // Another one plugged in takes over (its buttons named its way).
+        const next = this.gamepad();
+        if (next) setPadModel(next.id);
+      }
+      for (const fn of padListeners) fn({ kind: 'disconnected', id: g.id, style: styleOf(g.id), standard: g.mapping === 'standard' });
+    }, opts);
+    // Held pad buttons and sticks let go when another device takes over (a trigger held as the mouse moved kept firing).
+    const offDevice = onDeviceChange((d) => {
+      if (d !== 'pad') {
+        this.releasePad();
+        this.rumbler.stop(this.gamepad());
+      }
+    });
+    this.abort.signal.addEventListener('abort', offDevice);
     window.addEventListener('keydown', (e) => this.onKey(e, true), opts);
     window.addEventListener('keyup', (e) => this.onKey(e, false), opts);
     window.addEventListener('mousedown', (e) => this.onButton(e, true), opts);
@@ -193,15 +256,24 @@ export class Input {
     this.touchMove.y = y;
   }
 
-  /** Thumb drag (radians). */
+  /** Thumb drag (radians). Up and down follow the invert setting the mouse uses. */
   addTurn(x: number, y: number): void {
     this.turnX += x;
-    this.turnY += y;
+    this.turnY += y * (settings.value.controls.invertY ? -1 : 1);
     this.stickLook = true;
   }
 
   private releaseSource(source: 'Pad' | 'Touch'): void {
     for (const code of [...this.down]) if (code.startsWith(`${source}:`)) this.virtual(source, code.slice(source.length + 1) as Action, false);
+  }
+
+  /** Lets go of everything the controller holds (it went away, or another device took over). */
+  private releasePad(): void {
+    this.releaseSource('Pad');
+    this.padMove.x = this.padMove.y = 0;
+    this.padSprint = false;
+    this.holds.clear();
+    this.throwDown = null;
   }
 
   /** Lets go of everything the thumbs hold (the on-screen controls were hidden). */
@@ -210,6 +282,7 @@ export class Input {
     this.touchMove.x = this.touchMove.y = 0;
   }
 
+  /** The controller in use: the one picked, or the first one the browser lays out the standard way. */
   private gamepad(): Gamepad | null {
     if (typeof navigator.getGamepads !== 'function') return null;
     const pads = navigator.getGamepads();
@@ -217,6 +290,7 @@ export class Input {
     for (const p of pads) {
       if (p?.connected && p.mapping === 'standard') {
         this.padIndex = p.index;
+        setPadModel(p.id);
         return p;
       }
     }
@@ -228,7 +302,11 @@ export class Input {
     const pad = this.gamepad();
     this.stickLook = this.turnX !== 0 || this.turnY !== 0;
     this.triggers.l = this.triggers.r = 0;
-    if (pad) this.readPad(pad, dt);
+    // Holds are timed by the clock as well as the frame (a frame step is capped, and a hitch shouldn't stretch a hold).
+    const t = typeof performance !== 'undefined' ? performance.now() : 0;
+    const real = this.lastPoll ? (t - this.lastPoll) / 1000 : dt;
+    this.lastPoll = t;
+    if (pad) this.readPad(pad, dt, Math.max(dt, Math.min(real, 0.5)));
     const kx = this.held('right') ? 1 : 0, kxn = this.held('left') ? 1 : 0;
     const ky = this.held('forward') ? 1 : 0, kyn = this.held('back') ? 1 : 0;
     let x = this.padMove.x + this.touchMove.x + kx - kxn;
@@ -239,68 +317,118 @@ export class Input {
     this.move.y = this.enabled ? y : 0;
   }
 
-  private readPad(pad: Gamepad, dt: number): void {
-    const btn = (i: number) => {
+  /**
+   * A button with a press and a hold: `onTap` when it comes up before `limit` seconds (null: the press
+   * is handled elsewhere), `onHold` once it has been down that long.
+   */
+  private holdButton(b: number, now: boolean[], dt: number, limit: number, onTap: (() => void) | null, onHold: () => void): void {
+    const t = this.holds.get(b) ?? -1;
+    if (now[b]) {
+      if (!this.padPrev[b]) this.holds.set(b, 0);
+      else if (t >= 0) {
+        if (t + dt >= limit) {
+          this.holds.set(b, -1);
+          onHold();
+        } else this.holds.set(b, t + dt);
+      }
+    } else if (this.padPrev[b]) {
+      this.holds.set(b, -1);
+      if (t >= 0) onTap?.();
+    }
+  }
+
+  private readPad(pad: Gamepad, dt: number, holdDt: number): void {
+    const c = settings.value.controls;
+    const raw = (i: number) => {
       const b = pad.buttons[i];
       if (!b) return false;
-      return i === B.LT || i === B.RT ? b.value > TRIGGER_DOWN || (b.pressed && b.value === 0) : b.pressed;
+      // Triggers count from a firm squeeze (some pads report a pressed trigger with no value).
+      return i === PAD.LT || i === PAD.RT ? b.value > TRIGGER_DOWN || (b.pressed && b.value === 0) : b.pressed;
     };
-    const now = pad.buttons.map((_, i) => btn(i));
+    const phys = Array.from({ length: Math.max(PAD_BUTTONS, pad.buttons.length) }, (_, i) => raw(i));
+    const physPrev = this.physPrev;
+    this.physPrev = phys;
+    const physEdge = (i: number) => phys[i] && !physPrev[i];
+    let [lxr, lyr, rxr, ryr] = [pad.axes[0] ?? 0, pad.axes[1] ?? 0, pad.axes[2] ?? 0, pad.axes[3] ?? 0];
+    // Southpaw: the right stick moves and the left one looks.
+    if (c.padSwapSticks) [lxr, lyr, rxr, ryr] = [rxr, ryr, lxr, lyr];
+    const [lx, ly] = stick(lxr, lyr, c.padDeadzoneMove);
+    const [rx, ry] = stick(rxr, ryr, c.padDeadzoneLook);
+    const lean = Math.max(Math.hypot(lxr, lyr), Math.hypot(rxr, ryr));
+    if (phys.some((v, i) => v && !physPrev[i]) || lean > STICK_CLAIM) setDevice('pad');
+
+    // The buttons as the standard layout's (a remap moves them about).
+    const map = remap();
+    const now: boolean[] = new Array(PAD_BUTTONS).fill(false);
+    for (let i = 0; i < PAD_BUTTONS; i++) now[map[i]] = phys[i];
     const prev = this.padPrev;
     const edge = (i: number) => now[i] && !prev[i];
-    const [lx, ly] = stick(pad.axes[0] ?? 0, pad.axes[1] ?? 0);
-    const [rx, ry] = stick(pad.axes[2] ?? 0, pad.axes[3] ?? 0);
-    if (now.some((v, i) => v && !prev[i]) || lx || ly || rx || ry) setDevice('pad');
-    this.padPrev = now;
-    if (current !== 'pad') return;
-
-    if (this.captureNext || this.uiNav || !this.enabled) {
-      this.releaseSource('Pad');
-      this.padMove.x = this.padMove.y = 0;
-      this.padSprint = false;
-      this.upT = -1;
-      this.proneT = -1;
-      this.menus.update(dt, now, edge, lx, ly, ry);
+    if (current !== 'pad') {
+      this.padPrev = now;
       return;
     }
 
-    if (edge(B.START)) this.pauseWanted = true;
-    this.triggers.l = pad.buttons[B.LT]?.value ?? 0;
-    this.triggers.r = pad.buttons[B.RT]?.value ?? 0;
-    for (const [action, i] of PAD_ACTIONS) if (now[i] !== this.down.has(`Pad:${action}`)) this.virtual('Pad', action, now[i]);
-    // Y swaps between the two weapons, as the mouse wheel does.
-    if (edge(B.Y)) this.swapWeapon();
-    // D-pad up: a tap switches the flashlight, a hold switches shoulders.
-    if (now[B.UP]) {
-      if (edge(B.UP)) this.upT = 0;
-      else if (this.upT >= 0) {
-        this.upT += dt;
-        if (this.upT >= UP_HOLD) {
-          this.upT = -1;
-          this.tap('Pad', 'shoulder');
-        }
+    // Moving a button in Settings: the first one pressed is where it goes (Start leaves it where it was).
+    if (this.capturePad) {
+      const hit = phys.findIndex((v, i) => v && !physPrev[i]);
+      if (hit >= 0) {
+        const cb = this.capturePad;
+        this.capturePad = null;
+        cb(hit === PAD.START ? -1 : hit);
       }
-    } else if (this.upT >= 0) {
-      this.upT = -1;
-      this.tap('Pad', 'flashlight');
+      this.padPrev = now;
+      return;
     }
-    // B: crouch on its press (the survivor toggles it), prone once it has been held a moment.
-    if (now[B.B]) {
-      if (edge(B.B)) this.proneT = 0;
-      else if (this.proneT >= 0) {
-        this.proneT += dt;
-        if (this.proneT >= PRONE_HOLD) {
-          this.proneT = -1;
-          this.tap('Pad', 'prone');
-        }
-      }
-    } else this.proneT = -1;
+
+    if (this.captureNext || this.uiNav || !this.enabled) {
+      this.releasePad();
+      this.padPrev = now;
+      this.padHeldOver = now.slice();
+      // Menus use the buttons where they are (A picks, B goes back), whatever the layout in play.
+      this.menus.update(dt, phys, physEdge, lx, ly, rx, ry);
+      return;
+    }
+
+    this.menus.idle();
+    // Buttons held over from a menu count as up until they are let go.
+    for (let i = 0; i < PAD_BUTTONS; i++) {
+      if (!this.padHeldOver[i]) continue;
+      if (now[i]) now[i] = false;
+      else this.padHeldOver[i] = false;
+    }
+    if (edge(PAD.START)) this.pauseWanted = true;
+    const valueAt = (logical: number) => pad.buttons[map.indexOf(logical)]?.value ?? 0;
+    this.triggers.l = valueAt(PAD.LT);
+    this.triggers.r = valueAt(PAD.RT);
+    for (const [action, i] of PAD_HELD) if (now[i] !== this.down.has(`Pad:${action}`)) this.virtual('Pad', action, now[i]);
+    // D-pad up: a tap switches the flashlight, a hold switches shoulders.
+    this.holdButton(PAD.UP, now, holdDt, UP_HOLD, () => this.tap('Pad', 'flashlight'), () => this.tap('Pad', 'shoulder'));
+    // B: crouch on its press (the survivor toggles it, above), prone once it has been held a moment.
+    this.holdButton(PAD.B, now, holdDt, PRONE_HOLD, null, () => this.tap('Pad', 'prone'));
+    // LB: a tap is a bandage; held, a grenade (or a Molotov) is readied and goes when it is let go.
+    this.holdButton(PAD.LB, now, holdDt, THROW_HOLD, () => this.tap('Pad', 'heal'), () => {
+      this.throwDown = this.throwPick?.() ?? 'grenade';
+      this.virtual('Pad', this.throwDown, true);
+    });
+    if (this.throwDown && !now[PAD.LB]) {
+      this.virtual('Pad', this.throwDown, false);
+      this.throwDown = null;
+    }
+    // Y: a tap switches weapon, a hold opens the gunsmith. With a throw ready it switches grenade and Molotov.
+    if (this.throwDown && edge(PAD.Y)) {
+      const other = this.throwDown === 'grenade' ? 'molotov' : 'grenade';
+      this.virtual('Pad', other, true);
+      this.virtual('Pad', this.throwDown, false);
+      this.throwDown = other;
+      this.holds.set(PAD.Y, -1);
+    } else this.holdButton(PAD.Y, now, holdDt, GUNSMITH_HOLD, () => this.swapWeapon(), () => this.tap('Pad', 'gunsmith'));
     this.padMove.x = lx;
     this.padMove.y = -ly;
     // Sprint latches on a stick click and ends when the stick comes back.
-    if (edge(B.LS)) this.padSprint = !this.padSprint;
+    if (edge(PAD.LS)) this.padSprint = !this.padSprint;
     if (Math.hypot(lx, ly) < 0.3) this.padSprint = false;
     if (this.padSprint !== this.down.has('Pad:sprint')) this.virtual('Pad', 'sprint', this.padSprint);
+    this.padPrev = now;
 
     // Turning eases in (fine aim) and speeds up when held hard over (to turn around).
     const m = Math.hypot(rx, ry);
@@ -308,9 +436,9 @@ export class Input {
       this.padHold = m > 0.95 ? this.padHold + dt : 0;
       const boost = 1 + Math.min(1, Math.max(0, this.padHold - 0.25) / 0.35) * 0.6;
       const curve = Math.pow(m, 1.8) / m;
-      const rate = PAD_TURN * settings.value.controls.padSensitivity * boost * dt * curve;
+      const rate = PAD_TURN * c.padSensitivity * boost * dt * curve;
       this.turnX += rx * rate;
-      this.turnY += ry * rate * 0.75;
+      this.turnY += ry * rate * 0.75 * (c.padInvertY ? -1 : 1);
       this.stickLook = true;
     } else this.padHold = 0;
   }
@@ -322,17 +450,27 @@ export class Input {
     return r;
   }
 
-  /** A short rumble on the controller, or a buzz on a phone. */
-  rumble(strength: number, ms: number): void {
-    if (!settings.value.controls.vibration) return;
-    if (current === 'pad') {
-      const pad = this.gamepad() as (Gamepad & { vibrationActuator?: { playEffect?: (t: string, p: object) => Promise<unknown> } }) | null;
-      void pad?.vibrationActuator?.playEffect?.('dual-rumble', {
-        duration: ms, strongMagnitude: Math.min(1, strength), weakMagnitude: Math.min(1, strength * 0.7 + 0.1),
-      })?.catch(() => { /* not supported */ });
-    } else if (current === 'touch' && strength >= 0.3 && typeof navigator.vibrate === 'function') {
+  /**
+   * A short rumble on the controller, or a buzz on a phone. `kind` 'shot' also kicks the right trigger
+   * on pads with trigger motors; a weaker rumble never cuts short a stronger one still playing.
+   */
+  rumble(strength: number, ms: number, kind: RumbleKind = ''): void {
+    const c = settings.value.controls;
+    if (!c.vibration) return;
+    if (current === 'pad') this.rumbler.play(this.gamepad(), strength, ms, kind);
+    else if (current === 'touch' && strength * c.vibrationStrength >= 0.3 && typeof navigator.vibrate === 'function') {
       navigator.vibrate(Math.round(ms * 0.6));
     }
+  }
+
+  /** A rumble on the connected controller whatever is in use (Settings' test button). */
+  testRumble(): void {
+    this.rumbler.play(this.gamepad(), 0.9, 350, 'blast');
+  }
+
+  /** Stops any rumble (the game paused, the night ended). */
+  stopRumble(): void {
+    this.rumbler.stop(this.gamepad());
   }
 
   requestLock(): void {
@@ -429,6 +567,8 @@ export class Input {
     this.touchMove.x = this.touchMove.y = this.padMove.x = this.padMove.y = 0;
     this.move.x = this.move.y = 0;
     this.padSprint = false;
+    this.holds.clear();
+    this.throwDown = null;
   }
 
   dispose(): void {
@@ -442,9 +582,12 @@ export function typing(e: Event): boolean {
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
 }
 
-/** What to press for an action on the device in use ('' on touch screens: the button is on screen). */
+/**
+ * What to press for an action on the device in use ('' on touch screens: the button is on screen). On a
+ * controller it is a glyph (see PadLayout) that the HUD draws as the button itself.
+ */
 export function actionLabel(action: Action): string {
-  if (current === 'pad') return PAD_LABELS[action] ?? '';
+  if (current === 'pad') return padLabel(action);
   if (current === 'touch') return '';
   const code = settings.value.controls.bindings[action][0];
   return code ? codeLabel(code) : '';

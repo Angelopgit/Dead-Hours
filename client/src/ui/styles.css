@@ -461,7 +461,9 @@ body.touch-play .goals { display: none !important; }
 .inv-keys span { display: inline-block; min-width: 3.6em; margin-right: 0.6em; padding: 0.1em 0.4em; border: 1px solid rgba(255,255,255,0.2); border-radius: 0;
   text-align: center; color: var(--fg); font-size: 0.9em; }
 /* Phones and pads have no keyboard: no key list, no key after each slot name. */
-body.touch-play .inv-keys, body.touch-play .inv-k, body.pad-nav .inv-keys, body.pad-nav .inv-k { display: none; }
+body.touch-play .inv-keys, body.touch-play .inv-k { display: none; }
+.inv-keys.pad { grid-template-columns: repeat(3, 1fr); }
+.inv-keys span.pad { border: none; padding: 0; min-width: 2.6em; text-align: center; }
 /* A phone on its side: the inventory ran 95-165 px off the window (770 px at 667 wide, where it fell to one
    column). Set compact under the top buttons, darker so the HUD (moved to the top on phones) stays behind. */
 @media (max-height: 500px) {
@@ -759,9 +761,51 @@ body.pad-nav .menu-name-input:focus { outline: none; }
   .osk-key.wide, .osk-key.space { height: 2.6em; }
   .osk-help { display: none; }
 }
-.pad-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35em 1.2em; font-size: 0.85em; color: var(--fg-dim); margin-top: 0.6em; }
-.pad-layout .k { display: inline-block; min-width: 4.2em; color: var(--fg); font-family: var(--font-display); letter-spacing: 0.03em; }
-@media (max-width: 720px) { .pad-layout { grid-template-columns: 1fr; } }
+/* Controller buttons drawn as buttons (Glyphs.ts), in prompts, notices, hints and Settings. Face buttons are
+   round like the real ones; shoulders and triggers are boxes with the shape of the part. */
+.pb { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; vertical-align: -0.28em;
+  height: 1.45em; min-width: 1.45em; margin: 0 0.12em; padding: 0; font-family: var(--font-display); font-weight: 700;
+  font-size: 0.92em; line-height: 1; letter-spacing: 0; text-transform: none; color: var(--fg);
+  border: 1px solid rgba(228, 221, 208, 0.55); background: rgba(10, 9, 8, 0.72); white-space: nowrap; }
+.pb svg { width: 1.2em; height: 1.2em; display: block; }
+.pb .pb-on { fill: var(--fg); }
+.pb .pb-off { fill: rgba(228, 221, 208, 0.28); }
+.pb-face, .pb-stick { border-radius: 50%; }
+.pb-stick { border-style: dashed; font-size: 0.68em; height: 2.1em; min-width: 2.1em; vertical-align: -0.62em; }
+.pb-bumper { font-size: 0.68em; height: 1.75em; min-width: 2.6em; padding: 0 0.35em; border-radius: 0.55em 0.55em 0.12em 0.12em; vertical-align: -0.45em; }
+.pb-trigger { font-size: 0.68em; height: 2em; min-width: 2.3em; padding: 0 0.3em; border-radius: 0.9em 0.9em 0.15em 0.15em; vertical-align: -0.55em; }
+.pb-meta { font-size: 0.62em; height: 1.85em; padding: 0 0.45em; vertical-align: -0.5em; letter-spacing: 0.04em; }
+.pb-dpad { border: none; background: transparent; min-width: 1.3em; }
+.pb-dpad svg { width: 1.35em; height: 1.35em; }
+.pb-dpad .pb-on { fill: var(--accent); }
+.pb-generic.pb-face svg { width: 1.05em; height: 1.05em; }
+.pb-generic.pb-face .pb-on { fill: var(--accent); }
+/* Xbox face letters in their own colours, a step darker than the pad's to sit with the sodium orange. */
+.pb-xbox.pb-b0 { color: #8fc46a; } .pb-xbox.pb-b1 { color: #e0705c; } .pb-xbox.pb-b2 { color: #6ea6e0; } .pb-xbox.pb-b3 { color: #e6c35a; }
+.pb-playstation.pb-face { font-family: var(--font-body); font-weight: 600; font-size: 0.95em; }
+.pb-playstation.pb-b0 { color: #8fa9e8; } .pb-playstation.pb-b1 { color: #e57a6e; } .pb-playstation.pb-b2 { color: #d99ccd; } .pb-playstation.pb-b3 { color: #6fc9ad; }
+.prompt .k.pad { border: none; padding: 0; margin-right: 0.35em; font-size: 1em; }
+.prompt .k.pad .pb { margin: 0; }
+/* The menus' button hints along the bottom, only while the controller drives. */
+.pad-hints { position: absolute; left: 50%; bottom: max(1.8vh, calc(env(safe-area-inset-bottom) + 6px)); transform: translateX(-50%);
+  display: none; gap: 0.2em; align-items: center; white-space: pre; padding: 0.35em 0.9em; font-size: 0.82em; color: var(--fg-dim);
+  letter-spacing: 0.03em; background: rgba(10, 9, 8, 0.72); border-top: 1px solid var(--line); z-index: 40; pointer-events: none; }
+body.pad-nav .pad-hints.show { display: flex; }
+.pad-toasts { position: absolute; left: 50%; top: max(2.2vh, env(safe-area-inset-top)); transform: translateX(-50%); display: flex; flex-direction: column;
+  align-items: center; gap: 0.4em; z-index: 60; pointer-events: none; }
+.pad-toast { padding: 0.45em 1.1em; background: var(--panel-solid); border-top: 2px solid var(--accent); color: var(--fg); font-size: 0.9em;
+  letter-spacing: 0.02em; max-width: min(36em, 90vw); text-align: center; }
+.osk-help .pb { font-size: 0.95em; }
+/* Settings: a dead zone slider with the stick's lean beside it, and the controller's buttons. */
+.stick-zone { display: flex; align-items: center; gap: 0.8em; flex-wrap: wrap; justify-content: flex-end; }
+.mic-meter-row { display: flex; align-items: center; gap: 0.5em; }
+.mic-meter-row .mic-meter { width: 6em; }
+.mic-meter-row output { min-width: 5.5em; font-size: 0.8em; color: var(--fg-dim); }
+.mic-meter i.past { background: var(--accent); }
+.row:has(.stick-zone) { grid-template-columns: 1fr auto; }
+.pad-key { justify-self: end; width: 7em; display: inline-flex; align-items: center; justify-content: center; min-height: 2.2em; }
+.pad-key .pb { font-size: 1.05em; }
+.pad-move-hint { margin: 0.2em 0 0.4em; }
 
 /* ── Touch controls ───────────────────────────────────── */
 /* --tc-lift raises the thumb buttons just clear of an iPhone's home bar when they are small enough to reach it (AIM,

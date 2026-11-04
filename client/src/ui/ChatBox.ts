@@ -1,5 +1,6 @@
 import { CHAT, type ChatLine } from '@dead-hours/shared';
 import { h } from './dom';
+import { PadKeyboard } from './PadKeyboard';
 import type { NetLink } from '../network/NetLink';
 
 /** Readable name colors, picked by player id so a name keeps its color. */
@@ -54,7 +55,8 @@ export class ChatBox {
       const send = h('button', { class: 'btn', onclick: () => { if (this.link.chat.say(this.input.value)) this.input.value = ''; this.input.focus(); } }, 'SEND');
       this.el = h('div', { class: 'chat chat-lobby' }, this.log, h('div', { class: 'chat-row' }, this.input, send));
     } else {
-      this.input.addEventListener('blur', () => this.close());
+      // The controller's on-screen keyboard takes focus to its keys while it types here: that is not leaving.
+      this.input.addEventListener('blur', () => { if (!PadKeyboard.editing(this.input)) this.close(); });
       this.el = h('div', { class: 'chat chat-game' }, this.log, this.input);
       this.fader = setInterval(() => this.fade(), 500);
     }
@@ -118,11 +120,12 @@ export class ChatBox {
     return this.opened;
   }
 
-  /** In play: show the input and type. */
-  open(): void {
+  /** In play: show the input and type (`pad`: with the controller's on-screen keyboard, which sends with DONE). */
+  open(pad = false): void {
     this.opened = true;
     this.fade();
     this.input.focus();
+    if (pad) PadKeyboard.open(this.input, (sent) => { if (!sent) this.close(); });
   }
 
   close(): void {

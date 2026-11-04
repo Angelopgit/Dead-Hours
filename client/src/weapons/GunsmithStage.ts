@@ -112,6 +112,12 @@ export class GunsmithStage {
     this.pitchTarget = THREE.MathUtils.clamp(this.pitchTarget + dy * 0.008, -0.9, 0.9);
   }
 
+  /** A controller's right stick turning it (radians this frame, as the stick leans times the frame's time). */
+  turnBy(dx: number, dy: number): void {
+    this.yawTarget += dx * 3.2;
+    this.pitchTarget = THREE.MathUtils.clamp(this.pitchTarget + dy * 2, -0.9, 0.9);
+  }
+
   /** True when the pointer went up after a drag (not a click). */
   pointerUp(): boolean {
     const was = this.drag !== null && this.dragged > 6;

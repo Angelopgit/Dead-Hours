@@ -21,6 +21,7 @@ import { setSnowing, weather } from '../environment/Weather';
 import { HOLIDAY } from './Holiday';
 import { weatherUniforms } from '../lighting/WetShader';
 import { LoadingScreen } from '../ui/LoadingScreen';
+import { PadStatus } from '../ui/PadStatus';
 import { compileForPost, compileScene, keepShaderSources, nextFrame, pinPrograms, uploadTextures } from './Preload';
 
 type State = 'menu' | 'session';
@@ -116,6 +117,8 @@ export class Game {
     document.querySelector('.boot')?.remove();
     gsap.to(document.getElementById('fade'), { opacity: 0, duration: 2.2, ease: 'power2.out' });
     this.menu.show(this.ui);
+    // Button hints under the menus and a note when a controller comes or goes, on every screen from here on.
+    new PadStatus(this.ui);
     if (import.meta.env.DEV) {
       Object.assign(window, { __deadHours: this, THREE, __weather: weather, __wet: weatherUniforms });
       if (new URLSearchParams(location.search).has('trailer')) void this.startTrailer();

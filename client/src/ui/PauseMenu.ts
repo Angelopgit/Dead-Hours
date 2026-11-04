@@ -12,8 +12,12 @@ export class PauseMenu {
   private readonly main: HTMLElement;
   private refresh: ReturnType<typeof setInterval> | null = null;
 
-  /** Online the night goes on behind the menu, quitting means leaving the room, and PLAYERS has voice and chat controls. */
-  constructor(private readonly input: Input, onResume: () => void, onQuit: () => void, online = false, private readonly link: NetLink | null = null) {
+  /**
+   * Online the night goes on behind the menu, quitting means leaving the room, PLAYERS has voice and chat controls,
+   * and CHAT (`onChat`) opens the text chat (a controller has no chat key).
+   */
+  constructor(private readonly input: Input, onResume: () => void, onQuit: () => void, online = false, private readonly link: NetLink | null = null,
+    onChat?: () => void) {
     const item = (label: string, fn: () => void) =>
       h('button', { class: 'menu-item', onmouseenter: () => audio.ui('hover'), onclick: () => { audio.ui('click'); fn(); } }, label);
     this.main = h('div', { class: 'menu-main' },
@@ -22,6 +26,7 @@ export class PauseMenu {
       h('div', { class: 'subtitle' }, online ? 'The night goes on. You can still be hit.' : 'The night does not wait.'),
       h('nav', { class: 'menu-list' },
         item('RESUME', onResume),
+        onChat ? item('CHAT', onChat) : null,
         link ? item('PLAYERS', () => this.openPlayers()) : null,
         item('SETTINGS', () => this.openSettings()),
         item(online ? 'LEAVE GAME' : 'QUIT TO MENU', onQuit),
