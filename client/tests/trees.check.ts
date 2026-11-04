@@ -2,13 +2,13 @@
  * Tree models (npm run check:trees): every model and level of detail is well formed and inside its
  * triangle budget, the middle level is much lighter than the near one, wind weights are sane, the
  * trunks fit the trunk colliders players and zombies bump into, leaves stay above head height
- * under the maples, the tree shaders still recognise three's light chunk, and the map's trees,
- * pines and shrubs all get a model.
+ * under the maples, the tree shaders still recognise three's light chunk, leaves fading in front of
+ * the camera leave no lone specks, and the map's trees, pines and shrubs all get a model.
  */
 import * as THREE from 'three';
 import { MAPLE_HOLLOW, propHalfExtents } from '@dead-hours/shared';
 import { broadleaf, bush, pine, pineOutlineHalf, type TreeModel } from '../src/environment/trees/TreeGen';
-import { TREE_VERTEX_LIGHTS } from '../src/environment/trees/TreeMaterials';
+import { createTreeMaterial, NEAR_LEAF, TREE_VERTEX_LIGHTS } from '../src/environment/trees/TreeMaterials';
 
 let failed = 0;
 const ok = (msg: string) => console.log(`  ok  ${msg}`);
@@ -80,6 +80,40 @@ for (const [name, m] of models) {
 console.log('Shaders');
 // three's light chunk still has the point/spot loops where the tree patch cuts them out.
 check(TREE_VERTEX_LIGHTS, 'point and spot lights move to the vertex shader on trees (three light chunk recognised)');
+{
+  // Leaves thinning out in front of the camera: a small share of the dither is lone pixels, which
+  // scattered dark specks over the sky under a pine. The leaf shader drops leaves under the floor.
+  const tints: [THREE.Color, THREE.Color, THREE.Color] = [new THREE.Color(), new THREE.Color(), new THREE.Color()];
+  const { material, depth } = createTreeMaterial({ leaf: true, map: new THREE.Texture(), color: 0xffffff, roughness: 1, tints, texSize: 512 });
+  const compiled = (m: THREE.Material, lib: { vertexShader: string; fragmentShader: string; uniforms: Record<string, THREE.IUniform> }) => {
+    const sh = { vertexShader: lib.vertexShader, fragmentShader: lib.fragmentShader, uniforms: THREE.UniformsUtils.clone(lib.uniforms) } as unknown as THREE.WebGLProgramParametersWithUniforms;
+    m.onBeforeCompile(sh, {} as THREE.WebGLRenderer);
+    return sh.fragmentShader;
+  };
+  const frag = compiled(material, THREE.ShaderLib.physical);
+  const dither = /fract\(([\d.]+) \* fract\(dot\(gl_FragCoord\.xy, vec2\(([\d.]+), ([\d.]+)\)\)\)\)/.exec(frag);
+  const floor = /if \(keep < ([\d.]+) \|\| dn > keep\) discard;/.exec(frag);
+  if (!dither || !floor) fail('the leaf shader has no screen dither or no floor on the near-camera fade');
+  else {
+    const [a, b, c] = dither.slice(1).map(Number);
+    const f = Number(floor[1]);
+    const fr = (x: number) => x - Math.floor(x);
+    const kept = (x: number, y: number) => fr(a * fr((x + 0.5) * b + (y + 0.5) * c)) <= f;
+    let n = 0, lone = 0;
+    for (let y = 1; y < 127; y++) for (let x = 1; x < 127; x++) {
+      if (!kept(x, y)) continue;
+      n++;
+      let nb = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) if ((i || j) && kept(x + i, y + j)) nb++;
+      if (!nb) lone++;
+    }
+    const share = lone / n;
+    check(f === NEAR_LEAF.floor && share < 0.1, `leaves within ${NEAR_LEAF.full} m of the eye fade but are gone below a ${f * 100}% share, where ${(share * 100).toFixed(0)}% of the kept pixels are lone (no specks)`);
+  }
+  const d = compiled(depth, THREE.ShaderLib.depth);
+  const eyeOnly = d.slice(d.indexOf('#if defined(TREE_LEAF) && !defined(TREE_DEPTH)'));
+  check('TREE_DEPTH' in (depth.defines ?? {}) && eyeOnly.slice(0, eyeOnly.indexOf('#endif')).includes('dn > keep'), 'shadows keep the whole crown (the near-camera fade is for the eye only)');
+}
 
 console.log('Map');
 const kinds = new Map<string, number>();

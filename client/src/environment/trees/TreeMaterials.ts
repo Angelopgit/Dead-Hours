@@ -165,15 +165,25 @@ ${GLOSS_CAP_GLSL}
 float treeDither() { return fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))); }
 `;
 
+/**
+ * Leaves right in front of the camera thin out (never stuck inside a crown in the woods): all there
+ * from `full` metres, dithered away closer in. Under a 15% share the dither keeps only lone pixels,
+ * so standing under a pine scattered dark specks over the sky; from 25% the kept pixels touch. So
+ * below `floor` the leaves are gone entirely (closer than about 2.3 m).
+ */
+export const NEAR_LEAF = { gone: 1.2, full: 4.6, floor: 0.25 };
+
 const FADE_FRAG = /* glsl */ `
 #include <clipping_planes_fragment>
 {
   float dn = treeDither();
   if (dn > vTreeFade.y || dn < 1.0 - vTreeFade.x) discard;
 #if defined(TREE_LEAF) && !defined(TREE_DEPTH)
-  // Thin out leaves right in front of the camera (never stuck inside a crown in the woods).
   float camDist = length(vViewPosition);
-  if (camDist < 4.6 && dn > smoothstep(1.2, 4.6, camDist)) discard;
+  if (camDist < ${NEAR_LEAF.full.toFixed(2)}) {
+    float keep = smoothstep(${NEAR_LEAF.gone.toFixed(2)}, ${NEAR_LEAF.full.toFixed(2)}, camDist);
+    if (keep < ${NEAR_LEAF.floor.toFixed(2)} || dn > keep) discard;
+  }
 #endif
 }
 `;
