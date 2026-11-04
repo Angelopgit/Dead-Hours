@@ -549,7 +549,8 @@ section('Downtime lulls');
   }
   const fmt = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`;
   console.log(`     lulls (survival time, length): ${plan.map((p) => `${fmt(p.at)} ${p.len}s`).join(' · ')}`);
-  check(Math.abs(plan[0].at - LULLS.every) < 1e-9, `the first comes after ${LULLS.every / 60} minutes of fighting`);
+  // Due after LULLS.every of fighting; if a wave's siren or surge is on then, it waits for the wave to be over.
+  check(plan[0].at >= LULLS.every && plan[0].at <= LULLS.every + HORDES.warning + HORDES.maxDuration && plan[0].at === lullOpening(LULLS.every), `the first comes after ${LULLS.every / 60} minutes of fighting, or once the wave then on is over (${fmt(plan[0].at)})`);
   const fights = plan.slice(1).map((p, i) => p.threat - plan[i].threat);
   check(fights.every((g) => g >= LULLS.every && g <= LULLS.every + 140), `fighting between lulls: ${fights.map((g) => fmt(g)).join(', ')}`);
   check(plan.every((p) => hordeAt(p.threat).stage === 'calm'), 'none starts during a horde siren or surge');
@@ -579,7 +580,9 @@ section('Downtime lulls');
   const near = sim.spawnZombie('walker', { x: 4.8, y: 0.02, z: -8 }, 'approach');
   const hunter = sim.spawnZombie('runner', { x: 70, y: 0.02, z: 8 }, 'idle');
   hunter.summon(sp);
-  sim.phaseTime = LULLS.every - 0.1;
+  // Due in the calm after wave 1 (when the schedule's own first one comes is checked above).
+  sim.lullDue = HORDES.firstAt + hordeDuration(1) + 30;
+  sim.phaseTime = sim.lullDue - 0.1;
   go(0.3);
   check(lulls[0] === 'start1' && sim.lulling, `a lull starts when one is due in a calm (${lulls.join(' ')})`);
   check(Math.abs(sim.lull.end - sim.lull.start - lullDuration(1)) < 1e-9, `it lasts ${lullDuration(1)} s`);

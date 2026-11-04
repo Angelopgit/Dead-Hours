@@ -9,8 +9,11 @@ import {
  * hunt the players. Tuning lives here; the event itself is shared/src/sim/Raid.ts.
  */
 export const RAID = {
-  /** Seconds of fighting before the van comes, once (the threat clock: it stands still during a lull, see LULLS). */
-  at: 420,
+  /**
+   * Seconds of fighting before the van comes, once (the threat clock: it stands still during a
+   * lull, see LULLS). Just after the first lull, in the calm before horde 3's siren (~7:05 into the night).
+   */
+  at: 365,
   raiders: 5,
   /** What each raider carries, by weight (every crew has at least two kinds). */
   weapons: [['ar', 0.4], ['shotgun', 0.3], ['pistol', 0.3]] as [WeaponId, number][],

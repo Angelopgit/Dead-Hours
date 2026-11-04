@@ -171,10 +171,14 @@ export const SPAWNING = {
  * last. The siren warns `warning` seconds ahead. Times are survival seconds after the outbreak.
  */
 export const HORDES = {
-  /** First wave starts here; later waves come `gap` seconds apart, shrinking to `minGap`. */
+  /**
+   * First wave starts here; later waves come `gap` seconds apart, `gapShrink` less each time, down
+   * to `minGap` (160, 148, 136, 124, then 120). The floor stays above the longest surge plus the
+   * siren, so a wave is always over before the next siren.
+   */
   firstAt: 150,
-  gap: 200,
-  gapShrink: 15,
+  gap: 160,
+  gapShrink: 12,
   minGap: 120,
   warning: 25,
   /** Surge length: `duration` plus `durationGrowth` per wave after the first, up to `maxDuration`. */
