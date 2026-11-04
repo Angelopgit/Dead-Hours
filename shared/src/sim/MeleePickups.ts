@@ -41,21 +41,38 @@ function roomsOf(map: MapDefinition, nav: NavGrid, physics: Physics): PickupRoom
     (nav.flags[n] & NAV_NEAR_WALL ? r.wall : r.open).push(n);
   };
   const beds = map.props.map((p, i) => ({ p, i })).filter(({ p }) => p.kind === 'bed');
-  const houseAt = (x: number, z: number) => map.houses.find((h) => Math.abs(x - h.x) < h.w / 2 && Math.abs(z - h.z) < h.d / 2);
-  // Keep stairs, their ends and doorways clear.
-  const onStairs = (x: number, z: number, y: number) => map.stairs.some((s) => {
-    const [ax, az] = s.axis === 'x' ? [x, z] : [z, x];
+  // Keep stairs, their ends and doorways clear. A stair's keep-clear box, as x0, x1, z0, z1:
+  const stairBox = (s: MapDefinition['stairs'][number]) => {
     const lo = Math.min(s.from, s.to) - 0.9, hi = Math.max(s.from, s.to) + 0.9;
-    return ax > lo && ax < hi && az > s.a0 - 0.4 && az < s.a1 + 0.4 && y > Math.min(s.y0, s.y1) - 0.5 && y < Math.max(s.y0, s.y1) + 0.5;
+    return s.axis === 'x' ? [lo, hi, s.a0 - 0.4, s.a1 + 0.4] : [s.a0 - 0.4, s.a1 + 0.4, lo, hi];
+  };
+  // Each house with the stairs, doors and beds that can matter to a spot inside it (in map order), so
+  // the walk over every nav cell (about 300k) tests a few of each, not every one on the map.
+  const near = (h: { x: number; z: number; w: number; d: number }, x: number, z: number, reach: number) =>
+    Math.abs(x - h.x) < h.w / 2 + reach && Math.abs(z - h.z) < h.d / 2 + reach;
+  const houses = map.houses.map((h) => ({
+    h,
+    stairs: map.stairs.filter((s) => {
+      const [x0, x1, z0, z1] = stairBox(s);
+      return x1 > h.x - h.w / 2 && x0 < h.x + h.w / 2 && z1 > h.z - h.d / 2 && z0 < h.z + h.d / 2;
+    }),
+    doors: map.doors.filter((d) => near(h, d.x, d.z, d.w / 2 + 0.7)),
+    beds: beds.filter(({ p }) => near(h, p.x, p.z, P.bedRoom)),
+  }));
+  const houseAt = (x: number, z: number) => houses.find(({ h }) => Math.abs(x - h.x) < h.w / 2 && Math.abs(z - h.z) < h.d / 2);
+  const onStairs = (stairs: MapDefinition['stairs'], x: number, z: number, y: number) => stairs.some((s) => {
+    const [x0, x1, z0, z1] = stairBox(s);
+    return x > x0 && x < x1 && z > z0 && z < z1 && y > Math.min(s.y0, s.y1) - 0.5 && y < Math.max(s.y0, s.y1) + 0.5;
   });
-  const inDoorway = (x: number, z: number, y: number) => map.doors.some((d) => Math.hypot(d.x - x, d.z - z) < d.w / 2 + 0.7 && Math.abs((d.floorY ?? d.y - d.h / 2) - y) < 1.5);
-  for (let n = 0; n < nav.nodeCount; n++) {
+  const inDoorway = (doors: MapDefinition['doors'], x: number, z: number, y: number) => doors.some((d) => Math.hypot(d.x - x, d.z - z) < d.w / 2 + 0.7 && Math.abs((d.floorY ?? d.y - d.h / 2) - y) < 1.5);
+  for (let n = 0, count = nav.nodeCount; n < count; n++) {
     const f = nav.flags[n];
     if (!(f & NAV_REACHABLE) || !(f & NAV_INDOOR)) continue;
     const x = nav.nodeX(n), y = nav.nodeY[n], z = nav.nodeZ(n);
-    const house = houseAt(x, z);
-    if (!house) continue;
-    if (onStairs(x, z, y) || inDoorway(x, z, y)) continue;
+    const at = houseAt(x, z);
+    if (!at) continue;
+    const house = at.h;
+    if (onStairs(at.stairs, x, z, y) || inDoorway(at.doors, x, z, y)) continue;
     if (house.id === 'store') {
       add('store', 'store', n);
       continue;
@@ -64,7 +81,7 @@ function roomsOf(map: MapDefinition, nav: NavGrid, physics: Physics): PickupRoom
       add(`basement:${house.id}`, 'basement', n);
       continue;
     }
-    for (const { p, i } of beds) {
+    for (const { p, i } of at.beds) {
       const by = p.y ?? 0;
       const d = Math.hypot(p.x - x, p.z - z);
       if (d > P.bedRoom || Math.abs(y - by) > 0.8 || d < 0.3) continue;

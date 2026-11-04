@@ -2320,6 +2320,23 @@ section('Found melee weapons');
     check(!bare.length && basements === 5, `Oak Street's ${oakHomes.length} homes each have a bedroom to search, and ${basements} basements${bare.length ? ` (none in ${bare.map((h) => h.id).join(', ')})` : ''}`);
   }
   check(rooms.every((r) => map.playerSpawns.every((sp) => Math.hypot(sp.x - r.centre.x, sp.z - r.centre.z) >= MELEE_PICKUPS.awayFromSpawn)), 'none in the safehouse the survivors start in');
+  {
+    // The search only tests each house's own doors, stairs and beds: checked here against every one on the map.
+    let bad = '';
+    for (const r of rooms) for (const n of r.nodes) {
+      const x = nav.nodeX(n), y = nav.nodeY[n], z = nav.nodeZ(n);
+      const door = map.doors.find((d) => Math.hypot(d.x - x, d.z - z) < d.w / 2 + 0.7 && Math.abs((d.floorY ?? d.y - d.h / 2) - y) < 1.5);
+      const stair = map.stairs.find((s) => {
+        const [ax, az] = s.axis === 'x' ? [x, z] : [z, x];
+        return ax > Math.min(s.from, s.to) - 0.9 && ax < Math.max(s.from, s.to) + 0.9 && az > s.a0 - 0.4 && az < s.a1 + 0.4 && y > Math.min(s.y0, s.y1) - 0.5 && y < Math.max(s.y0, s.y1) + 0.5;
+      });
+      const bed = r.room === 'bedroom' ? map.props[+r.key.slice(4)] : null;
+      if (door) bad ||= `${r.key} has a spot in a doorway at ${x.toFixed(1)}, ${z.toFixed(1)}`;
+      else if (stair) bad ||= `${r.key} has a spot on the stairs at ${x.toFixed(1)}, ${z.toFixed(1)}`;
+      else if (bed && Math.hypot(bed.x - x, bed.z - z) > MELEE_PICKUPS.bedRoom) bad ||= `${r.key} has a spot ${Math.hypot(bed.x - x, bed.z - z).toFixed(1)} m from its bed`;
+    }
+    check(!bad, bad || 'no spot in a doorway or on the stairs (tested against every door and stair on the map), and every bedroom spot near its bed');
+  }
 
   const { sim, sp, body } = makeSim({ x: 0, y: 0.15, z: 6 });
   run(sim, 0.2);

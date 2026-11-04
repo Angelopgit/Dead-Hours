@@ -361,6 +361,8 @@ export class GameSession {
       physics, map: NEIGHBORHOOD, nav, doors: doors.bodies,
       seed: online ? online.begin.seed : opts.seed ?? (Math.random() * 2 ** 31) | 0, preparation: GAME.preparationSeconds,
     });
+    // Solo: the rooms found weapons lie in are worked out now, behind the loading card, not in the night's first step.
+    if (!online) void this.sim.meleeRooms;
     this.link = online?.link ?? null;
     this.myId = online ? online.link.id : 'p1';
     const profile = settings.value.profile;
