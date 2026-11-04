@@ -62,6 +62,7 @@ export class Casings {
   clear(): void {
     this.items.length = 0;
     this.mesh.count = 0;
+    this.mesh.visible = false;
   }
 
   update(dt: number): void {
@@ -106,6 +107,7 @@ export class Casings {
       this.mesh.setColorAt(i, c.shell ? this.hull : this.brass);
     }
     this.mesh.count = n;
+    this.mesh.visible = n > 0;
     if (n === 0) return;
     // Only the live slots go to the GPU, not the whole pool.
     const color = this.mesh.instanceColor;

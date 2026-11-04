@@ -77,6 +77,7 @@ export class WoodDebris {
   clear(): void {
     this.items.length = 0;
     this.mesh.count = 0;
+    this.mesh.visible = false;
   }
 
   update(dt: number): void {
@@ -124,6 +125,7 @@ export class WoodDebris {
       this.mesh.setColorAt(i, c.color);
     }
     this.mesh.count = n;
+    this.mesh.visible = n > 0;
     if (n === 0) return;
     // Only the live slots go to the GPU, not the whole pool.
     const color = this.mesh.instanceColor;

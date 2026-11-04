@@ -248,6 +248,7 @@ export class DecalBatch {
     this.tint[i * 4 + 2] = b;
     this.tint[i * 4 + 3] = alpha;
     this.mesh.count = Math.max(this.mesh.count, i + 1);
+    this.mesh.visible = true;
     (this.mesh.geometry.getAttribute('iCell') as THREE.BufferAttribute).needsUpdate = true;
     this.mesh.instanceMatrix.needsUpdate = true;
   }
@@ -255,6 +256,7 @@ export class DecalBatch {
   clear(): void {
     for (const s of this.slots) s.active = false;
     this.mesh.count = 0;
+    this.mesh.visible = false;
     this.next = 0;
   }
 

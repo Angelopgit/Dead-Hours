@@ -192,6 +192,7 @@ export class ParticleBatch {
   clear(): void {
     this.count = 0;
     this.geometry.instanceCount = 0;
+    this.mesh.visible = false;
   }
 
   update(dt: number): void {
@@ -239,7 +240,9 @@ export class ParticleBatch {
     }
     const g = this.geometry;
     g.instanceCount = n;
-    // Nothing to send when empty: a zero-length update range would make three upload the whole pool.
+    // Empty: not drawn (three would still bind its program and uniforms in every pass), and nothing to
+    // send (a zero-length update range would make three upload the whole pool).
+    this.mesh.visible = n > 0;
     if (n === 0) return;
     for (const name of ['iPos', 'iVel', 'iColor', 'iParams']) {
       const a = g.getAttribute(name) as THREE.InstancedBufferAttribute;

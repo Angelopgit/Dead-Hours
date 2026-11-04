@@ -114,10 +114,16 @@ console.log('Custom shaders keep their programs from night to night');
   else ok('one copy per shader, compiled on an object that uses it; the night keeps its own material; later nights add none');
 }
 
-console.log('Empty effect pools send nothing to the GPU');
+console.log('Empty effect pools send nothing to the GPU and are not drawn');
 {
   // three reads an update range of length 0 as "to the end of the array" (WebGL's bufferSubData), so a pool with
   // nothing live re-sent its whole buffer every frame: about 350 KB a frame on a quiet night, all of it unused.
+  // And drawn empty, each pool still had three bind its program and uniforms in every pass (22 draws a frame).
+  const shown = (root: THREE.Object3D) => {
+    let n = 0;
+    root.traverse((o) => { if ((o as THREE.Mesh).isMesh && o.visible) n++; });
+    return n;
+  };
   const instanced = (root: THREE.Object3D) => {
     const out: { name: string; a: THREE.BufferAttribute }[] = [];
     root.traverse((o) => {
@@ -156,8 +162,10 @@ console.log('Empty effect pools send nothing to the GPU');
     const sent = attrs.filter(({ a }, i) => a.version !== before[i]).map(({ name }) => name);
     if (!attrs.length) bad ||= `found no instanced buffers on the ${pool.name}`;
     else if (sent.length) bad ||= `the empty ${pool.name} pool flagged ${sent.join(', ')} for upload`;
+    else if (shown(pool.root)) bad ||= `the empty ${pool.name} pool is still drawn`;
     pool.add();
     pool.step();
+    if (!shown(pool.root)) bad ||= `the ${pool.name} pool is not drawn with something live in it`;
     // With something live, the update covers just the live slots, never an open-ended range.
     for (const { name, a } of attrs) {
       if (a.version === before[attrs.findIndex((x) => x.a === a)]) continue;
@@ -167,7 +175,7 @@ console.log('Empty effect pools send nothing to the GPU');
     if (attrs.every(({ a }, i) => a.version === before[i])) bad ||= `the ${pool.name} pool sent nothing with something live in it`;
   }
   if (bad) fail(bad);
-  else ok(`${pools.map((p) => p.name).join(', ')}: nothing sent while empty, only the live slots once something is in them`);
+  else ok(`${pools.map((p) => p.name).join(', ')}: not drawn and nothing sent while empty, drawn with only the live slots sent once something is in them`);
 }
 
 if (failures) {
