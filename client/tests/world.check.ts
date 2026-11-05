@@ -528,10 +528,11 @@ console.log('The opening shot keeps clear of the poles, streetlights and wires')
   else console.log(`  ok   ${s.d.toFixed(1)} m from the nearest pole or streetlight (${s.what}), ${w.d.toFixed(1)} m from the wires (${solid.length / 2} poles and lights, ${wires.length} wire pieces)`);
 }
 
-console.log('Wind-blown leaves stay out of the houses');
+console.log('Wind-blown leaves and fog wisps stay out of the houses');
 {
   // The leaves drift in a 60 m box around the survivor and knew nothing of walls: standing in a house, two or three
   // blew through the room at any moment (up to eight). Under a roof (the rain's cover map) they are hidden, as rain is.
+  // The fog wisps did the same (about one in the house you stand in), and one in a lit room greyed the whole view.
   const g2d: object = new Proxy({}, { get: () => () => g2d });
   (globalThis as { document?: unknown }).document ??= { createElement: () => ({ width: 0, height: 0, getContext: () => g2d }) };
   const { Atmosphere } = await import('../src/environment/Atmosphere');
@@ -571,9 +572,23 @@ console.log('Wind-blown leaves stay out of the houses');
     a.dispose();
   }
   weatherUniforms.uCover.value = null;
+  // A wisp is a billboard up to 21 m wide that reaches in through the walls, so its pixels are tested, in the shader:
+  // the patch has to land in three's sprite shader and read the rain's cover map.
+  const { patchWisp, WISP_ROOF } = await import('../src/environment/Atmosphere');
+  const lib = THREE.ShaderLib.sprite;
+  const sh = { vertexShader: lib.vertexShader, fragmentShader: lib.fragmentShader, uniforms: THREE.UniformsUtils.clone(lib.uniforms) } as THREE.WebGLProgramParametersWithUniforms;
+  const wisp = new THREE.SpriteMaterial();
+  patchWisp(wisp);
+  wisp.onBeforeCompile(sh, null as unknown as THREE.WebGLRenderer);
+  const twin = new THREE.SpriteMaterial();
+  patchWisp(twin);
+  const roofTest = `roof > ${WISP_ROOF.toFixed(1)} && vWispWorld.y < roof) diffuseColor.a = 0.0;`;
   if (leaks) fail(`${leaks} leaf frames inside a house; first: ${worst}`);
   else if (lost / total > 0.01) fail(`${(100 * lost / total).toFixed(1)}% of the leaves hidden out in the open (keep it under 1%)`);
-  else console.log(`  ok   none drawn inside a house over 4 minutes standing in three of them; ${(100 * lost / total).toFixed(2)}% hidden in the open`);
+  else if (!sh.vertexShader.includes('vWispWorld = (inverse(viewMatrix) * mvPosition).xyz;') || !sh.fragmentShader.includes(roofTest)) fail('the fog wisp roof test did not land in the sprite shader (three moved an include?)');
+  else if (sh.uniforms.uCover !== weatherUniforms.uCover || sh.uniforms.uCoverRect !== weatherUniforms.uCoverRect) fail('the fog wisps do not read the rain\'s cover map');
+  else if (wisp.customProgramCacheKey() === new THREE.SpriteMaterial().customProgramCacheKey() || wisp.customProgramCacheKey() !== twin.customProgramCacheKey()) fail('the fog wisps need one program of their own');
+  else console.log(`  ok   no leaf drawn inside a house over 4 minutes standing in three of them (${(100 * lost / total).toFixed(2)}% hidden in the open); fog wisps drop every pixel under a roof`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');

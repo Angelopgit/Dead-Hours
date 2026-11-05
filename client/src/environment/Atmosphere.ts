@@ -2,13 +2,40 @@ import * as THREE from 'three';
 import { createSoftSprite } from '../rendering/ProceduralTextures';
 import type { Quality } from '../core/Settings';
 import { coverAt } from './Rain';
+import { chain } from '../lighting/BakeShader';
+import { COVER, weatherUniforms } from '../lighting/WetShader';
 
 const WISPS: Record<Quality, number> = { low: 14, medium: 28, high: 44 };
 const LEAVES: Record<Quality, number> = { low: 60, medium: 140, high: 260 };
+/** Cover lower than this (a car, a fence) is not a roof to a fog wisp. */
+export const WISP_ROOF = 2.4;
 
 /**
- * Drifting ground fog wisps and wind-blown leaves that recycle around the focus point. A leaf under a
- * roof (the rain's cover map) is not drawn, so none blow through the rooms.
+ * A wisp is a billboard up to 21 m wide, so it drifted through the houses and reached in through their
+ * walls: one in a lit bedroom greyed the whole view (11 levels on average, up to 22). Each pixel of it
+ * under a roof (the rain's cover map) is dropped instead, so a room never has fog in it.
+ */
+export function patchWisp(mat: THREE.SpriteMaterial): void {
+  chain(mat, 'wisp-roof', (shader) => {
+    shader.uniforms.uCover = weatherUniforms.uCover;
+    shader.uniforms.uCoverRect = weatherUniforms.uCoverRect;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWispWorld;')
+      .replace('#include <logdepthbuf_vertex>', '#include <logdepthbuf_vertex>\n\tvWispWorld = (inverse(viewMatrix) * mvPosition).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWispWorld;\nuniform sampler2D uCover;\nuniform vec4 uCoverRect;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        {
+          vec2 cuv = (vWispWorld.xz - uCoverRect.xy) * uCoverRect.zw;
+          float roof = texture2D(uCover, cuv).r * ${(COVER.maxH + 4).toFixed(1)} - 4.0;
+          if (cuv.x > 0.0 && cuv.x < 1.0 && cuv.y > 0.0 && cuv.y < 1.0 && roof > ${WISP_ROOF.toFixed(1)} && vWispWorld.y < roof) diffuseColor.a = 0.0;
+        }`);
+  });
+}
+
+/**
+ * Drifting ground fog wisps and wind-blown leaves that recycle around the focus point. Neither is
+ * drawn under a roof (the rain's cover map), so none drift through the rooms.
  */
 export class Atmosphere {
   readonly group = new THREE.Group();
@@ -39,9 +66,11 @@ export class Atmosphere {
     }
     this.wisps = [];
     this.wispData = [];
-    const wispMat = () => new THREE.SpriteMaterial({
-      map: this.sprite, color: 0x8796ad, transparent: true, opacity: 0.075, depthWrite: false, fog: true,
-    });
+    const wispMat = () => {
+      const m = new THREE.SpriteMaterial({ map: this.sprite, color: 0x8796ad, transparent: true, opacity: 0.075, depthWrite: false, fog: true });
+      patchWisp(m);
+      return m;
+    };
     for (let i = 0; i < WISPS[this.quality]; i++) {
       const s = new THREE.Sprite(wispMat());
       const size = 9 + Math.random() * 12;
