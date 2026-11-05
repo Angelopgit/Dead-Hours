@@ -1,11 +1,15 @@
 import * as THREE from 'three';
 import { createSoftSprite } from '../rendering/ProceduralTextures';
 import type { Quality } from '../core/Settings';
+import { coverAt } from './Rain';
 
 const WISPS: Record<Quality, number> = { low: 14, medium: 28, high: 44 };
 const LEAVES: Record<Quality, number> = { low: 60, medium: 140, high: 260 };
 
-/** Drifting ground fog wisps and wind-blown leaves that recycle around the focus point. */
+/**
+ * Drifting ground fog wisps and wind-blown leaves that recycle around the focus point. A leaf under a
+ * roof (the rain's cover map) is not drawn, so none blow through the rooms.
+ */
 export class Atmosphere {
   readonly group = new THREE.Group();
   private wisps: THREE.Sprite[] = [];
@@ -125,6 +129,8 @@ export class Atmosphere {
       if (dz > 30) L.p.z -= 60; else if (dz < -30) L.p.z += 60;
       this.dummy.position.copy(L.p);
       this.dummy.rotation.copy(L.rot);
+      // They drift through walls, so indoors (two or three in the room at a time) they are hidden, as rain is.
+      this.dummy.scale.setScalar(L.p.y < coverAt(L.p.x, L.p.z) ? 0 : 1);
       this.dummy.updateMatrix();
       leaves.setMatrixAt(i, this.dummy.matrix);
     }

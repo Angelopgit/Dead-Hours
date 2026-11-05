@@ -4,11 +4,11 @@
  *
  * Covers spawn clearance, every doorway in both directions, every staircase both ways, the
  * safehouse routes, the backyard passages, routes into each district, door leaves blocking when
- * closed and clearing when open, furniture clipping into walls, and the flashlight turning down
- * near walls.
+ * closed and clearing when open, furniture clipping into walls, the flashlight turning down
+ * near walls, and the wind-blown leaves staying out of the houses.
  */
 import * as THREE from 'three';
-import { MAPLE_HOLLOW as map, OAK, PLAYER, propColliders } from '@dead-hours/shared';
+import { MAPLE_HOLLOW as map, OAK, PLAYER, STORY, houseTop, propColliders } from '@dead-hours/shared';
 import { Physics, initPhysics, RAPIER, GROUP, groups } from '../src/core/Physics';
 import { DoorSystem } from '../src/gameplay/Doors';
 import { Acoustics, type Space } from '../src/audio/Acoustics';
@@ -526,6 +526,54 @@ console.log('The opening shot keeps clear of the poles, streetlights and wires')
   if (s.d < 2) fail(`the opening shot passes ${s.d.toFixed(2)} m from ${s.what} at ${s.t.toFixed(1)} s (keep 2 m)`);
   else if (w.d < 1.5) fail(`the opening shot passes ${w.d.toFixed(2)} m from ${w.what} at ${w.t.toFixed(1)} s (keep 1.5 m)`);
   else console.log(`  ok   ${s.d.toFixed(1)} m from the nearest pole or streetlight (${s.what}), ${w.d.toFixed(1)} m from the wires (${solid.length / 2} poles and lights, ${wires.length} wire pieces)`);
+}
+
+console.log('Wind-blown leaves stay out of the houses');
+{
+  // The leaves drift in a 60 m box around the survivor and knew nothing of walls: standing in a house, two or three
+  // blew through the room at any moment (up to eight). Under a roof (the rain's cover map) they are hidden, as rain is.
+  const g2d: object = new Proxy({}, { get: () => () => g2d });
+  (globalThis as { document?: unknown }).document ??= { createElement: () => ({ width: 0, height: 0, getContext: () => g2d }) };
+  const { Atmosphere } = await import('../src/environment/Atmosphere');
+  const { buildCoverMap } = await import('../src/environment/Rain');
+  const { weatherUniforms } = await import('../src/lighting/WetShader');
+  weatherUniforms.uCover.value = buildCoverMap(map);
+  const rooms = map.houses.map((h) => ({ id: h.id, x0: h.x - h.w / 2, x1: h.x + h.w / 2, z0: h.z - h.d / 2, z1: h.z + h.d / 2, y0: h.slab ?? STORY.slab, y1: houseTop(h) }));
+  const m = new THREE.Matrix4(), p = new THREE.Vector3();
+  let leaks = 0, worst = '', lost = 0, total = 0;
+  for (const id of ['safehouse', 'house-sw', 'house-ne']) {
+    const h = map.houses.find((r) => r.id === id)!;
+    const focus = new THREE.Vector3(h.x, 0.3, h.z);
+    // Leaves resting on a sidewalk or a slab sit inside it (they rest at 2 to 5 cm): hidden or not, nobody sees them.
+    const near = map.solids.filter((s) => s.visible !== false && Math.abs(s.x - focus.x) < s.w / 2 + 32 && Math.abs(s.z - focus.z) < s.d / 2 + 32);
+    const buried = (q: THREE.Vector3) => near.some((s) => Math.abs(q.x - s.x) < s.w / 2 && Math.abs(q.y - s.y) < s.h / 2 && Math.abs(q.z - s.z) < s.d / 2);
+    const a = new Atmosphere();
+    a.setQuality('high', focus);
+    const leaves = a.group.children.find((c): c is THREE.InstancedMesh => (c as THREE.InstancedMesh).isInstancedMesh)!;
+    const data = (a as unknown as { leafData: { p: THREE.Vector3 }[] }).leafData;
+    for (let f = 0, t = 0; f < 30 * 90; f++) {
+      a.update(1 / 30, (t += 1 / 30), focus);
+      if (f < 30 * 10) continue;
+      for (let i = 0; i < leaves.count; i++) {
+        leaves.getMatrixAt(i, m);
+        total++;
+        // A hidden leaf has a zero scale (decompose() would report 1 for it).
+        if (m.elements[0] ** 2 + m.elements[1] ** 2 + m.elements[2] ** 2 === 0) {
+          const q = data[i].p;
+          if (f % 10 === 0 && !rooms.some((o) => q.x > o.x0 - 0.5 && q.x < o.x1 + 0.5 && q.z > o.z0 - 0.5 && q.z < o.z1 + 0.5) && !buried(q)) lost += 10;
+          continue;
+        }
+        p.setFromMatrixPosition(m);
+        const r = rooms.find((o) => p.x > o.x0 && p.x < o.x1 && p.z > o.z0 && p.z < o.z1 && p.y > o.y0 && p.y < o.y1);
+        if (r) { leaks++; worst ||= `a leaf drawn inside ${r.id} at (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}) standing in ${id}`; }
+      }
+    }
+    a.dispose();
+  }
+  weatherUniforms.uCover.value = null;
+  if (leaks) fail(`${leaks} leaf frames inside a house; first: ${worst}`);
+  else if (lost / total > 0.01) fail(`${(100 * lost / total).toFixed(1)}% of the leaves hidden out in the open (keep it under 1%)`);
+  else console.log(`  ok   none drawn inside a house over 4 minutes standing in three of them; ${(100 * lost / total).toFixed(2)}% hidden in the open`);
 }
 
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');

@@ -50,6 +50,19 @@ export function buildCoverMap(map: MapDefinition): THREE.DataTexture {
 }
 
 /**
+ * The height of the cover over (x, z), read on the CPU the way the rain shader reads it: -Infinity off
+ * the map or before a cover map is built. The wind-blown leaves hide below it.
+ */
+export function coverAt(x: number, z: number): number {
+  const img = (weatherUniforms.uCover.value as THREE.DataTexture | null)?.image as { data?: Uint8Array; width: number; height: number } | undefined;
+  if (!img?.data) return -Infinity;
+  const r = weatherUniforms.uCoverRect.value;
+  const u = (x - r.x) * r.z, v = (z - r.y) * r.w;
+  if (!(u > 0 && u < 1 && v > 0 && v < 1)) return -Infinity;
+  return (img.data[(Math.floor(v * img.height) * img.width + Math.floor(u * img.width)) * 4] / 255) * (COVER.maxH + 4) - 4;
+}
+
+/**
  * GPU rain: thin streaks that live in a box around the camera and fall, wrap and drift entirely in
  * the vertex shader (no per-frame CPU work). Drops stop under roofs (cover map), fade with distance
  * and catch the light of nearby lamps and the flashlight, which is what makes rain visible at night.
