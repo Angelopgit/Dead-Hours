@@ -147,6 +147,13 @@ const FRAG = /* glsl */ `
 
 interface Slot { born: number; life: number; grow: number; size: number; alpha: number; active: boolean }
 
+/** Queues slots lo..hi of an instanced attribute for upload, rather than the whole pool's buffer. */
+function sendSlots(a: THREE.BufferAttribute, lo: number, hi = lo): void {
+  if (hi < lo) return;
+  a.addUpdateRange(lo * a.itemSize, (hi - lo + 1) * a.itemSize);
+  a.needsUpdate = true;
+}
+
 /**
  * Surface marks (bullet holes, blood splatter, pools) as instanced quads that darken what is
  * under them (multiply blending). A fixed ring of slots: new marks recycle the oldest, and
@@ -168,6 +175,9 @@ export class DecalBatch {
   private readonly s = new THREE.Vector3();
   private readonly n = new THREE.Vector3();
   private readonly z = new THREE.Vector3(0, 0, 1);
+  private readonly e = new THREE.Vector3();
+  private readonly qd = new THREE.Quaternion();
+  private readonly sc = new THREE.Vector3();
 
   constructor(private readonly maxCapacity: number) {
     this.capacity = maxCapacity;
@@ -198,6 +208,7 @@ export class DecalBatch {
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 1;
     this.mesh.count = 0;
+    this.mesh.visible = false;
     for (let i = 0; i < maxCapacity; i++) {
       this.slots.push({ born: 0, life: 0, grow: 0, size: 0, alpha: 0, active: false });
       this.matrices.push(new THREE.Matrix4());
@@ -249,8 +260,10 @@ export class DecalBatch {
     this.tint[i * 4 + 3] = alpha;
     this.mesh.count = Math.max(this.mesh.count, i + 1);
     this.mesh.visible = true;
-    (this.mesh.geometry.getAttribute('iCell') as THREE.BufferAttribute).needsUpdate = true;
-    this.mesh.instanceMatrix.needsUpdate = true;
+    // Only this slot goes to the GPU: the whole pool was 42 KB with every mark (bullet holes come a dozen a second).
+    sendSlots(this.mesh.geometry.getAttribute('iCell') as THREE.BufferAttribute, i);
+    sendSlots(this.mesh.geometry.getAttribute('iTint') as THREE.BufferAttribute, i);
+    sendSlots(this.mesh.instanceMatrix, i);
   }
 
   clear(): void {
@@ -262,23 +275,22 @@ export class DecalBatch {
 
   update(dt: number): void {
     this.time += dt;
-    let matrices = false;
-    const e = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    // Only the span of marks that changed this frame (fading out, or a pool still spreading) is sent: the
+    // whole tint buffer went up every frame, 8 KB, mostly unchanged and all of it with no marks at all.
+    let tintLo = Infinity, tintHi = -1, matLo = Infinity, matHi = -1;
+    const e = this.e, q = this.qd, sc = this.sc;
     for (let i = 0; i < this.mesh.count; i++) {
       const s = this.slots[i];
-      if (!s.active) {
-        this.tint[i * 4 + 3] = 0;
-        continue;
-      }
       const age = this.time - s.born;
-      if (age >= s.life) {
-        s.active = false;
-        this.tint[i * 4 + 3] = 0;
-        continue;
+      if (s.active && age >= s.life) s.active = false;
+      // As stored (32-bit), or every steady mark would read as changed.
+      const alpha = Math.fround(s.active ? s.alpha * Math.min(1, (s.life - age) / Math.min(4, s.life * 0.3)) : 0);
+      if (this.tint[i * 4 + 3] !== alpha) {
+        this.tint[i * 4 + 3] = alpha;
+        tintLo = Math.min(tintLo, i);
+        tintHi = i;
       }
-      const fade = Math.min(1, (s.life - age) / Math.min(4, s.life * 0.3));
-      this.tint[i * 4 + 3] = s.alpha * fade;
-      if (s.grow > 0 && age < s.grow + 0.1) {
+      if (s.active && s.grow > 0 && age < s.grow + 0.1) {
         const k = Math.min(1, age / s.grow);
         const grow = 1 - (1 - k) * (1 - k);
         const m = this.matrices[i];
@@ -286,12 +298,12 @@ export class DecalBatch {
         const size = s.size * Math.max(0.05, grow);
         m.compose(e, q, sc.set(size, size, 1));
         this.mesh.setMatrixAt(i, m);
-        matrices = true;
+        matLo = Math.min(matLo, i);
+        matHi = i;
       }
     }
-    const t = this.mesh.geometry.getAttribute('iTint') as THREE.BufferAttribute;
-    t.needsUpdate = true;
-    if (matrices) this.mesh.instanceMatrix.needsUpdate = true;
+    sendSlots(this.mesh.geometry.getAttribute('iTint') as THREE.BufferAttribute, tintLo, tintHi);
+    sendSlots(this.mesh.instanceMatrix, matLo, matHi);
   }
 
   dispose(): void {

@@ -12,6 +12,7 @@ import { VolumeBatch } from '../src/effects/Volume';
 import { Flames } from '../src/effects/Flames';
 import { Casings } from '../src/effects/Casings';
 import { WoodDebris } from '../src/effects/WoodDebris';
+import { DecalBatch } from '../src/effects/Decals';
 import { patchWire, WIRE_MIN_PX, WIRE_RADIUS } from '../src/environment/Wires';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -141,6 +142,10 @@ console.log('Empty effect pools send nothing to the GPU and are not drawn');
   const v3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
   const particles = new ParticleBatch(300, false), volume = new VolumeBatch(200, false), flames = new Flames(300, 24);
   const casings = new Casings(40), wood = new WoodDebris(40);
+  // The decal atlas is drawn on a canvas: a stand-in that takes every call is enough here.
+  const g2d: object = new Proxy({}, { get: () => () => g2d });
+  (globalThis as { document?: unknown }).document ??= { createElement: () => ({ width: 0, height: 0, getContext: () => g2d }) };
+  const decals = new DecalBatch(520);
   const cam = new THREE.PerspectiveCamera();
   let lit = false;
   const pools: { name: string; root: THREE.Object3D; step: () => void; add: () => void; live: number }[] = [
@@ -154,6 +159,8 @@ console.log('Empty effect pools send nothing to the GPU and are not drawn');
       add: () => casings.eject(v3(0, 1, 0), v3(1, 0, 0), 0, false, v3()) },
     { name: 'wood debris', root: wood.mesh, step: () => wood.update(1 / 60), live: 2,
       add: () => wood.burst(v3(0, 1, 0), v3(1, 0, 0), v3(0, 0, 1), 0.2, 0.2, 2) },
+    { name: 'decals', root: decals.mesh, step: () => decals.update(1 / 60), live: 1,
+      add: () => decals.add(0, v3(0, 0, 0), v3(0, 1, 0), 0.2, 0.2, 0.2, 0.2, 0.85, 30) },
   ];
   let bad = '';
   for (const pool of pools) {
@@ -175,8 +182,21 @@ console.log('Empty effect pools send nothing to the GPU and are not drawn');
     }
     if (attrs.every(({ a }, i) => a.version === before[i])) bad ||= `the ${pool.name} pool sent nothing with something live in it`;
   }
+  // Decals stay on for half a minute and more: a steady mark sends nothing again until it fades (the whole
+  // 8 KB tint buffer went up every frame), and a frame of fading marks sends one span, not the pool.
+  const tint = decals.mesh.geometry.getAttribute('iTint') as THREE.BufferAttribute;
+  decals.add(0, v3(1, 0, 0), v3(0, 1, 0), 0.2, 0.2, 0.2, 0.2, 0.7, 30);
+  decals.add(0, v3(2, 0, 0), v3(0, 1, 0), 0.2, 0.2, 0.2, 0.2, 0.6, 30);
+  decals.update(1 / 60);
+  for (const a of [tint, decals.mesh.instanceMatrix]) a.clearUpdateRanges();
+  const steady = tint.version;
+  for (let i = 0; i < 60; i++) decals.update(1 / 60);
+  if (tint.version !== steady || tint.updateRanges.length) bad ||= `steady decals sent their tint again (${JSON.stringify(tint.updateRanges)})`;
+  decals.update(27);
+  const r = tint.updateRanges;
+  if (r.length !== 1 || r[0].start !== 0 || r[0].count !== 3 * 4) bad ||= `three fading decals sent ${JSON.stringify(r)}, not one span of 3 slots`;
   if (bad) fail(bad);
-  else ok(`${pools.map((p) => p.name).join(', ')}: not drawn and nothing sent while empty, drawn with only the live slots sent once something is in them`);
+  else ok(`${pools.map((p) => p.name).join(', ')}: not drawn and nothing sent while empty, drawn with only the live slots sent once something is in them; steady decals send nothing`);
 }
 
 console.log('Power lines stay at least a pixel wide');
