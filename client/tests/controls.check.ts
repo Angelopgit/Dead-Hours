@@ -322,6 +322,13 @@ check(none === null, 'nothing near: full speed');
   check(/h\('span', \{ class: 'upright' \}, ' Turn your phone sideways\.'\)/.test(menu) && prop('.menu-hint .upright', 'display') === 'none'
     && /@media \(orientation: portrait\) \{ \.menu-hint \.upright \{ display: inline; \} \}/.test(css),
     'touch: the menu asks to turn the screen sideways only while it is upright');
+  // Settings on an upright phone (390 px): beside the 220 px controls each label got about 46 px and its hint one word
+  // a line, and the fifth tab ran off the panel. The one-column rule sat above the .row rules it meant to override.
+  const narrow = css.search(/@media \(max-width: 480px\) \{\s*\.row, \.row:has\(\.mic-test\), \.row:has\(\.stick-zone\) \{ grid-template-columns: 1fr;/);
+  const rowRules = [...css.matchAll(/(?:^|[\n}])\s*\.row(?::has\(\.(?:mic-test|stick-zone)\))?\s*\{[^}]*grid-template-columns/g)].map((m) => m.index ?? 0);
+  check(narrow > 0 && rowRules.length >= 3 && rowRules.every((i) => i < narrow)
+    && /@media \(max-width: 480px\) \{[^@]*\.tabs \{ flex-wrap: wrap;/.test(css),
+    `settings lay out in one column on upright phones and the tabs wrap (${rowRules.length} row rules before it)`);
   // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
   // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
   // to the stylesheet and the column lifts clear.

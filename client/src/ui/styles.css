@@ -178,7 +178,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .logo { font-size: 3.8em; }
   .menu-main { left: max(16px, 6vw); }
   .panel { right: 50%; transform: translate(50%, -50%); padding: 1.4em 1.2em; }
-  .row { grid-template-columns: 1fr; }
   .weapons { grid-template-columns: 1fr; }
   .menu-footer { left: max(16px, 6vw); }
 }
@@ -810,6 +809,15 @@ body.pad-nav .pad-hints.show { display: flex; }
 .mic-meter-row output { min-width: 5.5em; font-size: 0.8em; color: var(--fg-dim); }
 .mic-meter i.past { background: var(--accent); }
 .row:has(.stick-zone) { grid-template-columns: 1fr auto; }
+/* Phones held upright: beside the 220px controls a label got about 46px and its hint one word a line (the narrow
+   rule sat above the .row rule, so it never applied; phones on their side read better in two columns anyway). One
+   column there, after every .row rule so it wins (a tick box is 22px, so its row keeps the box beside the label),
+   and the tabs wrap instead of running off the panel. */
+@media (max-width: 480px) {
+  .row, .row:has(.mic-test), .row:has(.stick-zone) { grid-template-columns: 1fr; gap: 0.5em; }
+  .row:has(> .toggle) { grid-template-columns: 1fr auto; }
+  .tabs { flex-wrap: wrap; column-gap: 1.2em; }
+}
 .pad-key { justify-self: end; width: 7em; display: inline-flex; align-items: center; justify-content: center; min-height: 2.2em; }
 .pad-key .pb { font-size: 1.05em; }
 .pad-move-hint { margin: 0.2em 0 0.4em; }
