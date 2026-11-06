@@ -209,7 +209,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .row label { color: var(--fg-dim); font-size: 0.95em; }
 .row .hint { display: block; color: var(--fg-faint); font-size: 0.78em; margin-top: 0.2em; }
 .seg { display: flex; border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
-.seg button { flex: 1; padding: 0.45em 0; font-size: 0.78em; letter-spacing: 0.03em; color: var(--fg-faint); text-transform: uppercase; transition: background 0.2s, color 0.2s; }
+.seg button { flex: 1; padding: 0.45em 0.6em; font-size: 0.78em; letter-spacing: 0.03em; color: var(--fg-faint); text-transform: uppercase; transition: background 0.2s, color 0.2s; }
+/* The control column is 220px; long labels (the controller's five button styles) widen it rather than run into each
+   other: at 100% UI scale NINTENDO and GENERIC touched their borders, at 140% the row read AUTOXBOX PS NINTENDOGENERIC.
+   Narrow windows keep their single column. */
+@media (min-width: 721px) { .row:has(> .seg) { grid-template-columns: 1fr minmax(220px, auto); } }
 .seg button:hover { color: var(--fg-dim); }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--fg); color: #17120b; font-weight: 600; }
