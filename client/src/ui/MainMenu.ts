@@ -106,7 +106,7 @@ export class MainMenu {
       h('div', { class: 'menu-shade' }),
       this.main,
       h('div', { class: 'menu-footer' }, `Build ${GAME.version}`),
-      h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'Touch controls on. Turn your phone sideways.'), 'Best with headphones.'),
+      h('div', { class: 'menu-hint' }, h('span', { class: 'touch' }, 'Touch controls on.', h('span', { class: 'upright' }, ' Turn your phone sideways.')), 'Best with headphones.'),
     );
     window.addEventListener('keydown', this.onKey);
     this.sizes?.observe(this.el);

@@ -317,6 +317,11 @@ check(none === null, 'nothing near: full speed');
   const menu = readFileSync(new URL('../src/ui/MainMenu.ts', import.meta.url), 'utf8');
   check(/new ResizeObserver\(\(\) => this\.coverMenu\(\)\)/.test(menu) && /\.observe\(this\.el\)/.test(menu) && /\.observe\(el\)/.test(menu),
     'the main menu re-checks whether a panel covers it when the window or the panel changes size');
+  // The touch hint said "Turn your phone sideways." to tablets already on their side (1024x768, 1024x600; phones on
+  // their side hide the hint): that sentence shows only while the screen is upright.
+  check(/h\('span', \{ class: 'upright' \}, ' Turn your phone sideways\.'\)/.test(menu) && prop('.menu-hint .upright', 'display') === 'none'
+    && /@media \(orientation: portrait\) \{ \.menu-hint \.upright \{ display: inline; \} \}/.test(css),
+    'touch: the menu asks to turn the screen sideways only while it is upright');
   // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
   // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
   // to the stylesheet and the column lifts clear.
