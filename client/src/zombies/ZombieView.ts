@@ -141,6 +141,8 @@ export class ZombieView {
 
   private build(kind: ZombieKind, look: number): { body: Humanoid; probe: DynamicProbe } {
     const body = new Humanoid(zombieLookOf(kind === 'crawler' ? 'walker' : kind, look));
+    // Its wounds' vertex lists too, so warm() covers them (the first wound on each look cost 5-20 ms mid-night).
+    body.prepareWounds();
     const probe = new DynamicProbe(this.field, 0.3 + Math.random() * 0.1);
     probe.attach(body.surfaces());
     return { body, probe };

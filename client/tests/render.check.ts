@@ -14,6 +14,8 @@ import { Casings } from '../src/effects/Casings';
 import { WoodDebris } from '../src/effects/WoodDebris';
 import { DecalBatch } from '../src/effects/Decals';
 import { patchWire, WIRE_MIN_PX, WIRE_RADIUS } from '../src/environment/Wires';
+import { Humanoid, zombieLookOf } from '../src/characters/Humanoid';
+import { BONE_COUNT } from '../src/characters/rig';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -230,6 +232,37 @@ console.log('Power lines stay at least a pixel wide');
   const near = WIRE_RADIUS / (WIRE_MIN_PX * want);
   if (bad) fail(bad);
   else ok(`grown to ${WIRE_MIN_PX} px radius past ${near.toFixed(0)} m on a phone (${(near * 2).toFixed(0)} m at 1080p), untouched closer`);
+}
+
+console.log('Zombie looks are ready for wounds before the night');
+{
+  // The first wound on each look built its per-bone vertex lists by pushing every vertex onto growing arrays: 5-20 ms
+  // and over 1 MB of garbage, mid-night on that look's first spawn (warm() had built the body but not these).
+  let bad = '';
+  const view = readFileSync(new URL('../src/zombies/ZombieView.ts', import.meta.url), 'utf8');
+  if (!/private build\([^]*?new Humanoid\([^]*?body\.prepareWounds\(\);[^]*?return \{ body, probe \}/.test(view)) bad ||= 'ZombieView.build no longer prepares the wound lists (warm() builds every look through it)';
+  let looks = 0, verts = 0;
+  for (const [kind, n] of [['walker', 3], ['runner', 2], ['brute', 2]] as const) for (let i = 0; i < n; i++) {
+    const h = new Humanoid(zombieLookOf(kind, i));
+    const entry = (h as unknown as { body: { geometry: THREE.BufferGeometry; byBone?: Float32Array[] } }).body;
+    if (entry.byBone) { bad ||= `${kind} ${i}: lists built before prepareWounds`; continue; }
+    (h as { prepareWounds?: () => void }).prepareWounds?.();
+    // The same lists the old pushes built: each bone's bind-pose vertices, in order.
+    const pos = entry.geometry.getAttribute('position'), si = entry.geometry.getAttribute('skinIndex');
+    const want: number[][] = Array.from({ length: BONE_COUNT }, () => []);
+    for (let v = 0; v < pos.count; v++) want[si.getX(v)]?.push(pos.getX(v), pos.getY(v), pos.getZ(v));
+    const got = entry.byBone;
+    if (!got || got.length !== BONE_COUNT) { bad ||= `${kind} ${i}: no lists after prepareWounds`; continue; }
+    for (let b = 0; b < BONE_COUNT; b++) {
+      const w = Float32Array.from(want[b]);
+      if (got[b].length !== w.length || got[b].some((x, j) => x !== w[j])) bad ||= `${kind} ${i}: bone ${b} lists ${got[b].length / 3} vertices, not the ${w.length / 3} it holds`;
+    }
+    looks++;
+    verts += pos.count;
+    h.dispose();
+  }
+  if (bad) fail(bad);
+  else ok(`${looks} looks (${verts} vertices): built by ZombieView.build, so the loading warm-up covers them, and the same lists as before`);
 }
 
 if (failures) {

@@ -168,9 +168,23 @@ function verticesByBone(e: BodyEntry): Float32Array[] {
   if (e.byBone) return e.byBone;
   const pos = e.geometry.getAttribute('position');
   const si = e.geometry.getAttribute('skinIndex');
-  const lists: number[][] = Array.from({ length: BONE_COUNT }, () => []);
-  for (let i = 0; i < pos.count; i++) lists[si.getX(i)]?.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-  return (e.byBone = lists.map((l) => new Float32Array(l)));
+  // Counted, then filled in place: pushed onto growing arrays, a look's lists took 5-20 ms and over 1 MB of garbage.
+  const n = new Uint32Array(BONE_COUNT);
+  for (let i = 0; i < pos.count; i++) {
+    const b = si.getX(i);
+    if (b < BONE_COUNT) n[b]++;
+  }
+  const lists = Array.from(n, (c) => new Float32Array(c * 3));
+  n.fill(0);
+  for (let i = 0; i < pos.count; i++) {
+    const b = si.getX(i);
+    if (b >= BONE_COUNT) continue;
+    const l = lists[b], o = n[b]++ * 3;
+    l[o] = pos.getX(i);
+    l[o + 1] = pos.getY(i);
+    l[o + 2] = pos.getZ(i);
+  }
+  return (e.byBone = lists);
 }
 
 /** Close enough to the skin color to be skin (ears, nose and swollen guts are shaded from it). */
@@ -930,6 +944,14 @@ export class Humanoid {
     const p = this.toBind(world, zone, _a);
     if (!p) return;
     this.addHit(p, severity, false);
+  }
+
+  /**
+   * Builds the per-bone vertex lists that wounds are placed from (once per look), ahead of the first wound: left
+   * to the first spawn of each look, it landed mid-night, after the loading warm-up had built the body itself.
+   */
+  prepareWounds(): void {
+    if (this.decay) verticesByBone(this.body);
   }
 
   /** Older wounds it turned up with (already soaked through), placed by `seed`. */
