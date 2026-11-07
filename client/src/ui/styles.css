@@ -965,8 +965,13 @@ body.touch-play .spectate:not(.net-lost) { left: auto; right: calc(16px + env(sa
 
 /* Phones held upright: the game is played sideways. */
 @media (orientation: portrait) and (pointer: coarse) {
-  body.touch-play::after { content: 'TURN YOUR PHONE SIDEWAYS TO PLAY'; position: fixed; left: 0; right: 0; top: 0; z-index: 70; padding: 10px 16px;
+  body.touch-play { --turn-bar: calc(35px + env(safe-area-inset-top)); }
+  body.touch-play::after { content: 'TURN YOUR PHONE SIDEWAYS TO PLAY'; position: fixed; left: 0; right: 0; top: 0; z-index: 70; box-sizing: border-box;
+    height: var(--turn-bar); padding: calc(10px + env(safe-area-inset-top)) 16px 10px; line-height: 15px;
     text-align: center; font-family: var(--font-display); letter-spacing: 0.07em; font-size: 12px; color: #07090d; background: var(--accent); pointer-events: none; }
+  /* The survivor creator and the armory fill the screen from its top edge: the bar hid the creator's title, name box
+     and (on a tablet) DONE, and the top half of the armory's BACK. They start below it. */
+  body.touch-play .creator, body.touch-play .armory { top: var(--turn-bar); }
 }
 
 /* Phones on their side are short: a smaller title and a menu that scrolls instead of running off. */

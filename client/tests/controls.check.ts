@@ -335,6 +335,13 @@ check(none === null, 'nothing near: full speed');
     && /private closePanel\(\)[^]*?classList\.remove\('under-panel'\)[^]*?gsap\.to\(p,/.test(menu)
     && prop('.menu-hint.under-panel, .menu-footer.under-panel', 'visibility') === 'hidden',
     'the menu hint and build line hide while a panel runs over them');
+  // Held upright, "TURN YOUR PHONE SIDEWAYS TO PLAY" (35 px across the top) hid the creator's title and name box, DONE
+  // on a tablet, and half of the armory's BACK: the bar's height is one variable and both screens start below it.
+  const turn = css.match(/@media \(orientation: portrait\) and \(pointer: coarse\) \{([^@]*)\n\}/)?.[1] ?? '';
+  check(/body\.touch-play \{ --turn-bar: calc\(35px \+ env\(safe-area-inset-top\)\); \}/.test(turn)
+    && /body\.touch-play::after \{[^}]*box-sizing: border-box;[^}]*height: var\(--turn-bar\);/.test(turn)
+    && /body\.touch-play \.creator, body\.touch-play \.armory \{ top: var\(--turn-bar\); \}/.test(turn),
+    'touch: the survivor creator and the armory start below the turn-sideways bar on an upright screen');
   // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
   // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
   // to the stylesheet and the column lifts clear.
