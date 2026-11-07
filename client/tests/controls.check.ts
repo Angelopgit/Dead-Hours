@@ -329,6 +329,12 @@ check(none === null, 'nothing near: full speed');
   check(narrow > 0 && rowRules.length >= 3 && rowRules.every((i) => i < narrow)
     && /@media \(max-width: 480px\) \{[^@]*\.tabs \{ flex-wrap: wrap;/.test(css),
     `settings lay out in one column on upright phones and the tabs wrap (${rowRules.length} row rules before it)`);
+  // On an upright phone the Settings panel's bottom edge ran through "Touch controls on." (390x844, 360x780, 412x915):
+  // the hint and the build line hide while a panel crosses a line of them, and come back when it closes.
+  check(/private coverMenu\(\)[^]*?querySelectorAll\('\.menu-hint, \.menu-footer'\)\)[^\n]*toggle\('under-panel', panelCrossesText\(this\.panel, e\)\)/.test(menu)
+    && /private closePanel\(\)[^]*?classList\.remove\('under-panel'\)[^]*?gsap\.to\(p,/.test(menu)
+    && prop('.menu-hint.under-panel, .menu-footer.under-panel', 'visibility') === 'hidden',
+    'the menu hint and build line hide while a panel runs over them');
   // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
   // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
   // to the stylesheet and the column lifts clear.

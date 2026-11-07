@@ -141,6 +141,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 /* Only held upright: a tablet on its side (phones on their side hide the hint) was told to turn it sideways. */
 .menu-hint .upright { display: none; }
 @media (orientation: portrait) { .menu-hint .upright { display: inline; } }
+/* A panel whose box crosses a line of the hint or the build line (Settings on an upright phone) hides them. */
+.menu-hint.under-panel, .menu-footer.under-panel { visibility: hidden; }
 /* Each band of window heights lays the menu out for the window height that just fits it with PLAY open
    (--menu-fit, in px at 100% UI; the holiday logo's hat needs a bit more). A shorter window in the band
    shrinks the whole column, whose sizes are all in em, by the same share, so it still fits: a 1536x864

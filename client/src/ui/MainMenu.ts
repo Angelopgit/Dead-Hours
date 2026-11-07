@@ -1,6 +1,6 @@
 import gsap from 'gsap';
 import { GAME, type BeginMsg } from '@dead-hours/shared';
-import { h, panelCoversMenu } from './dom';
+import { h, panelCoversMenu, panelCrossesText } from './dom';
 import { SettingsPanel } from './SettingsPanel';
 import { LoadoutPanel } from './LoadoutPanel';
 import { CharacterCreator } from './CharacterCreator';
@@ -273,6 +273,9 @@ export class MainMenu {
   /** Dimmed menu words beside a panel read fine; words the panel slices through (phones, narrow windows) don't. */
   private coverMenu(): void {
     if (!this.panel) return;
+    // The hint and the build line sit low on the screen, and on an upright phone the Settings panel ran its bottom
+    // edge through "Touch controls on.": a line the panel crosses hides until the panel closes or shrinks.
+    for (const e of this.el.querySelectorAll('.menu-hint, .menu-footer')) e.classList.toggle('under-panel', panelCrossesText(this.panel, e));
     const covered = panelCoversMenu(this.panel, this.main, (e) => !this.playOpen && !!e.closest('.menu-sub'));
     if (covered === this.covered) return;
     this.covered = covered;
@@ -285,6 +288,7 @@ export class MainMenu {
     if (!p) return;
     this.panel = null;
     this.covered = null;
+    for (const e of this.el.querySelectorAll('.under-panel')) e.classList.remove('under-panel');
     this.sizes?.unobserve(p);
     this.panelDispose?.();
     this.panelDispose = null;

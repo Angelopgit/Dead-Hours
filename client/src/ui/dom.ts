@@ -38,6 +38,17 @@ export function panelCoversMenu(panel: HTMLElement, menu: HTMLElement, skip?: (e
   return false;
 }
 
+/** Does `panel`'s box cross a line of `el`'s text (a line it hides some of, or all)? */
+export function panelCrossesText(panel: HTMLElement, el: Element): boolean {
+  const p = panel.getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  for (const r of range.getClientRects()) {
+    if (r.width && r.right > p.left && r.left < p.right && r.bottom > p.top && r.top < p.bottom) return true;
+  }
+  return false;
+}
+
 /**
  * A row that scrolls sideways (the creator's category strip on a narrow window) moves with an ordinary mouse wheel
  * too: the browser scrolls such a row only for a sideways wheel or Shift, so with a mouse its last tabs were out of
