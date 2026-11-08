@@ -351,6 +351,13 @@ check(none === null, 'nothing near: full speed');
     .map(([desk, phone]) => [em(desk), phonePanel * em(phone)]);
   check(small.every(([desk, phone]) => phone >= desk * 0.98),
     `touch: the item counts and fire mode under the ammo are as big as on a desktop (${small.map(([d, p]) => `${p.toFixed(3)} vs ${d}`).join(', ')} em)`);
+  // A boost chip is a syringe and the time left. The needle pokes 4 px out of the syringe's box and the room for it
+  // was the name's margin, so on a phone (no name) it ran into the first digit, which was 7 px tall there.
+  const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
+  const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
+  const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');
+  check(needle > 0 && room >= needle && phoneTime >= em('.boost-chip') * 0.98,
+    `boost chips: the needle clears the time left (${room} px room for ${needle} px), as big on a phone as on a desktop (${phoneTime.toFixed(3)} em)`);
   // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
   // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
   // to the stylesheet and the column lifts clear.

@@ -325,10 +325,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .vitals .boosts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 0.7em; }
 .vitals .boosts:empty { display: none; }
 .boost-chip { --c: #fff; position: relative; overflow: hidden; display: flex; align-items: center; gap: 0.5em; padding: 0.3em 0.6em 0.4em 0.5em; background: rgba(8, 10, 12, 0.6); border-left: 2px solid var(--c); font-size: 0.66em; letter-spacing: 0.05em; color: var(--c); }
-.boost-chip .ico { position: relative; width: 13px; height: 5px; border-radius: 1px; background: var(--c); box-shadow: 0 0 5px var(--c); }
+.boost-chip .ico { position: relative; width: 13px; height: 5px; border-radius: 1px; background: var(--c); box-shadow: 0 0 5px var(--c);
+  margin-right: 4px; /* room for the needle, which pokes 4 px out of the box */ }
 .boost-chip .ico::before { content: ''; position: absolute; left: -5px; top: 2px; width: 5px; height: 1px; background: rgba(232, 230, 224, 0.85); }
 .boost-chip .ico::after { content: ''; position: absolute; right: -4px; top: 2px; width: 4px; height: 1px; background: rgba(200, 204, 208, 0.9); }
-.boost-chip .l { margin-left: 4px; }
 .boost-chip .t { color: var(--fg); opacity: 0.85; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
 .boost-chip .bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--c); opacity: 0.75; }
 .boost-chip.ending { animation: pulse 0.7s ease-in-out infinite; }
@@ -908,6 +908,8 @@ body.touch-play .vitals .boosts { position: absolute; left: calc(12px + env(safe
   flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; }
 body.touch-play .boost-chip { font-size: 0.6em; padding: 0.25em 0.45em 0.35em 0.4em; }
 body.touch-play .boost-chip .l { display: none; }
+/* Without the name the time left follows the syringe, at the desktop's letter size (7 px inside the smaller chip). */
+body.touch-play .boost-chip .t { font-size: 1.3em; }
 /* Ammo under the health bar (it follows the bar down when the serum's armor shows), narrow, so the timer's band
    between it and the feed stays wide. */
 body.touch-play .weapon-panel { bottom: auto; right: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));
