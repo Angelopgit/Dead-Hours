@@ -916,8 +916,11 @@ body.touch-play .weapon-panel { bottom: auto; right: auto; left: var(--col-l); t
 body.touch-play .weapon-panel .w-slots { display: none; }
 body.touch-play .weapon-panel .w-model { letter-spacing: 0.07em; }
 body.touch-play .weapon-panel .w-bar { width: 100%; max-width: 12em; margin-left: 0; }
-body.touch-play .weapon-panel .w-heal { margin-top: 0.45em; letter-spacing: 0.06em; }
-body.touch-play .weapon-panel .w-heal.w-throw { margin-top: 0.3em; }
+/* The item counts and the fire mode keep the desktop's letter size: inside the smaller panel they came to 6.7 px,
+   too small to read on a phone. */
+body.touch-play .weapon-panel .w-heal { margin-top: 0.34em; letter-spacing: 0.06em; font-size: 0.85em; }
+body.touch-play .weapon-panel .w-heal.w-throw { margin-top: 0.22em; }
+body.touch-play .weapon-panel .w-mode { font-size: 0.88em; }
 /* At the wheel the gauges take the ammo panel's place (the driver has no gun in hand); a passenger keeps the gun. */
 body.touch-play .hud.driving .weapon-panel, body.touch-play .hud.riding .car-panel { display: none !important; }
 body.touch-play .car-panel { bottom: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));

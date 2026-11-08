@@ -342,6 +342,15 @@ check(none === null, 'nothing near: full speed');
     && /body\.touch-play::after \{[^}]*box-sizing: border-box;[^}]*height: var\(--turn-bar\);/.test(turn)
     && /body\.touch-play \.creator, body\.touch-play \.armory \{ top: var\(--turn-bar\); \}/.test(turn),
     'touch: the survivor creator and the armory start below the turn-sideways bar on an upright screen');
+  // On a phone the ammo panel is 0.75 of the HUD's letter size, and the item counts (BANDAGE × 2, GRENADE × 2, …)
+  // and the fire mode kept the desktop's fraction inside it: 6.7 px letters, too small to read. They keep the
+  // desktop's size in HUD letters.
+  const em = (sel: string) => parseFloat(prop(sel, 'font-size') ?? 'NaN');
+  const phonePanel = em('body.touch-play .weapon-panel');
+  const small = [['.w-heal', 'body.touch-play .weapon-panel .w-heal'], ['.w-mode', 'body.touch-play .weapon-panel .w-mode']]
+    .map(([desk, phone]) => [em(desk), phonePanel * em(phone)]);
+  check(small.every(([desk, phone]) => phone >= desk * 0.98),
+    `touch: the item counts and fire mode under the ammo are as big as on a desktop (${small.map(([d, p]) => `${p.toFixed(3)} vs ${d}`).join(', ')} em)`);
   // Boost chips stack up over the health panel, and the online chat column sat at a fixed height above it: with
   // all five running it printed its lines over the chips (54 px deep at 1280x720). The HUD hands the panel's height
   // to the stylesheet and the column lifts clear.
