@@ -4,6 +4,7 @@ import { createLightConeMaterial } from '../environment/LightCone';
 import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
 import type { Physics } from '../core/Physics';
 import { Parachute } from './Parachute';
+import { settings } from '../core/Settings';
 
 /** Where the helicopter is along its flight, how it is tilted and how fast it goes. */
 export interface HeliPose {
@@ -89,6 +90,17 @@ function std(color: number, roughness = 0.65, metalness = 0.15, extra: THREE.Mes
   return new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true, ...extra });
 }
 
+/**
+ * A navigation light's level at `time`: on for `on` seconds of every `period`. With reduced flashing it swells and
+ * fades over the same period at half strength instead (the setting promises softened strobes; the white strobe
+ * blinked for 60 ms every 1.6 s through the whole supply run).
+ */
+export function navLight(time: number, period: number, on: number, reduced: boolean): number {
+  return reduced ? 0.25 - 0.25 * Math.cos((time / period) * Math.PI * 2) : time % period < on ? 1 : 0;
+}
+
+const BEACON = 0xff2010, STROBE = 0xffffff;
+
 /** A utility helicopter in drab paint, nose along +Z. */
 class Helicopter {
   readonly root = new THREE.Group();
@@ -171,8 +183,8 @@ class Helicopter {
     const glow = (c: number) => this.mat(new THREE.MeshBasicMaterial({ color: c }));
     add(new THREE.SphereGeometry(0.09, 6, 4), glow(0xff2a1a), 1.3, -0.4, 0.6);
     add(new THREE.SphereGeometry(0.09, 6, 4), glow(0x26ff5a), -1.3, -0.4, 0.6);
-    this.strobe = add(new THREE.SphereGeometry(0.1, 6, 4), glow(0xffffff), 0, 1.15, -8.95);
-    this.beacon = add(new THREE.SphereGeometry(0.13, 6, 4), glow(0xff2010), 0, 1.82, -1.6);
+    this.strobe = add(new THREE.SphereGeometry(0.1, 6, 4), glow(STROBE), 0, 1.15, -8.95);
+    this.beacon = add(new THREE.SphereGeometry(0.13, 6, 4), glow(BEACON), 0, 1.82, -1.6);
     this.lamp.position.set(0, -1.15, 2.4);
     this.body.add(this.lamp);
     this.root.add(this.body);
@@ -190,8 +202,14 @@ class Helicopter {
     this.spin += dt * 31;
     this.rotor.rotation.y = this.spin;
     this.tailRotor.rotation.x = this.spin * 4.6;
-    this.beacon.visible = time % 1.1 < 0.16;
-    this.strobe.visible = time % 1.6 < 0.06;
+    const reduced = settings.value.accessibility.reducedFlashing;
+    this.light(this.beacon, BEACON, navLight(time, 1.1, 0.16, reduced));
+    this.light(this.strobe, STROBE, navLight(time, 1.6, 0.06, reduced));
+  }
+
+  private light(mesh: THREE.Mesh, color: number, level: number): void {
+    mesh.visible = level > 0.01;
+    (mesh.material as THREE.MeshBasicMaterial).color.setHex(color).multiplyScalar(level);
   }
 
   dispose(): void {

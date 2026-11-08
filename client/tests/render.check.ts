@@ -16,6 +16,7 @@ import { DecalBatch } from '../src/effects/Decals';
 import { patchWire, WIRE_MIN_PX, WIRE_RADIUS } from '../src/environment/Wires';
 import { Humanoid, zombieLookOf } from '../src/characters/Humanoid';
 import { BONE_COUNT } from '../src/characters/rig';
+import { navLight } from '../src/gameplay/SupplyDrops';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -263,6 +264,32 @@ console.log('Zombie looks are ready for wounds before the night');
   }
   if (bad) fail(bad);
   else ok(`${looks} looks (${verts} vertices): built by ZombieView.build, so the loading warm-up covers them, and the same lists as before`);
+}
+
+console.log('Reduced flashing softens the supply helicopter\'s lights');
+{
+  // The setting promises softened strobes, but the helicopter's white strobe (60 ms every 1.6 s) and red beacon
+  // blinked hard through the whole supply run with it on.
+  let bad = '';
+  const drops = readFileSync(new URL('../src/gameplay/SupplyDrops.ts', import.meta.url), 'utf8');
+  if (!/const reduced = settings\.value\.accessibility\.reducedFlashing;\s*this\.light\(this\.beacon, BEACON, navLight\(time, 1\.1, 0\.16, reduced\)\);\s*this\.light\(this\.strobe, STROBE, navLight\(time, 1\.6, 0\.06, reduced\)\);/.test(drops)) bad ||= 'the helicopter no longer drives its beacon and strobe through navLight with the setting';
+  for (const [name, period, on] of [['beacon', 1.1, 0.16], ['strobe', 1.6, 0.06]] as const) {
+    let max = 0, jump = 0, lit = 0, prev = navLight(0, period, on, true);
+    const hard = new Set<number>();
+    for (let f = 1; f <= 600; f++) {
+      const t = f / 60, k = navLight(t, period, on, true);
+      max = Math.max(max, k);
+      jump = Math.max(jump, Math.abs(k - prev));
+      prev = k;
+      hard.add(navLight(t, period, on, false));
+      if (navLight(t, period, on, false) === 1) lit++;
+    }
+    if (max > 0.5 + 1e-9) bad ||= `${name}: reaches ${max.toFixed(2)} with reduced flashing (half strength at most)`;
+    if (jump > 0.05) bad ||= `${name}: jumps ${jump.toFixed(3)} between frames at 60 fps with reduced flashing`;
+    if (hard.size !== 2 || Math.abs(lit / 600 - on / period) > 0.02) bad ||= `${name}: no longer blinks as before with the setting off (lit ${(lit / 600).toFixed(3)} of the time)`;
+  }
+  if (bad) fail(bad);
+  else ok('beacon and strobe swell and fade at half strength (under 0.05 a frame at 60 fps) with reduced flashing, blink as before without');
 }
 
 if (failures) {
