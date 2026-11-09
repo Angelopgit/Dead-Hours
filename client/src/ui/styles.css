@@ -445,8 +445,9 @@ body.touch-play .goals { display: none !important; }
 .weapon.hover { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.035); }
 .panel .table-hint { font-size: 0.75em; color: var(--fg-faint); margin: 1.2em 0 0; }
 
-/* Inventory (hold Tab) */
-.inventory { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(5,7,10,0.55), rgba(5,7,10,0.85));
+/* Inventory (hold Tab). On a phone it covers the thumb buttons too, which were drawn over the cards' words; touches
+   still go through to them. */
+.inventory { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(5,7,10,0.55), rgba(5,7,10,0.85));
   pointer-events: none !important; font-family: var(--font-display); }
 .inventory * { pointer-events: none; }
 .inv-box { width: min(880px, 92vw); }

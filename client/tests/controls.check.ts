@@ -353,6 +353,11 @@ check(none === null, 'nothing near: full speed');
     `touch: the item counts and fire mode under the ammo are as big as on a desktop (${small.map(([d, p]) => `${p.toFixed(3)} vs ${d}`).join(', ')} em)`);
   // A boost chip is a syringe and the time left. The needle pokes 4 px out of the syringe's box and the room for it
   // was the name's margin, so on a phone (no name) it ran into the first digit, which was 7 px tall there.
+  // Held on a phone, the bag's cards sat under the thumb buttons (SWAP, RELOAD, MELEE, FIRE … over the melee card
+  // and the night's stats). The inventory covers them and lets touches through to them.
+  check(+(prop('.inventory', 'z-index') ?? 0) > +(prop('.touch-controls', 'z-index') ?? 0)
+    && prop('.inventory', 'pointer-events') === 'none !important' && prop('.inventory *', 'pointer-events') === 'none',
+    'touch: the held bag covers the thumb buttons and touches still reach them');
   const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
   const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
   const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');
