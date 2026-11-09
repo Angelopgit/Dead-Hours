@@ -208,7 +208,7 @@ export const DECAY_SURFACE = /* glsl */ `
 export const DECAY_BLOOD = /* glsl */ `
   if (uZ.w > 0.5 && uZBody > 0.5) {
     // Feeding: blood from the mouth down the chin and the front of the chest.
-    float yy = 1.67 - zp.y;  // the mouth (the head is drawn HEAD_K of its built size)
+    float yy = 1.662 - zp.y;  // the mouth (the head is drawn HEAD_K of its built size)
     float len = 0.14 + 0.32 * fract(uZ.x * 0.173);
     if (!zHard && yy > -0.012 && yy < len && zFront > 0.0) {
       vec4 mn = zN(vec3(zp.y * 7.0, uZ.x, 1.0));

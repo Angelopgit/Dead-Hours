@@ -204,7 +204,7 @@ function latheGeometry(rings: readonly Ring[], rk: number, inf: number, seg: num
  * The head and everything on it is drawn this much smaller than it is built (about the neck),
  * so bodies stand a little over seven heads tall.
  */
-export const HEAD_K = 0.92;
+export const HEAD_K = 0.8;
 
 /** How much of the jaw narrowing applies at head-space height y: none at the cheekbones, all of it at the chin. */
 const jawK = (y: number) => THREE.MathUtils.smoothstep(-y, -0.1, 0.005);

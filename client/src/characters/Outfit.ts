@@ -15,10 +15,13 @@ const BEND = 0.07;
 const ARM_UP: readonly Ring[] = [[0.015, 0.05], [-0.04, 0.057], [-0.11, 0.055, 0.002, 1], [-0.19, 0.049], [-0.25, 0.044, 0, 1], [-0.285, 0.042, 0, 1], [-0.31, 0.041]];
 /** Elbow to the wrist: the forearm's swell just below the elbow, thin at the wrist. */
 const ARM_LO: readonly Ring[] = [[0, 0.041], [-0.025, 0.043, 0, 1], [-0.07, 0.046], [-0.14, 0.041, 0, 1], [-0.22, 0.034], [-0.29, 0.03]];
-/** Hip to knee and knee to ankle, bare: a full thigh, a calf swelling out behind, slim ankles. */
+/**
+ * Hip to knee and knee to ankle, bare: a full thigh, a calf swelling out behind, slim ankles.
+ * The thigh is a real one's girth for the survivor's height (docs/art-style.md).
+ */
 const LEG_UP: Record<'male' | 'female', readonly Ring[]> = {
-  male: [[0.03, 0.078], [-0.05, 0.083, 0.004], [-0.16, 0.078, 0.005, 1], [-0.28, 0.068, 0.002], [-0.37, 0.059, 0, 1], [-0.41, 0.0555, 0, 1], [-0.44, 0.054]],
-  female: [[0.03, 0.084], [-0.05, 0.09, 0.004], [-0.16, 0.082, 0.005, 1], [-0.28, 0.068, 0.002], [-0.37, 0.057, 0, 1], [-0.41, 0.0535, 0, 1], [-0.44, 0.052]],
+  male: [[0.03, 0.087], [-0.05, 0.093, 0.004], [-0.16, 0.087, 0.005, 1], [-0.28, 0.074, 0.002], [-0.37, 0.059, 0, 1], [-0.41, 0.0555, 0, 1], [-0.44, 0.054]],
+  female: [[0.03, 0.09], [-0.05, 0.097, 0.004], [-0.16, 0.088, 0.005, 1], [-0.28, 0.072, 0.002], [-0.37, 0.057, 0, 1], [-0.41, 0.0535, 0, 1], [-0.44, 0.052]],
 };
 const LEG_LO: Record<'male' | 'female', readonly Ring[]> = {
   male: [[0, 0.054], [-0.03, 0.0555, -0.001, 1], [-0.08, 0.059, -0.005], [-0.15, 0.06, -0.007, 1], [-0.25, 0.049, -0.004], [-0.35, 0.04, 0, 1], [-0.44, 0.036]],
@@ -194,7 +197,7 @@ function seatBump(b: Body, x: number, y: number): number {
 }
 
 /** Pelvis width scale with the build (pants, belts). */
-const pelvisK = (b: Body) => 0.97 + (b.bx - 1) * 0.5;
+const pelvisK = (b: Body) => 1.055 + (b.bx - 1) * 0.5;
 
 /** Female pelvis half-width (x) at hip-space y: the hips flaring down, rounding under at the bottom. */
 function pelvisR(b: Body, y: number): number {
@@ -1019,6 +1022,10 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   return { rings: legs.lo, k: lk };
 }
 
+/** Shoe parts below this shin height are the foot, drawn this much longer (a real foot is 15% of a person's height). */
+const FOOT_TOP = -0.42;
+const FOOT_LENGTH = 1.12;
+
 function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body, shin: Shins): void {
   const hex = paletteColor('cloth', a.shoesColor);
   const sole = a.shoes === 'sneakers' || a.shoes === 'hightops' ? 0xe6e3dc : 0x1a1816;
@@ -1032,7 +1039,17 @@ function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body, shin: Shins):
     return m;
   };
   for (const s of [1, -1]) {
-    const lo = kit(s > 0 ? BONE.legLLower : BONE.legRLower);
+    const shinKit = kit(s > 0 ? BONE.legLLower : BONE.legRLower);
+    // Everything at foot height is drawn FOOT_LENGTH longer from the ankle: the shoes below were
+    // laid out for a foot an eighth shorter than a real one.
+    const lo: Kit = Object.create(shinKit, {
+      box: {
+        value: (c: number, size: [number, number, number], p: [number, number, number] = [0, 0, 0], ...rest: unknown[]) => {
+          const foot = p[1] < FOOT_TOP;
+          return (shinKit.box as (...args: unknown[]) => void).call(shinKit, c, foot ? [size[0], size[1], size[2] * FOOT_LENGTH] : size, foot ? [p[0], p[1], p[2] * FOOT_LENGTH] : p, ...rest);
+        },
+      },
+    }) as Kit;
     switch (a.shoes) {
       case 'sneakers':
         lo.box(hex, [0.1, 0.07, 0.23], [0, -0.47, 0.05]);

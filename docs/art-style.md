@@ -42,12 +42,12 @@ A full street is 90 x 4,200 = 380k zombie triangles; everything else on this pag
 | Model | From | Before | After |
 | --- | --- | --- | --- |
 | M4A1 | TM 9-1005-319-10: 838 mm stock out, 368 mm barrel | 556 triangles, 960 mm (15% long) | 3,158 triangles, 838 mm, 3 draw calls as before |
+| Survivors and zombies | body survey medians scaled to the survivor's height (recalled figures, not a looked-up table): head 13% smaller (`HEAD_K` 0.8), feet 12% longer (`FOOT_LENGTH`), thighs 12% fuller (`LEG_UP`), hips 9% wider (`pelvisK`) | head about 30% large, shoe 13.6% of the height | shoe 15.5% of the height; triangle counts unchanged |
 | Sedan, police car | hard points kept (4.4 m body, 2.7 m wheelbase, 1.86 m wide); outline of a mid-90s American sedan | 824 triangles, a box on octagons | 2,900 triangles, 1 draw call as before |
 
 Measured in the software renderer (SwiftShader, 1280x720, no GPU on the build machine, so read these as relative): the M4 over the shoulder costs 5% more of the frame than the old one, and 31% more down the sights, where the slimmer rifle also hides less of the arms behind it. The star flash and barrel smoke use the particle pools already in the scene. Models are code, so the download grew by the source of the kit and the outlines only.
 
 ## Next
 
-- Bodies: against a body survey (ANSUR II medians scaled to the survivor's height) the head is about 30% too large, the feet 12% short, the thighs 17% thin and the hips 9% narrow. `HEAD_K` in `OutfitKit.ts` is the head's one number.
 - The other guns in `check:models`' waiting list, worst first: M249 (+15%), Mk 14 (+11%), M17 (-6%).
 - Cars: a damage state per crash, exhaust, and the truck.

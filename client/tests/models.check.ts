@@ -69,6 +69,27 @@ for (const [name, look] of [['man', DEFAULT_APPEARANCE], ['woman', DEFAULT_FEMAL
   const c = count(new Humanoid(survivorLook(look)).root);
   check(c.tris <= BUDGET.survivor.tris && c.draws <= BUDGET.survivor.draws, `survivor (${name}): ${c.tris} triangles, ${c.draws} draw calls (budget ${BUDGET.survivor.tris}, ${BUDGET.survivor.draws})`);
 }
+// Proportions: a real foot is about 15% of a person's height (the shoe a little more).
+{
+  const bare = new Humanoid(survivorLook({ ...DEFAULT_APPEARANCE, headwear: 'none' }));
+  bare.root.updateMatrixWorld(true);
+  let top = 0, heel = Infinity, toe = -Infinity;
+  bare.root.traverse((o) => {
+    const m = o as THREE.SkinnedMesh;
+    if (!m.isSkinnedMesh) return;
+    const p = m.geometry.getAttribute('position'), bone = m.geometry.getAttribute('skinIndex');
+    for (let i = 0; i < p.count; i++) {
+      top = Math.max(top, p.getY(i));
+      // Left shin and foot (bone 8), below the ankle.
+      if (bone.getX(i) === 8 && p.getY(i) < 0.06) {
+        heel = Math.min(heel, p.getZ(i));
+        toe = Math.max(toe, p.getZ(i));
+      }
+    }
+  });
+  const ratio = (toe - heel) / top;
+  check(ratio > 0.145 && ratio < 0.165, `survivor: shoe ${((toe - heel) * 100).toFixed(1)} cm on a ${(top * 100).toFixed(0)} cm body, ${(ratio * 100).toFixed(1)}% of the height (a real one is 15 to 16%)`);
+}
 let sum = 0, worst = 0, draws = 0;
 const LOOKS = 30;
 for (let i = 0; i < LOOKS; i++) {
