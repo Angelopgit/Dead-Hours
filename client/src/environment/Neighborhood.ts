@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COURT, OAK, ownerAt, standsAfter, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
+import { COURT, OAK, lightOwner, standsAfter, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
 import { MaterialLibrary } from '../rendering/Materials';
 import { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
@@ -307,9 +307,8 @@ export class Neighborhood {
         this.buildFlicker(l);
         continue;
       }
-      // A building's lamps go down with it (not the cellar's).
-      const owner = ownerAt(this.map, l.x, l.z);
-      batch.begin(owner && l.y > (this.map.structures.find((s) => s.id === owner)?.base ?? 0) ? owner : null);
+      // A structure's lamps go down with it (not a cellar's).
+      batch.begin(lightOwner(this.map, l));
       if (l.fixture === 'bulb') {
         const g = new THREE.SphereGeometry(0.07, 8, 6);
         g.translate(l.x, l.y + 0.06, l.z);
@@ -347,6 +346,7 @@ export class Neighborhood {
     light.castShadow = false;
     this.root.add(light);
     const base = l.intensity;
+    const owner = lightOwner(this.map, l);
     let next = 1.5 + ((l.x * 7.3) % 3), until = 0, level = 1;
     this.dynamic.push({
       update: (_dt, t) => {
@@ -361,6 +361,10 @@ export class Neighborhood {
           level = 0.95 + Math.sin(t * 100) * 0.02;
         }
         if (settings.value.accessibility.reducedFlashing) level = 0.55 + level * 0.45;
+        // Out for good once its building is down.
+        const out = owner !== null && worldPieces.fallen.has(owner);
+        mesh.visible = !out;
+        if (out) level = 0;
         light.intensity = base * level;
         emitter.emissiveIntensity = 5 * level;
       },

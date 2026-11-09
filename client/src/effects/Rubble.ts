@@ -112,7 +112,7 @@ export class Rubble {
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
 
-  /** Lets a piece go: it falls, tumbles and lies where it stops. With too many falling already it is set down instead. */
+  /** Lets a piece go: it falls, tumbles and lies where it stops. With too many falling already it is left out. */
   drop(pos: THREE.Vector3, size: THREE.Vector3, quat: THREE.Quaternion, vel: THREE.Vector3, spin: THREE.Vector3, color: THREE.Color, tag = 0): void {
     if (this.live >= LIVE) return;
     const i = this.take();

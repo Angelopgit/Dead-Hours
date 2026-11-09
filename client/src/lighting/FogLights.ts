@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { MapDefinition } from '@dead-hours/shared';
+import { lightOwner, type MapDefinition } from '@dead-hours/shared';
+import { worldPieces } from '../environment/WorldPieces';
 import type { BakeTracer } from './BakeTracer';
 import { LIVE_FOG_LIGHTS, type FogLight } from '../rendering/SceneFX';
 import type { WetLamp } from './WetShader';
@@ -38,6 +39,8 @@ const CUT = 8;
 export class FogLights {
   private readonly statics: FogLight[] = [];
   private readonly power: number[] = [];
+  /** Per static lamp: the structure it goes out with (see worldPieces.fallen). */
+  private readonly owner: (string | null)[] = [];
   /** Per static lamp: how far it has faded into the fog (0..1), and whether it owns a slot. */
   private readonly weight: Float32Array;
   private readonly holds: Uint8Array;
@@ -75,6 +78,7 @@ export class FogLights {
       const color = new THREE.Color(l.color).multiplyScalar(l.intensity * STATIC_SCALE);
       this.statics.push({ pos, range: l.range, color, decay: l.decay ?? 2, dir, cosOuter, cosInner, box });
       this.power.push(color.r + color.g + color.b);
+      this.owner.push(lightOwner(map, l));
       // Outdoors when nothing is overhead: those lamps reflect in wet streets.
       if (!tracer.occluded(l.x, l.y + 0.3, l.z, 0, 1, 0, 60)) {
         this.outdoor.push({ pos, color: new THREE.Color(l.color).multiplyScalar(l.intensity), range: l.range, decay: l.decay ?? 2, dir, cosOuter });
@@ -125,7 +129,10 @@ export class FogLights {
 
     // Static lamps: the brightest `lamps` (holders get the HOLD edge) are wanted.
     this.ranked.length = 0;
+    const fallen = worldPieces.fallen;
     for (let i = 0; i < this.statics.length; i++) {
+      // A lamp whose building has come down is out: it loses its slot and fades.
+      if (fallen.size && this.owner[i] !== null && fallen.has(this.owner[i]!)) continue;
       let s = this.score(this.statics[i], this.power[i], cam);
       if (s <= 0) continue;
       if (this.holds[i]) s *= HOLD;

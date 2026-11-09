@@ -60,6 +60,14 @@ export function propOwner(map: MapDefinition, p: PropSpec): string | null {
   return (p.y ?? 0) >= s.base - 0.5 ? id : null;
 }
 
+/** The structure a lamp hangs in or under, above what stays of it: it goes out when that falls. */
+export function lightOwner(map: MapDefinition, l: { x: number; y: number; z: number }): string | null {
+  for (const s of map.structures) {
+    if (Math.abs(l.x - s.x) <= s.w / 2 && Math.abs(l.z - s.z) <= s.d / 2 && l.y > s.base && l.y <= s.top + 0.5) return s.id;
+  }
+  return null;
+}
+
 /** How far a point is from a part's box (0 inside it). */
 function distance(p: StructurePart, o: Vec3): number {
   const hx = p.kind === 'pillar' ? p.w / 2 : p.axis === 'x' ? p.w / 2 : STORY.wall / 2;
