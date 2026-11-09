@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { OAK, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
+import { COURT, OAK, ownerAt, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
 import { MaterialLibrary } from '../rendering/Materials';
 import { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
 import { BAKE_CELL, dressHouses } from './Houses';
+import { buildWaterTower } from './WaterTower';
 import { PropFactory, type PropBuildResult, type Updatable } from './Props';
 import { Trees, type TreeTier } from './trees/Trees';
 import { Sky } from './Sky';
@@ -89,10 +90,17 @@ export class Neighborhood {
       if (s.visible === false || s.mat === 'invisible') continue;
       const e = this.lib.get(s.mat);
       const ao = s.h > 0.5 ? { groundY: s.y - s.h / 2, strength: 0.4 } : null;
+      // What a structure is built of is grouped by its owner, so it can be taken out when it falls.
+      batch.begin(s.owner);
       batch.add(worldBox(s.x, s.y, s.z, s.w, s.h, s.d, e.texScale, ao, BAKE_CELL), e.material, s.h > 0.2, true);
     }
+    batch.end();
     this.buildRoadMarkings(batch);
     dressHouses(map, this.lib, batch);
+    batch.begin('water-tower');
+    const tower = buildWaterTower(this.lib, batch, this.root);
+    batch.end();
+    this.dynamic.push(tower);
     this.propFactory = new PropFactory(this.lib);
     this.props = this.propFactory.build(map, this.root, batch);
     this.dynamic.push(...this.props.dynamic);
@@ -242,13 +250,28 @@ export class Neighborhood {
     }
     // Pell Lane runs on past Kinney Street to the edge of the map.
     for (let z = -150; z < this.map.bounds.z1 + 25; z += 6) {
-      if ((z * 11) % 7 === 0 || Math.abs(z + 1.5) < 8 || Math.abs(z + 1.5 - OAK.z) < 8) continue;
+      if ((z * 11) % 7 === 0 || Math.abs(z + 1.5) < 8 || Math.abs(z + 1.5 - OAK.z) < 8 || Math.abs(z + 1.5 - COURT.z) < 8) continue;
       batch.add(worldBox(birch, 0.022, z + 1.5, 0.14, 0.004, 3, 1, null), paint, false);
     }
     // Kinney Street's centre line, from the junction to the dead end.
     for (let x = birch + 8; x < OAK.end - 4; x += 6) {
       if ((Math.round(x) * 17) % 7 === 0) continue;
       batch.add(worldBox(x + 1.5, 0.022, OAK.z, 3, 0.004, 0.14, 1, null), paint, false);
+    }
+    // Court Street's centre line, from the junction to the water tower's lot, and the parking lot's stalls.
+    for (let x = birch + 8; x < COURT.end - 3; x += 6) {
+      if ((Math.round(x) * 19) % 7 === 0) continue;
+      batch.add(worldBox(x + 1.5, 0.022, COURT.z, 3, 0.004, 0.14, 1, null), paint, false);
+    }
+    const lot = COURT.parking;
+    for (let x = lot.x0 + 4.5; x < lot.x1 - 1; x += 3) {
+      if (Math.abs(x - COURT.pathX) < 2 || (Math.round(x) * 5) % 11 === 0) continue;
+      batch.add(worldBox(x, 0.026, lot.z1 - 2.6, 0.12, 0.004, 5, 1, null), white, false);
+    }
+    batch.add(worldBox(birch + 7.4, 0.022, COURT.z + 2.25, 0.35, 0.004, 4.3, 1, null), white, false);
+    for (let i = 0; i < 9; i++) {
+      batch.add(worldBox(birch + 6.2, 0.022, COURT.z - 4 + i, 1.6, 0.004, 0.5, 1, null), white, false);
+      for (const side of [-1, 1]) batch.add(worldBox(birch - 4 + i, 0.022, COURT.z + side * 6.2, 0.5, 0.004, 1.6, 1, null), white, false);
     }
     // Stop lines and crosswalks at the Pell Lane intersection.
     batch.add(worldBox(birch + 2.25, 0.022, -5.6, 4.3, 0.004, 0.35, 1, null), white, false);
@@ -278,6 +301,7 @@ export class Neighborhood {
         this.buildFlicker(l);
         continue;
       }
+      batch.begin(ownerAt(this.map, l.x, l.z));
       if (l.fixture === 'bulb') {
         const g = new THREE.SphereGeometry(0.07, 8, 6);
         g.translate(l.x, l.y + 0.06, l.z);
@@ -292,6 +316,7 @@ export class Neighborhood {
         batch.add(worldBox(l.x, l.y + 0.03, l.z, 1.1, 0.04, 0.34, 1, null), panel, false, false);
       }
     }
+    batch.end();
   }
 
   /**

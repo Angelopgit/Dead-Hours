@@ -77,6 +77,11 @@ function roomsOf(map: MapDefinition, nav: NavGrid, physics: Physics): PickupRoom
       add('store', 'store', n);
       continue;
     }
+    // The hardware store and the army surplus: tools and blades among the stock.
+    if (house.melee) {
+      add(`store:${house.id}`, 'store', n);
+      continue;
+    }
     if (y < -1) {
       add(`basement:${house.id}`, 'basement', n);
       continue;

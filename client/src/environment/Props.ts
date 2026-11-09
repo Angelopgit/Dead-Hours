@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { VEHICLES, isDrivable, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
+import { VEHICLES, isDrivable, ownerAt, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
@@ -95,7 +95,10 @@ export class PropFactory {
         line.push(new THREE.Vector3(p.x, 0, p.z));
         poles.set(p.variant ?? 0, line);
       }
+      // Furniture goes down with the building it stands in.
+      batch.begin(ownerAt(map, p.x, p.z));
       batch.addObject(root);
+      batch.end();
       root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose(); });
       if (dynamicRoot.children.length) scene.add(dynamicRoot);
     }

@@ -3,6 +3,7 @@ import { MapBuilder, STORY, STREET, door, doorway, seededRandom, storeWin, upWin
 import { divider, fenceLine, streetlight } from './dressing';
 import { buildHome, type HomePlan } from './homes';
 import { OAK, oakClear, oakStreet } from './oak-street';
+import { COURT, downtown, downtownClear } from './downtown';
 
 /**
  * Vesper: a 250 x 300 m suburban neighbourhood on the edge of town.
@@ -11,7 +12,9 @@ import { OAK, oakClear, oakStreet } from './oak-street';
  * The safehouse sits on the north side of Hale, the gas station and the park on the east end,
  * the police checkpoint closes Hale to the west, gravel alleys run behind both rows of
  * backyards, and woods close the map to the north and south. Kinney Street, the next street over,
- * tees into Pell Lane 94 m south of Hale and shares Hale's south alley (oak-street.ts).
+ * tees into Pell Lane 94 m south of Hale and shares Hale's south alley (oak-street.ts). Court
+ * Street, the downtown block with its stores, square and water tower, tees in 86 m north of Hale
+ * (downtown.ts).
  *
  * Axes: +X east, +Z south, +Y up.
  */
@@ -41,8 +44,8 @@ function roads(b: MapBuilder): void {
     b.boxMinMax(x0, 0, RW, x1, CURB, RW + SW, 'sidewalk');
   }
   for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, farSouth]]) b.boxMinMax(BIRCH - RW - SW, 0, z0, BIRCH - RW, CURB, z1, 'sidewalk');
-  // The east side breaks for Kinney Street's junction as well as Hale's.
-  for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, OAK.z - RW - SW], [OAK.z + RW + SW, farSouth]]) {
+  // The east side breaks for Court Street's and Kinney Street's junctions as well as Hale's.
+  for (const [z0, z1] of [[-far, COURT.z - RW - SW], [COURT.z + RW + SW, -RW - SW], [RW + SW, OAK.z - RW - SW], [OAK.z + RW + SW, farSouth]]) {
     b.boxMinMax(BIRCH + RW, 0, z0, BIRCH + RW + SW, CURB, z1, 'sidewalk');
   }
   // Gravel back alleys behind both rows of backyards.
@@ -172,7 +175,7 @@ function home(b: MapBuilder, e: HomeEntry): void {
 function safehouse(b: MapBuilder): void {
   const spec: HouseSpec = {
     id: 'safehouse', x: 0, z: -20, w: 14, d: 10, floors: 2, facing: 'south', siding: 'sidingBeige',
-    roofColor: 0x2b2d33, enterable: true, litWindows: 1, seed: 7, label: 'THE SAFEHOUSE',
+    roofColor: 0x2b2d33, enterable: true, litWindows: 1, seed: 7, label: 'THE SAFEHOUSE', reinforced: true,
   };
   const F1 = STORY.slab;
   const F2 = STORY.slab + STORY.ground + STORY.floorThickness;
@@ -280,7 +283,7 @@ function safehouse(b: MapBuilder): void {
   const garage: HouseSpec = {
     id: 'garage', x: 10, z: -19.75, w: 6, d: 9.5, floors: 1, facing: 'south', siding: 'sidingBeige',
     roofColor: 0x2b2d33, enterable: true, litWindows: 1, seed: 8, slab: 0.22, groundHeight: 2.9,
-    roof: 'gable-z', skipWalls: ['west'], interior: 'concrete', floorMat: 'concrete', label: 'THE SAFEHOUSE',
+    roof: 'gable-z', skipWalls: ['west'], interior: 'concrete', floorMat: 'concrete', label: 'THE SAFEHOUSE', reinforced: true,
   };
   b.house(garage, { front: [door(0, 3.2, 'rollup', 2.5)], back: [], west: [], east: [door(-1.75, 1.0), win(1.8, 1.0)] }, null);
   b.boxMinMax(8.2, 0, -15, 11.8, 0.024, -7, 'concrete', { collide: false });
@@ -337,8 +340,10 @@ function houseNe(b: MapBuilder): void {
 function gasStation(b: MapBuilder): void {
   // Forecourt and canopy.
   b.boxMinMax(72, 0, -33, 110, 0.02, -7, 'concrete', { collide: false });
-  b.boxMinMax(81, 5.2, -22, 101, 5.6, -12, 'roofFlat');
-  for (const [x, z] of [[83, -14], [99, -14], [83, -20], [99, -20]]) b.boxMinMax(x - 0.25, 0, z - 0.25, x + 0.25, 5.2, z + 0.25, 'metal');
+  // The canopy stands on four steel columns: blow two out and it comes down.
+  b.structure({ id: 'gas-canopy', kind: 'canopy', x: 91, z: -17, w: 20, d: 10, top: 5.6, label: 'THE GAS STATION CANOPY' });
+  b.boxMinMax(81, 5.2, -22, 101, 5.6, -12, 'roofFlat', { owner: 'gas-canopy' });
+  for (const [x, z] of [[83, -14], [99, -14], [83, -20], [99, -20]]) b.pillar('gas-canopy', x, z, 0.5, 0, 5.2, 'metal');
   for (const ix of [86, 96]) {
     b.boxMinMax(ix - 0.6, 0, -20.5, ix + 0.6, 0.2, -13.5, 'curb');
     b.prop('pump', ix, -15.6, Math.PI / 2);
@@ -565,7 +570,7 @@ function woods(b: MapBuilder): void {
     if (r() < 0.12) return; // clearings
     const rot = r() * Math.PI * 2, variant = Math.floor(r() * 6);
     // Drawn whether or not the tree stands, so the woods elsewhere keep their old layout.
-    if (oakClear(jx, jz)) return;
+    if (oakClear(jx, jz) || downtownClear(jx, jz)) return;
     b.prop('pine', jx, jz, rot, { variant, forest: true });
   };
   // The original square, then the belt past Kinney Street on the same grid with its own stream.
@@ -595,6 +600,7 @@ function build(): MapDefinition {
   backyards(b);
   frontYards(b);
   oakStreet(b);
+  downtown(b);
   woods(b);
   b.area('PELL LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, SOUTH);
   b.area('HALE STREET', -HALF, HALF, -16, 16);

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Downtown
+
+- Court Street, Vesper's downtown, runs east off Pell Lane a block north of Hale Street. Eight stores you can go into face each other across it: the savings bank with its columns and vault, the hardware store, Dot's Diner, the coin laundry, the corner drugstore, Kline's Market, the army surplus and the Lamplighter tavern.
+- Each store has its own sign, plate glass you can break and climb through, a back door onto a service alley, and things worth the walk: ammunition in the bank vault and the surplus, first aid in the drugstore, melee weapons in the hardware store and the surplus.
+- Court Square sits at the end of the street: lawns, benches, lamps and a flagpole, with a parking lot across from it.
+- The town's water tower stands past the square with VESPER on its tank and a red light on top that shows through the fog. Two paths lead back to the alley behind Hale Street.
+- Three more cars you can drive are parked downtown.
+
 ### Controllers
 
 - Button prompts are drawn as the buttons on your pad: Xbox, PlayStation (DualSense and DualShock), Nintendo or a generic pad, picked from the one plugged in or set by hand in Settings.

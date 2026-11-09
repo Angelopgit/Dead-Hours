@@ -46,7 +46,7 @@ interface Openings {
   east: Opening[];
 }
 
-class Frame {
+export class Frame {
   readonly f: 1 | -1;
   readonly m: 1 | -1;
   /** Interior half width and the back wall's inner face. */

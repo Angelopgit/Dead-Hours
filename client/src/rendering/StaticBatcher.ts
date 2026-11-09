@@ -44,6 +44,21 @@ export class StaticBatcher {
   private readonly buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
   private readonly flags = new Map<THREE.Material, { cast: boolean; receive: boolean }>();
   private readonly pieces = new Map<THREE.BufferGeometry, BatchPiece>();
+  /**
+   * Everything added between `begin(owner)` and `end()`, by owner (a building, the water tower):
+   * what to take out of the batch when that structure comes down.
+   */
+  readonly groups = new Map<string, BatchPiece[]>();
+  private owner: string | null = null;
+
+  /** From here to `end()`, what is added belongs to `owner` (null: to nothing). */
+  begin(owner: string | null | undefined): void {
+    this.owner = owner ?? null;
+  }
+
+  end(): void {
+    this.owner = null;
+  }
 
   add(geometry: THREE.BufferGeometry, material: THREE.Material, cast = true, receive = true): void {
     let list = this.buckets.get(material);
@@ -69,13 +84,24 @@ export class StaticBatcher {
     if (!g.getAttribute('normal')) g.computeVertexNormals();
     withWhiteColors(g);
     list.push(g);
+    if (this.owner !== null) {
+      const piece: BatchPiece = { mesh: null, start: 0, count: g.getAttribute('position').count, saved: null };
+      this.pieces.set(g, piece);
+      let group = this.groups.get(this.owner);
+      if (!group) this.groups.set(this.owner, (group = []));
+      group.push(piece);
+    }
   }
 
   /** Adds geometry that can be hidden again later (see BatchPiece; filled in by build()). */
   addPiece(geometry: THREE.BufferGeometry, material: THREE.Material, cast = true, receive = true): BatchPiece {
     this.add(geometry, material, cast, receive);
-    const piece: BatchPiece = { mesh: null, start: 0, count: geometry.getAttribute('position').count, saved: null };
-    this.pieces.set(geometry, piece);
+    // Inside an owner's group it already has its piece.
+    let piece = this.pieces.get(geometry);
+    if (!piece) {
+      piece = { mesh: null, start: 0, count: geometry.getAttribute('position').count, saved: null };
+      this.pieces.set(geometry, piece);
+    }
     return piece;
   }
 

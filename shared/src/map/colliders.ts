@@ -74,6 +74,7 @@ const SIMPLE: Partial<Record<PropKind, LocalBox>> = {
   toilet: [0, 0.4, 0, 0.2, 0.4, 0.35],
   bathtub: [0, 0.29, 0, 0.85, 0.29, 0.38],
   vanity: [0, 0.44, 0, 0.45, 0.44, 0.25],
+  flagpole: [0, 4.5, 0, 0.07, 4.5, 0.07],
 };
 
 /** Half extents of a prop's footprint in its own frame (along its length, front to back). */

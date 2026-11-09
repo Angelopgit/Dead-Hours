@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { STORY, houseTop, porchOf, type HouseSpec, type MapDefinition } from '@dead-hours/shared';
+import { PORTICO, STORY, houseTop, porchOf, type HouseSpec, type MapDefinition } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { BatchPiece, StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
@@ -97,22 +97,52 @@ function flatRoof(h: HouseSpec, top: number, lib: MaterialLibrary, batch: Static
     c.width = 1024;
     c.height = 128;
     const x = c.getContext('2d')!;
-    x.fillStyle = '#7a1612';
+    x.fillStyle = `#${(h.sign ?? 0x7a1612).toString(16).padStart(6, '0')}`;
     x.fillRect(0, 0, 1024, 128);
     x.fillStyle = '#f6efe0';
     x.font = '800 92px "Big Shoulders Display", Impact, sans-serif';
     x.textAlign = 'center';
     x.textBaseline = 'middle';
-    x.fillText(h.label, 512, 70);
+    // Long names are squeezed to fit the board, never cut off.
+    x.fillText(h.label, 512, 70, 960);
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     const sign = lib.custom(`fascia-${h.id}`, () => new THREE.MeshStandardMaterial({
       map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.9, roughness: 0.6,
     }));
     sign.userData.noBake = true;
-    const z = h.z + frontSign * (h.d / 2 + 0.19);
-    batch.add(worldBox(h.x, top - 0.45, z, h.w * 0.62, 0.75, 0.06, 1, null), sign, false);
+    // On the wall over the door, or on the beam of a portico.
+    const z = h.z + frontSign * (h.d / 2 + (h.portico ? h.portico + 0.23 : 0.19));
+    const y = h.portico ? (PORTICO.beam + PORTICO.top) / 2 : top - 0.45;
+    const sw = h.w * 0.62, sh = 0.75;
+    const board = worldBox(h.x, y, z, sw, sh, 0.06, 1, null);
+    // The lettering runs once across the board, read from the street.
+    const pos = board.getAttribute('position'), uv = board.getAttribute('uv');
+    for (let i = 0; i < pos.count; i++) {
+      const u = (pos.getX(i) - (h.x - sw / 2)) / sw;
+      uv.setXY(i, frontSign > 0 ? u : 1 - u, (pos.getY(i) - (y - sh / 2)) / sh);
+    }
+    batch.add(board, sign, false);
   }
+  if (h.awning !== undefined) awning(h, lib, batch);
+}
+
+/** A canvas awning over a storefront: a sloped sheet from the wall out over the sidewalk, with a valance. */
+function awning(h: HouseSpec, lib: MaterialLibrary, batch: StaticBatcher): void {
+  const f = h.facing === 'south' ? 1 : -1;
+  const cloth = lib.custom(`awning-${h.awning}`, () => new THREE.MeshStandardMaterial({ color: h.awning, roughness: 0.95, side: THREE.DoubleSide, vertexColors: true }));
+  const slab = h.slab ?? STORY.slab;
+  const z0 = h.z + f * (h.d / 2 + 0.02), z1 = z0 + f * 1.5;
+  const y0 = slab + 3.05, y1 = slab + 2.62;
+  const x0 = h.x - h.w / 2 + 0.5, x1 = h.x + h.w / 2 - 0.5;
+  // The sheet (wound to face up and out whichever way the shop faces), the valance, the two ends.
+  const sheet = f > 0 ? quad(V(x0, y1, z1), V(x1, y1, z1), V(x1, y0, z0), V(x0, y0, z0), 1) : quad(V(x1, y1, z1), V(x0, y1, z1), V(x0, y0, z0), V(x1, y0, z0), 1);
+  batch.add(sheet, cloth);
+  batch.add(worldBox(h.x, y1 - 0.11, z1, x1 - x0, 0.22, 0.02, 1, null), cloth, false);
+  for (const x of [x0, x1]) batch.add(tri(V(x, y0, z0), V(x, y1, z1), V(x, y1, z0), () => [0, 0]), cloth, false);
+  // The frame arms that hold it up.
+  const arm = lib.standard(0x2a2c2e, 0.5, 0.6);
+  for (const x of [x0 + 0.05, (x0 + x1) / 2, x1 - 0.05]) batch.add(worldBox(x, y1 - 0.02, (z0 + z1) / 2, 0.04, 0.04, 1.5, 1, null), arm, false);
 }
 
 /**
@@ -152,6 +182,8 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     const ground = h.groundHeight ?? STORY.ground;
     const siding = lib.get(h.siding);
     const skip = new Set(h.skipWalls ?? []);
+    // Everything a house is dressed in comes down with it.
+    batch.begin(h.id);
 
     if (!h.enterable) {
       // Shell walls for closed houses (collision is a single invisible box from the shared map).
@@ -196,10 +228,13 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     }
   }
 
+  batch.end();
+
   // Windows.
   windowBars.length = 0;
   map.windows.forEach((w, wi) => {
     const house = map.houses.find((h) => h.id === w.houseId)!;
+    batch.begin(house.id);
     const along = w.axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
     const out = w.axis === 'x' ? new THREE.Vector3(0, 0, w.outward) : new THREE.Vector3(w.outward, 0, 0);
     const surface = house.enterable ? STORY.wall / 2 : 0.01;
@@ -248,6 +283,7 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
   for (const w of map.windows) {
     const house = map.houses.find((h) => h.id === w.houseId)!;
     if (!house.enterable) continue;
+    batch.begin(house.id);
     const inward = w.axis === 'x' ? new THREE.Vector3(0, 0, -w.outward) : new THREE.Vector3(-w.outward, 0, 0);
     const along = w.axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
     const at = (offAlong: number, offY: number, lenAlong: number, lenY: number, depth: number, push: number) => {
@@ -272,6 +308,7 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     if (d.exterior) continue;
     const house = map.houses.find((h) => h.id === d.houseId)!;
     if (!house.enterable) continue;
+    batch.begin(house.id);
     const floor = d.floorY ?? d.y - d.h / 2;
     for (const side of [-1, 1]) {
       const n = 0.07 + 0.012;
@@ -289,6 +326,7 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
   for (const d of map.doors) {
     const house = map.houses.find((h) => h.id === d.houseId)!;
     if (!d.exterior) continue;
+    batch.begin(house.id);
     const out = d.axis === 'x' ? new THREE.Vector3(0, 0, d.outward) : new THREE.Vector3(d.outward, 0, 0);
     const push = house.enterable ? STORY.wall / 2 + 0.03 : 0.04;
     const c = new THREE.Vector3(d.x, d.y, d.z).addScaledVector(out, push);
@@ -315,4 +353,5 @@ export function dressHouses(map: MapDefinition, lib: MaterialLibrary, batch: Sta
     batch.add(ibox(0, d.h / 2 + 0.05, d.w + 0.2, 0.1), frame);
     for (const sx of [-1, 1]) batch.add(ibox(sx * (d.w / 2 + 0.05), 0, 0.1, d.h), frame);
   }
+  batch.end();
 }

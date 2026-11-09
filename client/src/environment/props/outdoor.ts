@@ -355,6 +355,17 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
     for (const sz of [-1, 1]) k.block(2.0, 0.04, 0.3, wood, 0, 0.42, sz * 0.62);
     for (const sx of [-0.75, 0.75]) for (const sz of [-1, 1]) k.rod(V(sx, 0, sz * 0.75), V(sx, 0.74, sz * 0.15), 0.05, wood, 4);
   },
+  flagpole(k) {
+    const steel = k.mat(0x8a8d90, 0.45, 0.7);
+    k.cyl(0.11, 0.14, 0.3, 8, steel, 0, 0.15, 0);
+    k.cyl(0.035, 0.06, 8.6, 8, steel, 0, 4.5, 0);
+    k.add(new THREE.SphereGeometry(0.09, 8, 6), k.mat(0xb09a4a, 0.4, 0.8), 0, 8.86, 0, { cast: false });
+    // The flag hangs limp and torn, half way down.
+    const cloth = k.mat(0x6a2a26, 0.95);
+    k.box(0.03, 1.2, 0.9, cloth, 0, 5.4, 0.5, { rx: 0.12, cast: false });
+    k.box(0.03, 0.5, 0.5, k.mat(0x2a3350, 0.95), 0.012, 5.75, 0.3, { rx: 0.12, cast: false });
+    k.rod(V(0, 0.9, 0.06), V(0, 8.7, 0.06), 0.008, k.mat(0x2a2a2a, 0.8), 3);
+  },
   parkLamp(k) {
     const g = k.mat(0x1f2a22, 0.5, 0.5);
     k.cyl(0.12, 0.16, 0.4, 8, g, 0, 0.2, 0);

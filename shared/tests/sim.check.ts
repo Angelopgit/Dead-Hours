@@ -62,6 +62,11 @@ const spots: [string, Vec3][] = [
   ['Oyelaran house basement (Kinney St)', { x: 7, y: -2.7, z: 113.5 }],
   ['Delgado house living room (Kinney St)', { x: 29, y: 0.3, z: 77 }],
   ['Kinney Street dead end', { x: 92, y: 0, z: 94 }],
+  ['Court Street', { x: -20, y: 0, z: -86 }],
+  ['Court Square', { x: 22, y: 0, z: -103 }],
+  ['water tower lot', { x: 52, y: 0, z: -78 }],
+  ['hardware store (Court St)', { x: -34, y: 0.2, z: -97 }],
+  ['market (Court St)', { x: -36, y: 0.2, z: -75 }],
 ];
 for (const [name, p] of spots) check(nav.reachable(nav.nodeAt(p.x, p.y, p.z, 0.6)), `${name} is reachable`);
 check(!nav.reachable(nav.nodeAt(0, 9, -20, 0.3)) || nav.nodeY[nav.nodeAt(0, 9, -20, 0.3)] < 5, 'safehouse roof is not part of the walkable area');
@@ -76,6 +81,10 @@ const routes: [string, Vec3, Vec3][] = [
   ['south woods to Oyelaran basement', spots[10][1], spots[13][1]],
   ['safehouse to Delgado house', spots[0][1], spots[14][1]],
   ['park to Kinney Street dead end', spots[7][1], spots[15][1]],
+  ['safehouse to Court Street', spots[0][1], spots[16][1]],
+  ['Court Street to the hardware store', spots[16][1], spots[19][1]],
+  ['Kinney Street to the water tower', spots[12][1], spots[18][1]],
+  ['Court Square to the market', spots[17][1], spots[20][1]],
 ];
 for (const [name, a, b] of routes) {
   t0 = performance.now();
@@ -415,6 +424,7 @@ for (const [where, at] of [
   ['the safehouse', { x: 4.8, y: 0.32, z: -22.3 }], ['Hale Street', { x: -40, y: 0.15, z: 6 }],
   ['Kinney Street', { x: -10, y: 0.02, z: 94 }], ['an Kinney Street basement', { x: 7, y: -2.7, z: 113.5 }],
   ['the Kinney Street dead end', { x: 90, y: 0.02, z: 94 }],
+  ['Court Street', { x: -20, y: 0.02, z: -86 }], ['the water tower', { x: 52, y: 0.02, z: -78 }],
 ] as [string, Vec3][]) {
   const { sim, body } = makeSim(at);
   let found = 0, south = 0;
@@ -2216,7 +2226,9 @@ const upstairs = (s: BarricadeSlot) => s.kind === 'window' && s.max === 0 && s.c
     if (o?.slot === s && o.plan?.land) {
       outOk++;
       const n = nav.nodeAt(o.plan.land.x, o.plan.land.y, o.plan.land.z, 0.5);
-      if (n >= 0 && (nav.flags[n] & NAV_INDOOR) === 0 && b.side(s, o.plan.land.x, o.plan.land.z) > 0) landsOutdoors++;
+      // Outdoors: open sky, or under the bank's portico (roofed, but outside every building's walls).
+      const walled = map.houses.some((h) => Math.abs(o.plan!.land!.x - h.x) < h.w / 2 && Math.abs(o.plan!.land!.z - h.z) < h.d / 2);
+      if (n >= 0 && ((nav.flags[n] & NAV_INDOOR) === 0 || !walled) && b.side(s, o.plan.land.x, o.plan.land.z) > 0) landsOutdoors++;
     } else stuck.push(`${s.houseId}#${s.ref} out: ${o?.block ?? (o ? 'other' : 'none')}`);
     if (i?.slot === s && i.plan?.land) {
       inOk++;

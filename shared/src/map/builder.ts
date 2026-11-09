@@ -10,6 +10,8 @@ import type {
   Rect,
   StairSpec,
   StaticBox,
+  StructurePart,
+  StructureSpec,
   WallSide,
   WindowSpec,
 } from '../types/world';
@@ -118,6 +120,14 @@ export function houseTop(spec: HouseSpec): number {
   return spec.floors === 2 ? slab + ground + STORY.floorThickness + STORY.upper : slab + ground;
 }
 
+/** The building a point stands in, if explosives can bring it down (see MapDefinition.structures). */
+export function ownerAt(map: { structures: StructureSpec[] }, x: number, z: number): string | null {
+  for (const s of map.structures) {
+    if (s.kind === 'building' && Math.abs(x - s.x) <= s.w / 2 && Math.abs(z - s.z) <= s.d / 2) return s.id;
+  }
+  return null;
+}
+
 /** Floor height of each storey of a house. */
 export function storeyFloors(spec: HouseSpec): number[] {
   const slab = spec.slab ?? STORY.slab;
@@ -150,6 +160,20 @@ export class MapBuilder {
   readonly excavations: Rect[] = [];
   readonly stairways: StairSpec[] = [];
   readonly areas: AreaSpec[] = [];
+  readonly structures: StructureSpec[] = [];
+  readonly parts: StructurePart[] = [];
+
+  /** Registers something explosives can bring down (buildings register themselves in `house`). */
+  structure(s: StructureSpec): void {
+    this.structures.push(s);
+  }
+
+  /** A square column of a structure, from y0 to y1: a part explosives destroy. */
+  pillar(owner: string, x: number, z: number, size: number, y0: number, y1: number, mat: MaterialKey): void {
+    const part = this.parts.length;
+    this.parts.push({ kind: 'pillar', owner, x, y: (y0 + y1) / 2, z, w: size, h: y1 - y0, axis: 'x', outward: 1, storey: 0, floor: y0 });
+    this.boxMinMax(x - size / 2, y0, z - size / 2, x + size / 2, y1, z + size / 2, mat, { owner, part });
+  }
 
   box(b: StaticBox): void {
     this.solids.push(b);
@@ -233,6 +257,16 @@ export class MapBuilder {
    */
   house(spec: HouseSpec, ground: StoreyLayout, upper: StoreyLayout | null, extras: HouseExtras = {}): void {
     this.houses.push(spec);
+    const first = this.solids.length;
+    this.raise(spec, ground, upper, extras);
+    // Everything it is built of comes down with it.
+    for (let i = first; i < this.solids.length; i++) this.solids[i].owner = spec.id;
+    if (spec.enterable && !spec.reinforced) {
+      this.structures.push({ id: spec.id, kind: 'building', x: spec.x, z: spec.z, w: spec.w, d: spec.d, top: houseTop(spec), label: spec.label });
+    }
+  }
+
+  private raise(spec: HouseSpec, ground: StoreyLayout, upper: StoreyLayout | null, extras: HouseExtras): void {
     const { x, z, w, d } = spec;
     const hw = w / 2;
     const hd = d / 2;
@@ -365,7 +399,8 @@ export class MapBuilder {
     return {
       name, halfExtent, bounds: { ...bounds },
       solids: this.solids, houses: this.houses, windows: this.windows, doors: this.doors,
-      props: this.props, lights: this.lights, excavations: this.excavations, stairs: this.stairways, areas: this.areas, playerSpawns,
+      props: this.props, lights: this.lights, excavations: this.excavations, stairs: this.stairways, areas: this.areas,
+      structures: this.structures, parts: this.parts, playerSpawns,
     };
   }
 }

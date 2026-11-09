@@ -43,6 +43,10 @@ export interface StaticBox {
   /** Tilt for ramps (stairs collision), radians about the X or Z axis. */
   rotX?: number;
   rotZ?: number;
+  /** The structure it is part of (a building, the water tower): it comes down with it. */
+  owner?: string;
+  /** Index into `MapDefinition.parts`: a piece explosives can blow out on its own. */
+  part?: number;
 }
 
 export type Facing = 'north' | 'south';
@@ -77,6 +81,52 @@ export interface HouseSpec {
   floorMat?: MaterialKey;
   /** Display name for location notices. */
   label?: string;
+  /** Storefronts: the colour of the lettered sign over the door, and of the awning (none without). */
+  sign?: number;
+  awning?: number;
+  /** A columned porch across the front, this deep: the sign goes on its beam. */
+  portico?: number;
+  /** Found weapons turn up here as they do in a store's back room. */
+  melee?: boolean;
+  /** Built to hold: explosives neither breach its walls nor bring it down (the safehouse). */
+  reinforced?: boolean;
+}
+
+/** Something explosives can bring down: an enterable building, the water tower, the gas station's canopy. */
+export interface StructureSpec {
+  id: string;
+  kind: 'building' | 'tower' | 'canopy';
+  /** Footprint centre and size. */
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+  /** Height of its highest point. */
+  top: number;
+  label?: string;
+}
+
+/**
+ * A piece of a structure that explosives destroy on its own: a bay of wall (blown out, it leaves
+ * a hole to walk through) or a pillar (a column, a tower leg).
+ */
+export interface StructurePart {
+  kind: 'bay' | 'pillar';
+  /** The structure's id. */
+  owner: string;
+  /** Centre. */
+  x: number;
+  y: number;
+  z: number;
+  /** Bays: length along the wall. Pillars: width. */
+  w: number;
+  h: number;
+  /** Bays: the wall's axis ('x' runs along X) and outward normal sign. */
+  axis: 'x' | 'z';
+  outward: 1 | -1;
+  /** Storey (0 = ground) and its floor height. */
+  storey: number;
+  floor: number;
 }
 
 /** A window opening. Glass is a collider until it breaks. */
@@ -131,7 +181,9 @@ export type PropKind =
   | 'sofa' | 'armchair' | 'coffeeTable' | 'tvStand' | 'bed' | 'wardrobe' | 'bookshelf' | 'counter' | 'fridge'
   | 'stove' | 'diningTable' | 'chair' | 'workbench' | 'metalShelf' | 'crate' | 'ammoCrate' | 'washer'
   | 'waterHeater' | 'desk' | 'dresser' | 'rug' | 'floorLamp' | 'storeShelf' | 'storeCounter' | 'cooler'
-  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress' | 'firstAid' | 'toilet' | 'bathtub' | 'vanity';
+  | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress' | 'firstAid' | 'toilet' | 'bathtub' | 'vanity'
+  // downtown
+  | 'flagpole';
 
 export interface PropSpec {
   kind: PropKind;
@@ -231,5 +283,8 @@ export interface MapDefinition {
   excavations: Rect[];
   stairs: StairSpec[];
   areas: AreaSpec[];
+  /** What explosives can bring down, and the pieces of each they destroy one at a time. */
+  structures: StructureSpec[];
+  parts: StructurePart[];
   playerSpawns: { x: number; y: number; z: number; yaw: number }[];
 }

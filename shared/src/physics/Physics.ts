@@ -28,6 +28,8 @@ export function groups(member: number, filter: number): number {
 /** The map's own colliders: static, and everything may touch them. */
 const STATIC_GROUPS = groups(GROUP.static, 0xffff);
 
+const NO_COLLIDERS: readonly RAPIER.Collider[] = [];
+
 /** What a bullet hit, for impact effects and sounds. */
 export type Surface = 'concrete' | 'asphalt' | 'brick' | 'plaster' | 'wood' | 'metal' | 'glass' | 'grass' | 'dirt' | 'fabric' | 'flesh';
 
@@ -153,6 +155,11 @@ export class Physics {
   private readonly covers: { x0: number; x1: number; z0: number; z1: number; top: number; surface: Surface }[] = [];
   /** Window glass colliders of enterable buildings (smashed panes are switched off). */
   private readonly panes: { x: number; y: number; z: number; collider: RAPIER.Collider }[] = [];
+  /** Each map solid's collider, by its index in `map.solids` (null for the ones nothing collides with). */
+  readonly solidColliders: (RAPIER.Collider | null)[] = [];
+  /** Colliders of the props that stand still, by the prop's index in `map.props`, and the way back. */
+  private readonly propBoxes = new Map<number, RAPIER.Collider[]>();
+  private readonly propByCollider = new Map<number, number>();
 
   constructor(readonly map: MapDefinition) {
     guardBodies();
@@ -183,20 +190,26 @@ export class Physics {
         if (s.visible !== false && s.h < 0.1) {
           this.covers.push({ x0: s.x - s.w / 2, x1: s.x + s.w / 2, z0: s.z - s.d / 2, z1: s.z + s.d / 2, top: s.y + s.h / 2, surface: MATERIAL_SURFACE[s.mat] });
         }
+        this.solidColliders.push(null);
         continue;
       }
       const c = add(RAPIER.ColliderDesc.cuboid(s.w / 2, s.h / 2, s.d / 2).setTranslation(s.x, s.y, s.z), s.glass ? 'glass' : MATERIAL_SURFACE[s.mat]);
+      this.solidColliders.push(c);
       if (s.glass) this.panes.push({ x: s.x, y: s.y, z: s.z, collider: c });
     }
 
-    for (const p of map.props) {
+    map.props.forEach((p, index) => {
       // Vehicles that can be driven get moving bodies of their own (sim/Vehicles).
-      if (isDrivable(p)) continue;
+      if (isDrivable(p)) return;
+      const boxes: RAPIER.Collider[] = [];
       for (const b of propColliders(p)) {
         const q = { x: 0, y: Math.sin(b.rotY / 2), z: 0, w: Math.cos(b.rotY / 2) };
-        add(RAPIER.ColliderDesc.cuboid(b.hx, b.hy, b.hz).setTranslation(b.x, b.y, b.z).setRotation(q), propSurface(p.kind));
+        const c = add(RAPIER.ColliderDesc.cuboid(b.hx, b.hy, b.hz).setTranslation(b.x, b.y, b.z).setRotation(q), propSurface(p.kind));
+        boxes.push(c);
+        this.propByCollider.set(c.handle, index);
       }
-    }
+      if (boxes.length) this.propBoxes.set(index, boxes);
+    });
     // Builds the query structures so ray casts work before the first simulation step.
     this.world.step();
   }
@@ -243,6 +256,32 @@ export class Physics {
   switchOn(collider: RAPIER.Collider): void {
     collider.setCollisionGroups(STATIC_GROUPS);
     collider.setEnabled(true);
+  }
+
+  /** Whether `switchOff` took a collider out. */
+  isOff(collider: RAPIER.Collider): boolean {
+    return !collider.isEnabled();
+  }
+
+  /** The colliders of a prop that stands still (by its index in `map.props`). */
+  propColliders(index: number): readonly RAPIER.Collider[] {
+    return this.propBoxes.get(index) ?? NO_COLLIDERS;
+  }
+
+  /** The index in `map.props` of the standing prop a collider belongs to, if it is one. */
+  propOf(collider: RAPIER.Collider): number | undefined {
+    return this.propByCollider.get(collider.handle);
+  }
+
+  /**
+   * First hit along a ray, as `raycast`, but seeing through the colliders in `skip` (by handle):
+   * a blast looking out from inside the car that blew.
+   */
+  raycastSkip(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, skip: ReadonlySet<number>): number | null {
+    if (!finiteRay(ox, oy, oz, dx, dy, dz, maxDist)) return null;
+    const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
+    const hit = this.world.castRay(ray, maxDist, true, undefined, WORLD_FILTER, undefined, undefined, (c) => !skip.has(c.handle));
+    return hit ? hit.timeOfImpact : null;
   }
 
   /** The terrain slab: nothing walkable lies under it. */

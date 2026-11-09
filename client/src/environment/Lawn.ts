@@ -56,13 +56,21 @@ const smooth = (x: number, a: number, b: number): number => {
 /**
  * 0 on the streets' lawns, 1 on the forest floor. North of Hale and along the sides the forest
  * floor starts on a straight line; south of Hale it follows the trees, so Kinney Street's lots keep
- * their grass. Past the edge of the map it's all woods.
+ * their grass, and so does Court Street's block in the north woods. Past the edge of the map it's
+ * all woods.
  */
 export function woodsAt(map: MapDefinition): (x: number, z: number) => number {
   const nearTree = forestDistance(map);
   const b = map.bounds;
+  // Court Street's block was cleared out of the north woods: there the forest floor follows the trees too.
+  const court = (x: number, z: number) => smooth(Math.min(x + 62, 73 - x, z + 116, -61 - z), -6, 0);
+  const north = (x: number, z: number) => {
+    const c = z < -40 ? court(x, z) : 0;
+    const line = smooth(-z, 50, 60);
+    return c > 0 ? line * (1 - c) + (1 - smooth(nearTree(x, z), 3, 9)) * c : line;
+  };
   return (x, z) => Math.max(
-    smooth(-z, 50, 60),
+    north(x, z),
     smooth(Math.abs(x), 113, 121),
     z > 40 ? 1 - smooth(nearTree(x, z), 3, 9) : 0,
     smooth(z - b.z1, -4, 2),
