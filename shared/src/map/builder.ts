@@ -297,8 +297,10 @@ export class MapBuilder {
       const s1 = from + dir * ((i + 1) * run + 0.004);
       const top = y0 + ((i + 1) * rise) / n;
       const lo = Math.min(s0, s1), hi = Math.max(s0, s1);
-      if (axis === 'z') this.boxMinMax(a0, y0, lo, a1, top, hi, mat);
-      else this.boxMinMax(lo, y0, a0, hi, top, a1, mat);
+      // A house's stairs are part of it: the flight to the upper floor goes when it falls.
+      const extra = houseId ? { owner: houseId } : {};
+      if (axis === 'z') this.boxMinMax(a0, y0, lo, a1, top, hi, mat, extra);
+      else this.boxMinMax(lo, y0, a0, hi, top, a1, mat, extra);
     }
   }
 

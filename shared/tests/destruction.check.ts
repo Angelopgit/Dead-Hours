@@ -425,6 +425,14 @@ section('Bringing a building down');
   const slots = sim.barricades.slots.filter((s) => s.houseId === house.spec.id);
   check(slots.length > 0 && slots.every((s) => s.ruined && s.max === 0 && !s.glass), 'its windows are no longer openings to board');
   check(nav.isShut(upstairs), 'nothing paths to its upper floor again');
+  let standing = 0;
+  for (let gx = x - w / 2 + 0.4; gx < x + w / 2 - 0.3; gx += 0.6) {
+    for (let gz = z - d / 2 + 0.4; gz < z + d / 2 - 0.3; gz += 0.6) {
+      const hit = physics.raycast(gx, top + 3, gz, 0, -1, 0, top + 6);
+      if (hit !== null && top + 3 - hit > base + 0.25) standing++;
+    }
+  }
+  check(standing === 0, 'nothing of it stands above its floor: stairs, furniture and inner walls went with it');
   const way = zombiePath(sim, { x: x + w / 2 + 4, y: 0.1, z }, floor);
   check(!!way && way.complete && way.links.length > 0, 'zombies walk onto the slab over where the walls stood');
   // More blasts change nothing.

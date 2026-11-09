@@ -304,11 +304,11 @@ export class Structures {
     for (const i of s.props) for (const c of physics.propColliders(i)) physics.switchOff(c);
     for (const i of s.doors) sim.doors[i]?.takeOut();
     if (s.spec.kind === 'building') sim.barricades.ruin(s.spec.id);
-    // Nothing walks its upper floor again.
+    // Nothing walks its stairs or its upper floor again.
     const { x, z, w, d, base } = s.spec;
     const shut: number[] = [];
     for (let n = 0; n < nav.nodeCount; n++) {
-      if (nav.nodeY[n] < base + 1) continue;
+      if (nav.nodeY[n] < base + 0.3) continue;
       if (Math.abs(nav.nodeX(n) - x) <= w / 2 && Math.abs(nav.nodeZ(n) - z) <= d / 2) shut.push(n);
     }
     nav.shut(shut);

@@ -1,4 +1,4 @@
-import type { HouseSpec, MaterialKey, PropKind, PropSpec, Rect } from '../types/world';
+import type { HouseSpec, MaterialKey, PropKind, PropSpec, Rect, StaticBox } from '../types/world';
 import { MapBuilder, STORY, door, doorway, seededRandom, upWin, win, type Opening, type Partition, type StoreyLayout } from './builder';
 import { propHalfExtents } from './colliders';
 
@@ -117,7 +117,7 @@ export class Frame {
   railAlongU(v: number, u0: number, u1: number, y: number): void {
     this.prop('railing', (u0 + u1) / 2, v, this.run(1, 0), { y, length: Math.abs(u1 - u0) });
   }
-  box(u0: number, u1: number, y0: number, y1: number, v0: number, v1: number, mat: MaterialKey, extra: { collide?: boolean } = {}): void {
+  box(u0: number, u1: number, y0: number, y1: number, v0: number, v1: number, mat: MaterialKey, extra: Partial<StaticBox> = {}): void {
     const r = this.rect(u0, u1, v0, v1);
     this.b.boxMinMax(r.x0, y0, r.z0, r.x1, y1, r.z1, mat, extra);
   }
@@ -155,7 +155,7 @@ export class Frame {
   }
   /** Tiled floor over the wood finish (kitchens and bathrooms). */
   tile(u0: number, u1: number, v0: number, v1: number, floor: number): void {
-    this.box(u0, u1, floor + 0.012, floor + 0.016, v0, v1, 'tile', { collide: false });
+    this.box(u0, u1, floor + 0.012, floor + 0.016, v0, v1, 'tile', { collide: false, owner: this.s.id });
   }
   /** Poured-concrete basement with its walls inside the given outline. */
   basement(u0: number, u1: number, v0: number, v1: number): void {
