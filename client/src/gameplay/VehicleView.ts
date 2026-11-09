@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { bakeOcclusion } from '../rendering/Solid';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, seatDrop, vehicleKindOf, type Vec3, type VehicleDef, type Vehicle } from '@dead-hours/shared';
 import type { VehicleParts } from '../environment/Props';
@@ -128,6 +129,16 @@ function mergeParts(root: THREE.Group): { geometry: THREE.BufferGeometry; textur
   // Flat shading: normals come from the faces in the shader.
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
   geometry.computeVertexNormals();
+  // Parts shade each other (docs/art-style.md): wheels in their arches, bumpers under the body, handles on doors. Lamps stay clear.
+  const shade = bakeOcclusion(pos, geometry.getAttribute('normal').array, 0.15);
+  const tint = geometry.getAttribute('color').array as Float32Array;
+  for (let i = 0; i < shade.length; i++) {
+    if (pbr[i * 3 + 2] > 0 || glow[i * 3] + glow[i * 3 + 1] + glow[i * 3 + 2] > 0) continue;
+    const k = 0.4 + 0.6 * shade[i];
+    tint[i * 3] *= k;
+    tint[i * 3 + 1] *= k;
+    tint[i * 3 + 2] *= k;
+  }
   geometry.computeBoundingSphere();
   let glass: { geometry: THREE.BufferGeometry; material: THREE.Material } | null = null;
   if (panes.length && paneMat) {

@@ -7,6 +7,7 @@ import { LampGlare, patchLens } from './LampGlare';
 import { WIRE_RADIUS, wireCurves, wireMaterial } from './Wires';
 import { settings } from '../core/Settings';
 import { Kit, jitter, type PropBuildResult, type Surface } from './props/Kit';
+import { chamferBox, loft, plate, type P2 } from '../rendering/Solid';
 import { INTERIOR } from './props/interior';
 import { OUTDOOR } from './props/outdoor';
 
@@ -44,6 +45,37 @@ function openCabinGeometry(len: number, h: number, wid: number, insetF: number, 
 }
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+
+/** A kit geometry ready for the prop batches: no modeling attributes, texture coordinates present. */
+function dressed(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  g.deleteAttribute('edge');
+  if (!g.getAttribute('uv')) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count * 2), 2));
+  return g;
+}
+
+/** A car's side-view outline ([x, y] points, nose toward +X) extruded across the car and chamfered. */
+function sidePlate(outline: P2[], width: number, bevel: number): THREE.BufferGeometry {
+  const g = plate(outline, width, { bevel });
+  g.rotateY(Math.PI / 2);
+  return dressed(g);
+}
+
+/** Points along a wheel arch, from angle a0 to a1 (radians, 0 toward the nose). */
+function arch(cx: number, cy: number, r: number, a0: number, a1: number, n: number): P2[] {
+  const out: P2[] = [];
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + ((a1 - a0) * i) / n;
+    out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+  }
+  return out;
+}
+
+/**
+ * The sedan's hard points, which the seats, the colliders and the driving all assume
+ * (shared/src/config/vehicles.ts): 4.4 m of body on a 2.7 m wheelbase, 1.86 m wide, the belt
+ * line at 0.93 m and 0.72 m wheels. The outline between them is a mid-90s American sedan's.
+ */
+const CAR = { nose: 2.2, tail: -2.2, sill: 0.31, belt: 0.93, axle: 1.35, wheelY: 0.36, wheelR: 0.36, archR: 0.435, half: 0.93, cowl: 0.95, deck: -1.35 };
 
 /**
  * Knocked-over furniture: a chair falls onto its side (toward local -X, matching its tipped collider),
@@ -140,17 +172,7 @@ export class PropFactory {
     const white = k.mat(0xb9bcbf, 0.5, 0.2);
     const cloth = k.mat(0x2b2724, 0.95);
     const dash = k.mat(0x1b1b1d, 0.8);
-    k.box(1.25, 0.62, 1.86, paint, 1.575, 0.62, 0);
-    k.box(0.85, 0.62, 1.86, paint, -1.775, 0.62, 0);
-    k.block(2.3, def.floor - 0.31, 1.86, k.mat(0x161617, 0.9), -0.2, 0.31, 0);
-    for (const sz of [-1, 1]) {
-      if (police) {
-        // Black and white: the white doors as the solid car had them.
-        k.box(0.3, 0.62, 0.07, paint, -1.2, 0.62, sz * 0.895);
-        k.box(1.9, 0.63, 0.075, white, -0.1, 0.62, sz * 0.9);
-        k.box(0.1, 0.62, 0.07, paint, 0.9, 0.62, sz * 0.895);
-      } else k.box(2.3, 0.62, 0.07, paint, -0.2, 0.62, sz * 0.895);
-    }
+    k.block(2.3, def.floor - 0.31, 1.72, k.mat(0x161617, 0.9), -0.2, 0.31, 0);
     // Two bucket seats in front, a bench behind.
     const [driver, front, back] = def.seats;
     for (const s of [driver, front]) {
@@ -171,12 +193,74 @@ export class PropFactory {
     k.rod(V(w.x + 0.03, w.y - 0.01, driver.z), V(0.75, 0.82, driver.z), 0.028, dash);
     // Glass all round, the roof, and the pillars at the corners and between the doors.
     k.pane(openCabinGeometry(2.3, 0.6, 1.7, 0.55, 0.4, 0.12), -0.2, 1.23, 0);
-    k.box(1.39, 0.06, 1.54, police ? white : paint, -0.275, 1.555, 0);
+    k.add(dressed(chamferBox(1.39, 0.06, 1.54, 0.02)), police ? white : paint, -0.275, 1.555, 0);
     for (const sz of [-1, 1]) {
       k.rod(V(0.95, 0.93, sz * 0.85), V(0.4, 1.53, sz * 0.748), 0.035, paint);
       k.rod(V(-0.28, 0.93, sz * 0.85), V(-0.3, 1.53, sz * 0.748), 0.03, paint);
       k.rod(V(-1.35, 0.93, sz * 0.85), V(-0.95, 1.53, sz * 0.748), 0.045, paint);
     }
+  }
+
+  /**
+   * A sedan's shell below the glass: the front clip (hood, fenders, fascia) and the rear one
+   * (trunk and quarters) as side outlines across the whole car, the doors as panels with the
+   * rear arch cut into them, bumpers, wheels with steel rims, lamps, grille and the small things
+   * a silhouette is read by. The middle is left open for a cabin (or closed by dark glass).
+   */
+  private carBody(k: Kit, paint: Surface, police: boolean, wreck: boolean): void {
+    const c = CAR;
+    const dark = k.mat(0x0c0c0d, 0.9);
+    const trim = k.mat(0x18191b, 0.7);
+    const chrome = k.mat(0x77797b, 0.35, 0.8);
+    const white = k.mat(0xb9bcbf, 0.5, 0.2);
+    const up = Math.PI / 2;
+    // Front clip: cowl, hood falling to the nose, the fascia, and the arch over the wheel.
+    const cowlArch = Math.acos((c.cowl - c.axle) / c.archR);
+    const low = -Math.asin((c.wheelY - c.sill) / c.archR);
+    k.add(sidePlate([
+      [c.cowl, c.belt], [1.55, 0.915], [2.02, 0.86], [2.16, 0.8], [c.nose, 0.72], [c.nose, 0.44], [2.13, c.sill],
+      ...arch(c.axle, c.wheelY, c.archR, low, cowlArch, 7),
+    ], c.half * 2, 0.06), paint, 0, 0, 0);
+    // Rear clip: the deck, the tail, and the back of the rear arch.
+    k.add(sidePlate([
+      [c.deck, c.belt], [c.deck, c.wheelY + c.archR], ...arch(-c.axle, c.wheelY, c.archR, up + 0.3, Math.PI - low, 5),
+      [-2.14, c.sill], [c.tail, 0.46], [c.tail, 0.8], [-2.12, 0.885], [-1.9, 0.915],
+    ], c.half * 2, 0.06), paint, 0, 0, 0);
+    // Doors and sills: a panel each side, the front of the rear arch cut out of it.
+    const door: P2[] = [[c.cowl, c.belt], [c.deck, c.belt], [c.deck, c.wheelY + c.archR], ...arch(-c.axle, c.wheelY, c.archR, up - 0.3, low, 5), [c.cowl, c.sill]];
+    for (const sz of [-1, 1]) {
+      k.add(sidePlate(door, 0.07, 0.012), paint, 0, 0, sz * 0.895);
+      // Black and white: the white doors.
+      if (police) k.add(dressed(chamferBox(1.82, 0.585, 0.078, 0.01)), white, -0.06, 0.63, sz * 0.895);
+      // The shut line between the doors, their handles, the rub strip, the mirror.
+      k.box(0.014, 0.56, 0.006, dark, -0.28, 0.63, sz * 0.932, { cast: false });
+      k.box(0.014, 0.56, 0.006, dark, 0.86, 0.63, sz * 0.932, { cast: false });
+      for (const hx of [0.42, -0.72]) k.add(dressed(chamferBox(0.13, 0.03, 0.02, 0.006)), police ? trim : chrome, hx, 0.84, sz * 0.938, { cast: false });
+      if (!police) k.box(2.2, 0.035, 0.014, trim, -0.2, 0.56, sz * 0.936, { cast: false });
+      k.add(dressed(chamferBox(0.09, 0.11, 0.17, 0.02)), police ? trim : paint, 0.82, 1.0, sz * 1.01, { cast: false });
+      // Wheel wells, so the arches are dark and not a view through the car.
+      k.box(0.86, 0.5, 0.36, dark, c.axle, 0.56, sz * 0.72, { cast: false });
+      k.box(0.86, 0.5, 0.36, dark, -c.axle, 0.56, sz * 0.72, { cast: false });
+    }
+    // Bumpers, grille between the headlamps, plates.
+    for (const end of [1, -1]) {
+      k.add(dressed(chamferBox(0.17, 0.2, 1.92, 0.04)), wreck ? chrome : trim, end * 2.2, 0.43, 0);
+      k.box(0.012, 0.11, 0.32, k.mat(0xc9c6ba, 0.6), end * 2.292, 0.43, 0, { cast: false });
+    }
+    k.add(dressed(chamferBox(0.05, 0.13, 0.74, 0.012)), dark, 2.19, 0.635, 0, { cast: false });
+    for (let i = -3; i <= 3; i++) k.box(0.012, 0.11, 0.012, chrome, 2.218, 0.635, i * 0.1, { cast: false });
+    // Wheels: a tire with shoulders on a steel rim, a cap on the hub.
+    const tire = dressed(loft([{ z: -0.13, rx: 0.2 }, { z: -0.13, rx: 0.325 }, { z: -0.1, rx: c.wheelR }, { z: 0.1, rx: c.wheelR }, { z: 0.13, rx: 0.325 }, { z: 0.13, rx: 0.2 }], { segments: 16, caps: false }));
+    const rim = dressed(loft([{ z: -0.118, rx: 0.205 }, { z: -0.1, rx: 0.215 }, { z: 0.1, rx: 0.215 }, { z: 0.118, rx: 0.205 }], { segments: 12 }));
+    const cap = dressed(loft([{ z: -0.135, rx: 0.06 }, { z: -0.128, rx: 0.085 }, { z: 0.128, rx: 0.085 }, { z: 0.135, rx: 0.06 }], { segments: 8 }));
+    const rubber = k.mat(0x101010, 0.92);
+    const steel = police ? k.mat(0x1b1c1e, 0.5, 0.6) : k.mat(0x8d9093, 0.4, 0.8);
+    for (const wx of [-c.axle, c.axle]) for (const wz of [-0.86, 0.86]) {
+      k.add(tire.clone(), rubber, wx, c.wheelY, wz);
+      k.add(rim.clone(), steel, wx, c.wheelY, wz, { cast: false });
+      k.add(cap.clone(), chrome, wx, c.wheelY, wz, { cast: false });
+    }
+    tire.dispose(); rim.dispose(); cap.dispose();
   }
 
   /** A lamp lens that hands its light to the glare as it shrinks on screen. */
@@ -283,23 +367,18 @@ export class PropFactory {
         paint.userData.envMap = !wreck;
         const glass = this.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.08, metalness: 0.8 }));
         glass.userData.envMap = true;
-        const rubber = k.mat(0x111111, 0.9);
-        const chrome = k.mat(0x77797b, 0.35, 0.8);
         // One that drives shows who is inside: clear glass over an open cabin.
         const open = isDrivable(p);
+        this.carBody(k, paint, police, wreck);
         if (open) this.carCabin(k, paint, police);
         else {
-          k.box(4.4, 0.62, 1.86, paint, 0, 0.62, 0);
-          if (police) k.box(1.9, 0.63, 1.875, k.mat(0xb9bcbf, 0.5, 0.2), -0.1, 0.62, 0);
+          k.block(2.3, 0.05, 1.72, k.mat(0x161617, 0.9), -0.2, 0.31, 0);
           k.add(cabinGeometry(2.3, 0.6, 1.7, 0.55, 0.4, 0.12), glass, -0.2, 1.23, 0);
-          k.box(1.3, 0.06, 1.5, police ? k.mat(0xb9bcbf, 0.5, 0.2) : paint, -0.15, 1.55, 0);
+          k.add(dressed(chamferBox(1.34, 0.06, 1.52, 0.02)), police ? k.mat(0xb9bcbf, 0.5, 0.2) : paint, -0.15, 1.55, 0);
         }
-        k.box(0.12, 0.25, 1.9, chrome, 2.22, 0.45, 0);
-        k.box(0.12, 0.25, 1.9, chrome, -2.22, 0.45, 0);
-        for (const wx of [-1.35, 1.35]) for (const wz of [-0.86, 0.86]) k.cyl(0.36, 0.36, 0.26, 10, rubber, wx, 0.36, wz, { rx: Math.PI / 2 });
         const tail = k.glow(0x5a0805, 0.6);
-        for (const tz of [0.65, -0.65]) k.box(0.05, 0.12, 0.35, tail, -2.24, 0.75, tz, { cast: false }).userData.lamp = 'tail';
-        for (const hz of [0.62, -0.62]) k.box(0.05, 0.14, 0.38, k.mat(0x9aa0a6, 0.2, 0.5), 2.24, 0.72, hz).userData.lamp = 'head';
+        for (const tz of [0.63, -0.63]) k.box(0.05, 0.13, 0.44, tail, -2.185, 0.7, tz, { cast: false }).userData.lamp = 'tail';
+        for (const hz of [0.63, -0.63]) k.box(0.05, 0.13, 0.42, k.mat(0x9aa0a6, 0.2, 0.5), 2.185, 0.635, hz).userData.lamp = 'head';
         const door = wreckDoor(p);
         if (door) {
           // Abandoned with a door hanging open: a hole in the body and the door swung out on its hinge.
