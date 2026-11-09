@@ -1,0 +1,84 @@
+/**
+ * Model checks (docs/art-style.md): every held weapon and every body is built as the game builds
+ * it, then held against its budget (triangles, draw calls) and, for the guns that exist, against
+ * the real one's published length. A rebuilt model must land within 2% of the real thing; the
+ * ones still waiting for their rebuild are listed with how far off they are.
+ * Run with `npm run check:models`.
+ */
+import * as THREE from 'three';
+import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, WEAPONS, defaultBuild, type WeaponId } from '@dead-hours/shared';
+import { createWeaponModel } from '../src/weapons/WeaponModels';
+import { Humanoid, survivorLook, zombieLook } from '../src/characters/Humanoid';
+
+let failures = 0, passes = 0;
+const check = (ok: boolean, msg: string) => {
+  if (ok) passes++;
+  else failures++;
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${msg}`);
+};
+const count = (root: THREE.Object3D) => {
+  let tris = 0, draws = 0;
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    draws++;
+    tris += (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3;
+  });
+  return { tris, draws };
+};
+
+/** Budgets, as in docs/art-style.md. */
+const BUDGET = {
+  gun: { tris: 4500, draws: 5 },
+  melee: { tris: 1500, draws: 3 },
+  survivor: { tris: 9000, draws: 3 },
+  zombie: { tris: 6500, average: 4200, draws: 2 },
+};
+
+/**
+ * Overall length in millimetres, from the makers' and the services' own figures: M4A1 with the
+ * stock out (TM 9-1005-319-10), MP5A2 with the fixed stock (HK operator's manual), Remington 870
+ * Police with an 18 inch barrel, Mk 14 Mod 0 EBR, SIG M17 (TM 9-1005-470-10), M249 (TM 9-1005-201-10),
+ * FN SCAR-H with a 16 inch barrel and the stock out, Barrett M107 with a 29 inch barrel (TM 9-1005-239-10).
+ */
+const REAL_LENGTH: Partial<Record<WeaponId, number>> = { ar: 838, smg: 680, shotgun: 978, marksman: 889, pistol: 203, lmg: 1041, battle: 965, sniper: 1448 };
+/** Guns rebuilt from measurements so far: these must match. */
+const REBUILT = new Set<WeaponId>(['ar']);
+
+console.log('\nHeld weapons');
+for (const id of Object.keys(WEAPONS) as WeaponId[]) {
+  if (id === 'akimbo' || id === 'katanas') continue;
+  const m = createWeaponModel(id, defaultBuild(id));
+  const c = count(m.root);
+  const b = WEAPONS[id].slot === 'melee' ? BUDGET.melee : BUDGET.gun;
+  check(c.tris <= b.tris && c.draws <= b.draws, `${id}: ${c.tris} triangles, ${c.draws} draw calls (budget ${b.tris}, ${b.draws})`);
+  const real = REAL_LENGTH[id];
+  if (real) {
+    const box = new THREE.Box3().setFromObject(m.root);
+    const len = (box.max.z - box.min.z) * 1000;
+    const off = ((len - real) / real) * 100;
+    const line = `${id}: ${len.toFixed(0)} mm long, the real ${WEAPONS[id].model} is ${real} mm (${off >= 0 ? '+' : ''}${off.toFixed(1)}%)`;
+    if (REBUILT.has(id)) check(Math.abs(off) <= 2, line);
+    else console.log(`  wait ${line}, not rebuilt yet`);
+  }
+  m.dispose();
+}
+
+console.log('\nBodies');
+for (const [name, look] of [['man', DEFAULT_APPEARANCE], ['woman', DEFAULT_FEMALE_APPEARANCE]] as const) {
+  const c = count(new Humanoid(survivorLook(look)).root);
+  check(c.tris <= BUDGET.survivor.tris && c.draws <= BUDGET.survivor.draws, `survivor (${name}): ${c.tris} triangles, ${c.draws} draw calls (budget ${BUDGET.survivor.tris}, ${BUDGET.survivor.draws})`);
+}
+let sum = 0, worst = 0, draws = 0;
+const LOOKS = 30;
+for (let i = 0; i < LOOKS; i++) {
+  const c = count(new Humanoid(zombieLook(i)).root);
+  sum += c.tris;
+  worst = Math.max(worst, c.tris);
+  draws = Math.max(draws, c.draws);
+}
+check(sum / LOOKS <= BUDGET.zombie.average, `walkers: ${(sum / LOOKS).toFixed(0)} triangles on average over ${LOOKS} looks (budget ${BUDGET.zombie.average}): ${(sum / LOOKS * 90 / 1000).toFixed(0)}k for a full street of 90`);
+check(worst <= BUDGET.zombie.tris && draws <= BUDGET.zombie.draws, `walkers: the heaviest look is ${worst} triangles, ${draws} draw calls (budget ${BUDGET.zombie.tris}, ${BUDGET.zombie.draws})`);
+
+console.log(failures ? `\n${failures} of ${passes + failures} model checks failed` : `\nall ${passes} model checks passed`);
+process.exit(failures ? 1 : 0);

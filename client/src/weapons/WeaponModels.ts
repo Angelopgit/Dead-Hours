@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { detailTexture, patchSurf } from '../rendering/SurfShader';
+import { bakeOcclusion, boxProject, chamferBox, loft, patchNoise, plate, type LoftOptions, type P2, type Ring } from '../rendering/Solid';
 import { SKINS, defaultBuild, encodeBuild, isHandgun, type BuildSlot, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
 
 /**
@@ -118,10 +120,40 @@ export function sightOf(id: WeaponId, build: WeaponBuild = defaultBuild(id)): Si
   return { eye: new THREE.Vector3(0, base + rail.y + rail.riser + view.h, irons.eye[2]), fov: view.fov, optic: view.optic };
 }
 
-type Part = { g: THREE.BufferGeometry; color: number; keep: boolean };
+/** What a part is made of: how rough, how metallic, and how readily its edges wear through. */
+export interface Surface {
+  rough: number;
+  metal: number;
+  /** 0..1: how much of the chamfered edges has worn through. */
+  wear?: number;
+  /** What shows where it has worn (bare aluminium, bright steel, scuffed plastic). */
+  worn?: number;
+}
+
+/** Real finishes (docs/art-style.md): the receiver, the barrel and the furniture of one gun differ. */
+export const SURF = {
+  /** Hard-anodized aluminium: receivers, rails, scope tubes. */
+  anodized: { rough: 0.5, metal: 0.55, wear: 0.42, worn: 0x74777b },
+  /** Parkerized or phosphated steel: barrels, sights, pins. */
+  steel: { rough: 0.6, metal: 0.7, wear: 0.4, worn: 0x70737a },
+  /** Blued or polished steel: bolts, slides, blades. */
+  blued: { rough: 0.34, metal: 0.85, wear: 0.5, worn: 0x9a9da2 },
+  /** Glass-filled polymer: handguards, stocks, grips, magazines. */
+  polymer: { rough: 0.8, metal: 0, wear: 0.3, worn: 0x4a4b4e },
+  rubber: { rough: 0.94, metal: 0 },
+  wood: { rough: 0.62, metal: 0, wear: 0.35, worn: 0x8a6a48 },
+  brass: { rough: 0.3, metal: 0.9 },
+} satisfies Record<string, Surface>;
+
+type Part = { g: THREE.BufferGeometry; color: number; keep: boolean; surface: Surface | null };
 
 /** Parts no finish paints over: bare steel, sight posts, glass. */
 const BARE = new Set([0x141516, 0x0e0e0e, 0x8e9296, 0xb6babe]);
+
+/** How far a surface shades its neighbours in the baked occlusion (metres). */
+const AO_REACH = 0.02;
+/** Detail map tiles per metre. */
+const DETAIL_TILES = 9;
 
 class Builder {
   readonly parts: Part[] = [];
@@ -129,6 +161,7 @@ class Builder {
   fitting = false;
   /** Self-lit parts (red dot, tritium and fiber-optic sights), drawn unlit so they read at night. */
   readonly glowParts: Part[] = [];
+  private surface: Surface | null = null;
   private readonly m = new THREE.Matrix4();
   private readonly q = new THREE.Quaternion();
   private readonly e = new THREE.Euler();
@@ -139,7 +172,13 @@ class Builder {
     geo.deleteAttribute('uv');
     this.q.setFromEuler(this.e.set(rx, ry, rz));
     geo.applyMatrix4(this.m.compose(new THREE.Vector3(x, y, z), this.q, new THREE.Vector3(1, 1, 1)));
-    (glow ? this.glowParts : this.parts).push({ g: geo, color, keep: this.fitting || BARE.has(color) });
+    (glow ? this.glowParts : this.parts).push({ g: geo, color, keep: this.fitting || BARE.has(color), surface: this.surface });
+  }
+
+  /** What the parts added from here on are made of (null: the gun's plain finish). */
+  as(surface: Surface | null): this {
+    this.surface = surface;
+    return this;
   }
 
   glow(w: number, h: number, d: number, color: number, x: number, y: number, z: number): this {
@@ -149,17 +188,31 @@ class Builder {
 
   /** Open ring around the Z axis (sight apertures, hoods, optic bodies) you can look through. */
   ring(r: number, t: number, z0: number, z1: number, color: number, x: number, y: number, segs = 10): this {
-    const chord = 2 * (r + t) * Math.tan(Math.PI / segs) + 0.0005;
-    for (let i = 0; i < segs; i++) {
-      const a = (i / segs) * Math.PI * 2;
-      const c = r + t / 2;
-      this.push(new THREE.BoxGeometry(chord, t, Math.abs(z1 - z0)), color, x + Math.cos(a) * c, y + Math.sin(a) * c, (z0 + z1) / 2, 0, 0, a - Math.PI / 2);
-    }
+    const o = r + t;
+    this.push(loft([{ z: z0, rx: o }, { z: z1, rx: o }, { z: z1, rx: r }, { z: z0, rx: r }, { z: z0, rx: o }], { segments: Math.max(segs, 12), caps: false }), color, x, y, 0);
     return this;
   }
 
   box(w: number, h: number, d: number, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): this {
     this.push(new THREE.BoxGeometry(w, h, d), color, x, y, z, rx, ry, rz);
+    return this;
+  }
+
+  /** A box with chamfered edges, which catch the light and wear. */
+  slab(w: number, h: number, d: number, bevel: number, color: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): this {
+    this.push(chamferBox(w, h, d, bevel), color, x, y, z, rx, ry, rz);
+    return this;
+  }
+
+  /** A side-view outline ([z, y] points) extruded across the gun, chamfered. */
+  plate(outline: P2[], width: number, color: number, bevel = 0, x = 0): this {
+    this.push(plate(outline, width, { bevel, x }), color, 0, 0, 0);
+    return this;
+  }
+
+  /** A tube along the barrel through stations (stepped barrels, handguards, scope bodies). */
+  loft(rings: Ring[], color: number, opts: LoftOptions = {}, x = 0, y = 0): this {
+    this.push(loft(rings, opts), color, x, y, 0);
     return this;
   }
 
@@ -169,20 +222,63 @@ class Builder {
     return this;
   }
 
-  /** Merged geometry with vertex colors; `paint` is a finish's colors (patchwork camo when several). */
-  build(glow = false, paint: number[] = []): THREE.BufferGeometry | null {
+  /** A short cylinder across the gun (pins, buttons, drums), centred at x. */
+  pin(r: number, len: number, color: number, x: number, y: number, z: number, segs = 8): this {
+    this.push(new THREE.CylinderGeometry(r, r, len, segs), color, x, y, z, 0, 0, Math.PI / 2);
+    return this;
+  }
+
+  /**
+   * Merged geometry with vertex colors; `paint` is a finish's colors (patchwork camo when several).
+   * Colors carry the baked occlusion and the wear on chamfered edges; `surf` carries each part's
+   * roughness and metalness (`plain` for parts that named no surface of their own).
+   */
+  build(glow = false, paint: number[] = [], plain: Surface = { rough: 0.55, metal: 0.35 }, painted: Surface | null = null): THREE.BufferGeometry | null {
     const parts = glow ? this.glowParts : this.parts;
     if (parts.length === 0) return null;
-    const c = new THREE.Color();
+    const c = new THREE.Color(), w = new THREE.Color();
     parts.forEach((p, i) => {
-      const n = p.g.getAttribute('position').count;
+      const pos = p.g.getAttribute('position');
+      const n = pos.count;
       const col = new Float32Array(n * 3);
-      c.setHex(paint.length && !p.keep ? finish(p.color, paint, i) : p.color);
-      for (let k = 0; k < n; k++) col.set([c.r, c.g, c.b], k * 3);
+      const surf = new Float32Array(n * 2);
+      const isPainted = paint.length > 0 && !p.keep;
+      const s = (isPainted && painted) || p.surface || plain;
+      c.setHex(isPainted ? finish(p.color, paint, i) : p.color);
+      // Under a finish, wear shows the gun's own color; bare parts show their metal.
+      w.setHex(isPainted ? p.color : s.worn ?? p.color);
+      const edge = p.g.getAttribute('edge');
+      const wear = glow ? 0 : s.wear ?? 0;
+      for (let k = 0; k < n; k++) {
+        let t = 0;
+        if (edge && wear > 0 && edge.getX(k) > 0.5) {
+          t = THREE.MathUtils.smoothstep(patchNoise(pos.getX(k), pos.getY(k), pos.getZ(k), 0.022), 1 - wear, 1 - wear * 0.35) * 0.85;
+        }
+        col[k * 3] = c.r + (w.r - c.r) * t;
+        col[k * 3 + 1] = c.g + (w.g - c.g) * t;
+        col[k * 3 + 2] = c.b + (w.b - c.b) * t;
+        // Worn-through metal is brighter and smoother than its coating.
+        surf[k * 2] = s.rough * (1 - 0.35 * t);
+        surf[k * 2 + 1] = isPainted && !painted ? s.metal * 0.5 + (s.metal * 0.5) * t : s.metal;
+      }
+      if (edge) p.g.deleteAttribute('edge');
       p.g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      p.g.setAttribute('surf', new THREE.BufferAttribute(surf, 2));
     });
     const merged = mergeGeometries(parts.map((p) => p.g), false)!;
     for (const p of parts) p.g.dispose();
+    const pos = merged.getAttribute('position').array, nor = merged.getAttribute('normal').array;
+    if (!glow) {
+      const ao = bakeOcclusion(pos, nor, AO_REACH);
+      const col = merged.getAttribute('color').array as Float32Array;
+      for (let k = 0; k < ao.length; k++) {
+        const shade = 0.3 + 0.7 * ao[k];
+        col[k * 3] *= shade;
+        col[k * 3 + 1] *= shade;
+        col[k * 3 + 2] *= shade;
+      }
+    }
+    merged.setAttribute('uv', new THREE.BufferAttribute(boxProject(pos, nor, DETAIL_TILES), 2));
     merged.computeBoundingSphere();
     return merged;
   }
@@ -227,31 +323,120 @@ interface Spec {
   trimRough?: number;
 }
 
-function m4(): Spec {
-  const b = new Builder()
-    .box(0.05, 0.06, 0.26, DARK, 0, 0.05, 0.08)
-    .box(0.045, 0.05, 0.2, BLACK, 0, 0.0, 0.06)
-    .box(0.062, 0.066, 0.24, 0x1a1b1d, 0, 0.05, 0.33)
-    .tube(0.011, 0.45, 0.62, STEEL, 0, 0.05)
-    .tube(0.015, 0.62, 0.67, STEEL, 0, 0.05, 6)
-    // Front sight post (co-witnessed low in the optic) between protective ears.
-    .box(0.004, 0.04, 0.006, BLACK, 0, 0.087, 0.43)
-    .box(0.03, 0.012, 0.02, BLACK, 0, 0.074, 0.43)
-    .box(0.004, 0.03, 0.016, BLACK, 0.011, 0.093, 0.43)
-    .box(0.004, 0.03, 0.016, BLACK, -0.011, 0.093, 0.43)
-    .box(0.02, 0.016, 0.03, BLACK, 0, 0.085, -0.02)
-    .tube(0.016, -0.21, -0.05, BLACK, 0, 0.042)
-    .box(0.045, 0.085, 0.11, BLACK, 0, 0.02, -0.22)
-    .box(0.05, 0.12, 0.02, 0x121212, 0, 0.01, -0.28)
-    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.35)
-    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08);
-  const mag = new Builder().box(0.024, 0.17, 0.062, 0x202124, 0, -0.08, 0.012, 0.18);
+/**
+ * A drawing's frame: points are given in millimetres, forward of the receiver's front face and
+ * up from the bore line, as dimension drawings give them, and land in model space.
+ */
+function drawn(z0: number, y0: number) {
   return {
-    body: b, mag: { b: mag, at: [0, -0.01, 0.12] },
-    muzzle: [0, 0.05, 0.68], fore: [0.035, -0.015, 0.25], eject: [-0.03, 0.06, 0.1], stock: [0, 0.03, -0.29], bolt: [0.02, 0.085, -0.02],
-    under: [0, 0.017, 0.33],
-    // Flip-up rear aperture, lined up with the front post.
-    irons: (r) => r.box(0.02, 0.012, 0.016, BLACK, 0, 0.092, 0.0).ring(0.0035, 0.002, -0.004, 0.004, BLACK, 0, 0.106, 10),
+    p: (pts: P2[]): P2[] => pts.map(([z, y]) => [z0 + z / 1000, y0 + y / 1000]),
+    z: (mm: number) => z0 + mm / 1000,
+    y: (mm: number) => y0 + mm / 1000,
+  };
+}
+
+/** Anodized receiver grey, furniture black, parkerized barrel. */
+const RECV = 0x2c2d30;
+const POLY = 0x1b1b1d;
+const PARK = 0x242528;
+const PORT = 0x08080a;
+
+/**
+ * Colt M4 carbine with a flat-top receiver (TM 9-1005-319-10): 838 mm with the stock out, a
+ * 368 mm barrel that stands 387 mm proud of the receiver with its flash hider, a 200 mm receiver,
+ * double-shield handguards and the front sight base 200 mm ahead of it. The hand on the grip is
+ * the origin, so everything else is placed from where a real one sits around that hand.
+ */
+function m4(): Spec {
+  const d = drawn(0.216, 0.05);
+  const b = new Builder();
+  // Upper receiver and its rail.
+  b.as(SURF.anodized)
+    .plate(d.p([[-200, -20], [-200, 19], [-193, 24], [-4, 24], [0, 19], [0, -20]]), 0.031, RECV, 0.003)
+    .slab(0.0155, 0.004, 0.19, 0.001, RECV, 0, d.y(25.5), d.z(-98));
+  for (let k = 0; k < 19; k++) b.box(0.0212, 0.0032, 0.0047, RECV, 0, d.y(28.9), d.z(-188 + k * 10));
+  // Lower receiver: magazine well, trigger housing, the ring the buffer tube screws into.
+  b.plate(d.p([[-2, -20], [-2, -32], [-13, -36], [-17, -79], [-80, -71], [-83, -50], [-150, -50], [-156, -60], [-184, -60], [-192, -44], [-203, -34], [-213, -28], [-213, 17], [-201, 17], [-201, -20]]), 0.03, RECV, 0.002)
+    .slab(0.012, 0.003, 0.07, 0.001, RECV, 0, d.y(-72), d.z(-117));
+  // Right side (-X): ejection port with the bolt showing, its door hanging open, the brass deflector, the forward assist.
+  b.box(0.002, 0.015, 0.047, PORT, -0.0152, d.y(3), d.z(-85))
+    .as(SURF.blued).box(0.002, 0.007, 0.04, 0x4c4f54, -0.0156, d.y(4), d.z(-86))
+    .as(SURF.anodized).box(0.0025, 0.015, 0.046, RECV, -0.0185, d.y(-11), d.z(-85), 0, 0, -0.55)
+    .plate(d.p([[-112, -3], [-112, 12], [-123, 9], [-126, -1]]), 0.008, RECV, 0.002, -0.016)
+    .tube(0.0058, d.z(-178), d.z(-150), RECV, -0.0185, d.y(5), 8)
+    .tube(0.0074, d.z(-184), d.z(-178), RECV, -0.0185, d.y(5), 8)
+    .pin(0.0045, 0.004, RECV, -0.0155, d.y(-38), d.z(-95));
+  // Left side: bolt catch and the selector. Charging handle across the back.
+  b.slab(0.004, 0.02, 0.011, 0.001, RECV, 0.0162, d.y(-25), d.z(-93))
+    .pin(0.0055, 0.004, RECV, 0.0155, d.y(-42), d.z(-168))
+    .box(0.003, 0.004, 0.017, RECV, 0.0175, d.y(-42), d.z(-161))
+    .slab(0.046, 0.008, 0.011, 0.002, RECV, 0, d.y(19), d.z(-204))
+    .slab(0.012, 0.007, 0.03, 0.001, RECV, 0, d.y(20.5), d.z(-190));
+  // Pins, trigger.
+  b.as(SURF.steel)
+    .pin(0.0038, 0.0312, 0x3a3c40, 0, d.y(-28), d.z(-11))
+    .pin(0.0038, 0.0312, 0x3a3c40, 0, d.y(-31), d.z(-190))
+    .plate(d.p([[-124, -50], [-131, -50], [-133, -60], [-130, -68], [-126, -68], [-127, -59]]), 0.006, STEEL, 0.001);
+  // Pistol grip.
+  b.as(SURF.polymer)
+    .plate(d.p([[-150, -50], [-152, -72], [-158, -76], [-160, -84], [-164, -96], [-184, -146], [-224, -138], [-200, -62], [-205, -48], [-196, -44], [-186, -50]]), 0.028, POLY, 0.007);
+  // Buffer tube with its castle nut, and the stock pulled out.
+  b.as(SURF.anodized)
+    .loft([{ z: d.z(-213), rx: 0.019 }, { z: d.z(-225), rx: 0.019 }, { z: d.z(-225), rx: 0.0145 }, { z: d.z(-292), rx: 0.0145 }], RECV, { segments: 10 }, 0, d.y(0));
+  b.as(SURF.polymer)
+    .plate(d.p([[-266, 20], [-438, 23], [-446, 16], [-446, -90], [-440, -98], [-423, -98], [-334, -40], [-316, -44], [-312, -34], [-284, -30], [-266, -20]]), 0.04, POLY, 0.005)
+    .plate(d.p([[-300, -22], [-300, -27], [-430, -86], [-436, -80]]), 0.0415, POLY, 0.0005)
+    .plate(d.p([[-276, 6], [-276, 2], [-436, 4], [-436, 8]]), 0.0415, POLY, 0.0005)
+    .box(0.042, 0.02, 0.008, PORT, 0, d.y(-52), d.z(-428))
+    .slab(0.014, 0.008, 0.03, 0.002, POLY, 0, d.y(-41), d.z(-300))
+    .as(SURF.rubber).slab(0.041, 0.118, 0.006, 0.002, 0x101011, 0, d.y(-37), d.z(-448));
+  // Barrel nut and delta ring, then the handguards with their ribs and vents.
+  b.as(SURF.steel)
+    .loft([{ z: d.z(0), rx: 0.019 }, { z: d.z(8), rx: 0.019 }, { z: d.z(8), rx: 0.0275 }, { z: d.z(12), rx: 0.0275 }, { z: d.z(28), rx: 0.0235 }], PARK, { segments: 12 }, 0, d.y(0));
+  const guard: Ring[] = [];
+  const taper = (mm: number) => 1 - 0.15 * ((mm - 28) / 168);
+  for (let k = 0; k < 7; k++) {
+    const z0 = 28 + k * 24;
+    for (const [z, deep] of [[z0, 1], [z0 + 3, 0], [z0 + 19, 0], [z0 + 22, 1]] as const) {
+      const r = taper(z) - deep * 0.06;
+      guard.push({ z: d.z(z), rx: 0.027 * r, ry: 0.0305 * r });
+    }
+  }
+  b.as(SURF.polymer).loft(guard, POLY, { segments: 12, power: 2.4 }, 0, d.y(0));
+  for (let k = 1; k < 7; k++) b.box(0.007, 0.003, 0.004, PORT, 0, d.y(30.5 * taper(28 + k * 24) - 1.2), d.z(27 + k * 24));
+  // Front sight base: clamp and bayonet lug, the A-frame, the ears around the post.
+  b.as(SURF.steel)
+    .loft([{ z: d.z(196), rx: 0.0245 }, { z: d.z(200), rx: 0.0245 }], PARK, { segments: 12 }, 0, d.y(0))
+    .plate(d.p([[200, -13], [200, 14], [238, 14], [240, -13], [238, -25], [226, -25], [226, -13]]), 0.021, PARK, 0.003)
+    .plate(d.p([[203, 12], [204, 50], [222, 50], [224, 44], [238, 12]]), 0.0105, PARK, 0.0015)
+    .plate(d.p([[210, 19], [212, 41], [226, 19]]), 0.011, PORT, 0)
+    .plate(d.p([[203, 50], [203, 63], [206, 66], [217, 66], [221, 62], [222, 50]]), 0.003, PARK, 0.0006, 0.0095)
+    .plate(d.p([[203, 50], [203, 63], [206, 66], [217, 66], [221, 62], [222, 50]]), 0.003, PARK, 0.0006, -0.0095)
+    .box(0.016, 0.004, 0.018, PARK, 0, d.y(51), d.z(212))
+    .box(0.0036, 0.01, 0.0036, BLACK, 0, d.y(52), d.z(212));
+  // Barrel: the step cut for a grenade launcher, then the flash hider with its slots.
+  b.loft([
+    { z: d.z(238), rx: 0.0095 }, { z: d.z(262), rx: 0.0095 }, { z: d.z(262), rx: 0.008 }, { z: d.z(300), rx: 0.008 },
+    { z: d.z(300), rx: 0.0095 }, { z: d.z(343), rx: 0.0095 }, { z: d.z(343), rx: 0.0078 }, { z: d.z(346), rx: 0.0078 },
+    { z: d.z(346), rx: 0.011 }, { z: d.z(383), rx: 0.011 }, { z: d.z(387), rx: 0.009 },
+  ], PARK, { segments: 12 }, 0, d.y(0));
+  for (const a of [0, 0.96, -0.96, 1.92, -1.92]) b.box(0.0034, 0.003, 0.02, PORT, Math.sin(a) * 0.0102, d.y(0) + Math.cos(a) * 0.0102, d.z(366), 0, 0, -a);
+  b.tube(0.0046, d.z(386.6), d.z(387.3), PORT, 0, d.y(0), 8);
+  b.as(null);
+  // The magazine: a 30-round aluminium one, straight in the well and curving forward below it.
+  const at: V3 = [0, -0.01, 0.167];
+  const md = drawn(0.216 - at[2], 0.05 - at[1]);
+  const mag = new Builder().as({ rough: 0.52, metal: 0.5, wear: 0.55, worn: 0x7e8185 })
+    .plate(md.p([[-20, -40], [-80, -40], [-81, -105], [-76, -150], [-61, -196], [-56, -200], [2, -186], [4, -181], [-10, -150], [-18, -105]]), 0.0225, 0x303134, 0.002)
+    .box(0.0236, 0.07, 0.004, 0x2a2b2e, 0, md.y(-128), md.z(-33), 0.16)
+    .box(0.0236, 0.07, 0.004, 0x2a2b2e, 0, md.y(-128), md.z(-60), 0.16)
+    .as(SURF.polymer).slab(0.0245, 0.006, 0.066, 0.0015, 0x1d1d1f, 0, md.y(-192), md.z(-28), -0.235);
+  return {
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.05, d.z(387)], fore: [0.035, -0.012, 0.31], eject: [-0.02, 0.055, d.z(-85)], stock: [0, 0.03, d.z(-451)], bolt: [0.02, 0.072, d.z(-204)],
+    under: [0, 0.019, 0.33],
+    // Flip-up rear aperture on the last rail slots, lined up with the front post.
+    irons: (r) => r.box(0.02, 0.012, 0.016, BLACK, 0, 0.092, 0.035).ring(0.0035, 0.002, 0.031, 0.039, BLACK, 0, 0.106, 10),
   };
 }
 
@@ -853,15 +1038,18 @@ export function createWeaponModel(id: WeaponId, build: WeaponBuild = defaultBuil
   const glowMaterials: THREE.Material[] = [];
   const geometries: THREE.BufferGeometry[] = [];
   const metallic = spec.metal || skin.metal;
-  const mesh = (b: Builder, parent: THREE.Object3D, metal = 0.35, trim = false) => {
+  /** Parts that name no surface of their own: the gun's plain finish, or bright metal. */
+  const plain: Surface = metallic ? { rough: 0.32, metal: 0.75 } : { rough: 0.55, metal: 0.35 };
+  const mesh = (b: Builder, parent: THREE.Object3D, trim = false) => {
     // Trim (wood, tape, rubber) keeps its own colors under a finish.
-    const g = b.build(false, trim ? undefined : paint);
+    const g = trim
+      ? b.build(false, [], { rough: spec.trimRough ?? 0.7, metal: 0.02 })
+      : b.build(false, paint, plain, skin.metal ? { rough: 0.3, metal: 0.85, wear: 0.3 } : null);
     if (!g) return null;
     geometries.push(g);
     // Double-sided: looking down the sights puts the eye inside apertures and optic tubes.
-    const mat = trim
-      ? new THREE.MeshStandardMaterial({ vertexColors: true, roughness: spec.trimRough ?? 0.7, metalness: 0.02, flatShading: true, side: THREE.DoubleSide })
-      : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: metallic ? 0.32 : 0.55, metalness: metallic ? 0.75 : metal, flatShading: true, side: THREE.DoubleSide });
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughnessMap: detailTexture(), bumpMap: detailTexture(), bumpScale: 0.12 });
+    patchSurf(mat);
     if (skin.glow && !trim) mat.emissive.setRGB(0.04, 0.22, 0.2);
     mat.userData.baseEmissive = mat.emissive.getHex();
     materials.push(mat);
@@ -878,7 +1066,7 @@ export function createWeaponModel(id: WeaponId, build: WeaponBuild = defaultBuil
     return m;
   };
   mesh(spec.body, root);
-  if (spec.trim) mesh(spec.trim, root, 0, true);
+  if (spec.trim) mesh(spec.trim, root, true);
   const sub = (s: { b: Builder; at: [number, number, number] } | undefined) => {
     if (!s) return null;
     const o = new THREE.Group();
