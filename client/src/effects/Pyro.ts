@@ -39,6 +39,20 @@ interface FireView {
 }
 
 /** Something burning that moves (a zombie on fire, a Molotov's rag): flame points for this frame. */
+/** Something with fuel in it that smokes or burns where it stands (a shot-up car, a pump, a drum). */
+export interface SmoulderPoint {
+  x: number;
+  y: number;
+  z: number;
+  /** 1 smoking, 2 on fire, 3 burnt out (black smoke, a last few flames), 4 the same with the flames gone. */
+  stage: number;
+  /** How big the thing is (1: a car's hood). */
+  size: number;
+  seed: number;
+  /** 0..1: how hard it smokes or burns now. */
+  strength: number;
+}
+
 export interface BurnPoint {
   x: number; y: number; z: number;
   /** Size of the flames there (1 = a torso). */
@@ -85,6 +99,8 @@ export class Pyro {
   private readonly flashes: { pos: THREE.Vector3; t: number; scale: number; fire: boolean }[] = [];
   private readonly fires = new Map<number, FireView>();
   private burning: BurnPoint[] = [];
+  private smouldering: SmoulderPoint[] = [];
+  private ringR: number = BLAST.radius;
   private quality = 1;
   reducedFlashing = false;
   private readonly cam = new THREE.Vector3();
@@ -146,8 +162,24 @@ export class Pyro {
 
   // ------------------------------------------------------------------ explosions
 
-  /** A frag going off at `pos` (on or near the floor). */
-  explosion(pos: THREE.Vector3): void {
+  /**
+   * A frag going off at `pos` (on or near the floor). `scale`: a bigger blast (a car's is 1.25).
+   * `fuel`: something with fuel in it going up: a taller, longer fireball, black smoke, burning scrap.
+   */
+  explosion(pos: THREE.Vector3, scale = 1, fuel = false): void {
+    if (scale !== 1 || fuel) {
+      // Thrown bigger and farther; a tank of fuel burns on as it rises.
+      const q = this.quality;
+      this.quality = q * scale * (fuel ? 1.15 : 1);
+      this.explosion(pos);
+      this.quality = q;
+      this.ringR = BLAST.radius * scale;
+      const last = this.flashes[this.flashes.length - 1];
+      if (last) last.scale = Math.min(1.6, scale);
+      if (fuel) this.fuelBurst(pos, scale);
+      return;
+    }
+    this.ringR = BLAST.radius;
     const fy = this.floor(pos);
     const o = this.tmp.set(pos.x, Math.max(pos.y, fy) + 0.25, pos.z);
     const ox = o.x, oy = o.y, oz = o.z;
@@ -238,6 +270,47 @@ export class Pyro {
     this.onBlastNear?.(near);
   }
 
+  /** What a fuel tank adds to a blast: a ball of fire rolling up, black smoke after it, burning scrap thrown wide. */
+  private fuelBurst(pos: THREE.Vector3, scale: number): void {
+    const fy = this.floor(pos);
+    const ox = pos.x, oy = Math.max(pos.y, fy) + 0.4, oz = pos.z;
+    for (let i = 0, c = this.n(12, scale); i < c; i++) {
+      this.fireball.emit({
+        x: ox + rand(-1.1, 1.1), y: oy + rand(0.2, 1.4), z: oz + rand(-1.1, 1.1),
+        vx: rand(-1.6, 1.6), vy: rand(3.5, 7.5), vz: rand(-1.6, 1.6),
+        life: rand(1.1, 1.9), size: rand(1.4, 2.2), size1: rand(3.2, 4.6),
+        heat: rand(0.7, 0.9), cool: rand(1.1, 1.7), erode0: 0.05, erode1: 0.95, drag: 1.6, lift: 2.2, floor: fy, alpha: 0.95,
+      });
+    }
+    for (let i = 0, c = this.n(16, scale); i < c; i++) {
+      const g = rand(0.035, 0.07);
+      this.smoke.emit({
+        x: ox + rand(-1, 1), y: oy + rand(0.6, 2), z: oz + rand(-1, 1), vx: rand(-0.8, 0.8), vy: rand(2.2, 4.8), vz: rand(-0.8, 0.8),
+        life: rand(6, 10), size: rand(1.4, 2), size1: rand(4.5, 7), r: g, g: g * 0.95, b: g * 0.9, alpha: rand(0.7, 0.9),
+        heat: rand(0.3, 0.5), cool: rand(3, 5), glow: 1, erode0: 0, erode1: 0.65, drag: 0.9, lift: 0.5, floor: fy, spin: rand(-0.3, 0.3),
+      });
+    }
+    // Scrap on fire, tumbling out and bouncing.
+    for (let i = 0, c = this.n(26, scale); i < c; i++) {
+      const d = this.randDir(0.3);
+      const s = rand(6, 17);
+      this.sparks.emit({
+        x: ox, y: oy, z: oz, vx: d.x * s, vy: Math.abs(d.y) * s + 3, vz: d.z * s,
+        life: rand(1.2, 2.8), size: rand(0.05, 0.11), r: 6, g: rand(1.8, 2.8), b: 0.5, alpha: 1, gravity: 1, drag: 0.5, stretch: 0.02, shape: SHAPE.spark, floor: fy + 0.03,
+      });
+    }
+    for (let i = 0, c = this.n(30, scale); i < c; i++) {
+      const d = this.randDir(0.3);
+      const s = rand(5, 16);
+      const shade = rand(0.02, 0.07);
+      this.debris.emit({
+        x: ox, y: oy, z: oz, vx: d.x * s, vy: Math.abs(d.y) * s + 3, vz: d.z * s,
+        life: rand(1.6, 3.2), size: rand(0.05, 0.14), r: shade, g: shade, b: shade, alpha: 1, gravity: 1, drag: 0.35, shape: SHAPE.hard, floor: fy + 0.03,
+      });
+    }
+    this.decals.add(DECAL.pool, this.tmp.set(ox, fy + 0.011, oz), this.up, rand(4.6, 5.6) * scale, 0.05, 0.045, 0.04, 0.95, 240);
+  }
+
   /** A Molotov breaking: glass flying, fuel splashing and catching in a rush of flame. */
   shatter(pos: THREE.Vector3, ground: THREE.Vector3): void {
     for (let i = 0, c = this.n(26); i < c; i++) {
@@ -291,6 +364,11 @@ export class Pyro {
   /** Where things are burning on moving bodies this frame. */
   setBurning(points: BurnPoint[]): void {
     this.burning = points;
+  }
+
+  /** The cars, pumps and drums that smoke or burn this frame. */
+  setSmouldering(points: SmoulderPoint[]): void {
+    this.smouldering = points;
   }
 
   /** A Molotov in flight: its rag burning. */
@@ -414,6 +492,39 @@ export class Pyro {
       this.ask(bx / bw, by / bw + 0.5, bz / bw, 1, 0.5, 0.16, glow, 10, 10, glow);
     }
 
+    // Shot-up cars, pumps and drums: smoke from the damage, flames once they catch, a black column after.
+    for (const p of this.smouldering) {
+      const d = Math.hypot(p.x - this.cam.x, p.z - this.cam.z);
+      if (d > 120) continue;
+      const lod = (d > 60 ? 0.4 : d > 30 ? 0.7 : 1) * this.quality;
+      const s = p.strength, z = p.size;
+      if ((p.stage === 2 || p.stage === 3) && s > 0.02) {
+        const big = p.stage === 2 ? 1 : 0.55 * s;
+        for (let k = 0; k < 3; k++) {
+          const seed = (p.seed + k * 0.31) % 1;
+          const flick = 0.8 + 0.2 * Math.sin(t * (8 + seed * 5) + seed * 40);
+          const a = seed * 6.283 + k * 2.1;
+          f.flame(p.x + Math.cos(a) * 0.35 * z, p.y - 0.15, p.z + Math.sin(a) * 0.35 * z, (0.7 + seed * 0.4) * z * big, (1.5 + seed * 0.9) * z * big * flick, seed, 0.85, Math.min(1, 0.5 + s));
+        }
+        if (Math.random() < dt * 9 * big * lod) {
+          this.sparks.emit({ x: p.x + rand(-0.5, 0.5) * z, y: p.y + rand(0.2, 0.9), z: p.z + rand(-0.5, 0.5) * z, vx: rand(-0.7, 0.7), vy: rand(1.5, 3.6), vz: rand(-0.7, 0.7), life: rand(0.8, 2), size: rand(0.014, 0.03), r: 6, g: rand(1.6, 2.6), b: 0.4, alpha: 1, gravity: -0.03, drag: 0.9, stretch: 0.012, shape: SHAPE.spark });
+        }
+        const fl = 0.8 + 0.14 * Math.sin(t * 11 + p.seed * 9) + 0.08 * Math.sin(t * 23.7 + p.seed * 31);
+        this.ask(p.x, p.y + 0.8, p.z, 1, 0.5, 0.16, 40 * big * fl, 12, 16, 40 * big);
+      }
+      // Smoke: a grey wisp from a hole in the hood, black and rolling from a fire.
+      const rate = p.stage === 1 ? 2.5 * s : p.stage === 2 ? 7 : p.stage === 3 ? 5 * s : 3.5 * s;
+      if (Math.random() < dt * rate * lod) {
+        const g = p.stage === 1 ? rand(0.16, 0.24) : rand(0.035, 0.075);
+        this.smoke.emit({
+          x: p.x + rand(-0.25, 0.25) * z, y: p.y + (p.stage === 1 ? 0.1 : 0.9), z: p.z + rand(-0.25, 0.25) * z, vx: rand(-0.25, 0.25), vy: rand(1.1, 2.2), vz: rand(-0.25, 0.25),
+          life: p.stage === 1 ? rand(2.2, 3.6) : rand(5, 8), size: (p.stage === 1 ? rand(0.25, 0.4) : rand(0.8, 1.2)) * z, size1: (p.stage === 1 ? rand(1.2, 1.9) : rand(3.4, 5.2)) * z,
+          r: g, g: g * 0.96, b: g * 0.93, alpha: p.stage === 1 ? rand(0.3, 0.45) : rand(0.6, 0.85),
+          glow: p.stage === 2 ? 0.9 : p.stage === 3 ? 0.4 * s : 0, erode0: 0.05, erode1: 0.8, drag: 0.6, lift: 0.4, spin: rand(-0.25, 0.25),
+        });
+      }
+    }
+
     // Shockwave.
     if (this.ringT >= 0) {
       this.ringT += dt;
@@ -422,7 +533,7 @@ export class Pyro {
         this.ringT = -1;
         this.ring.visible = false;
       } else {
-        this.ring.scale.setScalar(0.6 + u * BLAST.radius);
+        this.ring.scale.setScalar(0.6 + u * this.ringR);
         this.ringMat.uniforms.uT.value = u;
       }
     }
@@ -482,6 +593,7 @@ export class Pyro {
     this.fires.clear();
     this.flashes.length = 0;
     this.burning = [];
+    this.smouldering = [];
     for (const b of [this.fireball, this.smoke]) b.clear();
     this.sparks.clear();
     this.debris.clear();

@@ -34,6 +34,8 @@ export interface Vehicle extends DriveBody {
   lastDriver: string | null;
   /** Moved or used since the night started: snapshots carry it from then on. */
   touched: boolean;
+  /** Blown up (sim/Volatiles): a burnt shell nobody gets into. */
+  wrecked: boolean;
   body: RAPIER.RigidBody;
   hull: RAPIER.Collider;
   cabin: RAPIER.Collider;
@@ -123,7 +125,7 @@ export class Vehicles {
       const gas = def.fuel[0] + rand() * (def.fuel[1] - def.fuel[0]);
       this.list.push({
         id: this.list.length, kind, def, prop: p, pos, yaw: p.rotY, speed: 0, vel: { x: 0, y: 0, z: 0 }, steer: 0,
-        gas, engine: false, crank: 0, input: 0, seats: def.seats.map(() => null), lastDriver: null, touched: false,
+        gas, engine: false, crank: 0, input: 0, seats: def.seats.map(() => null), lastDriver: null, touched: false, wrecked: false,
         body, hull, cabin, hits: new Map(), noiseT: 0, prev: { ...pos }, prevYaw: p.rotY,
       });
     }
@@ -151,7 +153,7 @@ export class Vehicles {
 
   /** Whether a survivor standing here could get into this vehicle (on their feet, close to it, a seat free). */
   canEnter(p: SimPlayer, v: Vehicle): boolean {
-    if (!p.up || this.seated.has(p.id) || !v.seats.includes(null)) return false;
+    if (!p.up || v.wrecked || this.seated.has(p.id) || !v.seats.includes(null)) return false;
     const m = p.motion.pos;
     return Math.abs(m.y - v.pos.y) < 1.6 && outsideBy(v, m.x, m.z) <= VEHICLE.reach;
   }
@@ -396,6 +398,18 @@ export class Vehicles {
       const q = id ? this.sim.players.get(id) : null;
       if (q?.up && hurt > 0) this.sim.damagePlayer(q, hurt, v.pos);
     }
+  }
+
+  /** It blew up: the engine is dead for good, the tank is gone, and it stops where it is. */
+  wreck(v: Vehicle): void {
+    v.wrecked = true;
+    v.engine = false;
+    v.crank = 0;
+    v.input = 0;
+    v.gas = 0;
+    v.speed = 0;
+    v.vel.x = v.vel.z = 0;
+    v.touched = true;
   }
 
   /** The speed of the vehicle a survivor sits in (0 on foot). */

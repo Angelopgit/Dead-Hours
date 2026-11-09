@@ -1,0 +1,58 @@
+import type { PropKind } from '../types/world';
+
+/** A prop with fuel in it: shot enough it catches fire, burns a moment, and blows up. */
+export interface VolatileDef {
+  /** Gunfire (damage points) it takes before it catches fire. */
+  health: number;
+  /** Share of a round's damage that counts (the truck's plate turns most of it). */
+  armor: number;
+  /** Seconds it burns before it goes up, from gunfire: [least, most]. */
+  fuse: [number, number];
+  /** The blast, against a frag grenade's (radius and damage both scale with it). */
+  power: number;
+  /** Patches of burning fuel it leaves, and how far they spread (m). */
+  fire: number;
+  spread: number;
+  /** What it stands on when it is gone: a burnt-out shell that still blocks the way, or nothing. */
+  shell: boolean;
+  /** Middle of the body above the ground it stands on (m): where the blast comes from. */
+  centre: number;
+  /** Half its length and width (m), for how far a blast is from its bodywork. */
+  hx: number;
+  hz: number;
+}
+
+const CAR = { armor: 1, fire: 7, spread: 3.2, shell: true, centre: 0.85, hx: 2.25, hz: 0.95 };
+
+/**
+ * What blows up: every car, cruiser and wreck (parked or driven), the armored truck, the pumps at
+ * the gas station and loose oil drums.
+ */
+export const VOLATILES: Partial<Record<PropKind, VolatileDef>> = {
+  car: { ...CAR, health: 480, fuse: [3.2, 4.6], power: 1.25 },
+  policeCar: { ...CAR, health: 560, fuse: [3.2, 4.6], power: 1.25 },
+  wreckedCar: { ...CAR, health: 300, fuse: [2.4, 3.6], power: 1.05, fire: 5 },
+  armoredTruck: { health: 1500, armor: 0.4, fuse: [4, 5.5], power: 1.5, fire: 9, spread: 4, shell: true, centre: 1.3, hx: 3.1, hz: 1.2 },
+  pump: { health: 220, armor: 1, fuse: [1.6, 2.4], power: 1.3, fire: 8, spread: 3.4, shell: true, centre: 0.9, hx: 0.45, hz: 0.3 },
+  oilDrum: { health: 70, armor: 1, fuse: [0.9, 1.6], power: 0.8, fire: 5, spread: 2.4, shell: false, centre: 0.45, hx: 0.3, hz: 0.3 },
+};
+
+/** How far along a volatile prop is: untouched, smoking, on fire, blown. */
+export const VOLATILE_STAGE = { fine: 0, smoking: 1, burning: 2, blown: 3 } as const;
+
+export const VOLATILE = {
+  /** It starts to smoke with this share of its health left. */
+  smoke: 0.55,
+  /** A blast's damage to it: a frag's damage to a zombie at that distance, times this. */
+  blast: 2.4,
+  /** Set off by a blast it burns only this long (seconds): a row of cars goes up one after another. */
+  chain: [0.3, 0.8] as [number, number],
+  /** Each round into something already burning takes this much off its fuse (seconds). */
+  hurry: 0.25,
+  /** Damage to each survivor sitting in a car when it blows (they are thrown out). */
+  occupant: 85,
+  /** The spilled fuel burns this long (seconds). */
+  burn: 14,
+  /** Zombies hear something catch fire this far (m). */
+  noise: 30,
+} as const;

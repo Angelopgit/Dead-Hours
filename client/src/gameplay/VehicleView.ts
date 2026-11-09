@@ -41,6 +41,14 @@ interface Drawn {
   beam: Beam;
   /** Seconds since it last moved (still ones skip their light probe). */
   still: number;
+  /** Burnt out: its paint, finish and lamps as they were, to give back for the next night. */
+  paint: { color: Float32Array; pbr: Float32Array; glow: Float32Array } | null;
+}
+
+/** Soot over what a vertex was painted: nearly black, a trace of the old colour, mottled. */
+export function soot(r: number, g: number, b: number, i: number): [number, number, number] {
+  const n = 0.65 + 0.7 * (((i * 2654435761) >>> 0) / 4294967296);
+  return [(0.022 + r * 0.05) * n, (0.019 + g * 0.045) * n, (0.017 + b * 0.04) * n];
 }
 
 const _m = new THREE.Matrix4();
@@ -232,7 +240,7 @@ export class VehicleView {
       this.drawn.push({
         id: this.drawn.length, def, group, body, mats, head, tail, probe, anchors: part.anchors,
         home: { x: p.x, y, z: p.z, yaw: p.rotY }, pos: new THREE.Vector3(p.x, y, p.z), yaw: p.rotY, speed: 0, pitch: 0, roll: 0,
-        beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(), level: 0, dim: 1, head: true }, still: 0,
+        beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(), level: 0, dim: 1, head: true }, still: 0, paint: null,
       });
     }
     const blob = new THREE.MeshBasicMaterial({ color: 0x000000, alphaMap: blobTexture(), transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
@@ -257,9 +265,42 @@ export class VehicleView {
     this.shadows.setMatrixAt(d.id, _m.compose(_p, _q, _s));
   }
 
+  /**
+   * A vehicle that blew up: its body black with soot, its glass and lettering gone, its lamps dead.
+   * `on` false gives it back its paint (a new night).
+   */
+  char(id: number, on: boolean): void {
+    const d = this.drawn[id];
+    if (!d || (d.paint !== null) === on) return;
+    const g = d.body.geometry;
+    const color = g.getAttribute('color') as THREE.BufferAttribute;
+    const pbr = g.getAttribute('pbr') as THREE.BufferAttribute;
+    const glow = g.getAttribute('glow') as THREE.BufferAttribute;
+    const c = color.array as Float32Array, p = pbr.array as Float32Array, e = glow.array as Float32Array;
+    if (on) {
+      d.paint = { color: c.slice(), pbr: p.slice(), glow: e.slice() };
+      for (let i = 0; i < color.count; i++) {
+        // Tyres, seats and steel alike: the whole triangle one shade.
+        const [r, gg, b] = soot(c[i * 3], c[i * 3 + 1], c[i * 3 + 2], Math.floor(i / 3));
+        c[i * 3] = r; c[i * 3 + 1] = gg; c[i * 3 + 2] = b;
+        p[i * 3] = 0.95; p[i * 3 + 1] = 0.25; p[i * 3 + 2] = 0;
+      }
+      e.fill(0);
+    } else if (d.paint) {
+      c.set(d.paint.color);
+      p.set(d.paint.pbr);
+      e.set(d.paint.glow);
+      d.paint = null;
+    }
+    color.needsUpdate = pbr.needsUpdate = glow.needsUpdate = true;
+    // The glass and the lettering go with the fire (meshes only: lights are never hidden, see Pyro).
+    for (const o of d.group.children) if (o !== d.body && (o as THREE.Mesh).isMesh) o.visible = !on;
+  }
+
   /** Puts every vehicle back where the map parks it, lamps off (the menu, a new night). */
   reset(): void {
     for (const d of this.drawn) {
+      this.char(d.id, false);
       d.pos.set(d.home.x, d.home.y, d.home.z);
       d.yaw = d.home.yaw;
       d.speed = d.pitch = d.roll = 0;

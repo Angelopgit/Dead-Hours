@@ -6,6 +6,7 @@ import { worldBox } from '../rendering/GeometryUtils';
 import { BAKE_CELL, dressHouses } from './Houses';
 import { buildWaterTower } from './WaterTower';
 import { PropFactory, type PropBuildResult, type Updatable } from './Props';
+import { worldPieces } from './WorldPieces';
 import { Trees, type TreeTier } from './trees/Trees';
 import { Sky } from './Sky';
 import { Atmosphere } from './Atmosphere';
@@ -108,6 +109,7 @@ export class Neighborhood {
     // Fixed density: clutter is static geometry, and changing it would re-run the lighting bake.
     this.clutterCount = Clutter.build(map, this.lib, batch);
     this.staticMeshes = batch.build(this.root, 'map');
+    worldPieces.groups = batch.groups;
     // After the static batches: grass draws after the houses, so the ones in front hide it cheaply.
     this.grass = new Grass(map);
     this.root.add(this.grass.root);

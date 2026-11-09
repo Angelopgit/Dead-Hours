@@ -10,6 +10,13 @@
 - The town's water tower stands past the square with VESPER on its tank and a red light on top that shows through the fog. Two paths lead back to the alley behind Hale Street.
 - Three more cars you can drive are parked downtown.
 
+### Destruction
+
+- Cars blow up. Rounds and blasts wear one down: about half way it smokes, then it catches fire, burns for a few seconds (less the more you shoot it) and goes up in a fireball bigger than a grenade's, leaving burning fuel on the road and a burnt shell. Parked cars, the ones you drive, police cars, wrecks and the armored truck all do; the truck takes far more.
+- Gas pumps and oil drums go up the same way, sooner. Anything with fuel in it that stands near a blast is set alight in turn, so a row of cars or the pumps at the gas station go one after another.
+- A car that blows up with people in it throws them out hurt and never runs again. Fuel hurts everyone near it alike, whoever lit it. Zombies killed by it count for whoever set it off.
+- All of it is the same for everyone in an online night, including for players who join after.
+
 ### Controllers
 
 - Button prompts are drawn as the buttons on your pad: Xbox, PlayStation (DualSense and DualShock), Nintendo or a generic pad, picked from the one plugged in or set by hand in Settings.

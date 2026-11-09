@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  FIRE, THROWABLES, THROWING, flightStep, throwLaunch,
+  FIRE, THROWABLES, THROWING, VOLATILE_STAGE, flightStep, throwLaunch,
   type SimEvent, type Simulation, type ThrowKind, type Vec3,
 } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
@@ -163,16 +163,24 @@ export class Throwables {
       case 'explosion': {
         this.drop(e.id);
         const p = new THREE.Vector3(e.pos.x, e.pos.y, e.pos.z);
-        this.pyro.explosion(p);
+        this.pyro.explosion(p, e.power ?? 1, e.kind === 'fuel');
         audio.explosion(p);
         return true;
       }
       case 'fire': {
         this.drop(e.id);
         const p = new THREE.Vector3(e.pos.x, e.pos.y, e.pos.z);
-        this.pyro.shatter(p, new THREE.Vector3(e.ground.x, e.ground.y, e.ground.z));
+        // A bottle breaking, or fuel from something that blew up (no glass, and the blast was heard already).
+        if (!e.spill) this.pyro.shatter(p, new THREE.Vector3(e.ground.x, e.ground.y, e.ground.z));
         this.pyro.fire(e.id, e.patches.map(([x, y, z, r]) => ({ x, y, z, r })), e.start, e.end);
-        audio.molotov(p);
+        if (!e.spill) audio.molotov(p);
+        return true;
+      }
+      case 'volatile': {
+        // A car, a pump or a drum: the whoosh as it catches, torn metal as it goes up (Wrecks draws the rest).
+        const p = _v.set(e.pos.x, e.pos.y, e.pos.z);
+        if (e.stage === VOLATILE_STAGE.burning) audio.ignite(p);
+        else if (e.stage === VOLATILE_STAGE.blown) audio.impact('metal', p);
         return true;
       }
       case 'ignite': {

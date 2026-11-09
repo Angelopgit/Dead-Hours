@@ -139,13 +139,22 @@ export type SimEvent =
   | { type: 'thrown'; id: number; kind: ThrowKind; player: string; pos: Vec3; vel: Vec3; fuseAt: number }
   /** It bounced (or came to rest, speed 0): its new state, for clients drawing the flight. */
   | { type: 'bounce'; id: number; pos: Vec3; vel: Vec3; surface: Surface; speed: number }
-  /** A grenade went off (`id` 0 for blasts not from a thrown grenade). */
-  | { type: 'explosion'; id: number; kind: 'frag'; pos: Vec3; player: string }
+  /**
+   * A grenade went off (`id` 0 for blasts not from a thrown grenade), or something with fuel in it
+   * blew up (`fuel`). `power`: its size against a frag's, when it isn't 1.
+   */
+  | { type: 'explosion'; id: number; kind: 'frag' | 'fuel'; pos: Vec3; player: string; power?: number }
   /**
    * A Molotov broke (`pos`) and its fuel caught on the floor (`ground`): burning patches
-   * [x, y, z, radius] from `start` to `end` (simulation time).
+   * [x, y, z, radius] from `start` to `end` (simulation time). `spill`: fuel from a car, a pump or a
+   * drum that blew up instead (no bottle breaks).
    */
-  | { type: 'fire'; id: number; player: string; pos: Vec3; ground: Vec3; patches: [number, number, number, number][]; start: number; end: number }
+  | { type: 'fire'; id: number; player: string; pos: Vec3; ground: Vec3; patches: [number, number, number, number][]; start: number; end: number; spill?: boolean }
+  /**
+   * Something with fuel in it (sim/Volatiles: a car, a pump, a drum) started to smoke, caught fire
+   * or blew up: `stage` is its new VOLATILE_STAGE, `pos` the middle of it, `by` whoever did it.
+   */
+  | { type: 'volatile'; id: number; stage: number; pos: Vec3; by: string | null }
   /** A zombie caught fire. */
   | { type: 'ignite'; zombie: number }
   /**

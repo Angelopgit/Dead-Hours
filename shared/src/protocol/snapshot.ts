@@ -109,6 +109,8 @@ export interface Snapshot {
   bk?: (number | string)[][];
   /** Tonight's goals: [kind (GOAL_KINDS), progress, target] for each (sim/Contracts). */
   ct?: number[];
+  /** Cars, pumps and drums that have been shot at: [id, VOLATILE_STAGE, health]... (sim/Volatiles; left out while all are untouched). */
+  vo?: number[];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -236,6 +238,8 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   }
   if (cars.length) snap.vh = cars;
   snap.ct = sim.contracts.pack();
+  const vo = sim.volatiles.pack();
+  if (vo.length) snap.vo = vo;
   if (wear.length) snap.dw = wear;
   const raid = sim.raid;
   const van = raid.van;
@@ -738,6 +742,9 @@ export class Mirror {
         if (slot?.glass) sim.barricades.breakGlass(slot);
       });
     }
+    // What has been shot up or blown up (nothing mends: one left out keeps what this copy has).
+    const vo = s.vo ?? [];
+    for (let i = 0; i + 2 < vo.length; i += 3) sim.volatiles.remote(vo[i], vo[i + 1], vo[i + 2]);
     this.applyRaid(s, T, span);
     if (s.ct) sim.contracts.sync(s.ct);
     const lu = s.lu;

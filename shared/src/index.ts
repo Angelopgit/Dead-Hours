@@ -49,6 +49,8 @@ export * from './sim/Skateboards';
 export * from './config/vehicles';
 export * from './sim/VehicleDrive';
 export * from './sim/Vehicles';
+export * from './config/destruction';
+export * from './sim/Volatiles';
 export * from './config/bicycles';
 export * from './sim/Bicycles';
 export * from './sim/Squad';

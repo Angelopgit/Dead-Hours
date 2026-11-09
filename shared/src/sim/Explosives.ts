@@ -8,6 +8,21 @@ import { clamp, dist2D, type Vec3 } from './math';
 import type { Zombie } from './Zombie';
 import type { SimPlayer, Simulation } from './Simulation';
 import type { GibPart } from './events';
+import type { Volatile } from './Volatiles';
+
+/** What sets a blast apart from a plain frag grenade's. */
+export interface BlastOptions {
+  /** What blew: a grenade or rocket, or something with fuel in it. */
+  kind?: 'frag' | 'fuel';
+  /** Its size against a frag's (radius and damage). */
+  power?: number;
+  /** Colliders (by handle) the blast sees through: the shell of the car it came from. */
+  skip?: ReadonlySet<number>;
+  /** The volatile prop whose blast this is. */
+  source?: Volatile;
+  /** Survivors (by id) this blast leaves alone: whoever was thrown out of the car as it went up, hurt already. */
+  spare?: ReadonlySet<string>;
+}
 
 /** Something thrown, in flight or lying where it stopped. */
 export interface SimThrowable {
@@ -228,24 +243,32 @@ export class Explosives {
    * A blast at `pos` thrown by `by`: damage falling off with distance and cover, survivors hurt
    * too, the living knocked down, the dead torn apart by how close each part was to it.
    */
-  explode(pos: Vec3, by: SimPlayer, id = 0): void {
+  explode(pos: Vec3, by: SimPlayer, id = 0, opts: BlastOptions = {}): void {
     const sim = this.sim;
     const physics = sim.physics;
     // The centre, lifted off the floor it lies on (sight lines start above it).
     const o = { x: pos.x, y: pos.y + 0.18, z: pos.z };
-    const R = BLAST.radius;
+    const power = opts.power ?? 1;
+    const kind = opts.kind ?? 'frag';
+    const skip = opts.skip;
+    const R = BLAST.radius * power, inner = BLAST.inner * power;
+    const hurt = BLAST.damage * power;
+    // Survivors: a car going up is no kinder than a grenade, but not much worse either.
+    const hurtPlayers = BLAST.playerDamage * Math.min(power, 1.15);
     sim.noise(o, BLAST.noise, by.id);
-    sim.emit({ type: 'explosion', id, kind: 'frag', pos: { ...pos }, player: by.id });
-    sim.blastGlass(o, BLAST.glass);
+    sim.emit({ type: 'explosion', id, kind, pos: { ...pos }, player: by.id, ...(power !== 1 ? { power } : {}) });
+    sim.blastGlass(o, BLAST.glass * power);
     sim.blastDoors(o);
-    const force = (d: number) => (d <= BLAST.inner ? 1 : Math.pow(clamp(1 - (d - BLAST.inner) / (R - BLAST.inner), 0, 1), BLAST.falloff));
+    const force = (d: number) => (d <= inner ? 1 : Math.pow(clamp(1 - (d - inner) / (R - inner), 0, 1), BLAST.falloff));
     const visible = (p: Vec3) => {
       const dx = p.x - o.x, dy = p.y - o.y, dz = p.z - o.z;
       const d = Math.hypot(dx, dy, dz);
       if (d < 0.3) return true;
-      const hit = physics.raycast(o.x, o.y, o.z, dx / d, dy / d, dz / d, d);
+      const hit = skip ? physics.raycastSkip(o.x, o.y, o.z, dx / d, dy / d, dz / d, d, skip) : physics.raycast(o.x, o.y, o.z, dx / d, dy / d, dz / d, d);
       return hit === null || hit > d - 0.25;
     };
+    // Cars, pumps and drums near enough catch fire in turn.
+    sim.volatiles.blast(o, R, force, power, by, opts.source ?? null);
 
     // Zombies, nearest first (arms torn off nearer the blast come off before farther ones die).
     const near: { z: Zombie; d: number }[] = [];
@@ -279,7 +302,7 @@ export class Explosives {
       }
       const k = force(best) * cover;
       if (k <= 0.005) continue;
-      const damage = BLAST.damage * k;
+      const damage = hurt * k;
       const dir = this.away(o, chest, 0.35);
       const lethal = damage >= z.health;
       // What comes off: each part by how hard the blast tears at it (closer than the damage plateau).
@@ -328,19 +351,20 @@ export class Explosives {
           sim.severLeg(by, z, leg, q > 0.7 || z.rand() < 0.5 ? 'hip' : 'knee', this.away(o, centre(s), 0.4), false, damage, false);
         }
       }
-      if (z.alive && best < BLAST.inner * BLAST.knockDown) z.blasted(dir, k);
+      if (z.alive && best < inner * BLAST.knockDown) z.blasted(dir, k);
     }
 
     // Survivors: the thrower takes all of it, teammates a share.
     for (const p of sim.players.values()) {
-      if (!p.alive) continue;
+      if (!p.alive || opts.spare?.has(p.id)) continue;
       const c = p.chest;
       const d = Math.hypot(c.x - o.x, c.y - o.y, c.z - o.z);
       if (d > R) continue;
       const seen = [c, p.eye, { x: p.motion.pos.x, y: p.motion.pos.y + 0.3, z: p.motion.pos.z }].filter(visible).length;
       if (!seen) continue;
       const k = force(Math.max(0, d - PLAYER.radius)) * [0, 0.45, 0.8, 1][seen];
-      const dmg = BLAST.playerDamage * k * (p === by ? 1 : BLAST.teamShare);
+      // Fuel going up hurts everyone alike: nobody threw it.
+      const dmg = hurtPlayers * k * (p === by || kind === 'fuel' ? 1 : BLAST.teamShare);
       if (dmg >= 0.5) sim.damagePlayer(p, dmg, o);
     }
 
@@ -353,7 +377,7 @@ export class Explosives {
       const seen = [c, r.eye, { x: r.pos.x, y: r.pos.y + 0.3, z: r.pos.z }].filter(visible).length;
       if (!seen) continue;
       const k = force(Math.max(0, d - PLAYER.radius)) * [0, 0.45, 0.8, 1][seen];
-      if (k > 0.01) sim.raid.hit(by, r, BLAST.playerDamage * 1.5 * k, 'torso', c, this.away(o, c, 0.3));
+      if (k > 0.01) sim.raid.hit(by, r, hurtPlayers * 1.5 * k, 'torso', c, this.away(o, c, 0.3));
     }
 
     // Loose arms lying around are thrown about.
@@ -388,8 +412,7 @@ export class Explosives {
 
   /** The bottle breaks: fuel splashes out from where it hit and catches. */
   private shatter(t: SimThrowable, normal: Vec3): void {
-    const sim = this.sim;
-    const physics = sim.physics;
+    const physics = this.sim.physics;
     // Broken on a wall or a zombie: the fuel runs down to the floor below.
     const p = { ...t.pos };
     const down = physics.raycast(p.x, p.y + 0.05, p.z, 0, -1, 0, 6);
@@ -397,12 +420,34 @@ export class Explosives {
     const centre = { x: p.x + normal.x * 0.05, y: floorY, z: p.z + normal.z * 0.05 };
     // Spreads farther the way it was going.
     const hl = Math.hypot(t.vel.x, t.vel.z);
-    const fx = hl > 0.1 ? t.vel.x / hl : 0, fz = hl > 0.1 ? t.vel.z / hl : 0;
+    const dir = hl > 0.1 ? { x: t.vel.x / hl, z: t.vel.z / hl } : undefined;
+    this.pool(centre, t.by, t.id, p, { patches: FIRE.patches, spread: FIRE.spread, duration: FIRE.duration, dir });
+  }
+
+  /**
+   * Fuel from something that blew up (a car, a pump, a drum) burning on the ground about `ground`.
+   * `skip`: the shell it came out of, which the spill runs out from under.
+   */
+  spill(ground: Vec3, by: SimPlayer, opts: { patches: number; spread: number; duration: number; skip?: ReadonlySet<number> }): void {
+    this.pool({ ...ground }, by, this.nextId++, { x: ground.x, y: ground.y + 0.4, z: ground.z }, opts);
+  }
+
+  /** Burning patches spread over the floor about `centre` (not through walls, not onto another floor), alight from now. */
+  private pool(
+    centre: Vec3, by: SimPlayer, id: number, from: Vec3,
+    opts: { patches: number; spread: number; duration: number; dir?: { x: number; z: number }; skip?: ReadonlySet<number> },
+  ): void {
+    const sim = this.sim;
+    const physics = sim.physics;
+    const skip = opts.skip;
+    const ray = (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max: number) =>
+      (skip ? physics.raycastSkip(ox, oy, oz, dx, dy, dz, max, skip) : physics.raycast(ox, oy, oz, dx, dy, dz, max));
+    const fx = opts.dir?.x ?? 0, fz = opts.dir?.z ?? 0;
     const rand = sim.random;
     const patches: FirePatch[] = [{ x: centre.x, y: centre.y + 0.02, z: centre.z, r: FIRE.patchRadius * 1.15 }];
-    for (let i = 0; i < FIRE.patches * 2 && patches.length < FIRE.patches; i++) {
+    for (let i = 0; i < opts.patches * 2 && patches.length < opts.patches; i++) {
       const a = rand() * Math.PI * 2;
-      const d = FIRE.spread * Math.sqrt(0.15 + rand() * 0.85);
+      const d = opts.spread * Math.sqrt(0.15 + rand() * 0.85);
       let x = Math.cos(a) * d, z = Math.sin(a) * d;
       // Stretched along the throw.
       const along = x * fx + z * fz;
@@ -411,21 +456,22 @@ export class Explosives {
       // Not through walls, not down into another floor.
       const hx = tx - centre.x, hz = tz - centre.z;
       const hd = Math.hypot(hx, hz) || 1;
-      const wall = physics.raycast(centre.x, centre.y + 0.25, centre.z, hx / hd, 0, hz / hd, hd + 0.2);
+      const wall = ray(centre.x, centre.y + 0.25, centre.z, hx / hd, 0, hz / hd, hd + 0.2);
       if (wall !== null) continue;
-      const g = physics.raycast(tx, centre.y + 0.8, tz, 0, -1, 0, 0.8 + FIRE.maxDrop);
+      const g = ray(tx, centre.y + 0.8, tz, 0, -1, 0, 0.8 + FIRE.maxDrop);
       if (g === null) continue;
       const y = centre.y + 0.8 - g;
       if (Math.abs(y - centre.y) > FIRE.maxDrop) continue;
       if (patches.some((q) => Math.hypot(q.x - tx, q.z - tz) < FIRE.patchRadius * 0.55)) continue;
       patches.push({ x: tx, y: y + 0.02, z: tz, r: FIRE.patchRadius * (0.7 + rand() * 0.45) });
     }
-    const f: SimFire = { id: t.id, by: t.by, pos: centre, patches, start: sim.time, end: sim.time + FIRE.duration };
+    const f: SimFire = { id, by, pos: centre, patches, start: sim.time, end: sim.time + opts.duration };
     this.fires.push(f);
-    sim.noise(centre, FIRE.noise, t.by.id);
+    sim.noise(centre, FIRE.noise, by.id);
     sim.emit({
-      type: 'fire', id: f.id, player: t.by.id, pos: { ...p }, ground: { ...centre },
+      type: 'fire', id: f.id, player: by.id, pos: { ...from }, ground: { ...centre },
       patches: patches.map((q) => [q.x, q.y, q.z, q.r] as [number, number, number, number]), start: f.start, end: f.end,
+      ...(skip ? { spill: true } : {}),
     });
     // Whoever it broke on is alight at once.
     this.burn(0);

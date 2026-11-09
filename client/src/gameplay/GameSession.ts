@@ -34,6 +34,7 @@ import { createWeaponModel, sightOf, type Sight, type WeaponModel } from '../wea
 import { Effects } from '../effects/Effects';
 import { Pyro, type BurnPoint } from '../effects/Pyro';
 import { Throwables } from './Throwables';
+import { Wrecks } from './Wrecks';
 import { createThrowableModel } from '../weapons/ThrowableModels';
 import { clearGibCache } from '../characters/Gibs';
 import { ZombieView, type CorpseHit } from '../zombies/ZombieView';
@@ -190,6 +191,8 @@ export class GameSession {
   private readonly effects: Effects;
   private readonly pyro: Pyro;
   private readonly throws: Throwables;
+  /** Shot-up and burnt-out cars, pumps and drums. */
+  private readonly wrecks: Wrecks;
   private readonly burnPoints: BurnPoint[] = [];
   private wantThrow: ThrowKind | null = null;
   private readonly zombies: ZombieView;
@@ -446,6 +449,7 @@ export class GameSession {
       this.input.rumble(0.3 + k * 0.7, 220 + k * 420, 'blast');
     };
     this.throws = new Throwables(engine.scene, physics, this.pyro);
+    this.wrecks = new Wrecks(this.sim, vehicleView);
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
     this.syringes = new SyringePickups(engine.scene, field);
@@ -2930,8 +2934,10 @@ export class GameSession {
     const wick = priming === 'molotov' ? this.weapon.wickWorld(this.tmpC) : null;
     if (wick && dt > 0) this.pyro.rag(wick, this.tmpD.set(0, 0, 0));
     this.pyro.setBurning(this.zombies.flamePoints(this.burnPoints, cam));
+    this.pyro.setSmouldering(this.wrecks.update(dt));
     this.pyro.update(dt, renderTime, cam);
     const fires = this.phase === 'paused' && !this.link ? [] : this.pyro.activeFires(renderTime);
+    if (this.phase !== 'paused' || this.link) this.wrecks.burning(fires);
     // Up to three of the nearest burning zombies crackle too.
     const cp = cam.position;
     const near = this.burnPoints.filter((b) => b.size >= 0.9)
@@ -4071,6 +4077,7 @@ export class GameSession {
     if (sceneSmoke() === this.effects.smoke) setSceneSmoke(null);
     this.effects.dispose();
     this.throws.dispose();
+    this.wrecks.dispose();
     this.pyro.dispose();
     audio.fires([], 0);
     clearGibCache();

@@ -31,6 +31,7 @@ import { Explosives } from './Explosives';
 import { Skateboards } from './Skateboards';
 import { SKATEBOARD, type SkateTrick } from '../config/skateboards';
 import { Vehicles, type DriveState } from './Vehicles';
+import { Volatiles } from './Volatiles';
 import { VEHICLE } from '../config/vehicles';
 import { Bicycles } from './Bicycles';
 import { BICYCLE } from '../config/bicycles';
@@ -360,6 +361,8 @@ export class Simulation {
   readonly skateboards: Skateboards;
   /** Every drivable car, cruiser, wreck and the armored truck (sim/Vehicles). */
   readonly vehicles: Vehicles;
+  /** Cars, pumps and drums that blow up when they are shot (sim/Volatiles.ts). */
+  readonly volatiles: Volatiles;
   /** Bicycles lying about, who rides which and who stands on whose pegs. */
   readonly bicycles: Bicycles;
   /** Tonight's three team goals. */
@@ -403,6 +406,7 @@ export class Simulation {
     this.outdoorNodes = Int32Array.from(nodes);
     // Before the boards: none is laid on a car roof.
     this.vehicles = new Vehicles(this, opts.seed ?? 1);
+    this.volatiles = new Volatiles(this);
     this.skateboards = new Skateboards(this, opts.seed ?? 1, this.outdoorNodes);
     this.bicycles = new Bicycles(this, opts.seed ?? 1, this.outdoorNodes, this.skateboards.boards.map((b) => b.pos));
 
@@ -973,6 +977,7 @@ export class Simulation {
         const pos = { x: eye.x + (tx / L) * ob.distance, y: eye.y + (ty / L) * ob.distance, z: eye.z + (tz / L) * ob.distance };
         const door = this.doorByCollider.get(ob.collider.handle);
         this.emit({ type: 'impact', pos, normal: { x: ob.nx, y: ob.ny, z: ob.nz }, surface: ob.surface, dir: { x: tx / L, y: ty / L, z: tz / L }, ...(door?.wooden ? { door: door.index } : {}) });
+        this.volatiles.shot(ob.collider, def.damage * FALLOFF(def, ob.distance), p);
         return { end: pos, hit: 'world' };
       }
     }
@@ -1007,6 +1012,7 @@ export class Simulation {
       const door = this.doorByCollider.get(world.collider.handle);
       this.emit({ type: 'impact', pos, normal: { x: world.nx, y: world.ny, z: world.nz }, surface: world.surface, dir: { ...d }, ...(door?.wooden ? { door: door.index } : {}) });
       if (door) this.shootDoor(door, def.damage * FALLOFF(def, world.distance) * kept, eye);
+      else this.volatiles.shot(world.collider, def.damage * FALLOFF(def, world.distance) * kept, p);
       return { end: pos, hit: 'world' };
     }
     return { end: { x: o.x + d.x * maxD, y: o.y + d.y * maxD, z: o.z + d.z * maxD }, hit: 'none' };
@@ -2388,6 +2394,7 @@ export class Simulation {
     }
 
     this.explosives.step(dt);
+    this.volatiles.step();
 
     // Zombies far from everyone and not hunting update at a third of the rate.
     for (const z of this.zombies) {

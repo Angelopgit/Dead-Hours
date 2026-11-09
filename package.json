@@ -33,6 +33,7 @@
     "check:melee": "tsx client/tests/melee.check.ts",
     "check:models": "tsx client/tests/models.check.ts",
     "check:explosives": "tsx shared/tests/explosives.check.ts",
+    "check:destruction": "tsx shared/tests/destruction.check.ts",
     "check:skate": "tsx shared/tests/skateboards.check.ts && tsx server/tests/skate.check.ts",
     "check:windows": "tsx server/tests/vault.check.ts",
     "check:vehicles": "tsx shared/tests/vehicles.check.ts && tsx server/tests/vehicles.check.ts && tsx client/tests/vehicles.check.ts",

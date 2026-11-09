@@ -1,13 +1,14 @@
 import * as THREE from 'three';
-import { VEHICLES, isDrivable, ownerAt, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
+import { VEHICLES, VOLATILES, isDrivable, ownerAt, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
 import { LampGlare, patchLens } from './LampGlare';
 import { WIRE_RADIUS, wireCurves, wireMaterial } from './Wires';
 import { settings } from '../core/Settings';
-import { Kit, jitter, type PropBuildResult, type Surface } from './props/Kit';
+import { Kit, jitter, type Paint, type PropBuildResult, type Surface } from './props/Kit';
 import { chamferBox, loft, plate, type P2 } from '../rendering/Solid';
+import { worldPieces } from './WorldPieces';
 import { INTERIOR } from './props/interior';
 import { OUTDOOR } from './props/outdoor';
 
@@ -108,9 +109,9 @@ export class PropFactory {
     map.props.forEach((p, index) => {
       if (isDrivable(p)) this.buildVehicle(kit, p, index, result);
     });
-    for (const p of map.props) {
+    map.props.forEach((p, index) => {
       // Trees, pines and shrubs are drawn by Trees (instanced, levels of detail, wind).
-      if (p.forest || isDrivable(p) || p.kind === 'tree' || p.kind === 'pine' || p.kind === 'bush') continue;
+      if (p.forest || isDrivable(p) || p.kind === 'tree' || p.kind === 'pine' || p.kind === 'bush') return;
       const root = new THREE.Group();
       root.position.set(p.x, p.y ?? 0, p.z);
       root.rotation.y = p.rotY;
@@ -127,13 +128,13 @@ export class PropFactory {
         line.push(new THREE.Vector3(p.x, 0, p.z));
         poles.set(p.variant ?? 0, line);
       }
-      // Furniture goes down with the building it stands in.
-      batch.begin(ownerAt(map, p.x, p.z));
+      // Furniture goes down with the building it stands in; a car, a pump or a drum burns on its own.
+      batch.begin(VOLATILES[p.kind] ? `prop:${index}` : ownerAt(map, p.x, p.z));
       batch.addObject(root);
       batch.end();
       root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose(); });
       if (dynamicRoot.children.length) scene.add(dynamicRoot);
-    }
+    });
     for (const line of poles.values()) this.buildWires(line, batch);
     const glare = this.glare.build();
     if (glare) scene.add(glare);
@@ -363,10 +364,18 @@ export class PropFactory {
           k.dyn.position.y += 1.55;
         }
         const color = police ? 0x15181c : CAR_COLORS[(p.variant ?? 0) % CAR_COLORS.length];
-        const paint = this.lib.standard(color, wreck ? 0.75 : 0.45, 0.35, true);
-        paint.userData.envMap = !wreck;
-        const glass = this.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.08, metalness: 0.8 }));
-        glass.userData.envMap = true;
+        // Paint and glass carry their colour in the vertices, so a car that burns out can be blackened where it stands.
+        const paint: Paint = {
+          paint: true, color: new THREE.Color(color),
+          material: this.lib.custom(wreck ? 'car-paint-dull' : 'car-paint', () =>
+            new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: wreck ? 0.75 : 0.45, metalness: 0.35, flatShading: true, vertexColors: true })),
+        };
+        paint.material.userData.envMap = !wreck;
+        const glass: Paint = {
+          paint: true, color: new THREE.Color(0x0b0f14),
+          material: this.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.08, metalness: 0.8, vertexColors: true })),
+        };
+        glass.material.userData.envMap = true;
         // One that drives shows who is inside: clear glass over an open cabin.
         const open = isDrivable(p);
         this.carBody(k, paint, police, wreck);
@@ -420,6 +429,12 @@ export class PropFactory {
           const phase = p.x * 0.37;
           out.dynamic.push({
             update: (_dt, t) => {
+              // Burnt out: the strobes are dead.
+              if (worldPieces.burnt.has(p)) {
+                red.emissiveIntensity = blue.emissiveIntensity = 0;
+                rl.intensity = bl.intensity = 0;
+                return;
+              }
               const reduced = settings.value.accessibility.reducedFlashing;
               const cycle = (t * (reduced ? 0.6 : 1.6) + phase) % 1;
               const strobe = (c: number) => (reduced ? 0.5 + 0.5 * Math.sin(c * Math.PI * 2) : (c % 0.25 < 0.09 ? 1 : 0));
@@ -443,14 +458,14 @@ export class PropFactory {
           k.dyn.add(hl);
           out.dynamic.push({
             update: (_dt, t) => {
-              const on = (t % 1.1) < 0.55 ? 1 : 0;
+              const on = (t % 1.1) < 0.55 && !worldPieces.burnt.has(p) ? 1 : 0;
               const kk = settings.value.accessibility.reducedFlashing ? 0.35 : 1;
               amber.emissiveIntensity = on * 9 * kk;
               hl.intensity = on * 9 * kk;
             },
           });
           out.landmarks.wreck = new THREE.Vector3(p.x, 1, p.z);
-          out.anchors.push({ kind: 'alarm', position: new THREE.Vector3(p.x, 1, p.z), level: () => 1 });
+          out.anchors.push({ kind: 'alarm', position: new THREE.Vector3(p.x, 1, p.z), level: () => (worldPieces.burnt.has(p) ? 0 : 1) });
         }
         break;
       }
