@@ -74,7 +74,6 @@ export function detailTexture(): THREE.DataTexture {
   detail.magFilter = THREE.LinearFilter;
   detail.minFilter = THREE.LinearMipmapLinearFilter;
   detail.generateMipmaps = true;
-  detail.anisotropy = 4;
   detail.needsUpdate = true;
   return detail;
 }

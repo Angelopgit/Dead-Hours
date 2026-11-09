@@ -12,7 +12,7 @@ Low poly, but of a real thing. A model here should pass two tests: its black sil
 4. **Parts are made of something.** One mesh carries each part's roughness and metalness per vertex (`SURF`, `patchSurf`): anodized aluminium, parkerized steel, polymer, rubber and wood sit in one draw call and answer the light differently.
 5. **Wear where hands and holsters reach.** Chamfers lose their finish in patches (the `edge` attribute); under a paint finish the gun's own color shows through.
 6. **Parts sit in each other's shade.** Occlusion is baked into the vertices when a model is built (`bakeOcclusion`), so a magazine darkens its well and a rail its receiver. No texture, no download.
-7. **One shared detail map.** A 256² map of grain and handling scratches, made from arithmetic at start, tiles over every hard surface (`detailTexture`).
+7. **Shape before texture.** A shared 256² map of grain and handling scratches exists (`detailTexture`, made from arithmetic at start) but stays off the guns: one more texture read per pixel cost a tenth of the frame when aiming in the software renderer, for a detail seen only under a torch. Turn it on per material once it is measured on a real GPU.
 
 The kit is `client/src/rendering/Solid.ts` and `SurfShader.ts`. Models stay code: the character creator, the body sliders, severed limbs and attachments all rebuild meshes while the game runs, which imported files could not do.
 
@@ -22,11 +22,11 @@ Sized for the worst street: 90 zombies, four survivors and their guns, on a phon
 
 | Asset | Triangles | Draw calls | Texture memory | Far version |
 | --- | --- | --- | --- | --- |
-| Held gun | 4,500 | 5 (body, magazine, action, lit sights) | shared detail map, 0.35 MB with mips | none: at most 8 are ever drawn |
-| Melee weapon | 1,500 | 3 | shared detail map | none |
+| Held gun | 4,500 | 5 (body, magazine, action, lit sights) | none | none: at most 8 are ever drawn |
+| Melee weapon | 1,500 | 3 | none | none |
 | Survivor | 9,000 | 3 | none (vertex color, fabric pattern in the shader) | none: at most 4 |
 | Zombie | 4,200 average over the 30 looks, 6,500 heaviest | 2 | shared 32³ noise | lite decay shader on Phone and Low |
-| Drivable car | 6,000 | 3 (body, glass, lights) | shared detail map | parked cars stay in the static batches |
+| Drivable car | 6,000 | 3 (body, glass, lettering) | none | parked cars stay in the static batches |
 
 A full street is 90 x 4,200 = 380k zombie triangles; everything else on this page together stays under 60k. `npm run check:models` fails when a model goes over.
 
@@ -35,10 +35,19 @@ A full street is 90 x 4,200 = 380k zombie triangles; everything else on this pag
 - `npm run check:models`: budgets, and each gun's length against the real one.
 - `/dev/models.html?gun=ar`: the same four cameras for every model (flat side view to lay over a dimension drawing, two quarters by day, two under the night's lamp and torch). Before and after shots come from these.
 - `npm run check:sights`, `check:melee`, `check:vehicles`: the hands, sights and seats still fit.
-- Frame cost is measured with the GPU timer on `/dev/zbench.html` and a pinned night view, before and after.
+- Frame cost is measured before and after on `/dev/fp.html` (the gun in hand, over the shoulder and down the sights) and `/dev/zbench.html` (a street of zombies), old tree against new on two dev servers.
 
 ## Rebuilt so far
 
 | Model | From | Before | After |
 | --- | --- | --- | --- |
-| M4A1 | TM 9-1005-319-10: 838 mm stock out, 368 mm barrel | 556 triangles, 960 mm (15% long) | 3,158 triangles, 838 mm |
+| M4A1 | TM 9-1005-319-10: 838 mm stock out, 368 mm barrel | 556 triangles, 960 mm (15% long) | 3,158 triangles, 838 mm, 3 draw calls as before |
+| Sedan, police car | hard points kept (4.4 m body, 2.7 m wheelbase, 1.86 m wide); outline of a mid-90s American sedan | 824 triangles, a box on octagons | 2,900 triangles, 1 draw call as before |
+
+Measured in the software renderer (SwiftShader, 1280x720, no GPU on the build machine, so read these as relative): the M4 over the shoulder costs 5% more of the frame than the old one, and 31% more down the sights, where the slimmer rifle also hides less of the arms behind it. The star flash and barrel smoke use the particle pools already in the scene. Models are code, so the download grew by the source of the kit and the outlines only.
+
+## Next
+
+- Bodies: against a body survey (ANSUR II medians scaled to the survivor's height) the head is about 30% too large, the feet 12% short, the thighs 17% thin and the hips 9% narrow. `HEAD_K` in `OutfitKit.ts` is the head's one number.
+- The other guns in `check:models`' waiting list, worst first: M249 (+15%), Mk 14 (+11%), M17 (-6%).
+- Cars: a damage state per crash, exhaust, and the truck.

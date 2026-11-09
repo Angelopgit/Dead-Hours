@@ -1262,6 +1262,7 @@ export class GameSession {
     if (running) this.drops.update(live, renderTime, this.engine.camera.position);
     this.drops.helicopters(this.helis);
     audio.helicopters(this.phase === 'paused' && !this.link ? new Map() : this.helis);
+    if (this.effects.barrelWarm) this.effects.barrel(this.weapon.muzzleWorld(this.tmpA), live);
     this.effects.update(live, this.engine.camera);
     this.updateFire(live, renderTime);
     this.rack?.update(dt, this.engine.camera);
@@ -1811,7 +1812,7 @@ export class GameSession {
     this.weapon.fired(def, this.me.arsenal.weapon.mag);
     const muzzle = this.weapon.muzzleWorld(this.tmpA);
     const dir = this.weapon.muzzleDir(this.tmpB);
-    this.effects.muzzle(muzzle, dir, weapon);
+    this.effects.muzzle(muzzle, dir, weapon, true);
     audio.gunshot(weapon, muzzle, true, undefined, this.me.arsenal.builds[weapon]?.muzzle === 'suppressor' || weapon === 'wraith');
     const steady = this.sim.boosted(this.me, 'focus') ? BOOSTS.focus.recoil : 1;
     const kick = (0.006 + def.recoil * 0.014) * (this.player.aiming ? 0.75 : 1) * (this.player.prone ? 0.6 : this.player.crouching ? 0.8 : 1) * steady;

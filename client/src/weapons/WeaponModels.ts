@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { detailTexture, patchSurf } from '../rendering/SurfShader';
+import { patchSurf } from '../rendering/SurfShader';
 import { bakeOcclusion, boxProject, chamferBox, loft, patchNoise, plate, type LoftOptions, type P2, type Ring } from '../rendering/Solid';
 import { SKINS, defaultBuild, encodeBuild, isHandgun, type BuildSlot, type WeaponBuild, type WeaponId } from '@dead-hours/shared';
 
@@ -265,7 +265,14 @@ class Builder {
       p.g.setAttribute('color', new THREE.BufferAttribute(col, 3));
       p.g.setAttribute('surf', new THREE.BufferAttribute(surf, 2));
     });
-    const merged = mergeGeometries(parts.map((p) => p.g), false)!;
+    // Rear parts first: the eye is behind the gun (over the shoulder, down the sights), so the stock
+    // and receiver are drawn before what they hide and the hidden pixels are never shaded.
+    const rear = (p: Part) => {
+      if (!p.g.boundingBox) p.g.computeBoundingBox();
+      return p.g.boundingBox!.min.z;
+    };
+    const ordered = [...parts].sort((a, b) => rear(a) - rear(b));
+    const merged = mergeGeometries(ordered.map((p) => p.g), false)!;
     for (const p of parts) p.g.dispose();
     const pos = merged.getAttribute('position').array, nor = merged.getAttribute('normal').array;
     if (!glow) {
@@ -1048,7 +1055,7 @@ export function createWeaponModel(id: WeaponId, build: WeaponBuild = defaultBuil
     if (!g) return null;
     geometries.push(g);
     // Double-sided: looking down the sights puts the eye inside apertures and optic tubes.
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughnessMap: detailTexture(), bumpMap: detailTexture(), bumpScale: 0.12 });
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide });
     patchSurf(mat);
     if (skin.glow && !trim) mat.emissive.setRGB(0.04, 0.22, 0.2);
     mat.userData.baseEmissive = mat.emissive.getHex();

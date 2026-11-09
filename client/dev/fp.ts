@@ -14,6 +14,7 @@ import { PlayerWeapon, type HeldState } from '../src/weapons/PlayerWeapon';
 import { ThirdPersonCamera } from '../src/gameplay/ThirdPersonCamera';
 import type { WeaponModel } from '../src/weapons/WeaponModels';
 import type { Physics } from '../src/core/Physics';
+import { Effects } from '../src/effects/Effects';
 
 const q = new URLSearchParams(location.search);
 const gun = (q.get('gun') ?? 'akimbo') as WeaponId;
@@ -64,6 +65,9 @@ const s: HeldState = {
   builds: { [gun]: { ...defaultBuild(gun), ...(optic ? { optic } : {}) } },
 };
 const model = () => (weapon as unknown as { ensure(id: WeaponId): WeaponModel }).ensure(gun);
+// `fx=1` draws the game's own muzzle flash and barrel smoke.
+const fx = q.get('fx') ? new Effects(scene, physics) : null;
+const burst = Number(q.get('burst') ?? 0);
 const feet = new THREE.Vector3();
 let t = 0, nextShot = 0.4;
 const DT = 1 / 60;
@@ -83,9 +87,16 @@ function step(): void {
     nextShot = t + 1 / fire;
     a.mag = a.mag > 1 ? a.mag - 1 : def.magazine;
     weapon.fired(def, a.mag);
+    if (fx) fx.muzzle(weapon.muzzleWorld(new THREE.Vector3()), weapon.muzzleDir(new THREE.Vector3()), gun, true);
     cam.addRecoil((0.006 + def.recoil * 0.014) * 0.75, (Math.random() - 0.5) * def.recoil * 0.008);
   }
   weapon.update(DT, s, { aim: 1, sprinting: false, aimPoint: cam.aimPoint, ads: cam.ads, eye: cam.eye, view: cam.view });
+  if (fx) {
+    // `burst=1.5` stops the firing after that many seconds, to watch the barrel smoke afterwards.
+    if (burst > 0 && t > 0.4 + burst) nextShot = Infinity;
+    if (fx.barrelWarm) fx.barrel(weapon.muzzleWorld(new THREE.Vector3()), DT);
+    fx.update(DT, camera);
+  }
 }
 for (let i = 0; i < 60; i++) step();
 renderer.render(scene, camera);

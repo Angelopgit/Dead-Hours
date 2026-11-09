@@ -78,6 +78,18 @@ export class SmokeWisps implements SmokeSink {
     });
   }
 
+  /** A thread of smoke off a hot barrel: thin, quick to rise and gone in a second or two. `k` is how hot (0..1). */
+  barrel(at: THREE.Vector3, k: number): void {
+    if (!this.keep(at)) return;
+    this.batch.emit({
+      x: at.x + rand(-0.004, 0.004), y: at.y + 0.006, z: at.z + rand(-0.004, 0.004),
+      vx: rand(-0.05, 0.05), vy: rand(0.16, 0.3), vz: rand(-0.05, 0.05),
+      life: rand(0.9, 1.6), size: 0.012, size1: rand(0.06, 0.11),
+      r: 0.7, g: 0.71, b: 0.74, alpha: 0.13 + 0.11 * k,
+      erode0: 0.2, erode1: 0.92, drag: 0.9, lift: 0.16, spin: rand(-1, 1),
+    });
+  }
+
   exhale(at: THREE.Vector3, dir: THREE.Vector3, kind: SmokeKind, k: number): void {
     if (!this.keep(at)) return;
     const p = BREATH[kind];

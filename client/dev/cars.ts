@@ -130,4 +130,13 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 frame();
-Object.assign(window, { __carsReady: true });
+/** Triangles of each vehicle's merged body, for the budgets in docs/art-style.md. */
+function bodyTriangles(): number[] {
+  const out: number[] = [];
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh && m.geometry.getAttribute('pbr')) out.push(m.geometry.getAttribute('position').count / 3);
+  });
+  return out;
+}
+Object.assign(window, { __carsReady: true, __carTriangles: bodyTriangles });

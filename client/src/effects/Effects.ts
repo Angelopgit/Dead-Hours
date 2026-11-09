@@ -38,6 +38,10 @@ const SURFACES: Record<Surface, SurfaceFx> = {
 const BLOOD: [number, number, number] = [0.24, 0.008, 0.008];
 const BLOOD_DECAL: [number, number, number] = [0.34, 0.03, 0.025];
 
+/** Rifles with a slotted flash hider: the flash vents sideways and up as well as forward. */
+const BIRDCAGE = new Set<WeaponId>(['ar', 'battle', 'lmg', 'marksman']);
+/** One shot of these heats the barrel as much as a burst. */
+const HEAVY = new Set<WeaponId>(['shotgun', 'sniper', 'wraith', 'rpg']);
 const FLASH: Partial<Record<WeaponId, { size: number; light: number }>> = {
   ar: { size: 0.42, light: 1 }, smg: { size: 0.32, light: 0.8 }, shotgun: { size: 0.65, light: 1.4 },
   marksman: { size: 0.55, light: 1.2 }, pistol: { size: 0.3, light: 0.7 }, akimbo: { size: 0.3, light: 0.7 }, machete: { size: 0, light: 0 },
@@ -74,6 +78,12 @@ export class Effects {
   private quality = 1;
   gore: Gore = 'full';
   reducedFlashing = false;
+  /** This survivor's barrel: 0 cold to 1 smoking, the pause after the last shot, and the next puff. */
+  private heat = 0;
+  private heatWait = 0;
+  private heatPuff = 0;
+  private readonly tmpJet = new THREE.Vector3();
+  private readonly tmpJet2 = new THREE.Vector3();
   private readonly camPos = new THREE.Vector3();
   private dripBudget = 0;
   private readonly tmp = new THREE.Vector3();
@@ -559,10 +569,34 @@ export class Effects {
     this.decals.add(DECAL.pool, pos, this.up, s, BLOOD_DECAL[0] * 0.9, BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, life, grow);
   }
 
-  muzzle(pos: THREE.Vector3, dir: THREE.Vector3, weapon: WeaponId): void {
+  /**
+   * A shot's flash. Rifles with a slotted flash hider vent it up and to the sides as well as
+   * forward, the star a birdcage makes. `own` is this survivor's own gun, whose barrel heats.
+   */
+  muzzle(pos: THREE.Vector3, dir: THREE.Vector3, weapon: WeaponId, own = false): void {
     const f = FLASH[weapon] ?? FLASH.machete!;
     if (!f.size) return;
     const dim = this.reducedFlashing ? 0.45 : 1;
+    if (own) {
+      this.heat = Math.min(1, this.heat + (HEAVY.has(weapon) ? 0.34 : 0.085));
+      this.heatWait = 0.14;
+    }
+    if (BIRDCAGE.has(weapon)) {
+      const right = this.tmpJet.crossVectors(dir, this.up);
+      if (right.lengthSq() > 1e-6) {
+        right.normalize();
+        const upv = this.tmpJet2.crossVectors(right, dir);
+        for (const a of [0, 1.13, -1.13]) {
+          const c = Math.cos(a), sn = Math.sin(a);
+          const jx = upv.x * c + right.x * sn, jy = upv.y * c + right.y * sn, jz = upv.z * c + right.z * sn;
+          this.glow.emit({
+            x: pos.x + jx * 0.02, y: pos.y + jy * 0.02, z: pos.z + jz * 0.02,
+            vx: jx * 5 + dir.x * 2, vy: jy * 5 + dir.y * 2, vz: jz * 5 + dir.z * 2,
+            life: 0.035, size: f.size * 0.24, r: 4.4 * dim, g: 2.5 * dim, b: 1 * dim, alpha: 0.85, stretch: 0.022, shape: SHAPE.spark,
+          });
+        }
+      }
+    }
     this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, vx: 0, vy: 0, vz: 0, life: 0.045, size: f.size * rand(0.8, 1.1), size1: f.size * 0.6, r: 5 * dim, g: 3 * dim, b: 1.3 * dim, alpha: 1, shape: SHAPE.flash });
     this.glow.emit({
       x: pos.x + dir.x * 0.08, y: pos.y + dir.y * 0.08, z: pos.z + dir.z * 0.08,
@@ -579,6 +613,25 @@ export class Effects {
     this.light.position.copy(pos).addScaledVector(dir, 0.15);
     this.lightPower = f.light * dim;
     this.lightT = 0.06;
+  }
+
+  /**
+   * Each frame, with where this survivor's muzzle is now: after a string of shots the barrel
+   * smokes for a few seconds once the firing stops, the smoke rising from the gun as it moves.
+   */
+  barrel(muzzle: THREE.Vector3, dt: number): void {
+    this.heat = Math.max(0, this.heat - dt * 0.2);
+    this.heatWait -= dt;
+    if (this.heatWait > 0 || this.heat < 0.3) return;
+    this.heatPuff -= dt * (6 + 16 * this.heat);
+    if (this.heatPuff > 0) return;
+    this.heatPuff = 1;
+    this.smoke.barrel(muzzle, this.heat);
+  }
+
+  /** Whether the barrel is still warm enough to ask where the muzzle is. */
+  get barrelWarm(): boolean {
+    return this.heat > 0.02;
   }
 
   /** Bright streak from the muzzle to where the round stopped. */
