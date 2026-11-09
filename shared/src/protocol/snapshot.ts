@@ -111,6 +111,10 @@ export interface Snapshot {
   ct?: number[];
   /** Cars, pumps and drums that have been shot at: [id, VOLATILE_STAGE, health]... (sim/Volatiles; left out while all are untouched). */
   vo?: number[];
+  /** Bays of wall and pillars blown out of structures still standing: indices into `map.parts` (sim/Structures; left out while there are none). */
+  bp?: number[];
+  /** Structures that have fallen: indices into `map.structures`. */
+  fs?: number[];
 }
 
 /** Bit flags in a motion message and a snapshot's player motion. */
@@ -240,6 +244,9 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
   snap.ct = sim.contracts.pack();
   const vo = sim.volatiles.pack();
   if (vo.length) snap.vo = vo;
+  const bp = sim.structures.packGone(), fs = sim.structures.packFallen();
+  if (bp.length) snap.bp = [...bp];
+  if (fs.length) snap.fs = [...fs];
   if (wear.length) snap.dw = wear;
   const raid = sim.raid;
   const van = raid.van;
@@ -745,6 +752,7 @@ export class Mirror {
     // What has been shot up or blown up (nothing mends: one left out keeps what this copy has).
     const vo = s.vo ?? [];
     for (let i = 0; i + 2 < vo.length; i += 3) sim.volatiles.remote(vo[i], vo[i + 1], vo[i + 2]);
+    if (s.bp || s.fs) sim.structures.remote(s.bp ?? [], s.fs ?? []);
     this.applyRaid(s, T, span);
     if (s.ct) sim.contracts.sync(s.ct);
     const lu = s.lu;

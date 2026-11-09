@@ -341,7 +341,7 @@ function gasStation(b: MapBuilder): void {
   // Forecourt and canopy.
   b.boxMinMax(72, 0, -33, 110, 0.02, -7, 'concrete', { collide: false });
   // The canopy stands on four steel columns: blow two out and it comes down.
-  b.structure({ id: 'gas-canopy', kind: 'canopy', x: 91, z: -17, w: 20, d: 10, top: 5.6, label: 'THE GAS STATION CANOPY' });
+  b.structure({ id: 'gas-canopy', kind: 'canopy', x: 91, z: -17, w: 20, d: 10, top: 5.6, base: 0, label: 'THE GAS STATION CANOPY' });
   b.boxMinMax(81, 5.2, -22, 101, 5.6, -12, 'roofFlat', { owner: 'gas-canopy' });
   for (const [x, z] of [[83, -14], [99, -14], [83, -20], [99, -20]]) b.pillar('gas-canopy', x, z, 0.5, 0, 5.2, 'metal');
   for (const ix of [86, 96]) {

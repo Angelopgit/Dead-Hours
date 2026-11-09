@@ -266,6 +266,19 @@ export class DecalBatch {
     sendSlots(this.mesh.instanceMatrix, i);
   }
 
+  /** Takes away every mark inside a box (the wall they were on is gone). */
+  removeIn(min: THREE.Vector3, max: THREE.Vector3): void {
+    const e = this.e;
+    for (let i = 0; i < this.mesh.count; i++) {
+      const s = this.slots[i];
+      if (!s.active) continue;
+      e.setFromMatrixPosition(this.matrices[i]);
+      if (e.x < min.x || e.x > max.x || e.y < min.y || e.y > max.y || e.z < min.z || e.z > max.z) continue;
+      // Run out: the next update fades it to nothing.
+      s.born = this.time - s.life;
+    }
+  }
+
   clear(): void {
     for (const s of this.slots) s.active = false;
     this.mesh.count = 0;

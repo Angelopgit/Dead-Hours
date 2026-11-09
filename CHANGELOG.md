@@ -15,7 +15,12 @@
 - Cars blow up. Rounds and blasts wear one down: about half way it smokes, then it catches fire, burns for a few seconds (less the more you shoot it) and goes up in a fireball bigger than a grenade's, leaving burning fuel on the road and a burnt shell. Parked cars, the ones you drive, police cars, wrecks and the armored truck all do; the truck takes far more.
 - Gas pumps and oil drums go up the same way, sooner. Anything with fuel in it that stands near a blast is set alight in turn, so a row of cars or the pumps at the gas station go one after another.
 - A car that blows up with people in it throws them out hurt and never runs again. Fuel hurts everyone near it alike, whoever lit it. Zombies killed by it count for whoever set it off.
-- All of it is the same for everyone in an online night, including for players who join after.
+- Walls can be blown open. The outer walls of every building you can enter stand in sections about two metres wide. A rocket against a section takes it out, floor to ceiling; a grenade cracks it and a second goes through; a car going up beside it does about as much as a grenade. The pieces fly through the room and stay where they land. Walk in or out through the hole. So do the zombies: a hole is a way in they will use.
+- Buildings fall. One that has lost about a third of the wall sections on its ground floor groans for two seconds and comes down: roof, upper floor, walls and everything inside drop as rubble onto its floor slab in a cloud of dust. Anyone inside is hurt badly, zombies inside are killed and count for whoever brought it down. A launcher's five rockets are enough for a house. The cellar stays.
+- Pillars hold things up. Blow out two of the four legs of the water tower and it goes over toward them; two posts of the gas station's canopy and it drops on the pumps' island. The columns of the bank's portico count toward bringing the bank down.
+- The safehouse and its garage are built to hold: nothing breaches them or brings them down.
+- Blasts mark what stands round them: shrapnel pocks, cracks and soot on walls, fences and parked cars.
+- All of it is the same for everyone in an online night, including for players who join after. Everything stands again the next night.
 
 ### Controllers
 

@@ -189,6 +189,8 @@ export class Door {
 
   /** Follows the physical leaf; `stepBody` advances it when no simulation owns the doors (menu). */
   update(dt: number, camera: THREE.Camera, stepBody: boolean): void {
+    // Its building fell: no leaf.
+    if (this.pivot.visible === this.body.gone) this.pivot.visible = !this.body.gone;
     this.probe?.update(camera);
     if (stepBody) this.body.update(dt);
     const n = this.woodMats.length ? this.body.pieces : 0;
@@ -233,6 +235,7 @@ export class DoorSystem {
     let best: Door | null = null;
     let bestD = maxDist;
     for (const d of this.doors) {
+      if (d.body.gone) continue;
       const dist = d.center.distanceTo(pos);
       if (dist < bestD) {
         bestD = dist;

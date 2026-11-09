@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FIRE, BLAST, fireStrength, type FirePatch } from '@dead-hours/shared';
-import type { Physics } from '../core/Physics';
+import { GROUP, groups, type Physics } from '../core/Physics';
 import { lampPower } from '../lighting/BeamPower';
 import type { Quality } from '../core/Settings';
 import { ParticleBatch, SHAPE } from './Particles';
@@ -63,6 +63,10 @@ export interface BurnPoint {
 }
 
 const LIGHTS = 3;
+/** Shrapnel marks what stands still: walls, fences, parked cars (not doors, which swing away from their marks). */
+const SHRAPNEL_FILTER = groups(0xffff, GROUP.static);
+/** How long the marks a blast leaves on walls last (s). */
+const SCAR_LIFE = 420;
 /**
  * A fire's light in the volumetric fog: a warm haze round it. At full strength the fog right round
  * a Molotov came out several times the bloom threshold and the bloom spread it over the street.
@@ -101,6 +105,9 @@ export class Pyro {
   private burning: BurnPoint[] = [];
   private smouldering: SmoulderPoint[] = [];
   private ringR: number = BLAST.radius;
+  /** The blast being drawn, against a frag's. */
+  private blastScale = 1;
+  private readonly tmpN = new THREE.Vector3();
   private quality = 1;
   reducedFlashing = false;
   private readonly cam = new THREE.Vector3();
@@ -171,7 +178,9 @@ export class Pyro {
       // Thrown bigger and farther; a tank of fuel burns on as it rises.
       const q = this.quality;
       this.quality = q * scale * (fuel ? 1.15 : 1);
+      this.blastScale = scale;
       this.explosion(pos);
+      this.blastScale = 1;
       this.quality = q;
       this.ringR = BLAST.radius * scale;
       const last = this.flashes[this.flashes.length - 1];
@@ -267,7 +276,74 @@ export class Pyro {
     this.decals.add(DECAL.pool, this.tmp.set(ox, fy + 0.01, oz), this.up, rand(2.6, 3.4), 0.1, 0.09, 0.085, 0.95, 160);
     this.decals.add(DECAL.splat, this.tmp.set(ox, fy + 0.012, oz), this.up, rand(1.6, 2.2), 0.06, 0.055, 0.05, 0.9, 160);
     this.flashes.push({ pos: new THREE.Vector3(ox, oy + 0.6, oz), t: 0, scale: 1, fire: false });
+    this.shrapnel(ox, oy, oz, this.blastScale);
     this.onBlastNear?.(near);
+  }
+
+  /**
+   * What a blast does to whatever stands round it: fragments fly out and pock the walls, fences
+   * and cars they strike, crack them where they hit hardest, and the nearest wall is left black.
+   */
+  private shrapnel(ox: number, oy: number, oz: number, scale: number): void {
+    const reach = BLAST.radius * 0.9 * scale;
+    const p = this.tmp, n = this.tmpN;
+    let soot = 3.2 * scale;
+    for (let i = 0, c = this.n(18, scale); i < c; i++) {
+      const d = this.randDir(-0.3);
+      const hit = this.physics.raycastHit(ox, oy, oz, d.x, d.y, d.z, reach, SHRAPNEL_FILTER);
+      // Floors already carry the scorch.
+      if (!hit || hit.ny > 0.7) continue;
+      p.set(ox + d.x * hit.distance, oy + d.y * hit.distance, oz + d.z * hit.distance);
+      n.set(hit.nx, hit.ny, hit.nz);
+      const near = 1 - hit.distance / reach;
+      const shade = rand(0.03, 0.08);
+      this.decals.add(DECAL.hole, p, n, rand(0.05, 0.1) + near * 0.07, shade, shade, shade, 0.92, SCAR_LIFE);
+      if (Math.random() < 0.25 + near * 0.5) this.decals.add(DECAL.crack, p, n, rand(0.22, 0.4) + near * 0.4, 0.1, 0.095, 0.09, 0.85, SCAR_LIFE);
+      // Soot on the nearest wall, where the fire washed over it.
+      if (hit.distance < soot) {
+        soot = -1;
+        this.decals.add(DECAL.splat, p, n, rand(1.5, 2.1) * scale, 0.09, 0.085, 0.08, 0.8, SCAR_LIFE);
+        this.decals.add(DECAL.crack, p, n, rand(0.8, 1.2) * scale, 0.08, 0.075, 0.07, 0.9, SCAR_LIFE);
+      }
+      // What it knocks off the surface.
+      if (i % 2) continue;
+      const tone = hit.surface === 'wood' ? 0.24 : hit.surface === 'metal' ? 0.12 : 0.4;
+      this.smoke.emit({
+        x: p.x + n.x * 0.1, y: p.y + n.y * 0.1, z: p.z + n.z * 0.1, vx: n.x * rand(0.6, 1.8), vy: n.y * rand(0.6, 1.8) + 0.2, vz: n.z * rand(0.6, 1.8),
+        life: rand(0.9, 1.7), size: 0.15, size1: rand(0.6, 1), r: tone, g: tone * 0.94, b: tone * 0.86, alpha: 0.4, erode0: 0.1, erode1: 0.9, drag: 2.5, lift: 0.1,
+      });
+    }
+  }
+
+  /**
+   * Masonry and plaster dust: a wall blown out, a building coming down. Clouds billow out of a box
+   * (`size` across each way round `pos`) and hang; `amount` 1 is one bay of wall.
+   */
+  dust(pos: THREE.Vector3, size: THREE.Vector3, amount: number, push?: THREE.Vector3): void {
+    const fy = this.floor(pos);
+    const big = Math.min(1, amount / 12);
+    for (let i = 0, c = this.n(10 * Math.min(amount, 9)); i < c; i++) {
+      const g = rand(0.3, 0.44);
+      const a = Math.random() * Math.PI * 2;
+      const s = rand(0.6, 2.6) + big * 3;
+      this.smoke.emit({
+        x: pos.x + rand(-0.5, 0.5) * size.x, y: Math.max(fy + 0.2, pos.y + rand(-0.5, 0.5) * size.y), z: pos.z + rand(-0.5, 0.5) * size.z,
+        vx: Math.cos(a) * s + (push?.x ?? 0) * rand(0.5, 1.5), vy: rand(0.1, 1.2) + big * 1.5, vz: Math.sin(a) * s + (push?.z ?? 0) * rand(0.5, 1.5),
+        life: rand(3.5, 6.5) + big * 4, size: rand(0.7, 1.2) + big, size1: rand(2.4, 3.8) + big * 3.5,
+        r: g, g: g * 0.95, b: g * 0.88, alpha: rand(0.4, 0.6), erode0: 0.05, erode1: 0.8, drag: 1.8, lift: 0.08, floor: fy, spin: rand(-0.25, 0.25),
+      });
+    }
+    // Grit raining out of it.
+    for (let i = 0, c = this.n(16 * Math.min(amount, 5)); i < c; i++) {
+      const d = this.randDir(0.1);
+      const s = rand(2, 7);
+      const shade = rand(0.14, 0.34);
+      this.debris.emit({
+        x: pos.x + rand(-0.5, 0.5) * size.x, y: pos.y + rand(-0.4, 0.5) * size.y, z: pos.z + rand(-0.5, 0.5) * size.z,
+        vx: d.x * s + (push?.x ?? 0), vy: Math.abs(d.y) * s + 1, vz: d.z * s + (push?.z ?? 0),
+        life: rand(1.2, 2.6), size: rand(0.03, 0.08), r: shade, g: shade * 0.95, b: shade * 0.88, alpha: 1, gravity: 1, drag: 0.4, shape: SHAPE.hard, floor: fy + 0.02,
+      });
+    }
   }
 
   /** What a fuel tank adds to a blast: a ball of fire rolling up, black smoke after it, burning scrap thrown wide. */

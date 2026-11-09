@@ -1,13 +1,14 @@
 /**
  * Headless checks for destruction on the real map collision: cars, pumps and drums that smoke,
  * catch fire and blow up when they are shot (sim/Volatiles), what their blasts do, chain
- * reactions, a driven car going up with people in it, and the wire format.
+ * reactions, a driven car going up with people in it; walls blown open, the ways in that makes,
+ * buildings, the gas canopy and the water tower brought down (sim/Structures); the wire format.
  * Run with `npm run check:destruction`.
  */
 import {
   MAPLE_HOLLOW as map, Physics, initPhysics, createDoorBodies, buildNavGrid, Simulation, Mirror, captureSnapshot,
-  VOLATILE, VOLATILES, VOLATILE_STAGE, PLAYER,
-  type Vec3, type SimEvent, type NavGrid, type Volatile,
+  VOLATILE, VOLATILES, VOLATILE_STAGE, PLAYER, BREACH, COLLAPSE, STRUCTURE_STATE, STORY, WEAPONS,
+  NavGrid, type Vec3, type SimEvent, type Volatile, type Part, type Structure,
 } from '../src/index';
 
 let failures = 0;
@@ -243,6 +244,267 @@ section('A car with people in it');
   const theirs = copy.volatiles.list[cruiser.id];
   check(theirs.stage === VOLATILE_STAGE.blown && theirs.vehicle!.wrecked, 'a client\'s copy shows the wreck, and its car as one nobody can drive');
   sim.dispose();
+}
+
+/** A point `off` metres out from the middle of a bay (negative: inside), `up` above its floor. */
+const beside = (part: Part, off: number, up = 1.2): Vec3 => {
+  const p = part.spec;
+  const nx = p.axis === 'x' ? 0 : p.outward, nz = p.axis === 'x' ? p.outward : 0;
+  const k = Math.sign(off) * STORY.wall / 2 + off;
+  return { x: p.x + nx * k, y: p.floor + up, z: p.z + nz * k };
+};
+/** Whether anything solid stands between the two sides of a bay, at three heights. */
+const blocked = (part: Part): boolean => {
+  for (const up of [0.4, 1.2, 2.2]) {
+    const a = beside(part, 0.6, up), b = beside(part, -0.6, up);
+    const L = Math.hypot(b.x - a.x, b.z - a.z);
+    if (physics.raycast(a.x, a.y, a.z, (b.x - a.x) / L, 0, (b.z - a.z) / L, L) !== null) return true;
+  }
+  return false;
+};
+/** Whether the room behind a bay is empty for half a metre (nothing stood against the wall there). */
+const roomBehind = (part: Part): boolean => {
+  for (const up of [0.4, 1.2]) {
+    const a = beside(part, -0.05, up), b = beside(part, -0.7, up);
+    const L = Math.hypot(b.x - a.x, b.z - a.z);
+    if (physics.raycast(a.x, a.y, a.z, (b.x - a.x) / L, 0, (b.z - a.z) / L, L) !== null) return false;
+  }
+  return true;
+};
+const groundBays = (s: Structure) => s.parts.filter((p) => p.spec.kind === 'bay' && p.spec.storey === 0);
+/** A blast against the outside of a bay or pillar. */
+const blastAt = (sim: Simulation, part: Part, breach: number | undefined, events: SimEvent[] = []) => {
+  sim.explosives.explode(beside(part, 0.3, 1.0), sim.players.get('p1')!, 0, breach === undefined ? {} : { breach });
+  return run(sim, 0.1, events);
+};
+const zombiePath = (sim: Simulation, from: Vec3, to: Vec3) => nav.findPath(from, to, {
+  maxExpand: 20000,
+  doorCost: () => 40,
+  linkCost: (id) => (id >= BREACH.linkBase ? (sim.structures.passable(id) ? BREACH.pathCost : Infinity) : Infinity),
+});
+
+section('What can be blown open and brought down');
+{
+  const sim = fresh({ x: 0, z: 8 });
+  const st = sim.structures;
+  const buildings = st.list.filter((s) => s.spec.kind === 'building');
+  check(buildings.length >= 25 && buildings.every((s) => s.bays >= 10), `${buildings.length} buildings stand as bays of wall (${Math.min(...buildings.map((s) => s.bays))} to ${Math.max(...buildings.map((s) => s.bays))} on the ground storey)`);
+  check(!st.get('safehouse') && !st.get('garage') && map.parts.every((p) => p.owner !== 'safehouse' && p.owner !== 'garage'), 'the safehouse and its garage are built to hold: no bays, nothing to bring down');
+  check(st.get('gas-canopy')?.pillars === 4 && st.get('water-tower')?.pillars === 4 && st.get('bank')?.pillars === 4, 'the canopy, the water tower and the bank\'s portico stand on four pillars each');
+  const walk = st.parts.filter((p) => p.walk).length, ground = st.parts.filter((p) => p.spec.kind === 'bay' && p.spec.storey === 0).length;
+  check(walk > ground * 0.8, `${walk} of ${ground} ground-storey bays would be a way in for zombies`);
+  check(st.parts.every((p) => !p.gone && p.damage === 0) && st.list.every((s) => s.state === STRUCTURE_STATE.standing), 'everything stands as the night starts');
+  check(st.parts.every((p) => !p.structure || p.colliders.length > 0), 'every bay and pillar has its colliders');
+  const snap = captureSnapshot(sim, new Map());
+  check(snap.bp === undefined && snap.fs === undefined, 'nothing about them in a snapshot until something goes');
+  sim.dispose();
+}
+
+section('Blowing a hole in a wall');
+{
+  const sim = fresh({ x: -36, z: -48 });
+  const p = sim.players.get('p1')!;
+  const diner = sim.structures.get('market')!;
+  // Bays of the back wall (it faces south onto the service alley), side by side.
+  const back = groundBays(diner).filter((b) => b.spec.axis === 'x' && b.spec.outward === 1).sort((a, b) => a.spec.x - b.spec.x);
+  // One to open with grenades, its neighbour, one for a rocket and its neighbour, one for the launcher.
+  const [a, b, side, c, d] = [back[1], back[2], back[3], back[5], back[6]];
+  check(back.length === 8 && [a, c, side].every((x) => x.walk && roomBehind(x)), `the market's back wall is ${back.length} bays`);
+  check(blocked(a) && blocked(c), 'a wall is a wall');
+  const inside = beside(a, -2.5, 0.1), outside = beside(a, 3, 0.1);
+  const before = zombiePath(sim, outside, inside);
+  // Rounds do nothing to it.
+  const col = a.colliders[0];
+  check(!sim.volatiles.shot(col, 500, p) && a.damage === 0, 'rounds do nothing to a wall');
+  // A grenade against it cracks it, a second opens it.
+  let ev = blastAt(sim, a, undefined);
+  const crack = ev.find((e) => e.type === 'breach' && e.part === a.index);
+  check(!a.gone && Math.abs(a.damage - BREACH.frag) < 0.05 && !!crack && crack.type === 'breach' && !crack.gone, `one grenade against it takes ${a.damage.toFixed(2)} of it: cracked, not through`);
+  check(blocked(a), 'it still stands');
+  ev = blastAt(sim, a, undefined);
+  check(a.gone && ev.some((e) => e.type === 'breach' && e.part === a.index && e.gone), 'a second grenade goes through');
+  check(!blocked(a), 'and nothing stands in the hole, floor to ceiling');
+  check(diner.baysGone === 1 && diner.state === STRUCTURE_STATE.standing, 'the market stands with one bay gone');
+  // The way in.
+  const after = zombiePath(sim, outside, inside);
+  const through = after?.links.some((l) => l.id === BREACH.linkBase + a.index) ?? false;
+  check(!!after && after.complete && through, 'a zombie\'s path now goes in through the hole');
+  check(!before || !before.complete || before.points.length > (after?.points.length ?? 0), 'which it did not before');
+  // A rocket takes a bay at once and shakes the ones beside it.
+  const far = sim.structures.parts.filter((x) => x !== c && !x.gone).map((x) => x.damage);
+  ev = blastAt(sim, c, BREACH.rocket);
+  check(c.gone && !blocked(c), 'a rocket against a bay opens it in one');
+  check(!d.gone && d.damage > 0.3 && d.damage < 1 && !b.gone, `the bays beside it are shaken (${d.damage.toFixed(2)}) but stand`);
+  const untouched = sim.structures.parts.filter((x) => x.structure !== diner).every((x) => x.damage === 0);
+  check(untouched && far.length > 0, 'no other building feels it');
+  // The real thing: a rocket fired at the wall.
+  p.arsenal.replacePrimary('rpg', true);
+  run(sim, WEAPONS.rpg.draw + 0.1);
+  check(side.damage === 0, 'a bay four metres off felt nothing');
+  const from = beside(side, 9, 1.4);
+  sim.setMotion('p1', { pos: { x: from.x, y: ground(from.x, from.z) + 0.02, z: from.z } });
+  run(sim, 0.2);
+  const eye = p.eye, aim = beside(side, 0, 1.3);
+  const fired = sim.fire('p1', eye, { x: aim.x - eye.x, y: aim.y - eye.y, z: aim.z - eye.z }, true, 9000);
+  ev = run(sim, 0.3);
+  check(fired === 'fired' && side.gone, `a rocket from the launcher blows the bay it hits (${fired})`);
+  check(ev.some((e) => e.type === 'explosion') && ev.some((e) => e.type === 'breach' && e.gone), 'with its blast and the breach told to everyone');
+  // A zombie comes in by the hole rather than the door.
+  sim.setMotion('p1', { pos: { x: inside.x, y: inside.y + 0.02, z: inside.z } });
+  const z = sim.spawnZombie('walker', { x: outside.x, y: ground(outside.x, outside.z) + 0.02, z: outside.z }, 'approach');
+  let nearest = Infinity, got = false;
+  for (let i = 0; i < 60 * 12 && !got; i++) {
+    sim.step(DT);
+    physics.world.step();
+    sim.drain();
+    p.health = PLAYER.maxHealth;
+    for (const hole of back) if (hole.gone) nearest = Math.min(nearest, Math.hypot(z.pos.x - hole.spec.x, z.pos.z - hole.spec.z));
+    got = Math.abs(z.pos.x - diner.spec.x) < diner.spec.w / 2 - 0.4 && Math.abs(z.pos.z - diner.spec.z) < diner.spec.d / 2 - 0.4;
+    if (process.env.DEBUG_Z && i % 60 === 0) console.log(i / 60, z.alive, z.state, z.pos.x.toFixed(2), z.pos.y.toFixed(2), z.pos.z.toFixed(2), 'player', p.motion.pos.x.toFixed(2), p.motion.pos.z.toFixed(2), p.alive);
+  }
+  check(got && nearest < 1.1, `a zombie walks in through a hole (${got ? 'inside' : 'still outside'}, passed ${nearest.toFixed(2)} m from the middle of one)`);
+  // The wire.
+  const snap = captureSnapshot(sim, new Map());
+  check(!!snap.bp && [a, c, side].every((x) => snap.bp!.includes(x.index)) && snap.fs === undefined, 'the snapshot lists the bays that are gone');
+  const theirs = new Physics(map);
+  const copy = new Simulation({ physics: theirs, map, nav: new NavGrid(nav.buffers()), doors: [], seed: 7, preparation: 0.05 });
+  new Mirror(copy, 'p2').apply(JSON.parse(JSON.stringify(snap)));
+  const ca = copy.structures.parts[a.index];
+  check(ca.gone && ca.colliders.every((x) => theirs.isOff(x)) && copy.structures.parts.every((x, i) => x.gone === sim.structures.parts[i].gone), 'a client\'s copy has the same holes in its own walls');
+  copy.dispose();
+  sim.dispose();
+  // The next night the wall stands again.
+  const next = fresh({ x: -36, z: -48 });
+  check(blocked(a) && !next.structures.parts[a.index].gone && next.structures.get('market')!.baysGone === 0, 'the next night the wall stands again');
+  next.dispose();
+}
+
+section('Bringing a building down');
+{
+  const sim = fresh({ x: -28, z: 30 });
+  const p = sim.players.get('p1')!;
+  const house = sim.structures.get('house-nw')!;
+  const need = Math.ceil(house.bays * COLLAPSE.walls - 1e-9);
+  check(need >= 4 && need <= 7, `a house of ${house.bays} bays comes down when ${need} are gone`);
+  const { x, z, w, d, base, top } = house.spec;
+  const roofed = () => physics.raycast(x + 1.3, top + 3, z + 0.7, 0, -1, 0, top + 6);
+  const overhead = roofed();
+  check(overhead !== null && overhead < 6, 'it has a roof');
+  // A zombie and a survivor inside, a zombie outside.
+  const floor = { x: x + 1.5, y: base + 0.02, z: z + 1 };
+  const zin = sim.spawnZombie('walker', floor, 'idle');
+  const zout = sim.spawnZombie('walker', { x: x, y: 0.02, z: z + d / 2 + 16 }, 'idle');
+  const upstairs = nav.nodeAt(x, base + 3.3, z, 3);
+  check(upstairs >= 0 && nav.nodeY[upstairs] > base + 2, 'it has an upper floor to walk');
+  const events: SimEvent[] = [];
+  const bays = groundBays(house);
+  let rockets = 0;
+  for (const bay of bays) {
+    if (house.state !== STRUCTURE_STATE.standing) break;
+    if (bay.gone) continue;
+    blastAt(sim, bay, BREACH.rocket, events);
+    rockets++;
+  }
+  check(house.state === STRUCTURE_STATE.going && house.baysGone >= need, `${rockets} rockets round its walls and it starts to go (${house.baysGone} bays gone)`);
+  check(rockets <= WEAPONS.rpg.magazine + WEAPONS.rpg.startReserve, 'one launcher\'s rockets are enough');
+  check(events.some((e) => e.type === 'collapse' && e.structure === house.index && e.stage === STRUCTURE_STATE.going), 'everyone is told it is going');
+  check(roofed() === overhead, 'it groans a moment first');
+  // The survivor is inside when it lands.
+  sim.setMotion('p1', { pos: { x: x - 1.5, y: base + 0.02, z: z - 1 } });
+  p.health = PLAYER.maxHealth;
+  run(sim, COLLAPSE.warn + 0.2, events);
+  check(house.state === STRUCTURE_STATE.fallen && events.some((e) => e.type === 'collapse' && e.stage === STRUCTURE_STATE.fallen), `${COLLAPSE.warn} s later it falls`);
+  const sky = roofed();
+  check(sky !== null && Math.abs(top + 3 - sky - base) < 0.06, 'the roof and floors are gone: open sky over its floor slab');
+  check(bays.every((b) => !blocked(b)), 'no wall is left standing');
+  check(!zin.alive && zout.alive, 'the zombie inside is crushed, the one outside is not');
+  check(p.alive && Math.abs(PLAYER.maxHealth - p.health - COLLAPSE.crush) < 0.6, `the survivor inside is hurt ${COLLAPSE.crush}`);
+  check(house.doors.length > 0 && house.doors.every((i) => doors[i]!.gone && doors[i]!.open), 'its doors are gone with it');
+  doors[house.doors[0]]!.setOpen(false, x, z + 20);
+  check(doors[house.doors[0]]!.open, 'and can\'t be shut');
+  const slots = sim.barricades.slots.filter((s) => s.houseId === house.spec.id);
+  check(slots.length > 0 && slots.every((s) => s.ruined && s.max === 0 && !s.glass), 'its windows are no longer openings to board');
+  check(nav.isShut(upstairs), 'nothing paths to its upper floor again');
+  const way = zombiePath(sim, { x: x + w / 2 + 4, y: 0.1, z }, floor);
+  check(!!way && way.complete && way.links.length > 0, 'zombies walk onto the slab over where the walls stood');
+  // More blasts change nothing.
+  const n = events.length;
+  blastAt(sim, bays[0], BREACH.rocket, events);
+  check(!events.slice(n).some((e) => e.type === 'breach' || e.type === 'collapse'), 'what is left takes no more harm');
+  // The wire.
+  const snap = captureSnapshot(sim, new Map());
+  check(!!snap.fs && snap.fs.includes(house.index) && !(snap.bp ?? []).some((i) => sim.structures.parts[i].structure === house), 'the snapshot lists it as fallen (and not its bays one by one)');
+  const theirs = new Physics(map);
+  const theirDoors = createDoorBodies(map, theirs);
+  const copy = new Simulation({ physics: theirs, map, nav: new NavGrid(nav.buffers()), doors: theirDoors, seed: 7, preparation: 0.05 });
+  new Mirror(copy, 'p2').apply(JSON.parse(JSON.stringify(snap)));
+  const ch = copy.structures.list[house.index];
+  check(ch.state === STRUCTURE_STATE.fallen && ch.colliders.every((c) => theirs.isOff(c)) && ch.doors.every((i) => theirDoors[i]!.gone), 'a client\'s copy has it down too');
+  copy.dispose();
+  sim.dispose();
+  // The next night it stands.
+  const next = fresh({ x: -28, z: 30 });
+  const again = next.structures.get('house-nw')!;
+  check(again.state === STRUCTURE_STATE.standing && roofed() === overhead && bays.every((b) => blocked(b)), 'the next night it stands again, roof, walls and all');
+  check(house.doors.every((i) => !doors[i]!.gone && !doors[i]!.open) && !nav.isShut(upstairs), 'with its doors hung and its upper floor open');
+  next.dispose();
+}
+
+section('Pillars');
+{
+  const sim = fresh({ x: 91, z: 20 });
+  const canopy = sim.structures.get('gas-canopy')!;
+  const tower = sim.structures.get('water-tower')!;
+  const events: SimEvent[] = [];
+  const under = () => physics.raycast(91, 12, -17, 0, -1, 0, 14);
+  check(under() !== null && under()! < 7.5, 'the canopy is overhead at the pumps');
+  // Grenades: three to a pillar.
+  const post = canopy.parts[0];
+  let n = 0;
+  while (!post.gone && n < 6) {
+    blastAt(sim, post, undefined, events);
+    n++;
+  }
+  check(n === 3, `a pillar takes ${n} grenades`);
+  check(canopy.state === STRUCTURE_STATE.standing, 'the canopy stands on three');
+  blastAt(sim, canopy.parts[3], BREACH.rocket, events);
+  check(canopy.parts[3].gone && canopy.state === STRUCTURE_STATE.going, 'a rocket takes a second and it starts to go');
+  run(sim, COLLAPSE.warn + 0.2, events);
+  check(canopy.state === STRUCTURE_STATE.fallen && (under() === null || under()! > 11.5), 'the canopy comes down');
+  // The water tower: two legs.
+  const legs = tower.parts;
+  blastAt(sim, legs[0], BREACH.rocket, events);
+  check(legs[0].gone && tower.state === STRUCTURE_STATE.standing, 'the water tower stands on three legs');
+  const z = sim.spawnZombie('walker', { x: tower.spec.x + 1, y: 0.02, z: tower.spec.z + 1 }, 'idle');
+  blastAt(sim, legs[1], BREACH.rocket, events);
+  run(sim, COLLAPSE.warn + 0.2, events);
+  check(tower.state === STRUCTURE_STATE.fallen, 'and falls with two gone');
+  check(!z.alive, 'on whatever stood under it');
+  // A building's own columns only help it on its way.
+  const bank = sim.structures.get('bank')!;
+  for (const col of bank.parts.filter((x) => x.spec.kind === 'pillar')) blastAt(sim, col, BREACH.rocket, events);
+  check(bank.pillarsGone === 4 && bank.state === STRUCTURE_STATE.standing && Math.abs(sim.structures.strain(bank) - COLLAPSE.porch) < 0.2, `the bank stands with its portico's columns gone, ${Math.round(sim.structures.strain(bank) * 100)}% of the way to falling`);
+  const tank = physics.raycast(tower.spec.x, tower.spec.top + 2, tower.spec.z, 0, -1, 0, tower.spec.top + 4);
+  check(tank !== null && tank > tower.spec.top, 'the tank no longer stands over the lot');
+  sim.dispose();
+  fresh({ x: 91, z: 20 }).dispose();
+}
+
+section('Fuel against a wall');
+{
+  const sim = fresh({ x: 0, z: 8 });
+  const p = sim.players.get('p1')!;
+  const market = sim.structures.get('market')!;
+  const bay = groundBays(market).find((b) => b.walk)!;
+  // A car's worth of fuel going up half a metre from it.
+  sim.explosives.explode(beside(bay, 0.5, 0.8), p, 0, { kind: 'fuel', power: VOLATILES.car!.power });
+  run(sim, 0.1);
+  check(!bay.gone && bay.damage > 0.5, `a car going up against a wall leaves it badly cracked (${bay.damage.toFixed(2)})`);
+  sim.explosives.explode(beside(bay, 0.5, 0.8), p, 0, { kind: 'fuel', power: VOLATILES.car!.power });
+  run(sim, 0.1);
+  check(bay.gone, 'a second opens it');
+  sim.dispose();
+  fresh({ x: 0, z: 8 }).dispose();
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

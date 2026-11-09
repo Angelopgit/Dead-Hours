@@ -155,6 +155,16 @@ export type SimEvent =
    * or blew up: `stage` is its new VOLATILE_STAGE, `pos` the middle of it, `by` whoever did it.
    */
   | { type: 'volatile'; id: number; stage: number; pos: Vec3; by: string | null }
+  /**
+   * A blast wore down a bay of wall or a pillar (sim/Structures; `part` indexes `map.parts`): `gone`
+   * when it went, leaving a hole; `damage` how far gone it is (0..1); `pos` where the blast was.
+   */
+  | { type: 'breach'; part: number; pos: Vec3; gone: boolean; damage: number; by: string | null }
+  /**
+   * A structure (index into `map.structures`) has lost too much: `stage` is its new STRUCTURE_STATE,
+   * going (it groans, COLLAPSE.warn seconds to get out) and then fallen.
+   */
+  | { type: 'collapse'; structure: number; stage: number; pos: Vec3; by: string | null }
   /** A zombie caught fire. */
   | { type: 'ignite'; zombie: number }
   /**

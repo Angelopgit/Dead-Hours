@@ -110,6 +110,11 @@ export class NavGrid implements NavBuffers {
    */
   private readonly linkEnds = new Map<number, [number, number]>();
   private readonly extra = new Map<number, { to: number; id: number }[]>();
+  /**
+   * Nodes nothing walks any more this night (the upper floor of a building that fell). Like the
+   * links above it is this grid's own: the cached buffers, which rooms share, never change.
+   */
+  private closedOff: Uint8Array | null = null;
 
   constructor(b: NavBuffers) {
     this.cols = b.cols;
@@ -205,6 +210,23 @@ export class NavGrid implements NavBuffers {
       }
     }
     return best;
+  }
+
+  /** Closes nodes off for the rest of the night (see `reopen`). */
+  shut(nodes: readonly number[]): void {
+    if (!nodes.length) return;
+    this.closedOff ??= new Uint8Array(this.nodeY.length);
+    for (const n of nodes) this.closedOff[n] = 1;
+  }
+
+  /** A new night: every node `shut` closed is walked again. */
+  reopen(): void {
+    this.closedOff = null;
+  }
+
+  /** Whether `shut` closed a node off. */
+  isShut(n: number): boolean {
+    return !!this.closedOff && this.closedOff[n] === 1;
   }
 
   /** Joins two nodes both ways with climb-through link `id` (replacing whatever `id` joined before). */
@@ -319,6 +341,7 @@ export class NavGrid implements NavBuffers {
     const maxExpand = opts.maxExpand ?? 12000;
     const seed = opts.seed ?? 0;
     const gen = ++this.generation;
+    const off = this.closedOff;
     const gx = this.nodeX(goal), gz = this.nodeZ(goal), gy = this.nodeY[goal];
     const cell = NAV.cell;
     const h = (n: number) => {
@@ -351,7 +374,7 @@ export class NavGrid implements NavBuffers {
       const gc = this.g[cur];
       for (let d = 0; d < 8; d++) {
         const nb = this.links[cur * 8 + d];
-        if (nb < 0 || this.closed[nb] === gen || !(this.flags[nb] & NAV_REACHABLE)) continue;
+        if (nb < 0 || this.closed[nb] === gen || !(this.flags[nb] & NAV_REACHABLE) || (off && off[nb])) continue;
         let cost = (d < 4 ? 1 : DIAG) * cell;
         if (this.flags[nb] & NAV_NEAR_WALL) cost *= 1.5;
         if (seed) cost *= 1 + hash(nb >> 2, seed) * 0.5;
@@ -444,7 +467,7 @@ export class NavGrid implements NavBuffers {
       const a = rand() * Math.PI * 2;
       const r = Math.sqrt(rand()) * radius;
       const n = this.nodeAt(x + Math.cos(a) * r, y, z + Math.sin(a) * r, 0.6);
-      if (n >= 0 && (!outdoorOnly || !(this.flags[n] & NAV_INDOOR))) return n;
+      if (n >= 0 && (!outdoorOnly || !(this.flags[n] & NAV_INDOOR)) && !this.isShut(n)) return n;
     }
     return -1;
   }

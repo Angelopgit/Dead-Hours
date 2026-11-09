@@ -9,6 +9,7 @@ import { zombieZones, type ZoneShape } from './hitzones';
 import { NAV_INDOOR, NAV_NEAR_WALL } from './NavGrid';
 import { BARRICADE } from '../config/barricades';
 import { WINDOW_LINK_BASE } from './Barricades';
+import { BREACH } from '../config/destruction';
 import { angleDiff, clamp, dist2D, rng, v3, type Vec3 } from './math';
 import type { SimPlayer, Simulation } from './Simulation';
 
@@ -820,6 +821,8 @@ export class Zombie {
           return this.state === 'wander' ? 60 + boards * 20 : 6 + boards * 7;
         },
         linkCost: (id) => {
+          // A hole blown in a wall is as good as an open door.
+          if (id >= BREACH.linkBase) return sim.structures.passable(id) ? BREACH.pathCost : Infinity;
           const slot = sim.barricades.forLink(id);
           if (!slot) return Infinity;
           // Climbing in is slower than a door; idle ones only wander through a window already open.
@@ -832,6 +835,8 @@ export class Zombie {
       this.pathVaults = [];
       if (res) {
         for (const l of res.links) {
+          // Holes in walls are walked through: only windows are climbed.
+          if (l.id >= BREACH.linkBase) continue;
           const i = this.path.findIndex((p) => Math.abs(p.x - l.to.x) < 1e-3 && Math.abs(p.z - l.to.z) < 1e-3 && Math.abs(p.y - l.to.y) < 1e-3);
           if (i > 0) this.pathVaults.push({ i, slot: l.id - WINDOW_LINK_BASE, from: l.from, to: l.to });
         }

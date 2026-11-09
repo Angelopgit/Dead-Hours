@@ -56,3 +56,46 @@ export const VOLATILE = {
   /** Zombies hear something catch fire this far (m). */
   noise: 30,
 } as const;
+
+/**
+ * Blowing holes in walls. A building's outer walls stand as bays (see map/builder BAY); each takes
+ * blast until it is gone, and what a blast takes off one falls with its distance to the wall.
+ * Rounds do nothing to a wall but mark it.
+ */
+export const BREACH = {
+  /** How much of a bay a blast at the wall takes, by what blew up (1 goes through). */
+  rocket: 1.5,
+  frag: 0.5,
+  /** Times the fuel blast's power: a car against the wall. */
+  fuel: 0.6,
+  /** In full within `core` metres of the wall, nothing past `reach`. */
+  core: 0.5,
+  reach: 1.7,
+  /** Pillars against bays: a rocket still takes one, a grenade a third. */
+  pillar: 0.7,
+  /** How far a hole going is heard (m). */
+  noise: 45,
+  /** What a zombie's path pays to go through a hole (metres of walking). */
+  pathCost: 1.5,
+  /** Nav link ids of the holes: `linkBase + part`. */
+  linkBase: 1 << 20,
+} as const;
+
+/** When a structure comes down, and what that does. */
+export const COLLAPSE = {
+  /** Share of the ground-storey bays gone that brings a building down. */
+  walls: 0.34,
+  /** Share of its pillars (the water tower's legs, the canopy's posts), and never fewer than this many. */
+  pillars: 0.5,
+  leastPillars: 2,
+  /** A building's own columns (a portico, an awning's posts): all of them gone is this much of the way to falling. */
+  porch: 0.5,
+  /** Seconds it groans before it goes, once it has lost too much. */
+  warn: 2.2,
+  /** Hurt to a survivor inside or under it when it lands. */
+  crush: 80,
+  /** How far it is heard (m). */
+  noise: 80,
+} as const;
+
+export const STRUCTURE_STATE = { standing: 0, going: 1, fallen: 2 } as const;

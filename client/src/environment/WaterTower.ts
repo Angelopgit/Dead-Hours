@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { WATER_TOWER } from '@dead-hours/shared';
+import { worldPieces } from './WorldPieces';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import type { Updatable } from './props/Kit';
@@ -137,6 +138,8 @@ export function buildWaterTower(lib: MaterialLibrary, batch: StaticBatcher, scen
   scene.add(lamp);
   return {
     update: (_dt, time) => {
+      // Down with the tower.
+      lamp.visible = !worldPieces.fallen.has('water-tower');
       lampMat.emissiveIntensity = (time % 2.4) < 0.9 ? 14 : 0.3;
     },
   };

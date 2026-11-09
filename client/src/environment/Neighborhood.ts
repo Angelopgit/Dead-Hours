@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COURT, OAK, ownerAt, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
+import { COURT, OAK, ownerAt, standsAfter, subtractRects, type LightSpec, type MapDefinition } from '@dead-hours/shared';
 import { MaterialLibrary } from '../rendering/Materials';
 import { StaticBatcher } from '../rendering/StaticBatcher';
 import { worldBox } from '../rendering/GeometryUtils';
@@ -86,13 +86,17 @@ export class Neighborhood {
     this.lighting.onThunder = null;
 
     const batch = new StaticBatcher();
+    const structures = new Map(map.structures.map((s) => [s.id, s]));
     this.buildGround(batch);
     for (const s of map.solids) {
       if (s.visible === false || s.mat === 'invisible') continue;
       const e = this.lib.get(s.mat);
       const ao = s.h > 0.5 ? { groundY: s.y - s.h / 2, strength: 0.4 } : null;
-      // What a structure is built of is grouped by its owner, so it can be taken out when it falls.
-      batch.begin(s.owner);
+      // What a structure is built of is grouped so it can be taken out: each bay of wall and pillar
+      // on its own (a blast opens them one at a time), the rest by its owner (it falls together),
+      // but for what stays when it has fallen (its floor slab, footings and cellar).
+      const spec = s.owner ? structures.get(s.owner) : undefined;
+      batch.begin(s.part !== undefined ? `part:${s.part}` : spec && standsAfter(s, spec) ? null : s.owner);
       batch.add(worldBox(s.x, s.y, s.z, s.w, s.h, s.d, e.texScale, ao, BAKE_CELL), e.material, s.h > 0.2, true);
     }
     batch.end();
@@ -303,7 +307,9 @@ export class Neighborhood {
         this.buildFlicker(l);
         continue;
       }
-      batch.begin(ownerAt(this.map, l.x, l.z));
+      // A building's lamps go down with it (not the cellar's).
+      const owner = ownerAt(this.map, l.x, l.z);
+      batch.begin(owner && l.y > (this.map.structures.find((s) => s.id === owner)?.base ?? 0) ? owner : null);
       if (l.fixture === 'bulb') {
         const g = new THREE.SphereGeometry(0.07, 8, 6);
         g.translate(l.x, l.y + 0.06, l.z);

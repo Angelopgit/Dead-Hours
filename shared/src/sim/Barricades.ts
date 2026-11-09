@@ -47,6 +47,8 @@ export interface BarricadeSlot {
   inNode: number;
   /** A zombie is climbing through until then. */
   busyUntil: number;
+  /** Its building fell: there is no opening left to board, break or climb. */
+  ruined?: boolean;
 }
 
 export class Barricades {
@@ -125,7 +127,7 @@ export class Barricades {
   /** The window slot a nav link belongs to. */
   forLink(id: number): BarricadeSlot | undefined {
     const s = this.slots[id - WINDOW_LINK_BASE];
-    return s && s.kind === 'window' ? s : undefined;
+    return s && s.kind === 'window' && !s.ruined ? s : undefined;
   }
 
   /** Which side of the opening a point is on (+1 outside, -1 inside). */
@@ -155,6 +157,20 @@ export class Barricades {
       if (lateral < s.width / 2 + 0.3 && y > s.bottom - 1.9 && y < s.bottom + s.height) return true;
     }
     return false;
+  }
+
+  /** A building fell: its doors and windows are no longer openings (its boards and glass went with it). */
+  ruin(houseId: string): void {
+    for (const s of this.slots) {
+      if (s.houseId !== houseId || s.ruined) continue;
+      s.ruined = true;
+      s.max = 0;
+      s.boards = 0;
+      s.damage = 0;
+      s.climb = false;
+      s.glass = false;
+      if (s.pane) this.physics.switchOff(s.pane);
+    }
   }
 
   /** Nothing in the way: no glass, no boards. */

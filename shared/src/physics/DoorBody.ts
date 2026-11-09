@@ -40,6 +40,8 @@ export class DoorBody {
   pieces = 0;
   /** Set when the state changes so observers (sound, visuals) can react. */
   changed = false;
+  /** Its building fell: there is no door any more, only the way through. */
+  gone = false;
 
   constructor(readonly index: number, readonly spec: DoorSpec, physics: Physics) {
     this.rollup = spec.style === 'rollup';
@@ -74,7 +76,7 @@ export class DoorBody {
 
   /** Opens away from whoever opens it so the leaf never swings into them. */
   setOpen(open: boolean, fromX: number, fromZ: number): void {
-    if (open === this.open) return;
+    if (open === this.open || this.gone) return;
     this.open = open;
     this.changed = true;
     this.collider.setCollisionGroups(open ? OPEN_GROUPS : CLOSED_GROUPS);
@@ -106,12 +108,22 @@ export class DoorBody {
 
   /** Takes the state another simulation decided (network clients); the leaf still swings there itself. */
   remote(open: boolean, target: number): void {
+    if (this.gone) return;
     if (open !== this.open) {
       this.open = open;
       this.changed = true;
       this.collider.setCollisionGroups(open ? OPEN_GROUPS : CLOSED_GROUPS);
     }
     this.target = target;
+  }
+
+  /** Its building came down: nothing blocks the doorway and nothing can shut it again this night. */
+  takeOut(): void {
+    if (this.gone) return;
+    this.gone = true;
+    this.open = true;
+    this.changed = true;
+    this.collider.setCollisionGroups(0);
   }
 
   /** Zombie pounding (bullets and blasts too). Returns true when the door gives way. */
@@ -160,6 +172,7 @@ export class DoorBody {
 
   /** Snaps closed with no animation (new session). */
   reset(): void {
+    this.gone = false;
     this.open = false;
     this.target = 0;
     this.angle = 0;

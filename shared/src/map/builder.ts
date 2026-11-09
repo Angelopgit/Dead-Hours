@@ -31,6 +31,24 @@ export const STREET = {
   length: 250,
 } as const;
 
+/**
+ * How a building's outer walls are cut into bays: stretches of wall, floor to ceiling, that a
+ * blast can take out one at a time (sim/Structures). A run of wall is cut into bays about `width`
+ * long; a run shorter than `least` (a pier between two windows) stays whole.
+ */
+export const BAY = { width: 2, least: 1.2 } as const;
+
+/** Which wall a run of bays belongs to, for `MapBuilder.wall`. */
+export interface BayCut {
+  owner: string;
+  storey: number;
+  outward: 1 | -1;
+  /** The storey's floor height. */
+  floor: number;
+  /** The wall's centre line (its two layers lie either side of it). */
+  line: number;
+}
+
 export const STORY = {
   slab: 0.3,
   ground: 3.0,
@@ -202,31 +220,65 @@ export class MapBuilder {
     this.areas.push({ name, x0, x1, z0, z1, y0, y1 });
   }
 
-  /** Splits a wall into solid boxes around its openings (absolute coordinates). */
-  wall(axis: 'x' | 'z', c: number, a0: number, a1: number, y0: number, h: number, t: number, mat: MaterialKey, openings: { at: number; width: number; bottom: number; top: number }[]): void {
-    const push = (from: number, to: number, yb: number, yt: number) => {
+  /**
+   * Splits a wall into solid boxes around its openings (absolute coordinates). With `bays`, each
+   * full-height run between openings is cut into bays that explosives can take out (the wall's
+   * other layer, built with the same `bays`, shares them).
+   */
+  wall(
+    axis: 'x' | 'z', c: number, a0: number, a1: number, y0: number, h: number, t: number, mat: MaterialKey,
+    openings: { at: number; width: number; bottom: number; top: number }[], bays?: BayCut,
+  ): void {
+    const push = (from: number, to: number, yb: number, yt: number, part?: number) => {
       const len = to - from;
       const hh = yt - yb;
       if (len <= 0.01 || hh <= 0.01) return;
       const mid = (from + to) / 2;
       const y = y0 + (yb + yt) / 2;
-      this.solids.push(
-        axis === 'x'
-          ? { x: mid, y, z: c, w: len, h: hh, d: t, mat }
-          : { x: c, y, z: mid, w: t, h: hh, d: len, mat },
-      );
+      this.solids.push({
+        ...(axis === 'x' ? { x: mid, y, z: c, w: len, h: hh, d: t, mat } : { x: c, y, z: mid, w: t, h: hh, d: len, mat }),
+        ...(part === undefined ? {} : { part }),
+      });
+    };
+    // A run from floor to ceiling: whole, or as bays.
+    const run = (from: number, to: number) => {
+      const len = to - from;
+      if (!bays || len < BAY.least) return push(from, to, 0, h);
+      const n = Math.max(1, Math.round(len / BAY.width));
+      for (let i = 0; i < n; i++) {
+        const b0 = from + (len * i) / n, b1 = from + (len * (i + 1)) / n;
+        push(b0, b1, 0, h, this.bay(bays, axis, b0, b1, y0, h));
+      }
     };
     const sorted = [...openings].sort((p, q) => p.at - q.at);
     let cursor = a0;
     for (const o of sorted) {
       const s = o.at - o.width / 2;
       const e = o.at + o.width / 2;
-      push(cursor, s, 0, h);
+      run(cursor, s);
       push(s, e, 0, o.bottom);
       push(s, e, o.top, h);
       cursor = e;
     }
-    push(cursor, a1, 0, h);
+    run(cursor, a1);
+  }
+
+  private readonly bayIndex = new Map<string, number>();
+
+  /** The part a bay of wall is (registered the first time a layer of the wall asks for it). */
+  private bay(cut: BayCut, axis: 'x' | 'z', from: number, to: number, y0: number, h: number): number {
+    const key = `${cut.owner}|${cut.storey}|${axis}|${Math.round(cut.line * 100)}|${Math.round(from * 100)}`;
+    let part = this.bayIndex.get(key);
+    if (part === undefined) {
+      part = this.parts.length;
+      const mid = (from + to) / 2;
+      this.parts.push({
+        kind: 'bay', owner: cut.owner, x: axis === 'x' ? mid : cut.line, y: y0 + h / 2, z: axis === 'x' ? cut.line : mid,
+        w: to - from, h, axis, outward: cut.outward, storey: cut.storey, floor: cut.floor,
+      });
+      this.bayIndex.set(key, part);
+    }
+    return part;
   }
 
   /**
@@ -262,7 +314,7 @@ export class MapBuilder {
     // Everything it is built of comes down with it.
     for (let i = first; i < this.solids.length; i++) this.solids[i].owner = spec.id;
     if (spec.enterable && !spec.reinforced) {
-      this.structures.push({ id: spec.id, kind: 'building', x: spec.x, z: spec.z, w: spec.w, d: spec.d, top: houseTop(spec), label: spec.label });
+      this.structures.push({ id: spec.id, kind: 'building', x: spec.x, z: spec.z, w: spec.w, d: spec.d, top: houseTop(spec), base: spec.slab ?? STORY.slab, label: spec.label });
     }
   }
 
@@ -303,8 +355,10 @@ export class MapBuilder {
       for (const p of plans) {
         if (skip.has(p.side)) continue;
         if (spec.enterable) {
-          this.wall(p.axis, p.c + p.outward * (t / 2 - 0.05), p.a0, p.a1, storey.y0, storey.h, 0.1, spec.siding, p.openings);
-          this.wall(p.axis, p.c - p.outward * 0.05, p.a0, p.a1, storey.y0, storey.h, t - 0.1, interior, p.openings);
+          // A building explosives can open up has its outer walls in bays.
+          const bays: BayCut | undefined = spec.reinforced ? undefined : { owner: spec.id, storey: si, outward: p.outward, floor: storey.y0, line: p.c };
+          this.wall(p.axis, p.c + p.outward * (t / 2 - 0.05), p.a0, p.a1, storey.y0, storey.h, 0.1, spec.siding, p.openings, bays);
+          this.wall(p.axis, p.c - p.outward * 0.05, p.a0, p.a1, storey.y0, storey.h, t - 0.1, interior, p.openings, bays);
         }
         for (const o of p.openings) {
           const cy = storey.y0 + (o.bottom + o.top) / 2;

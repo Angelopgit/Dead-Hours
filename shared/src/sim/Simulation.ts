@@ -32,6 +32,8 @@ import { Skateboards } from './Skateboards';
 import { SKATEBOARD, type SkateTrick } from '../config/skateboards';
 import { Vehicles, type DriveState } from './Vehicles';
 import { Volatiles } from './Volatiles';
+import { Structures } from './Structures';
+import { BREACH } from '../config/destruction';
 import { VEHICLE } from '../config/vehicles';
 import { Bicycles } from './Bicycles';
 import { BICYCLE } from '../config/bicycles';
@@ -363,6 +365,8 @@ export class Simulation {
   readonly vehicles: Vehicles;
   /** Cars, pumps and drums that blow up when they are shot (sim/Volatiles.ts). */
   readonly volatiles: Volatiles;
+  /** Walls explosives open and structures they bring down (sim/Structures.ts). */
+  readonly structures: Structures;
   /** Bicycles lying about, who rides which and who stands on whose pegs. */
   readonly bicycles: Bicycles;
   /** Tonight's three team goals. */
@@ -407,6 +411,7 @@ export class Simulation {
     // Before the boards: none is laid on a car roof.
     this.vehicles = new Vehicles(this, opts.seed ?? 1);
     this.volatiles = new Volatiles(this);
+    this.structures = new Structures(this);
     this.skateboards = new Skateboards(this, opts.seed ?? 1, this.outdoorNodes);
     this.bicycles = new Bicycles(this, opts.seed ?? 1, this.outdoorNodes, this.skateboards.boards.map((b) => b.pos));
 
@@ -936,7 +941,7 @@ export class Simulation {
         const ex = r.end.x - o.x, ey = r.end.y - o.y, ez = r.end.z - o.z;
         const L = Math.hypot(ex, ey, ez) || 1;
         const back = Math.min(0.3, L);
-        this.explosives.explode({ x: r.end.x - (ex / L) * back, y: r.end.y - (ey / L) * back, z: r.end.z - (ez / L) * back }, p);
+        this.explosives.explode({ x: r.end.x - (ex / L) * back, y: r.end.y - (ey / L) * back, z: r.end.z - (ez / L) * back }, p, 0, { breach: BREACH.rocket });
       }
     }
     return 'fired';
@@ -2395,6 +2400,7 @@ export class Simulation {
 
     this.explosives.step(dt);
     this.volatiles.step();
+    this.structures.step();
 
     // Zombies far from everyone and not hunting update at a third of the rate.
     for (const z of this.zombies) {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { VEHICLES, VOLATILES, isDrivable, ownerAt, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
+import { VEHICLES, VOLATILES, isDrivable, propOwner, wreckDoor, type MapDefinition, type PropSpec } from '@dead-hours/shared';
 import type { MaterialLibrary } from '../rendering/Materials';
 import type { StaticBatcher } from '../rendering/StaticBatcher';
 import { createLightConeMaterial } from './LightCone';
@@ -129,7 +129,7 @@ export class PropFactory {
         poles.set(p.variant ?? 0, line);
       }
       // Furniture goes down with the building it stands in; a car, a pump or a drum burns on its own.
-      batch.begin(VOLATILES[p.kind] ? `prop:${index}` : ownerAt(map, p.x, p.z));
+      batch.begin(VOLATILES[p.kind] ? `prop:${index}` : propOwner(map, p));
       batch.addObject(root);
       batch.end();
       root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose(); });

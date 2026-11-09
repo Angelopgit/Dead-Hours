@@ -537,7 +537,7 @@ function waterTower(b: MapBuilder): void {
   const t = WATER_TOWER;
   const l = COURT.lot;
   b.boxMinMax(l.x0, 0, l.z0, l.x1, 0.03, l.z1, 'gravel', { collide: false });
-  b.structure({ id: 'water-tower', kind: 'tower', x: t.x, z: t.z, w: t.spread * 2 + 2, d: t.spread * 2 + 2, label: 'THE WATER TOWER', top: t.tankTop + 2 });
+  b.structure({ id: 'water-tower', kind: 'tower', x: t.x, z: t.z, w: t.spread * 2 + 2, d: t.spread * 2 + 2, label: 'THE WATER TOWER', top: t.tankTop + 2, base: 0.35 });
   // Concrete footings, the legs on them, the riser up the middle.
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
     const x = t.x + sx * t.spread, z = t.z + sz * t.spread;

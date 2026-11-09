@@ -103,6 +103,8 @@ export interface StructureSpec {
   d: number;
   /** Height of its highest point. */
   top: number;
+  /** What stands at or below this height stays when it falls (a building's floor slab and cellar). */
+  base: number;
   label?: string;
 }
 

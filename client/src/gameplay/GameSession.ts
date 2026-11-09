@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, LIMB_NAME,
+  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -35,6 +35,8 @@ import { Effects } from '../effects/Effects';
 import { Pyro, type BurnPoint } from '../effects/Pyro';
 import { Throwables } from './Throwables';
 import { Wrecks } from './Wrecks';
+import { StructureView } from './StructureView';
+import { Rubble } from '../effects/Rubble';
 import { createThrowableModel } from '../weapons/ThrowableModels';
 import { clearGibCache } from '../characters/Gibs';
 import { ZombieView, type CorpseHit } from '../zombies/ZombieView';
@@ -193,6 +195,9 @@ export class GameSession {
   private readonly throws: Throwables;
   /** Shot-up and burnt-out cars, pumps and drums. */
   private readonly wrecks: Wrecks;
+  /** Walls blown open and buildings brought down, and the rubble they leave. */
+  private readonly rubble: Rubble;
+  private readonly ruins: StructureView;
   private readonly burnPoints: BurnPoint[] = [];
   private wantThrow: ThrowKind | null = null;
   private readonly zombies: ZombieView;
@@ -450,6 +455,25 @@ export class GameSession {
     };
     this.throws = new Throwables(engine.scene, physics, this.pyro);
     this.wrecks = new Wrecks(this.sim, vehicleView);
+    this.rubble = new Rubble();
+    engine.scene.add(this.rubble.mesh);
+    this.rubble.onLand = (pos, strength) => audio.rubbleLand(pos, strength);
+    this.ruins = new StructureView(this.sim, this.sim.map, physics, this.effects.decals, this.pyro, this.rubble);
+    this.ruins.onBreach = (pos, gone) => audio.wallBreak(pos, gone);
+    this.ruins.onCreak = (pos) => {
+      audio.creak(pos);
+      const d = pos.distanceTo(this.player.position);
+      if (d < 25) this.cam.addTrauma(0.05 * (1 - d / 25));
+    };
+    this.ruins.onCollapse = (pos, size) => {
+      audio.collapse(pos, size);
+      const d = pos.distanceTo(this.player.position);
+      const k = THREE.MathUtils.clamp(1 - (d - 6) / 50, 0, 1);
+      if (k > 0) {
+        this.cam.addTrauma(0.25 + k * 0.6);
+        this.input.rumble(0.4 + k * 0.6, 700 + k * 900, 'blast');
+      }
+    };
     this.limbs = new LimbView(engine.scene, field, this.effects);
     this.pickups = new MeleePickups(engine.scene, field);
     this.syringes = new SyringePickups(engine.scene, field);
@@ -570,6 +594,8 @@ export class GameSession {
       undo.push(gib.dispose);
       // Pieces of meat and bone thrown off bodies (one instanced material of their own).
       undo.push(this.effects.chunks.sample(new THREE.Vector3(at.x - 2.5, at.y + 0.3, at.z + 1)));
+      // Rubble (an instanced material of its own).
+      undo.push(this.rubble.sample(new THREE.Vector3(at.x - 2.8, at.y + 0.3, at.z + 1)));
       // A severed arm lying in the street and one in hand, each lit by its own probe as in play.
       for (const mode of ['world', 'held'] as const) {
         const arm = new SeveredArm({ kind: 'walker', look: 0, arm: mode === 'world' ? 'armL' : 'legR', cut: mode === 'world' ? 'elbow' : 'hip', scale: 1 }, mode);
@@ -2935,6 +2961,8 @@ export class GameSession {
     if (wick && dt > 0) this.pyro.rag(wick, this.tmpD.set(0, 0, 0));
     this.pyro.setBurning(this.zombies.flamePoints(this.burnPoints, cam));
     this.pyro.setSmouldering(this.wrecks.update(dt));
+    this.ruins.update(dt);
+    this.rubble.update(dt);
     this.pyro.update(dt, renderTime, cam);
     const fires = this.phase === 'paused' && !this.link ? [] : this.pyro.activeFires(renderTime);
     if (this.phase !== 'paused' || this.link) this.wrecks.burning(fires);
@@ -3415,6 +3443,19 @@ export class GameSession {
           audio.outbreak();
         }
         break;
+      case 'breach':
+        this.ruins.event(e);
+        break;
+      case 'collapse': {
+        this.ruins.event(e);
+        // Inside or under it with a moment to get out.
+        const s = this.sim.structures.list[e.structure];
+        const me = this.me.motion.pos;
+        if (s && e.stage === STRUCTURE_STATE.going && this.me.alive && Math.abs(me.x - s.spec.x) < s.spec.w / 2 + 2 && Math.abs(me.z - s.spec.z) < s.spec.d / 2 + 2) {
+          this.hud.notify('IT IS COMING DOWN', 'Get out.', 2.4, 'danger');
+        }
+        break;
+      }
       default:
         this.throws.onEvent(e, this.sim, (id, out) => this.handOf(id, out));
         break;
@@ -4078,6 +4119,8 @@ export class GameSession {
     this.effects.dispose();
     this.throws.dispose();
     this.wrecks.dispose();
+    this.ruins.dispose();
+    this.rubble.dispose();
     this.pyro.dispose();
     audio.fires([], 0);
     clearGibCache();

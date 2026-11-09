@@ -3,6 +3,7 @@ import { BLAST, FIRE, THROWABLES, THROWING, type ThrowableDef, type ThrowKind } 
 import type { HitZone } from '../config/weapons';
 import type { ArmZone } from '../config/limbs';
 import { PLAYER } from '../config/player';
+import { BREACH } from '../config/destruction';
 import { along, type ZoneShape } from './hitzones';
 import { clamp, dist2D, type Vec3 } from './math';
 import type { Zombie } from './Zombie';
@@ -20,6 +21,8 @@ export interface BlastOptions {
   skip?: ReadonlySet<number>;
   /** The volatile prop whose blast this is. */
   source?: Volatile;
+  /** How much of a bay of wall it takes at the wall (BREACH): a rocket's is far more than a grenade's. */
+  breach?: number;
   /** Survivors (by id) this blast leaves alone: whoever was thrown out of the car as it went up, hurt already. */
   spare?: ReadonlySet<string>;
 }
@@ -267,6 +270,8 @@ export class Explosives {
       const hit = skip ? physics.raycastSkip(o.x, o.y, o.z, dx / d, dy / d, dz / d, d, skip) : physics.raycast(o.x, o.y, o.z, dx / d, dy / d, dz / d, d);
       return hit === null || hit > d - 0.25;
     };
+    // Walls and pillars first: what a blast opens, it reaches through.
+    sim.structures.blast(o, opts.breach ?? (kind === 'fuel' ? BREACH.fuel * power : BREACH.frag), power, by);
     // Cars, pumps and drums near enough catch fire in turn.
     sim.volatiles.blast(o, R, force, power, by, opts.source ?? null);
 

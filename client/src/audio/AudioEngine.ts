@@ -2748,6 +2748,79 @@ export class AudioEngine {
     }
   }
 
+  /** A bay of wall blown out (`gone`) or cracked by a blast: masonry breaking up and coming down. */
+  wallBreak(position: THREE.Vector3, gone: boolean): void {
+    if (!this.ctx) return;
+    const dist = position.distanceTo(this.listenerPos);
+    const t = this.ctx.currentTime + dist / SPEED_OF_SOUND;
+    const d = this.out(position, 0.4, 9);
+    const k = gone ? 1 : 0.5;
+    // The wall giving: a crack and a low crunch.
+    this.burst(d, t, 'bandpass', 900, 0.7, 0.9 * k, 0.002, 0.22);
+    this.burst(d, t + 0.01, 'lowpass', 320, 0.7, 1.0 * k, 0.006, 0.45, 0.5);
+    // Pieces landing and sliding.
+    for (let i = 0, n = gone ? 16 : 6; i < n; i++) {
+      const dt = 0.15 + Math.random() * (gone ? 1.5 : 0.8);
+      this.burst(d, t + dt, 'bandpass', 500 + Math.random() * 1900, 1.6, (0.1 + Math.random() * 0.2) * k * (1 - dt / 2), 0.002, 0.04 + Math.random() * 0.08, 0.7);
+    }
+    if (gone) this.burst(d, t + 0.2, 'lowpass', 2400, 0.5, 0.18, 0.2, 1.4, 0.8);
+  }
+
+  /** A structure straining before it falls: timbers and steel groaning, plaster ticking down. */
+  creak(position: THREE.Vector3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.5, 10);
+    const f = 70 + Math.random() * 60;
+    this.tone(d, t, 'sawtooth', f, f * (0.6 + Math.random() * 0.25), 0.22, 0.05, 0.5, 0.45);
+    this.tone(d, t + 0.04, 'triangle', f * 2.9, f * 2.1, 0.12, 0.04, 0.35, 0.3);
+    for (let i = 0; i < 5; i++) this.burst(d, t + Math.random() * 0.5, 'bandpass', 1400 + Math.random() * 2600, 4, 0.08 + Math.random() * 0.08, 0.001, 0.03);
+  }
+
+  /** A building, the canopy or the water tower coming down: `size` 0..1 for how much of one. */
+  collapse(position: THREE.Vector3, size: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const dist = position.distanceTo(this.listenerPos);
+    const t = ctx.currentTime + dist / SPEED_OF_SOUND;
+    const near = THREE.MathUtils.clamp(1 - dist / 45, 0, 1);
+    const k = 0.7 + size * 0.5;
+    const d = this.out(position, 0.55, 22);
+    // It lets go: a long roar of everything breaking at once, low and rolling.
+    this.burst(d, t, 'lowpass', 900, 0.5, 1.3 * k, 0.25, 2.6, 0.45);
+    this.burst(d, t + 0.1, 'lowpass', 260, 0.7, 1.4 * k, 0.4, 3.4, 0.3);
+    this.burst(d, t + 0.2, 'bandpass', 1700, 0.6, 0.5 * k, 0.3, 2.2, 0.7);
+    // The ground takes it.
+    this.tone(d, t + 0.5, 'sine', 62, 24, 1.1 * k, 0.05, 1.6, 0.9);
+    this.tone(d, t + 1.1, 'sine', 48, 22, 0.8 * k, 0.05, 1.8, 0.9);
+    if (near > 0) {
+      const chest = ctx.createGain();
+      chest.gain.value = near * near;
+      chest.connect(this.effects);
+      this.tone(chest, t + 0.5, 'sine', 55, 22, 0.8, 0.05, 1.8, 0.9);
+    }
+    // Beams snapping, sheets of wall slapping down, glass.
+    for (let i = 0; i < 30; i++) {
+      const dt = 0.1 + Math.random() * 3.2;
+      const fall = 1 - dt / 4;
+      if (i % 3 === 0) this.tone(d, t + dt, 'square', 160 + Math.random() * 180, 60, 0.16 * fall * k, 0.002, 0.12);
+      this.burst(d, t + dt, 'bandpass', 350 + Math.random() * 2400, 1.4, (0.16 + Math.random() * 0.3) * fall * k, 0.003, 0.06 + Math.random() * 0.16, 0.6);
+    }
+    for (let i = 0; i < 8; i++) this.burst(d, t + 0.4 + Math.random() * 2, 'highpass', 4200 + Math.random() * 3000, 2, 0.06 + Math.random() * 0.06, 0.001, 0.05);
+    // Settling.
+    this.burst(d, t + 3, 'lowpass', 500, 0.6, 0.3 * k, 0.6, 3.5, 0.4);
+    for (let i = 0; i < 10; i++) this.burst(d, t + 3.5 + Math.random() * 4, 'bandpass', 600 + Math.random() * 1800, 2, 0.05 + Math.random() * 0.07, 0.002, 0.05 + Math.random() * 0.06, 0.7);
+  }
+
+  /** A piece of rubble landing. */
+  rubbleLand(position: THREE.Vector3, strength: number): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const d = this.out(position, 0.3, 5);
+    this.burst(d, t, 'lowpass', 500 + Math.random() * 500, 0.8, 0.25 + strength * 0.55, 0.002, 0.07 + strength * 0.1, 0.6);
+    this.burst(d, t + 0.005, 'bandpass', 1500 + Math.random() * 1500, 2, 0.1 + strength * 0.15, 0.001, 0.04);
+  }
+
   /** A Molotov breaking: glass bursting and the fuel going up with a whoomp. */
   molotov(position: THREE.Vector3): void {
     if (!this.ctx) return;
