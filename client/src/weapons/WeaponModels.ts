@@ -48,11 +48,13 @@ export interface Sight {
 }
 
 type V3 = [number, number, number];
+/** Height of the M17's bore over the hand on its grip (the slide rides here). */
+const M17_BORE = 0.071;
 /** Supply-drop exclusives: sights built in, no fittings. */
 const FIXED_SIGHTS: Partial<Record<WeaponId, { eye: V3; fov: number; optic: Optic }>> = {
-  lmg: { eye: [0, 0.125, -0.2], fov: 48, optic: 'iron' },
-  battle: { eye: [0, 0.14, -0.17], fov: 42, optic: 'dot' },
-  sniper: { eye: [0, 0.16, -0.22], fov: 7, optic: 'scope' },
+  lmg: { eye: [0, 0.125, -0.06], fov: 48, optic: 'iron' },
+  battle: { eye: [0, 0.143, -0.095], fov: 42, optic: 'dot' },
+  sniper: { eye: [0, 0.16, -0.12], fov: 7, optic: 'scope' },
   rpg: { eye: [0, 0.125, -0.16], fov: 46, optic: 'iron' },
   wraith: { eye: [0, 0.14, -0.2], fov: 9, optic: 'scope' },
 };
@@ -60,12 +62,12 @@ const FIXED_SIGHTS: Partial<Record<WeaponId, { eye: V3; fov: number; optic: Opti
 /** Iron sights each gun comes with: eye position and zoom. */
 const IRONS: Partial<Record<WeaponId, { eye: V3; fov: number }>> = {
   ar: { eye: [0, 0.106, -0.2], fov: 50 },
-  smg: { eye: [0, 0.1, -0.125], fov: 48 },
-  shotgun: { eye: [0, 0.088, -0.26], fov: 50 },
-  marksman: { eye: [0, 0.098, -0.15], fov: 50 },
-  pistol: { eye: [0, 0.0885, -0.45], fov: 50 },
+  smg: { eye: [0, 0.1, -0.09], fov: 48 },
+  shotgun: { eye: [0, 0.082, -0.24], fov: 50 },
+  marksman: { eye: [0, 0.098, -0.067], fov: 50 },
+  pistol: { eye: [0, M17_BORE + 0.0175, -0.45], fov: 50 },
   // The pair: the right gun's sights line up with the eye (the left one is held out beside it).
-  akimbo: { eye: [0, 0.0885, -0.45], fov: 50 },
+  akimbo: { eye: [0, M17_BORE + 0.0175, -0.45], fov: 50 },
 };
 
 /**
@@ -75,10 +77,10 @@ const IRONS: Partial<Record<WeaponId, { eye: V3; fov: number }>> = {
 const RAILS: Partial<Record<WeaponId, { y: number; z: number; riser: number; onAction?: boolean }>> = {
   ar: { y: 0.08, z: 0.1, riser: 0 },
   smg: { y: 0.09, z: 0.07, riser: 0.02 },
-  shotgun: { y: 0.0775, z: 0.06, riser: 0.008 },
-  marksman: { y: 0.08, z: 0.075, riser: 0 },
-  pistol: { y: 0.017, z: -0.035, riser: 0, onAction: true },
-  akimbo: { y: 0.017, z: -0.035, riser: 0, onAction: true },
+  shotgun: { y: 0.074, z: 0.1, riser: 0.01 },
+  marksman: { y: 0.0925, z: 0.16, riser: 0 },
+  pistol: { y: 0.0115, z: -0.035, riser: 0, onAction: true },
+  akimbo: { y: 0.0115, z: -0.035, riser: 0, onAction: true },
 };
 
 /** Optic heights above the rail (sight line), zoom and kind. */
@@ -116,7 +118,7 @@ export function sightOf(id: WeaponId, build: WeaponBuild = defaultBuild(id)): Si
   const rail = RAILS[id];
   const view = OPTIC_VIEW[opticKey(id, build.optic)];
   if (!rail || !view || build.optic === 'iron') return { eye: new THREE.Vector3(...irons.eye), fov: irons.fov, optic: 'iron' };
-  const base = rail.onAction ? 0.064 : 0;
+  const base = rail.onAction ? M17_BORE : 0;
   return { eye: new THREE.Vector3(0, base + rail.y + rail.riser + view.h, irons.eye[2]), fov: view.fov, optic: view.optic };
 }
 
@@ -320,6 +322,8 @@ interface Spec {
   eject: [number, number, number];
   stock: [number, number, number];
   bolt: [number, number, number];
+  /** Front cap of a tube magazine: an extension screws on here. */
+  tube?: [number, number, number];
   /** Underside of the handguard: grips and lasers mount here. */
   under?: [number, number, number];
   /** Iron sights that fold away under an optic (the rear aperture of rifles that come with optics). */
@@ -447,272 +451,655 @@ function m4(): Spec {
   };
 }
 
+/** HK's black paint over phosphated steel. */
+const HK = 0x222326;
+
+/**
+ * Heckler & Koch MP5A2 (operator's manual): 680 mm with the fixed stock, a 225 mm barrel, sights
+ * 340 mm apart. Drawn from the back of the receiver and the bore line: the stamped receiver with
+ * the bolt tube along its top, which runs on forward over the barrel as the cocking tube.
+ */
 function mp5(): Spec {
-  const b = new Builder()
-    .tube(0.026, -0.08, 0.22, DARK, 0, 0.05, 8)
-    .box(0.02, 0.016, 0.22, BLACK, 0, 0.082, 0.07)
-    // Rear diopter (a peep ring on its drum) and the hooded front post with a tritium dot.
-    .box(0.03, 0.022, 0.03, BLACK, 0, 0.082, -0.05)
-    .ring(0.006, 0.004, -0.056, -0.044, BLACK, 0, 0.1, 10)
-    .box(0.02, 0.022, 0.022, BLACK, 0, 0.077, 0.24)
-    .ring(0.011, 0.003, 0.232, 0.248, BLACK, 0, 0.1, 12)
-    .box(0.003, 0.012, 0.004, BLACK, 0, 0.094, 0.24)
-    .glow(0.0024, 0.0024, 0.0008, 0x9dff6a, 0, 0.0985, 0.2376)
-    .box(0.056, 0.062, 0.14, 0x1b1c1e, 0, 0.04, 0.28)
-    .tube(0.012, 0.35, 0.42, STEEL, 0, 0.05, 6)
-    .box(0.04, 0.04, 0.13, BLACK, 0, 0.005, 0.03)
-    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.03, -0.25)
-    .box(0.008, 0.008, 0.18, STEEL, 0.02, 0.045, -0.16)
-    .box(0.008, 0.008, 0.18, STEEL, -0.02, 0.045, -0.16)
-    .box(0.05, 0.1, 0.02, BLACK, 0, 0.035, -0.25);
-  const mag = new Builder().box(0.022, 0.16, 0.034, 0x202124, 0, -0.075, 0.025, 0.35);
+  const d = drawn(-0.1, 0.05);
+  const b = new Builder();
+  b.as(SURF.steel)
+    .plate(d.p([[0, -22], [0, 22], [287, 22], [287, -22], [281, -22], [281, -47], [236, -50], [232, -22]]), 0.038, HK, 0.003)
+    .loft([
+      { z: d.z(0), rx: 0.0135 }, { z: d.z(287), rx: 0.0135 }, { z: d.z(287), rx: 0.0115 }, { z: d.z(430), rx: 0.0115 },
+      { z: d.z(430), rx: 0.0128 }, { z: d.z(437), rx: 0.0128 },
+    ], HK, { segments: 12 }, 0, d.y(27))
+    // Pressed ribs along the sides, the end cap.
+    .slab(0.0392, 0.004, 0.17, 0.001, HK, 0, d.y(8), d.z(110))
+    .slab(0.0392, 0.004, 0.2, 0.001, HK, 0, d.y(-12), d.z(125))
+    .slab(0.04, 0.062, 0.008, 0.002, 0x1a1b1d, 0, d.y(9), d.z(-2))
+    // Ejection port on the right, the bolt showing in it.
+    .box(0.002, 0.016, 0.046, PORT, -0.0185, d.y(13), d.z(228))
+    .as(SURF.blued).box(0.002, 0.008, 0.04, 0x4c4f54, -0.019, d.y(14), d.z(228))
+    .as(SURF.steel)
+    // Cocking handle in its slot on the left of the tube.
+    .box(0.002, 0.005, 0.11, PORT, 0.0112, d.y(29), d.z(355))
+    .pin(0.004, 0.02, HK, 0.02, d.y(29), d.z(398))
+    .pin(0.0062, 0.009, 0x1a1b1d, 0.031, d.y(29), d.z(398), 10)
+    // Rear sight: the diopter drum on its base.
+    .slab(0.03, 0.007, 0.034, 0.0015, HK, 0, d.y(41), d.z(85))
+    .box(0.006, 0.012, 0.012, HK, 0.012, d.y(48), d.z(85))
+    .box(0.006, 0.012, 0.012, HK, -0.012, d.y(48), d.z(85))
+    .ring(0.006, 0.004, d.z(79), d.z(91), BLACK, 0, d.y(50), 10)
+    // Front sight holder with its hood, the post and a tritium dot.
+    .plate(d.p([[419, -11], [419, 39], [423, 41], [431, 41], [435, 39], [435, -11]]), 0.024, HK, 0.003)
+    .ring(0.011, 0.003, d.z(421), d.z(433), BLACK, 0, d.y(50), 12)
+    .box(0.003, 0.012, 0.004, BLACK, 0, d.y(44), d.z(427))
+    .glow(0.0024, 0.0024, 0.0008, 0x9dff6a, 0, d.y(48.5), d.z(424.6))
+    // Barrel with the three lugs.
+    .loft([
+      { z: d.z(287), rx: 0.0075 }, { z: d.z(455), rx: 0.0075 }, { z: d.z(455), rx: 0.0088 }, { z: d.z(459), rx: 0.0088 },
+      { z: d.z(459), rx: 0.0075 }, { z: d.z(469), rx: 0.0075 }, { z: d.z(469), rx: 0.0086 }, { z: d.z(480), rx: 0.0086 },
+    ], PARK, { segments: 10 }, 0, d.y(0))
+    .tube(0.0046, d.z(479.6), d.z(480.3), PORT, 0, d.y(0), 8)
+    // Pins that hold the stock and the grip housing.
+    .pin(0.0035, 0.0395, 0x3a3c40, 0, d.y(-12), d.z(8))
+    .pin(0.0035, 0.0395, 0x3a3c40, 0, d.y(-34), d.z(240));
+  // Handguard, grip housing with its guard, trigger and selector.
+  b.as(SURF.polymer)
+    .plate(d.p([[288, -32], [288, 15], [293, 21], [414, 21], [419, 15], [419, -22], [413, -27]]), 0.046, POLY, 0.008)
+    .plate(d.p([[100, -22], [232, -22], [232, -46], [168, -46], [163, -52], [143, -127], [138, -132], [104, -126], [100, -119], [110, -64], [100, -42]]), 0.032, POLY, 0.005)
+    .plate(d.p([[232, -44], [232, -58], [224, -70], [172, -70], [163, -56], [167, -50], [175, -66], [221, -66], [228, -57], [228, -44]]), 0.014, POLY, 0.002)
+    .pin(0.0055, 0.035, POLY, 0, d.y(-33), d.z(150), 10)
+    .slab(0.003, 0.005, 0.024, 0.001, POLY, 0.0172, d.y(-31), d.z(162), -0.25)
+    .slab(0.003, 0.012, 0.02, 0.001, POLY, 0, d.y(-54), d.z(236), 0.3)
+    .as(SURF.rubber)
+    .box(0.0006, 0.003, 0.003, 0xd8d8d8, 0.0162, d.y(-26), d.z(168))
+    .box(0.0006, 0.003, 0.003, 0xc22a1c, 0.0162, d.y(-26), d.z(176))
+    .box(0.0006, 0.003, 0.003, 0xc22a1c, 0.0162, d.y(-26), d.z(183))
+    .as(SURF.steel)
+    .plate(d.p([[196, -46], [201, -46], [199.5, -56], [195, -64], [192, -63], [195.5, -55]]), 0.006, STEEL, 0.001);
+  // Fixed stock: the collar on the receiver, the hollow-looking body, a ribbed butt.
+  b.as(SURF.polymer)
+    .plate(d.p([[-6, 40], [-30, 38], [-186, 24], [-197, 18], [-197, -90], [-190, -96], [-178, -94], [-70, -30], [-30, -24], [-6, -24]]), 0.04, POLY, 0.006)
+    .plate(d.p([[-40, 20], [-170, 10], [-170, -70], [-80, -18], [-40, -12]]), 0.0412, 0x151517, 0.0006)
+    .as(SURF.rubber).slab(0.04, 0.112, 0.005, 0.0015, 0x101011, 0, d.y(-36), d.z(-197.5))
+    .as(null);
+  // 30-round magazine, curved forward.
+  const at: V3 = [0, d.y(-22), d.z(257)];
+  const md = drawn(-0.1 - at[2], 0.05 - at[1]);
+  const mag = new Builder().as({ rough: 0.5, metal: 0.6, wear: 0.5, worn: 0x7e8185 })
+    .plate(md.p([[239, -24], [277, -24], [279, -80], [286, -130], [297, -175], [303, -192], [268, -203], [262, -186], [252, -138], [243, -84]]), 0.021, 0x242528, 0.002)
+    .box(0.0216, 0.12, 0.003, 0x1c1d1f, 0, md.y(-110), md.z(264), -0.16)
+    .as(SURF.polymer).plate(md.p([[306, -190], [304.5, -195], [266, -207.5], [265, -202.5]]), 0.024, 0x1d1d1f, 0.0015);
   return {
-    body: b, mag: { b: mag, at: [0, -0.0, 0.15] },
-    muzzle: [0, 0.05, 0.43], fore: [0.035, -0.01, 0.25], eject: [-0.03, 0.06, 0.08], stock: [0, 0.035, -0.26], bolt: [0.0, 0.08, 0.2],
-    under: [0, 0.009, 0.28],
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.05, d.z(480)], fore: [0.035, 0.0, 0.25], eject: [-0.03, d.y(14), d.z(228)], stock: [0, 0.035, d.z(-200)], bolt: [0.03, d.y(29), d.z(398)],
+    under: [0, d.y(-30), d.z(350)],
   };
 }
 
+/**
+ * Remington 870 Police with the 18 inch barrel and walnut furniture: 978 mm long, a 356 mm length
+ * of pull, the four-round tube ending short of the muzzle. Drawn from the back of the receiver and
+ * the bore line; the fore-end stands a full stroke ahead of the receiver, as it has to.
+ */
 function m870(): Spec {
-  const b = new Builder()
-    .box(0.05, 0.075, 0.2, 0x1f2022, 0, 0.04, 0.06)
-    .tube(0.013, 0.16, 0.63, STEEL, 0, 0.066)
-    .tube(0.013, 0.16, 0.54, 0x18191a, 0, 0.026)
-    .box(0.008, 0.006, 0.01, STEEL, 0, 0.08, 0.62)
-    .glow(0.005, 0.005, 0.005, 0xff8a2a, 0, 0.0845, 0.62)
-    .box(0.042, 0.1, 0.27, WOOD, 0, -0.005, -0.2, 0.12)
-    .box(0.046, 0.13, 0.025, 0x101010, 0, -0.03, -0.345, 0.12)
-    .box(0.036, 0.06, 0.09, WOOD, 0, -0.012, -0.035, 0.45)
-    .box(0.012, 0.012, 0.06, BLACK, 0, -0.01, 0.06);
-  const pump = new Builder()
-    .box(0.052, 0.05, 0.17, WOOD, 0, 0, 0)
-    .box(0.056, 0.006, 0.17, 0x4a3020, 0, -0.01, 0);
+  const d = drawn(0.045, 0.058);
+  const b = new Builder();
+  b.as(SURF.steel)
+    .plate(d.p([[0, -42], [0, 10], [6, 16], [215, 16], [215, -42]]), 0.04, 0x222326, 0.005)
+    // Ejection port with the bright bolt in it, the loading port underneath.
+    .box(0.002, 0.018, 0.092, PORT, -0.0202, d.y(3), d.z(145))
+    .as({ rough: 0.25, metal: 0.95 }).box(0.002, 0.012, 0.074, 0x8e9296, -0.0206, d.y(3.5), d.z(138))
+    .as(SURF.steel)
+    .box(0.024, 0.002, 0.1, PORT, 0, d.y(-42.4), d.z(135))
+    .pin(0.003, 0.0405, 0x3a3c40, 0, d.y(-24), d.z(40))
+    .pin(0.003, 0.0405, 0x3a3c40, 0, d.y(-30), d.z(108))
+    // Barrel, the bead on its pedestal, the ring that ties it to the magazine tube.
+    .loft([{ z: d.z(215), rx: 0.0135 }, { z: d.z(657), rx: 0.0108 }], PARK, { segments: 12 }, 0, d.y(0))
+    .tube(0.0092, d.z(656.6), d.z(657.3), PORT, 0, d.y(0), 10)
+    .box(0.006, 0.008, 0.008, STEEL, 0, d.y(14), d.z(642))
+    .glow(0.005, 0.005, 0.005, 0xff8a2a, 0, d.y(20.5), d.z(642))
+    .slab(0.013, 0.022, 0.014, 0.002, PARK, 0, d.y(-15), d.z(551))
+    .loft([{ z: d.z(215), rx: 0.0125 }, { z: d.z(560), rx: 0.0125 }, { z: d.z(560), rx: 0.014 }, { z: d.z(572), rx: 0.014 }, { z: d.z(575), rx: 0.011 }], 0x1a1b1d, { segments: 10 }, 0, d.y(-29));
+  // Trigger plate: guard, trigger, the cross-bolt safety behind it.
+  b.as(SURF.anodized)
+    .plate(d.p([[5, -42], [8, -70], [20, -78], [55, -78], [66, -64], [70, -42], [66, -42], [62, -62], [53, -74], [22, -74], [12, -68], [9, -42]]), 0.012, 0x1c1d1f, 0.002)
+    .as(SURF.steel)
+    .plate(d.p([[36, -42], [41, -42], [39.5, -54], [35, -62], [32, -61], [35.5, -52]]), 0.006, STEEL, 0.001)
+    .pin(0.003, 0.016, 0x3a3c40, 0, d.y(-50), d.z(14));
+  // Walnut stock with its semi-pistol grip, a rubber recoil pad.
+  b.as(SURF.wood)
+    .plate(d.p([[2, 12], [-20, 8], [-55, -12], [-100, -16], [-110, -13], [-309, -40], [-305, -172], [-88, -94], [-66, -94], [-58, -86], [-30, -52], [2, -42]]), 0.042, WOOD, 0.009)
+    .as(SURF.polymer).slab(0.0425, 0.004, 0.02, 0.001, 0x141415, 0, d.y(-95), d.z(-77))
+    .as(SURF.rubber).slab(0.042, 0.136, 0.014, 0.003, 0x101011, 0, d.y(-106), d.z(-313), -0.03)
+    .as(null);
+  // Fore-end: ribbed walnut round the magazine tube, on two steel action bars.
+  const at: V3 = [0, d.y(-29), d.z(392)];
+  const ribs: Ring[] = [{ z: -0.086, rx: 0.019, ry: 0.018, y: 0.003 }];
+  for (let k = 0; k < 10; k++) {
+    const z0 = -0.081 + k * 0.0162;
+    for (const [z, deep] of [[z0, 1], [z0 + 0.002, 0], [z0 + 0.0142, 0], [z0 + 0.0162, 1]] as const) ribs.push({ z, rx: 0.024 - deep * 0.0016, ry: 0.0215 - deep * 0.0016, y: 0.004 });
+  }
+  ribs.push({ z: 0.086, rx: 0.019, ry: 0.018, y: 0.003 });
+  const pump = new Builder().as(SURF.wood)
+    .loft(ribs, WOOD, { segments: 12 })
+    .as(SURF.steel)
+    .box(0.003, 0.008, 0.13, 0x18191a, 0.0142, 0.006, -0.15)
+    .box(0.003, 0.008, 0.13, 0x18191a, -0.0142, 0.006, -0.15)
+    .tube(0.0138, 0.086, 0.091, 0x18191a, 0, 0, 10)
+    .as(null);
   return {
-    body: b, action: { b: pump, at: [0, 0.026, 0.27] },
-    muzzle: [0, 0.066, 0.64], fore: [0.035, -0.002, 0.27], eject: [-0.03, 0.05, 0.07], stock: [0, -0.01, -0.35], bolt: [0.035, -0.002, 0.27],
+    body: b, action: { b: pump, at },
+    muzzle: [0, d.y(0), d.z(657)], fore: [0.026, at[1] - 0.06, at[2]], eject: [-0.03, d.y(3), d.z(145)], stock: [0, -0.03, d.z(-321)], bolt: [0.026, at[1] - 0.06, at[2]],
     // The pump slides: the laser rides on the receiver's side.
-    under: [0.032, 0.03, 0.12],
+    under: [0.031, d.y(-2), d.z(150)],
+    tube: [0, d.y(-29), d.z(572)],
   };
 }
 
+/**
+ * Mk 14 Mod 0 Enhanced Battle Rifle: an M14 action with a 457 mm barrel in the Sage aluminium
+ * chassis. 889 mm with the stock run in; drawn with it pulled out 90 mm, to the M14's own 337 mm
+ * length of pull plus the pad. Measured from the bolt face and the bore line.
+ */
 function mk14(): Spec {
-  const b = new Builder()
-    .box(0.06, 0.08, 0.42, TAN, 0, 0.04, 0.12)
-    .box(0.066, 0.02, 0.3, 0x5d5340, 0, 0.04, 0.2)
-    .tube(0.012, 0.33, 0.63, STEEL, 0, 0.06)
-    .tube(0.019, 0.63, 0.69, STEEL, 0, 0.06, 6)
-    // Front post on the gas block (the rear aperture folds under an optic).
-    .box(0.016, 0.014, 0.02, BLACK, 0, 0.077, 0.6)
-    .box(0.004, 0.022, 0.005, BLACK, 0, 0.09, 0.6)
-    .box(0.04, 0.05, 0.18, TAN, 0, 0.045, -0.18)
-    // Cheek comb, kept under the iron sight line (IRONS.marksman eye y 0.098): taller, the eye sat inside it.
-    .box(0.03, 0.016, 0.1, TAN, 0, 0.078, -0.17)
-    .box(0.05, 0.12, 0.03, BLACK, 0, 0.025, -0.28)
-    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3);
-  const mag = new Builder().box(0.03, 0.11, 0.07, 0x1c1c1c, 0, -0.055, 0, 0.05);
+  const d = drawn(0.23, 0.06);
+  const b = new Builder();
+  const GROOVE = 0x3b3529;
+  // Chassis: the bed under the action with the magazine well, then the railed fore-end.
+  b.as({ rough: 0.55, metal: 0.4, wear: 0.45, worn: 0x8d8f92 })
+    .plate(d.p([[-228, -58], [-228, -8], [-200, 0], [30, 0], [30, -40], [0, -46], [-88, -46], [-96, -58]]), 0.05, TAN, 0.004)
+    .plate(d.p([[30, -34], [30, 24], [325, 24], [330, 18], [330, -28], [322, -34]]), 0.05, TAN, 0.004)
+    .slab(0.004, 0.021, 0.27, 0.001, TAN, 0.0265, d.y(0), d.z(180))
+    .slab(0.004, 0.021, 0.27, 0.001, TAN, -0.0265, d.y(0), d.z(180))
+    .slab(0.021, 0.004, 0.27, 0.001, TAN, 0, d.y(-35.5), d.z(180))
+    // Top rail from the clip guide to the front of the fore-end.
+    .slab(0.021, 0.007, 0.47, 0.001, TAN, 0, d.y(27.5), d.z(70))
+    .slab(0.02, 0.014, 0.03, 0.002, TAN, 0, d.y(18), d.z(-150));
+  for (let k = 0; k < 13; k++) {
+    const z = d.z(60 + k * 20);
+    b.box(0.0046, 0.0215, 0.005, GROOVE, 0.0265, d.y(0), z).box(0.0046, 0.0215, 0.005, GROOVE, -0.0265, d.y(0), z).box(0.0215, 0.0046, 0.005, GROOVE, 0, d.y(-35.5), z);
+  }
+  for (let k = 0; k < 47; k++) b.box(0.0212, 0.003, 0.0052, TAN, 0, d.y(31), d.z(-160 + k * 10));
+  // The M14 receiver: heel with the sight ears, the open bolt raceway, the ring round the breech.
+  b.as(SURF.steel)
+    .plate(d.p([[-215, 0], [-215, 20], [-182, 20], [-174, 12], [-10, 12], [-4, 18], [25, 18], [25, 0]]), 0.036, PARK, 0.003)
+    .pin(0.0065, 0.052, PARK, 0, d.y(15), d.z(-197), 10)
+    .as(SURF.blued).slab(0.02, 0.008, 0.095, 0.002, 0x3c3e42, -0.004, d.y(12.5), d.z(-66))
+    // Operating rod along the right side, its handle behind the breech.
+    .as(SURF.steel)
+    .slab(0.006, 0.01, 0.23, 0.0015, PARK, -0.0205, d.y(6), d.z(40))
+    .slab(0.012, 0.011, 0.018, 0.002, PARK, -0.027, d.y(7), d.z(-78))
+    .box(0.002, 0.012, 0.06, PORT, -0.0185, d.y(6), d.z(-40))
+    // Barrel past the fore-end, the flash hider, the front sight on its base.
+    .loft([
+      { z: d.z(25), rx: 0.0105 }, { z: d.z(330), rx: 0.0088 }, { z: d.z(440), rx: 0.008 }, { z: d.z(440), rx: 0.0112 },
+      { z: d.z(486), rx: 0.0105 }, { z: d.z(492), rx: 0.0088 },
+    ], PARK, { segments: 12 }, 0, d.y(0))
+    .tube(0.0046, d.z(491.6), d.z(492.3), PORT, 0, d.y(0), 8)
+    .plate(d.p([[443, 8], [446, 29], [462, 29], [466, 8]]), 0.012, PARK, 0.002)
+    .plate(d.p([[446, 29], [446, 39], [450, 41], [458, 41], [462, 39], [462, 29]]), 0.002, PARK, 0.0004, 0.0075)
+    .plate(d.p([[446, 29], [446, 39], [450, 41], [458, 41], [462, 39], [462, 29]]), 0.002, PARK, 0.0004, -0.0075)
+    .box(0.002, 0.01, 0.003, BLACK, 0, d.y(33), d.z(454));
+  for (const a of [0, 1.26, -1.26, 2.51, -2.51]) b.box(0.003, 0.003, 0.026, PORT, Math.sin(a) * 0.0105, d.y(0) + Math.cos(a) * 0.0105, d.z(466), 0, 0, -a);
+  // Trigger guard and trigger.
+  b.plate(d.p([[-160, -58], [-158, -80], [-150, -86], [-115, -86], [-104, -74], [-100, -58], [-104, -58], [-108, -72], [-117, -82], [-148, -82], [-155, -77], [-156, -58]]), 0.012, PARK, 0.002)
+    .plate(d.p([[-138, -58], [-133, -58], [-134.5, -68], [-139, -76], [-142, -75], [-139, -67]]), 0.006, STEEL, 0.001);
+  // Pistol grip.
+  b.as(SURF.polymer)
+    .plate(d.p([[-164, -56], [-166, -82], [-172, -86], [-174, -94], [-178, -106], [-198, -156], [-238, -148], [-214, -72], [-219, -58], [-210, -54], [-200, -56]]), 0.028, POLY, 0.007);
+  // Stock: the tube it slides on, the cheek rest, the butt on its strut.
+  b.as(SURF.anodized)
+    .loft([{ z: d.z(-228), rx: 0.013 }, { z: d.z(-430), rx: 0.013 }], 0x2a2b2e, { segments: 10 }, 0, d.y(-14))
+    .plate(d.p([[-228, -30], [-228, -44], [-452, -74], [-448, -58]]), 0.014, 0x2a2b2e, 0.002)
+    .as({ rough: 0.55, metal: 0.4, wear: 0.45, worn: 0x8d8f92 })
+    .plate(d.p([[-252, 4], [-252, 20], [-258, 24], [-398, 24], [-408, 16], [-408, 4]]), 0.034, TAN, 0.006)
+    .slab(0.018, 0.009, 0.11, 0.002, TAN, 0, d.y(1), d.z(-330))
+    .as(SURF.polymer)
+    .plate(d.p([[-428, 18], [-434, 24], [-482, 24], [-482, -96], [-466, -100], [-448, -60], [-428, -36]]), 0.04, POLY, 0.004)
+    .as(SURF.rubber).slab(0.04, 0.124, 0.008, 0.002, 0x101011, 0, d.y(-37), d.z(-485))
+    .as(null);
+  // 20-round steel magazine.
+  const at: V3 = [0, d.y(-40), d.z(-45)];
+  const md = drawn(0.23 - at[2], 0.06 - at[1]);
+  const mag = new Builder().as({ rough: 0.5, metal: 0.6, wear: 0.5, worn: 0x7e8185 })
+    .plate(md.p([[-84, -30], [-6, -30], [-2, -150], [-80, -140]]), 0.0245, 0x222325, 0.002)
+    .box(0.0252, 0.1, 0.004, 0x1c1d1f, 0, md.y(-90), md.z(-30))
+    .box(0.0252, 0.1, 0.004, 0x1c1d1f, 0, md.y(-90), md.z(-58))
+    .plate(md.p([[-1, -148], [0, -153], [-82, -143.5], [-81, -138.5]]), 0.026, 0x1a1b1d, 0.0012);
   return {
-    body: b, mag: { b: mag, at: [0, -0.005, 0.12] },
-    muzzle: [0, 0.06, 0.7], fore: [0.04, -0.01, 0.26], eject: [-0.035, 0.06, 0.1], stock: [0, 0.03, -0.3], bolt: [0.035, 0.07, 0.05],
-    under: [0, 0.0, 0.26],
-    irons: (r) => r.box(0.02, 0.012, 0.018, BLACK, 0, 0.086, -0.05).ring(0.0035, 0.002, -0.054, -0.046, BLACK, 0, 0.098, 10),
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.06, d.z(492)], fore: [0.04, -0.008, 0.33], eject: [-0.035, 0.075, d.z(-60)], stock: [0, 0.03, d.z(-489)], bolt: [0.02, d.y(16), d.z(-90)],
+    under: [0, d.y(-37.5), d.z(110)],
+    irons: (r) => r.box(0.02, 0.012, 0.018, BLACK, 0, 0.086, d.z(-197)).ring(0.0035, 0.002, d.z(-201), d.z(-193), BLACK, 0, 0.098, 10),
   };
 }
 
+/** The M4's A2 pistol grip, drawn `ds` mm ahead of where the M4 carries it (the hand closes on the same place). */
+function a2Grip(d: ReturnType<typeof drawn>, ds: number, dh = 0): P2[] {
+  return d.p(([[-150, -50], [-152, -72], [-158, -76], [-160, -84], [-164, -96], [-184, -146], [-224, -138], [-200, -62], [-205, -48], [-196, -44], [-186, -50]] as P2[]).map(([z, y]) => [z + ds, y + dh] as P2));
+}
+/** A trigger guard as a strip, and the trigger in it (`s` is the trigger, `h` the housing it hangs from). */
+function guard(b: Builder, d: ReturnType<typeof drawn>, s: number, h: number, color: number): void {
+  b.plate(d.p([[s - 24, h + 2], [s - 22, h - 20], [s - 16, h - 25], [s + 34, h - 25], [s + 42, h - 16], [s + 44, h + 2], [s + 40, h + 2], [s + 38, h - 14], [s + 32, h - 21], [s - 15, h - 21], [s - 18, h - 17], [s - 20, h + 2]]), 0.012, color, 0.002)
+    .plate(d.p([[s - 2, h], [s + 3, h], [s + 1.5, h - 10], [s - 3, h - 18], [s - 6, h - 17], [s - 3, h - 9]]), 0.006, STEEL, 0.001);
+}
+
+/**
+ * M249 Squad Automatic Weapon (TM 9-1005-201-10): 1,041 mm long with a 465 mm barrel, fed from a
+ * 200-round box under the receiver. Measured from the trigger and the bore line.
+ */
 function m249(): Spec {
-  const b = new Builder()
-    // Receiver with the feed tray cover on top, handguard and a long barrel under a carry handle.
-    .box(0.07, 0.085, 0.36, DARK, 0, 0.045, 0.06)
-    .box(0.072, 0.024, 0.2, BLACK, 0, 0.1, 0.03)
-    .box(0.074, 0.006, 0.04, STEEL, 0, 0.113, 0.11)
-    .box(0.076, 0.06, 0.2, BLACK, 0, 0.03, 0.34)
-    .tube(0.014, 0.44, 0.8, STEEL, 0, 0.05)
-    .tube(0.019, 0.8, 0.86, STEEL, 0, 0.05, 6)
-    .tube(0.009, 0.44, 0.68, STEEL, 0, 0.018)
-    .box(0.012, 0.04, 0.012, BLACK, -0.05, 0.08, 0.46)
-    .box(0.012, 0.04, 0.012, BLACK, -0.05, 0.08, 0.58)
-    .box(0.018, 0.014, 0.15, BLACK, -0.05, 0.105, 0.52)
-    // Folded bipod under the barrel.
-    .box(0.01, 0.01, 0.28, STEEL, 0.012, 0.0, 0.62)
-    .box(0.01, 0.01, 0.28, STEEL, -0.012, 0.0, 0.62)
-    .box(0.03, 0.016, 0.03, BLACK, 0, 0.012, 0.76)
-    // Hooded front post on the barrel, rear aperture on the cover.
-    .box(0.022, 0.035, 0.02, BLACK, 0, 0.073, 0.76)
-    .box(0.004, 0.035, 0.005, BLACK, 0, 0.1075, 0.76)
-    .box(0.004, 0.03, 0.016, BLACK, 0.012, 0.11, 0.76)
-    .box(0.004, 0.03, 0.016, BLACK, -0.012, 0.11, 0.76)
-    .box(0.03, 0.006, 0.03, BLACK, 0, 0.115, -0.06)
-    .ring(0.006, 0.004, -0.066, -0.054, BLACK, 0, 0.125, 10)
-    // Grip, trigger guard, skeleton stock and butt.
-    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3)
-    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08)
-    .box(0.03, 0.025, 0.2, BLACK, 0, 0.065, -0.22)
-    .box(0.03, 0.02, 0.2, BLACK, 0, 0.0, -0.22, 0.12)
-    .box(0.05, 0.12, 0.022, 0x121212, 0, 0.025, -0.33);
-  // The belt box hangs under the left of the receiver, a strip of rounds running up into the feed.
-  const mag = new Builder()
-    .box(0.075, 0.12, 0.11, OLIVE, -0.005, -0.06, 0)
-    .box(0.077, 0.01, 0.112, 0x2c3125, -0.005, -0.004, 0)
-    .box(0.028, 0.016, 0.05, BRASS, 0.02, 0.006, 0);
+  const d = drawn(0.08, 0.05);
+  const b = new Builder();
+  b.as(SURF.steel)
+    // Stamped receiver, the feed cover hinged over it with a short rail on top.
+    .plate(d.p([[-75, -40], [-75, 28], [235, 28], [235, -40]]), 0.052, DARK, 0.004)
+    .plate(d.p([[-52, 28], [-52, 44], [-42, 50], [178, 50], [204, 36], [204, 28]]), 0.05, 0x202124, 0.005)
+    .slab(0.021, 0.005, 0.13, 0.001, 0x202124, 0, d.y(52), d.z(85));
+  for (let k = 0; k < 13; k++) b.box(0.0212, 0.003, 0.0052, 0x202124, 0, d.y(55.5), d.z(25 + k * 10));
+  b.slab(0.054, 0.008, 0.2, 0.002, DARK, 0, d.y(-8), d.z(70))
+    // Cocking handle in its slot on the right, the ejection port low behind the box.
+    .box(0.002, 0.006, 0.17, PORT, -0.0262, d.y(10), d.z(90))
+    .slab(0.014, 0.012, 0.02, 0.003, 0x1a1b1d, -0.033, d.y(10), d.z(150))
+    .box(0.002, 0.02, 0.05, PORT, -0.0262, d.y(-26), d.z(110))
+    // Rear sight on the back of the receiver.
+    .slab(0.03, 0.01, 0.03, 0.002, BLACK, 0, d.y(54), d.z(-40))
+    .box(0.005, 0.016, 0.012, BLACK, 0.0125, d.y(66), d.z(-40))
+    .box(0.005, 0.016, 0.012, BLACK, -0.0125, d.y(66), d.z(-40))
+    .ring(0.006, 0.004, d.z(-46), d.z(-34), BLACK, 0, d.y(75), 10)
+    // Barrel with the gas cylinder under it, the gas block and the hooded front post, the flash hider.
+    .loft([
+      { z: d.z(191), rx: 0.0135 }, { z: d.z(440), rx: 0.012 }, { z: d.z(440), rx: 0.016 }, { z: d.z(462), rx: 0.016 },
+      { z: d.z(462), rx: 0.0105 }, { z: d.z(662), rx: 0.0095 }, { z: d.z(662), rx: 0.012 }, { z: d.z(705), rx: 0.0115 }, { z: d.z(711), rx: 0.009 },
+    ], PARK, { segments: 12 }, 0, d.y(0))
+    .tube(0.0046, d.z(710.6), d.z(711.3), PORT, 0, d.y(0), 8)
+    .loft([{ z: d.z(235), rx: 0.009 }, { z: d.z(462), rx: 0.009 }, { z: d.z(462), rx: 0.011 }, { z: d.z(476), rx: 0.011 }], PARK, { segments: 8 }, 0, d.y(-26))
+    .plate(d.p([[442, 12], [446, 60], [458, 60], [462, 12]]), 0.013, PARK, 0.002)
+    .plate(d.p([[446, 60], [446, 74], [449, 77], [455, 77], [458, 74], [458, 60]]), 0.002, PARK, 0.0004, 0.008)
+    .plate(d.p([[446, 60], [446, 74], [449, 77], [455, 77], [458, 74], [458, 60]]), 0.002, PARK, 0.0004, -0.008)
+    .box(0.0026, 0.015, 0.0036, BLACK, 0, d.y(67.5), d.z(452));
+  for (const a of [0, 1.26, -1.26, 2.51, -2.51]) b.box(0.003, 0.003, 0.024, PORT, Math.sin(a) * 0.0112, d.y(0) + Math.cos(a) * 0.0112, d.z(684), 0, 0, -a);
+  // Folded bipod: the yoke on the gas cylinder, the legs back under the handguard.
+  b.slab(0.04, 0.014, 0.02, 0.003, PARK, 0, d.y(-36), d.z(468))
+    .box(0.007, 0.007, 0.21, PARK, 0.017, d.y(-53), d.z(365))
+    .box(0.007, 0.007, 0.21, PARK, -0.017, d.y(-53), d.z(365))
+    .box(0.012, 0.01, 0.016, PARK, 0.017, d.y(-53), d.z(258))
+    .box(0.012, 0.01, 0.016, PARK, -0.017, d.y(-53), d.z(258));
+  guard(b, d, 8, -52, PARK);
+  // Heat shield over the barrel, the handguard under it, the carry handle folded to the right.
+  b.as(SURF.polymer)
+    .plate(d.p([[238, 12], [238, 20], [244, 24], [432, 22], [438, 16], [438, 12]]), 0.034, POLY, 0.005)
+    .plate(d.p([[236, -48], [236, -10], [432, -10], [432, -38], [422, -46]]), 0.058, POLY, 0.009)
+    .plate(d.p([[-70, -40], [52, -40], [50, -52], [-66, -52]]), 0.034, POLY, 0.003)
+    .plate(a2Grip(d, 136), 0.028, POLY, 0.007);
+  for (let k = 0; k < 6; k++) b.box(0.0345, 0.003, 0.018, PORT, 0, d.y(22.6 - k * 0.25), d.z(262 + k * 30));
+  b.as(SURF.steel)
+    .box(0.01, 0.006, 0.012, PARK, -0.02, d.y(14), d.z(262))
+    .box(0.01, 0.006, 0.012, PARK, -0.02, d.y(14), d.z(332))
+    .as(SURF.polymer).loft([{ z: d.z(256), rx: 0.0085 }, { z: d.z(338), rx: 0.0085 }], POLY, { segments: 8 }, -0.033, d.y(16));
+  // Solid stock with its shoulder rest.
+  b.plate(d.p([[-75, 30], [-108, 36], [-320, 36], [-327, 30], [-327, -74], [-318, -80], [-300, -80], [-120, -42], [-75, -40]]), 0.046, POLY, 0.006)
+    .plate(d.p([[-125, 22], [-300, 22], [-300, -60], [-140, -28]]), 0.0472, 0x151517, 0.0006)
+    .as(SURF.rubber).slab(0.046, 0.112, 0.006, 0.002, 0x101011, 0, d.y(-22), d.z(-329))
+    .as(null);
+  // The 200-round box under the receiver, the belt climbing its left side into the feed tray.
+  const at: V3 = [0.004, d.y(-40), d.z(165)];
+  const mag = new Builder().as(SURF.polymer)
+    .slab(0.078, 0.128, 0.13, 0.006, OLIVE, 0, -0.066, 0)
+    .slab(0.08, 0.012, 0.132, 0.003, 0x2c3125, 0, -0.008, 0)
+    .box(0.0792, 0.004, 0.1, 0x2c3125, 0, -0.07, 0)
+    .box(0.03, 0.02, 0.004, 0x2c3125, 0, -0.04, 0.066)
+    .as(SURF.brass)
+    .box(0.01, 0.07, 0.032, BRASS, 0.034, 0.03, -0.02)
+    .box(0.026, 0.008, 0.032, BRASS, 0.024, 0.066, -0.02);
+  for (let k = 0; k < 6; k++) mag.box(0.0104, 0.003, 0.033, 0x4a4b4e, 0.034, 0.002 + k * 0.011, -0.02);
   return {
-    body: b, mag: { b: mag, at: [-0.012, 0.0, 0.14] },
-    muzzle: [0, 0.05, 0.87], fore: [0.04, -0.005, 0.34], eject: [-0.035, 0.01, 0.1], stock: [0, 0.03, -0.34], bolt: [0.04, 0.05, 0.12],
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.05, d.z(711)], fore: [0.04, -0.024, d.z(320)], eject: [-0.035, 0.02, d.z(110)], stock: [0, 0.03, d.z(-330)], bolt: [0.03, d.y(10), d.z(100)],
   };
 }
 
+/** A rail's cross slots along the top of a part: `n` teeth from `s0`, 10 mm apart. */
+function teeth(b: Builder, d: ReturnType<typeof drawn>, s0: number, n: number, h: number, color: number): void {
+  for (let k = 0; k < n; k++) b.box(0.0212, 0.003, 0.0052, color, 0, d.y(h), d.z(s0 + k * 10));
+}
+
+/**
+ * FN SCAR-H (Mk 17 Mod 0) with the 406 mm barrel: 965 mm with the stock out. One long aluminium
+ * upper with the rail down its whole top, a polymer lower, the folding stock with its cheek piece.
+ * Measured from the trigger and the bore line.
+ */
 function scarH(): Spec {
-  const b = new Builder()
-    // Angular FDE upper with a full-length rail, black lower.
-    .box(0.058, 0.065, 0.42, FDE, 0, 0.06, 0.13)
-    .box(0.026, 0.012, 0.42, BLACK, 0, 0.098, 0.13)
-    .box(0.062, 0.03, 0.16, FDE, 0, 0.04, 0.27)
-    .box(0.05, 0.05, 0.2, BLACK, 0, 0.005, 0.05)
-    .tube(0.013, 0.34, 0.56, STEEL, 0, 0.055)
-    .tube(0.019, 0.56, 0.62, STEEL, 0, 0.055, 6)
-    // Holographic sight: a rectangular window on the rail, the reticle at its front pane.
-    .box(0.036, 0.02, 0.07, BLACK, 0, 0.114, 0.08)
-    .box(0.046, 0.006, 0.04, BLACK, 0, 0.158, 0.09)
-    .box(0.006, 0.036, 0.04, BLACK, 0.02, 0.14, 0.09)
-    .box(0.006, 0.036, 0.04, BLACK, -0.02, 0.14, 0.09)
-    .box(0.046, 0.004, 0.04, BLACK, 0, 0.124, 0.09)
-    .glow(0.0024, 0.0024, 0.0008, 0xff2414, 0, 0.14, 0.108)
-    .glow(0.012, 0.0008, 0.0008, 0xff2414, 0, 0.1465, 0.108)
-    .glow(0.012, 0.0008, 0.0008, 0xff2414, 0, 0.1335, 0.108)
-    .glow(0.0008, 0.012, 0.0008, 0xff2414, 0.0065, 0.14, 0.108)
-    .glow(0.0008, 0.012, 0.0008, 0xff2414, -0.0065, 0.14, 0.108)
-    // Charging handle on the left, grip, folding stock with a cheek riser.
-    .box(0.03, 0.012, 0.02, BLACK, -0.04, 0.07, 0.2)
-    .box(0.03, 0.09, 0.035, BLACK, 0, -0.045, 0.035, -0.3)
-    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08)
-    .box(0.04, 0.06, 0.24, BLACK, 0, 0.045, -0.185)
-    .box(0.034, 0.022, 0.12, FDE, 0, 0.085, -0.2)
-    .box(0.05, 0.12, 0.025, 0x121212, 0, 0.03, -0.3);
-  const mag = new Builder().box(0.03, 0.14, 0.072, 0x1c1c1c, 0, -0.07, 0, 0.1);
+  const d = drawn(0.08, 0.055);
+  const b = new Builder();
+  const LOWER = 0x97835f, SLOT = 0x4d412e;
+  b.as({ rough: 0.5, metal: 0.5, wear: 0.45, worn: 0xb9b4a6 })
+    .plate(d.p([[-85, -24], [-85, 42], [-80, 47], [396, 47], [400, 42], [400, -30], [190, -30], [185, -24]]), 0.05, FDE, 0.004)
+    .slab(0.021, 0.004, 0.47, 0.001, FDE, 0, d.y(47.5), d.z(157))
+    // Side and bottom rails of the fore-end.
+    .slab(0.004, 0.021, 0.15, 0.001, FDE, 0.0265, d.y(10), d.z(315))
+    .slab(0.004, 0.021, 0.15, 0.001, FDE, -0.0265, d.y(10), d.z(315))
+    .slab(0.021, 0.004, 0.18, 0.001, FDE, 0, d.y(-31.5), d.z(300));
+  teeth(b, d, -78, 48, 50.5, FDE);
+  for (let k = 0; k < 7; k++) {
+    const z = d.z(255 + k * 20);
+    b.box(0.0046, 0.0215, 0.005, SLOT, 0.0265, d.y(10), z).box(0.0046, 0.0215, 0.005, SLOT, -0.0265, d.y(10), z);
+  }
+  for (let k = 0; k < 8; k++) b.box(0.0215, 0.0046, 0.005, SLOT, 0, d.y(-31.5), d.z(225 + k * 20));
+  // Lightening slots along the upper, the ejection port with the carrier in it, the charging handle.
+  for (let k = 0; k < 4; k++) b.box(0.0506, 0.008, 0.03, SLOT, 0, d.y(30), d.z(215 + k * 45));
+  b.box(0.002, 0.02, 0.066, PORT, -0.0252, d.y(10), d.z(138))
+    .as(SURF.blued).box(0.002, 0.011, 0.058, 0x4c4f54, -0.0256, d.y(11), d.z(136))
+    .as(SURF.steel)
+    .box(0.002, 0.006, 0.15, PORT, -0.0254, d.y(-8), d.z(265))
+    .slab(0.018, 0.01, 0.014, 0.003, BLACK, -0.034, d.y(-8), d.z(200))
+    // Gas block with the folded front sight, barrel, the muzzle brake.
+    .slab(0.03, 0.03, 0.03, 0.004, PARK, 0, d.y(8), d.z(414))
+    .slab(0.016, 0.01, 0.03, 0.002, BLACK, 0, d.y(28), d.z(414))
+    .loft([
+      { z: d.z(400), rx: 0.0102 }, { z: d.z(583), rx: 0.009 }, { z: d.z(583), rx: 0.0118 }, { z: d.z(620), rx: 0.0118 }, { z: d.z(625), rx: 0.0095 },
+    ], PARK, { segments: 12 }, 0, d.y(0))
+    .tube(0.0052, d.z(624.6), d.z(625.3), PORT, 0, d.y(0), 8);
+  for (const a of [0.6, -0.6, 1.57, -1.57, 2.54, -2.54]) b.box(0.003, 0.003, 0.022, PORT, Math.sin(a) * 0.0115, d.y(0) + Math.cos(a) * 0.0115, d.z(602), 0, 0, -a);
+  guard(b, d, 8, -50, 0x1c1d1f);
+  // Holographic sight: a rectangular window on the rail, the reticle at its front pane.
+  const hy = d.y(52), hz = d.z(85);
+  b.as(SURF.anodized)
+    .slab(0.036, 0.02, 0.07, 0.003, BLACK, 0, hy + 0.01, hz - 0.01)
+    .box(0.046, 0.006, 0.04, BLACK, 0, hy + 0.054, hz)
+    .box(0.006, 0.036, 0.04, BLACK, 0.02, hy + 0.036, hz)
+    .box(0.006, 0.036, 0.04, BLACK, -0.02, hy + 0.036, hz)
+    .box(0.046, 0.004, 0.04, BLACK, 0, hy + 0.02, hz)
+    .glow(0.0024, 0.0024, 0.0008, 0xff2414, 0, hy + 0.036, hz + 0.018)
+    .glow(0.012, 0.0008, 0.0008, 0xff2414, 0, hy + 0.0425, hz + 0.018)
+    .glow(0.012, 0.0008, 0.0008, 0xff2414, 0, hy + 0.0295, hz + 0.018)
+    .glow(0.0008, 0.012, 0.0008, 0xff2414, 0.0065, hy + 0.036, hz + 0.018)
+    .glow(0.0008, 0.012, 0.0008, 0xff2414, -0.0065, hy + 0.036, hz + 0.018);
+  // Polymer lower with the magazine well, the grip, the stock on its hinge.
+  b.as({ rough: 0.82, metal: 0, wear: 0.25, worn: 0xb09a74 })
+    .plate(d.p([[-85, -24], [183, -24], [181, -64], [97, -66], [92, -50], [-62, -50], [-85, -40]]), 0.04, LOWER, 0.004)
+    .plate(d.p([[-87, 42], [-87, -22], [-120, -26], [-238, -34], [-262, -92], [-298, -100], [-332, -96], [-332, 40], [-300, 46], [-112, 46]]), 0.044, LOWER, 0.006)
+    .plate(d.p([[-130, 46], [-134, 57], [-250, 57], [-262, 46]]), 0.036, LOWER, 0.006)
+    .plate(d.p([[-135, 30], [-290, 30], [-290, -76], [-250, -26], [-135, -18]]), 0.0452, 0x7f6d4e, 0.0006)
+    .as(SURF.polymer)
+    .plate(a2Grip(d, 136), 0.028, POLY, 0.007)
+    .pin(0.005, 0.042, POLY, 0, d.y(-34), d.z(-30), 10)
+    .slab(0.003, 0.005, 0.022, 0.001, POLY, 0.0212, d.y(-33), d.z(-20), -0.2)
+    .as(SURF.rubber).slab(0.044, 0.13, 0.006, 0.002, 0x101011, 0, d.y(-27), d.z(-334))
+    .as(null);
+  // 20-round steel magazine.
+  const at: V3 = [0, d.y(-24), d.z(138)];
+  const md = drawn(0.08 - at[2], 0.055 - at[1]);
+  const mag = new Builder().as({ rough: 0.5, metal: 0.6, wear: 0.5, worn: 0x7e8185 })
+    .plate(md.p([[100, -30], [176, -30], [181, -158], [105, -168]]), 0.026, 0x232427, 0.002)
+    .box(0.0266, 0.1, 0.004, 0x1c1d1f, 0, md.y(-105), md.z(127))
+    .box(0.0266, 0.1, 0.004, 0x1c1d1f, 0, md.y(-105), md.z(155))
+    .as(SURF.polymer).plate(md.p([[183, -156], [183.5, -161], [104, -171.5], [103.5, -166.5]]), 0.028, 0x1a1b1d, 0.0012);
   return {
-    body: b, mag: { b: mag, at: [0, -0.01, 0.12] },
-    muzzle: [0, 0.055, 0.63], fore: [0.035, -0.005, 0.27], eject: [-0.03, 0.06, 0.1], stock: [0, 0.03, -0.31], bolt: [-0.04, 0.07, 0.2],
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.055, d.z(625)], fore: [0.035, -0.012, d.z(290)], eject: [-0.03, d.y(10), d.z(138)], stock: [0, 0.03, d.z(-337)], bolt: [-0.036, d.y(-8), d.z(200)],
   };
 }
 
+/**
+ * A telescopic sight along the barrel, from the eyepiece at `z0` to the objective at `z1`: the
+ * tube with its turrets, a bell at each end, two rings standing on the rail at height `rail`.
+ */
+function scope(b: Builder, y: number, z0: number, z1: number, rail: number, big = 1): void {
+  const len = z1 - z0, t = 0.0165 * big, eye = 0.022 * big, obj = 0.028 * big, body = 0x121315;
+  b.as(SURF.anodized)
+    .loft([
+      { z: z0, rx: eye * 0.94 }, { z: z0 + 0.01, rx: eye }, { z: z0 + len * 0.15, rx: eye }, { z: z0 + len * 0.2, rx: t },
+      { z: z0 + len * 0.64, rx: t }, { z: z0 + len * 0.78, rx: obj }, { z: z1 - 0.004, rx: obj }, { z: z1, rx: obj * 0.95 },
+    ], body, { segments: 12 }, 0, y)
+    .slab(t * 2.3, t * 2.3, 0.03, 0.004, body, 0, y, z0 + len * 0.44)
+    .slab(0.017 * big, 0.016, 0.017 * big, 0.003, body, 0, y + t + 0.008, z0 + len * 0.44)
+    .pin(0.009 * big, t * 2 + 0.03, body, 0, y, z0 + len * 0.44, 10);
+  for (const k of [0.29, 0.57]) {
+    const z = z0 + len * k;
+    b.slab(0.024, y - rail, 0.014, 0.002, BLACK, 0, (y + rail) / 2, z)
+      .loft([{ z: z - 0.007, rx: t + 0.0045 }, { z: z + 0.007, rx: t + 0.0045 }], BLACK, { segments: 12 }, 0, y);
+  }
+  b.as({ rough: 0.08, metal: 0.6 })
+    .tube(obj * 0.86, z1 - 0.0004, z1 + 0.0006, 0x1d3040, 0, y, 12)
+    .tube(eye * 0.8, z0 - 0.0006, z0 + 0.0004, 0x1d3040, 0, y, 12)
+    .as(null);
+}
+
+/**
+ * Barrett M107 (TM 9-1005-239-10): 1,448 mm long with the 737 mm barrel, which runs back inside
+ * the long stamped upper. Measured from the trigger and the bore line.
+ */
 function m107(): Spec {
-  const b = new Builder()
-    // Long boxy receiver and rail, a heavy barrel ending in a two-port brake.
-    .box(0.075, 0.09, 0.55, DARK, 0, 0.05, 0.1)
-    .box(0.03, 0.014, 0.5, BLACK, 0, 0.102, 0.1)
-    .box(0.08, 0.06, 0.12, BLACK, 0, 0.04, 0.42)
-    .tube(0.019, 0.48, 0.98, STEEL, 0, 0.06, 10)
-    .box(0.07, 0.05, 0.09, STEEL, 0, 0.06, 1.02)
-    .box(0.076, 0.014, 0.014, BLACK, 0, 0.06, 1.0)
-    .box(0.076, 0.014, 0.014, BLACK, 0, 0.06, 1.035)
-    // A big scope on two rings.
-    .tube(0.021, -0.05, 0.2, 0x111214, 0, 0.16, 10)
-    .tube(0.031, -0.13, -0.05, 0x111214, 0, 0.16, 10, 0.023)
-    .tube(0.023, 0.2, 0.31, 0x111214, 0, 0.16, 10, 0.038)
-    .tube(0.026, 0.06, 0.09, 0x111214, 0, 0.16, 8)
-    .box(0.03, 0.045, 0.025, BLACK, 0, 0.13, 0.0)
-    .box(0.03, 0.045, 0.025, BLACK, 0, 0.13, 0.16)
-    // Bipod folded along the barrel.
-    .box(0.012, 0.012, 0.34, STEEL, 0.02, 0.02, 0.68)
-    .box(0.012, 0.012, 0.34, STEEL, -0.02, 0.02, 0.68)
-    .box(0.05, 0.025, 0.04, BLACK, 0, 0.03, 0.5)
-    // Grip, trigger guard, stock with butt pad and monopod.
-    .box(0.035, 0.1, 0.04, BLACK, 0, -0.05, 0.035, -0.3)
-    .box(0.01, 0.012, 0.07, BLACK, 0, -0.02, 0.08)
-    .box(0.05, 0.1, 0.24, DARK, 0, 0.03, -0.29)
-    .box(0.04, 0.03, 0.14, BLACK, 0, 0.09, -0.3)
-    .box(0.056, 0.15, 0.03, 0x101010, 0, 0.02, -0.42)
-    .box(0.015, 0.08, 0.015, STEEL, 0, -0.04, -0.36);
-  const mag = new Builder()
-    .box(0.05, 0.1, 0.12, 0x1a1a1a, 0, -0.05, 0)
-    .box(0.03, 0.012, 0.09, BRASS, 0, 0.004, 0);
+  const d = drawn(0.08, 0.06);
+  const b = new Builder();
+  b.as(SURF.steel)
+    .plate(d.p([[-340, -18], [-340, 40], [-330, 48], [425, 48], [432, 40], [432, -18]]), 0.058, DARK, 0.005)
+    .slab(0.021, 0.004, 0.46, 0.001, 0x202124, 0, d.y(49), d.z(75));
+  teeth(b, d, -150, 46, 52, 0x202124);
+  // Cooling slots round the barrel, the ejection port, the charging handle on the right.
+  for (let k = 0; k < 3; k++) b.box(0.0586, 0.008, 0.04, PORT, 0, d.y(22), d.z(275 + k * 55)).box(0.0586, 0.008, 0.04, PORT, 0, d.y(2), d.z(275 + k * 55));
+  b.box(0.002, 0.024, 0.11, PORT, -0.0292, d.y(12), d.z(145))
+    .as(SURF.blued).box(0.002, 0.014, 0.098, 0x4c4f54, -0.0296, d.y(13), d.z(142))
+    .as(SURF.steel)
+    .slab(0.02, 0.012, 0.016, 0.003, BLACK, -0.038, d.y(12), d.z(70))
+    // Lower receiver: the magazine well, the trigger housing, the butt dropping behind the grip.
+    .plate(d.p([[-338, -18], [215, -18], [215, -58], [52, -60], [48, -50], [-64, -50], [-120, -40], [-250, -40], [-272, -92], [-300, -100], [-338, -96]]), 0.048, 0x202124, 0.004)
+    .pin(0.004, 0.06, 0x3a3c40, 0, d.y(-8), d.z(-300))
+    .pin(0.004, 0.06, 0x3a3c40, 0, d.y(-8), d.z(225))
+    // The heavy fluted barrel and its arrowhead brake.
+    .loft([
+      { z: d.z(432), rx: 0.026 }, { z: d.z(452), rx: 0.026 }, { z: d.z(452), rx: 0.0195 }, { z: d.z(1010), rx: 0.0165 },
+    ], PARK, { segments: 12 }, 0, d.y(0));
+  for (let k = 0; k < 6; k++) {
+    const a = (k + 0.5) * Math.PI / 3;
+    b.box(0.004, 0.002, 0.44, 0x0c0c0d, Math.sin(a) * 0.0176, d.y(0) + Math.cos(a) * 0.0176, d.z(730), 0, 0, -a);
+  }
+  b.slab(0.026, 0.026, 0.09, 0.003, PARK, 0, d.y(0), d.z(1053))
+    .slab(0.076, 0.046, 0.022, 0.004, PARK, 0, d.y(0), d.z(1030), 0, 0, 0)
+    .slab(0.062, 0.046, 0.02, 0.004, PARK, 0, d.y(0), d.z(1064))
+    .slab(0.044, 0.042, 0.014, 0.004, PARK, 0, d.y(0), d.z(1091))
+    .tube(0.0075, d.z(1097.8), d.z(1098.4), PORT, 0, d.y(0), 10)
+    // Bipod: the yoke under the front of the receiver, the legs folded forward beside the barrel.
+    .slab(0.074, 0.016, 0.03, 0.004, PARK, 0, d.y(-24), d.z(405))
+    .box(0.011, 0.011, 0.3, PARK, 0.031, d.y(-26), d.z(560))
+    .box(0.011, 0.011, 0.3, PARK, -0.031, d.y(-26), d.z(560))
+    .slab(0.016, 0.014, 0.026, 0.003, BLACK, 0.031, d.y(-26), d.z(716))
+    .slab(0.016, 0.014, 0.026, 0.003, BLACK, -0.031, d.y(-26), d.z(716))
+    // Carry handle ahead of the scope.
+    .plate(d.p([[322, 48], [334, 72], [410, 72], [422, 48], [414, 48], [404, 65], [340, 65], [331, 48]]), 0.01, PARK, 0.002, 0.016);
+  guard(b, d, 8, -50, PARK);
+  b.as(SURF.polymer).plate(a2Grip(d, 136), 0.03, POLY, 0.007)
+    .as(SURF.rubber).slab(0.05, 0.14, 0.012, 0.003, 0x101011, 0, d.y(-27), d.z(-344));
+  scope(b, d.y(100), d.z(-110), d.z(270), d.y(53.5), 1.15);
+  // Ten-round magazine.
+  const at: V3 = [0, d.y(-58), d.z(133)];
+  const md = drawn(0.08 - at[2], 0.06 - at[1]);
+  const mag = new Builder().as({ rough: 0.5, metal: 0.6, wear: 0.5, worn: 0x7e8185 })
+    .plate(md.p([[60, -30], [206, -30], [206, -148], [62, -140]]), 0.044, 0x1f2023, 0.003)
+    .box(0.0446, 0.09, 0.005, 0x18191b, 0, md.y(-95), md.z(100))
+    .box(0.0446, 0.09, 0.005, 0x18191b, 0, md.y(-95), md.z(165))
+    .plate(md.p([[208, -146], [208, -151], [60, -143], [60, -138]]), 0.046, 0x18191b, 0.0015);
   return {
-    body: b, mag: { b: mag, at: [0, 0.0, 0.16] },
-    muzzle: [0, 0.06, 1.07], fore: [0.04, 0.0, 0.32], eject: [-0.04, 0.07, 0.12], stock: [0, 0.03, -0.43], bolt: [0.045, 0.07, 0.15],
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.06, d.z(1098)], fore: [0.04, 0.006, d.z(300)], eject: [-0.04, 0.07, d.z(145)], stock: [0, 0.03, d.z(-350)], bolt: [0.035, d.y(12), d.z(70)],
   };
 }
 
+/**
+ * RPG-7: a 950 mm launcher, 40 mm in the bore. The trigger grip is the front one; the plain grip
+ * behind it is for the other hand, and the wooden shield over the chamber lies on the shoulder.
+ * Measured from the trigger grip and the tube's axis.
+ */
 function rpg7(): Spec {
-  const b = new Builder()
-    // The launch tube, wooden heat guards round its middle, the flared venturi at the back.
-    .tube(0.022, -0.46, 0.52, DARK, 0, 0.07, 10)
-    .tube(0.031, -0.06, 0.22, WOOD, 0, 0.07, 10)
-    .tube(0.025, -0.62, -0.46, STEEL, 0, 0.07, 10, 0.022)
-    .tube(0.046, -0.7, -0.62, STEEL, 0, 0.07, 10, 0.025)
-    .tube(0.026, 0.48, 0.52, STEEL, 0, 0.07, 8)
-    // Rear leaf on its block, front post at the muzzle end.
-    .box(0.03, 0.03, 0.03, BLACK, 0, 0.098, 0.0)
-    .ring(0.006, 0.004, -0.006, 0.006, BLACK, 0, 0.125, 10)
-    .box(0.024, 0.028, 0.022, BLACK, 0, 0.1, 0.42)
-    .box(0.004, 0.022, 0.005, BLACK, 0, 0.123, 0.42)
-    // Trigger grip under the tube, a second grip ahead of it.
-    .box(0.03, 0.1, 0.035, BLACK, 0, -0.01, 0.035, -0.25)
-    .box(0.012, 0.03, 0.05, BLACK, 0, 0.035, 0.07)
-    .box(0.03, 0.09, 0.035, WOOD, 0, 0.0, 0.2, -0.15);
-  // The rocket sits in the muzzle: neck, fat olive warhead, pointed nose.
-  const mag = new Builder()
-    .tube(0.018, 0, 0.08, STEEL, 0, 0, 8)
-    .tube(0.044, 0.08, 0.24, OLIVE, 0, 0, 12)
-    .tube(0.044, 0.24, 0.4, OLIVE, 0, 0, 12, 0.006)
-    .box(0.09, 0.006, 0.04, STEEL, 0, 0, 0.03)
-    .box(0.006, 0.09, 0.04, STEEL, 0, 0, 0.03);
+  const d = drawn(0.035, 0.07);
+  const BAKELITE = 0x3b2416;
+  const b = new Builder();
+  b.as(SURF.steel)
+    // The tube, open at the muzzle; the chamber swell is under the wood.
+    .loft([
+      { z: d.z(-470), rx: 0.0245 }, { z: d.z(255), rx: 0.0245 }, { z: d.z(255), rx: 0.0275 }, { z: d.z(265), rx: 0.0275 },
+      { z: d.z(265), rx: 0.021 }, { z: d.z(160), rx: 0.021 },
+    ], DARK, { segments: 14, caps: false }, 0, d.y(0))
+    .tube(0.021, d.z(159), d.z(160), PORT, 0, d.y(0), 14)
+    // Throat and the flared blast cone, hollow from behind.
+    .loft([
+      { z: d.z(-450), rx: 0.031 }, { z: d.z(-545), rx: 0.03 }, { z: d.z(-562), rx: 0.022 }, { z: d.z(-675), rx: 0.046 }, { z: d.z(-685), rx: 0.048 },
+      { z: d.z(-685), rx: 0.0445 }, { z: d.z(-675), rx: 0.0425 }, { z: d.z(-566), rx: 0.016 },
+    ], STEEL, { segments: 14, caps: false }, 0, d.y(0))
+    .tube(0.016, d.z(-567), d.z(-566), PORT, 0, d.y(0), 14)
+    // Sights: the folding rear leaf, the front post.
+    .slab(0.026, 0.022, 0.03, 0.003, BLACK, 0, d.y(34), d.z(-35))
+    .box(0.004, 0.014, 0.008, BLACK, 0.01, d.y(50), d.z(-35))
+    .box(0.004, 0.014, 0.008, BLACK, -0.01, d.y(50), d.z(-35))
+    .ring(0.006, 0.004, d.z(-41), d.z(-29), BLACK, 0, d.y(55), 10)
+    .plate(d.p([[212, 22], [216, 46], [234, 46], [238, 22]]), 0.012, BLACK, 0.002)
+    .box(0.003, 0.014, 0.004, BLACK, 0, d.y(48), d.z(225))
+    // Bracket for the optical sight on the left, the trigger housing with its hammer.
+    .slab(0.006, 0.034, 0.09, 0.002, BLACK, 0.027, d.y(6), d.z(-30))
+    .plate(d.p([[-20, -22], [78, -22], [80, -40], [70, -50], [-12, -50], [-22, -40]]), 0.024, 0x1c1d1f, 0.003)
+    .box(0.008, 0.012, 0.01, STEEL, 0, d.y(-30), d.z(-26), 0.5);
+  guard(b, d, 50, -50, 0x1c1d1f);
+  // Bands that hold the heat shield.
+  for (const z of [-172, -428]) b.loft([{ z: d.z(z - 8), rx: 0.0432 }, { z: d.z(z + 8), rx: 0.0432 }], STEEL, { segments: 14 }, 0, d.y(0));
+  b.as(SURF.wood)
+    .loft([{ z: d.z(-452), rx: 0.036 }, { z: d.z(-444), rx: 0.041 }, { z: d.z(-156), rx: 0.041 }, { z: d.z(-148), rx: 0.036 }], WOOD, { segments: 14 }, 0, d.y(0))
+    .plate(d.p([[-122, -22], [-152, -22], [-170, -118], [-140, -124], [-128, -60]]), 0.03, WOOD, 0.008)
+    .as({ rough: 0.5, metal: 0, wear: 0.3, worn: 0x6b4a32 })
+    .plate(a2Grip(d, 181), 0.03, BAKELITE, 0.007)
+    .as(null);
+  // The rocket sits in the muzzle: its motor, the swell of the warhead, the long nose and its fuze.
+  const mag = new Builder().as({ rough: 0.6, metal: 0.3, wear: 0.3, worn: 0x7b8068 })
+    .loft([
+      { z: -0.03, rx: 0.0195 }, { z: 0.07, rx: 0.0195 }, { z: 0.14, rx: 0.0425 }, { z: 0.185, rx: 0.0425 }, { z: 0.365, rx: 0.012 },
+    ], OLIVE, { segments: 14 })
+    .as(SURF.steel)
+    .loft([{ z: 0.365, rx: 0.012 }, { z: 0.385, rx: 0.011 }, { z: 0.385, rx: 0.007 }, { z: 0.405, rx: 0.006 }, { z: 0.41, rx: 0.003 }], 0x8e9296, { segments: 10 })
+    .loft([{ z: 0.068, rx: 0.0205 }, { z: 0.074, rx: 0.0205 }], 0x8e9296, { segments: 14 });
   return {
-    body: b, mag: { b: mag, at: [0, 0.07, 0.5] },
-    muzzle: [0, 0.07, 0.9], fore: [0.035, -0.03, 0.2], eject: [0, 0.07, -0.7], stock: [0, 0.06, -0.3], bolt: [0.03, 0.07, 0.1],
+    body: b, mag: { b: mag, at: [0, 0.07, d.z(265)] },
+    muzzle: [0, 0.07, d.z(265) + 0.41], fore: [0.035, d.y(-74), d.z(-146)], eject: [0, 0.07, d.z(-685)], stock: [0, 0.06, -0.3], bolt: [0.03, 0.07, 0.1],
   };
 }
 
+/** The LR-338 "Wraith": our own long rifle, so there is no real one to measure. A slim chassis, a long suppressor. */
 function wraith(): Spec {
   const RANGER = 0x2f3a2c;
-  const b = new Builder()
-    // Custom chassis in ranger green: a slim action, a long can on the barrel.
-    .box(0.06, 0.07, 0.36, RANGER, 0, 0.05, 0.06)
-    .box(0.026, 0.012, 0.36, BLACK, 0, 0.091, 0.06)
-    .box(0.066, 0.05, 0.22, RANGER, 0, 0.035, 0.33)
-    .tube(0.014, 0.24, 0.62, STEEL, 0, 0.055)
-    .tube(0.025, 0.62, 0.96, BLACK, 0, 0.055, 12)
-    .tube(0.027, 0.62, 0.64, STEEL, 0, 0.055, 12)
-    // Scope on two rings.
-    .tube(0.019, -0.06, 0.2, 0x111214, 0, 0.14, 10)
-    .tube(0.029, -0.13, -0.06, 0x111214, 0, 0.14, 10, 0.021)
-    .tube(0.021, 0.2, 0.3, 0x111214, 0, 0.14, 10, 0.034)
-    .tube(0.024, 0.05, 0.08, 0x111214, 0, 0.14, 8)
-    .box(0.028, 0.04, 0.022, BLACK, 0, 0.11, -0.01)
-    .box(0.028, 0.04, 0.022, BLACK, 0, 0.11, 0.15)
-    // Bolt handle with a fat knob on the right.
+  const d = drawn(0.08, 0.055);
+  const b = new Builder();
+  b.as({ rough: 0.55, metal: 0.45, wear: 0.4, worn: 0x80837f })
+    .plate(d.p([[-200, -38], [-200, 24], [-192, 30], [150, 30], [162, 20], [360, 8], [364, 2], [364, -30], [356, -38]]), 0.05, RANGER, 0.005)
+    .slab(0.021, 0.005, 0.34, 0.001, 0x1c1d1f, 0, d.y(32.5), d.z(-22))
+    // Skeleton stock: the beam, the strut under it, the butt.
+    .plate(d.p([[-198, 22], [-198, -4], [-440, -4], [-440, 22]]), 0.032, RANGER, 0.004)
+    .plate(d.p([[-198, -38], [-198, -24], [-440, -70], [-440, -84]]), 0.02, RANGER, 0.003)
+    .plate(d.p([[-438, 36], [-450, 40], [-450, -92], [-438, -96]]), 0.044, RANGER, 0.003);
+  teeth(b, d, -186, 34, 36, 0x1c1d1f);
+  for (let k = 0; k < 4; k++) b.box(0.0506, 0.008, 0.032, PORT, 0, d.y(-12), d.z(190 + k * 44));
+  b.as(SURF.steel)
+    // Bolt shroud at the back, the handle with a fat knob on the right.
+    .loft([{ z: d.z(-216), rx: 0.011 }, { z: d.z(-200), rx: 0.013 }], PARK, { segments: 10 }, 0, d.y(8))
     .box(0.05, 0.01, 0.012, STEEL, 0.045, 0.06, -0.06)
-    .tube(0.011, -0.07, -0.04, BLACK, 0.072, 0.06, 8)
-    // Grip, guard, skeleton stock with an adjustable cheek and butt.
-    .box(0.03, 0.095, 0.035, BLACK, 0, -0.045, 0.035, -0.3)
-    .box(0.008, 0.01, 0.06, BLACK, 0, -0.025, 0.08)
-    .box(0.035, 0.025, 0.25, RANGER, 0, 0.065, -0.24)
-    .box(0.035, 0.022, 0.25, RANGER, 0, 0.0, -0.24, 0.1)
-    .box(0.03, 0.02, 0.12, BLACK, 0, 0.09, -0.24)
-    .box(0.05, 0.13, 0.025, 0x121212, 0, 0.03, -0.37);
-  const mag = new Builder().box(0.028, 0.07, 0.08, 0x1a1a1a, 0, -0.035, 0).box(0.02, 0.008, 0.06, BRASS, 0, 0.003, 0);
+    .loft([{ z: -0.074, rx: 0.008 }, { z: -0.066, rx: 0.012 }, { z: -0.05, rx: 0.012 }, { z: -0.042, rx: 0.008 }], BLACK, { segments: 10 }, 0.072, 0.06)
+    .box(0.002, 0.014, 0.09, PORT, 0.0252, d.y(8), d.z(40))
+    // Barrel, then the suppressor on its mount.
+    .loft([{ z: d.z(160), rx: 0.0125 }, { z: d.z(540), rx: 0.0105 }], PARK, { segments: 10 }, 0, d.y(0))
+    .loft([{ z: d.z(536), rx: 0.021 }, { z: d.z(540), rx: 0.027 }, { z: d.z(560), rx: 0.027 }, { z: d.z(560), rx: 0.025 }, { z: d.z(874), rx: 0.025 }, { z: d.z(880), rx: 0.021 }], 0x18191b, { segments: 12 }, 0, d.y(0))
+    .tube(0.006, d.z(879.7), d.z(880.4), PORT, 0, d.y(0), 8);
+  for (const z of [640, 720, 800]) b.loft([{ z: d.z(z - 2), rx: 0.0256 }, { z: d.z(z + 2), rx: 0.0256 }], 0x0e0e0f, { segments: 12 }, 0, d.y(0));
+  guard(b, d, 8, -50, 0x1c1d1f);
+  b.as(SURF.polymer)
+    .plate(a2Grip(d, 136), 0.028, POLY, 0.007)
+    .plate(d.p([[-262, 22], [-266, 40], [-380, 40], [-386, 22]]), 0.03, POLY, 0.006)
+    .as(SURF.rubber).slab(0.044, 0.13, 0.008, 0.002, 0x101011, 0, d.y(-28), d.z(-454));
+  scope(b, 0.14, -0.13, 0.3, d.y(37.5));
+  const at: V3 = [0, d.y(-38), d.z(45)];
+  const md = drawn(0.08 - at[2], 0.055 - at[1]);
+  const mag = new Builder().as({ rough: 0.5, metal: 0.6, wear: 0.5, worn: 0x7e8185 })
+    .plate(md.p([[8, -30], [84, -30], [86, -100], [10, -106]]), 0.026, 0x1c1d1f, 0.002)
+    .as(SURF.polymer).plate(md.p([[88, -98], [88, -103], [8, -109], [8, -104]]), 0.028, 0x161617, 0.0012);
   return {
-    body: b, mag: { b: mag, at: [0, 0.0, 0.12] },
-    muzzle: [0, 0.055, 0.97], fore: [0.04, -0.005, 0.32], eject: [0.035, 0.06, 0.06], stock: [0, 0.03, -0.38], bolt: [0.072, 0.06, -0.055],
+    body: b, mag: { b: mag, at },
+    muzzle: [0, 0.055, d.z(880)], fore: [0.04, -0.005, 0.32], eject: [0.035, 0.06, 0.06], stock: [0, 0.03, d.z(-458)], bolt: [0.072, 0.06, -0.055],
   };
 }
 
+/** Coyote polymer of the M17's grip module, and the PVD coat on its steel slide. */
+const COYOTE_POLY: Surface = { rough: 0.82, metal: 0, wear: 0.25, worn: 0xa48f6c };
+const COYOTE_PVD: Surface = { rough: 0.46, metal: 0.5, wear: 0.5, worn: 0xb3ad9f };
+const PVD = 0x86704f;
+const CONTROL = 0x19191a;
+
+/**
+ * SIG Sauer M17 (TM 9-1005-470-10): 203 mm long, 140 mm tall, a 119 mm barrel, sights 173 mm
+ * apart. Drawn from the rear face of the slide and the bore line. The grip rakes back the way a
+ * real one does, around the point the hand always closed on.
+ */
 function m17(): Spec {
-  const b = new Builder()
-    .box(0.028, 0.025, 0.16, COYOTE, 0, 0.035, 0.1)
-    .box(0.03, 0.11, 0.046, COYOTE, 0, -0.015, 0.045, -0.3)
-    .box(0.01, 0.01, 0.045, COYOTE, 0, 0.004, 0.1);
-  const slide = new Builder()
-    .box(0.027, 0.034, 0.19, 0x1b1b1c, 0, 0, 0)
+  const d = drawn(0.006, M17_BORE);
+  const b = new Builder();
+  // Grip module: dust cover with its rail, the beavertail, then the grip itself, wider and rounder.
+  b.as(COYOTE_POLY)
+    .plate(d.p([[-9, -19], [-9, -16], [-2, -13], [186, -13], [188, -17], [188, -29], [186, -31], [128, -31], [124, -33], [76, -33], [73, -40], [9, -36], [11, -30], [8, -24], [-4, -20]]), 0.0285, COYOTE, 0.002)
+    .plate(d.p([[75, -35], [66, -58], [45.5, -117.5], [-9, -101], [-8, -90], [3, -55], [10, -33]]), 0.031, COYOTE, 0.006)
+    .plate(d.p([[127, -31], [124, -36], [124, -56], [117, -64], [71, -64], [64, -60], [66, -56], [73, -59], [114.5, -59], [119, -53.5], [119, -33]]), 0.013, COYOTE, 0.002);
+  // Stippled panels on the sides of the grip.
+  b.as({ rough: 0.97, metal: 0 })
+    .plate(d.p([[63, -50], [59, -62], [43, -106], [-3, -92], [5, -62], [13, -47]]), 0.0322, 0x77643f, 0);
+  for (const s of [140, 152, 164]) b.box(0.029, 0.003, 0.0052, PORT, 0, d.y(-30.2), d.z(s));
+  // Controls: takedown lever, slide catch and thumb safety on both sides, magazine release, trigger.
+  b.as(SURF.polymer)
+    .pin(0.0042, 0.0302, CONTROL, 0, d.y(-19), d.z(103), 10)
+    .slab(0.003, 0.005, 0.017, 0.001, CONTROL, 0.0152, d.y(-18), d.z(111))
+    .pin(0.0042, 0.0318, CONTROL, 0, d.y(-46), d.z(62), 10);
+  for (const x of [0.0152, -0.0152]) {
+    b.slab(0.003, 0.0045, 0.022, 0.001, CONTROL, x, d.y(-15.5), d.z(52))
+      .slab(0.0045, 0.006, 0.021, 0.0012, CONTROL, x, d.y(-17.5), d.z(22), 0.12);
+  }
+  b.plate(d.p([[84, -33], [89, -33], [87.5, -46], [83, -56], [80, -55], [83.5, -45]]), 0.007, CONTROL, 0.001);
+  // Barrel and its chamber block: the slide hides them until it comes back.
+  b.as(SURF.blued)
+    .loft([{ z: d.z(112), rx: 0.0068 }, { z: d.z(193), rx: 0.0068 }, { z: d.z(194), rx: 0.0058 }], 0x2b2b2e, { segments: 10 }, 0, d.y(0))
+    .slab(0.017, 0.02, 0.038, 0.0015, 0x1c1c1e, 0, d.y(0.5), d.z(94))
+    .tube(0.0045, d.z(193.7), d.z(194.2), PORT, 0, d.y(0), 8)
+    .as(null);
+
+  const sd = drawn(-0.094, 0);
+  const slide = new Builder().as(COYOTE_PVD)
+    .plate(sd.p([[0, -13], [0, 8.5], [3, 11.5], [187, 11.5], [191, 8], [191, -11.5], [189.5, -13]]), 0.026, PVD, 0.003)
+    // The plate an optic replaces, under the rear sight.
+    .slab(0.019, 0.0012, 0.042, 0.0004, 0x756044, 0, sd.y(11.8), sd.z(32));
+  // Cocking serrations, rear and front.
+  for (let k = 0; k < 7; k++) slide.box(0.0266, 0.019, 0.0016, 0x4a3d2b, 0, sd.y(-1.5), sd.z(11 + k * 3.6));
+  for (let k = 0; k < 5; k++) slide.box(0.0266, 0.019, 0.0016, 0x4a3d2b, 0, sd.y(-1.5), sd.z(158 + k * 3.6));
+  slide.as(SURF.blued)
+    // Ejection port over the right of the top, filled by the chamber; the extractor behind it.
+    .plate(sd.p([[77, -0.5], [77, 11.9], [115, 11.9], [115, -0.5]]), 0.0194, 0x252528, 0.003, -0.0038)
+    .box(0.001, 0.003, 0.016, CONTROL, -0.0133, sd.y(1.5), sd.z(68))
+    // Striker cover at the back, the holes for the barrel and the guide rod at the front.
+    .box(0.009, 0.013, 0.0008, 0x3d3325, 0, sd.y(-3), sd.z(-0.2))
+    .tube(0.0076, sd.z(190.8), sd.z(191.25), PORT, 0, sd.y(0), 10)
+    .tube(0.0036, sd.z(190.8), sd.z(191.25), 0x2c2c2f, 0, sd.y(-8), 8)
     // Three-dot night sights: front post, rear notch.
-    .box(0.004, 0.009, 0.005, 0x0e0e0e, 0, 0.0205, 0.085)
-    .glow(0.0022, 0.0022, 0.0008, 0x9dff6a, 0, 0.0215, 0.0822)
-    .box(0.0075, 0.01, 0.01, 0x0e0e0e, 0.006, 0.021, -0.088)
-    .box(0.0075, 0.01, 0.01, 0x0e0e0e, -0.006, 0.021, -0.088)
-    .glow(0.002, 0.002, 0.0008, 0x9dff6a, 0.006, 0.0215, -0.0935)
-    .glow(0.002, 0.002, 0.0008, 0x9dff6a, -0.006, 0.0215, -0.0935);
-  const mag = new Builder().box(0.024, 0.1, 0.036, 0x161616, 0, -0.045, 0, -0.3).box(0.03, 0.012, 0.045, 0x161616, 0, -0.098, -0.015, -0.3);
+    .slab(0.006, 0.002, 0.013, 0.0005, 0x0e0e0e, 0, 0.0124, 0.085)
+    .box(0.004, 0.0065, 0.005, 0x0e0e0e, 0, 0.01475, 0.085)
+    .glow(0.0022, 0.0022, 0.0008, 0x9dff6a, 0, 0.0148, 0.0822)
+    .slab(0.02, 0.004, 0.011, 0.0008, 0x0e0e0e, 0, 0.0135, -0.088)
+    .box(0.0075, 0.0075, 0.01, 0x0e0e0e, 0.006, 0.01525, -0.088)
+    .box(0.0075, 0.0075, 0.01, 0x0e0e0e, -0.006, 0.01525, -0.088)
+    .glow(0.002, 0.002, 0.0008, 0x9dff6a, 0.006, 0.0152, -0.0935)
+    .glow(0.002, 0.002, 0.0008, 0x9dff6a, -0.006, 0.0152, -0.0935)
+    .as(null);
+
+  // 17-round magazine: a steel tube raked with the grip, a polymer floor plate along its foot.
+  const at: V3 = [0, 0.02, 0.05];
+  const md = drawn(0.006 - at[2], M17_BORE - at[1]);
+  const mag = new Builder().as({ rough: 0.4, metal: 0.8, wear: 0.3, worn: 0x8e9196 })
+    .plate(md.p([[43.5, -22], [74.5, -22], [41.6, -117], [14, -108]]), 0.021, 0x1c1c1e, 0.002)
+    .as(SURF.polymer)
+    .plate(md.p([[47.5, -118], [5, -104.8], [3.6, -109.5], [46, -122.7]]), 0.03, 0x18181a, 0.002);
   return {
-    body: b, action: { b: slide, at: [0, 0.064, 0.1] }, mag: { b: mag, at: [0, 0.02, 0.05] },
-    muzzle: [0, 0.064, 0.2], fore: [0.03, -0.035, 0.035], eject: [-0.02, 0.07, 0.1], stock: [0, 0, 0], bolt: [0.0, 0.07, 0.03],
-    under: [0, -0.002, 0.13],
+    body: b, action: { b: slide, at: [0, M17_BORE, 0.1] }, mag: { b: mag, at },
+    muzzle: [0, M17_BORE, 0.2], fore: [0.03, -0.035, 0.035], eject: [-0.02, d.y(6), d.z(96)], stock: [0, 0, 0], bolt: [0.0, d.y(6), 0.03],
+    // The rail under the dust cover.
+    under: [0, d.y(-31), 0.16],
   };
 }
 
@@ -911,11 +1298,7 @@ function optic(b: Builder, kind: string, y: number, z: number, riser: number): v
       break;
     case 'scope':
       // Long tube with bells on two rings (looking through it is the scope view, not this model).
-      b.tube(0.025, z - 0.095, z + 0.085, 0x111214, 0, y + 0.055, 10)
-        .tube(0.031, z - 0.135, z - 0.095, 0x111214, 0, y + 0.055, 10, 0.026)
-        .tube(0.026, z + 0.085, z + 0.135, 0x111214, 0, y + 0.055, 10, 0.033)
-        .box(0.025, 0.04, 0.02, BLACK, 0, y + 0.02, z - 0.075)
-        .box(0.025, 0.04, 0.02, BLACK, 0, y + 0.02, z + 0.055);
+      scope(b, y + 0.055, z - 0.135, z + 0.135, y, 1.2);
       break;
     case 'miniHolo': {
       // Enclosed compact holographic: a squared-off hood over a short base, the ring reticle in the window.
@@ -1021,9 +1404,10 @@ export function createWeaponModel(id: WeaponId, build: WeaponBuild = defaultBuil
     if (hand) fore.splice(0, 3, ...hand);
     points.grip = v(spec.under).add(new THREE.Vector3(0, -0.02, 0));
   }
-  if (build.mag === 'extended' && spec.action && !spec.mag) {
+  if (build.mag === 'extended' && spec.tube) {
     // Tube magazine: an extension past the end of the tube.
-    body.tube(0.013, 0.54, 0.6, 0x18191a, 0, 0.026).tube(0.015, 0.6, 0.61, BLACK, 0, 0.026);
+    const [x, y, z] = spec.tube;
+    body.tube(0.0125, z - 0.004, z + 0.085, 0x18191a, x, y, 10).tube(0.0145, z + 0.085, z + 0.094, BLACK, x, y, 10);
   }
   body.fitting = false;
   if (spec.mag && build.mag === 'fast') {

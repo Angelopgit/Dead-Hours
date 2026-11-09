@@ -42,12 +42,28 @@ A full street is 90 x 4,200 = 380k zombie triangles; everything else on this pag
 | Model | From | Before | After |
 | --- | --- | --- | --- |
 | M4A1 | TM 9-1005-319-10: 838 mm stock out, 368 mm barrel | 556 triangles, 960 mm (15% long) | 3,158 triangles, 838 mm, 3 draw calls as before |
+| M17 (and the pair) | TM 9-1005-470-10: 203 mm long, 140 mm tall | 144 triangles, 190 mm, 180 mm tall, the grip raked forward | 1,366 triangles, 203 mm, 142 mm tall |
+| MP5A2 | HK operator's manual: 680 mm, 225 mm barrel | 464 triangles, 680 mm | 1,710 triangles, 680 mm |
+| Remington 870 Police | 978 mm with the 18 inch barrel, 356 mm length of pull | 172 triangles, 995 mm | 1,586 triangles, 979 mm |
+| Mk 14 Mod 0 | 889 mm with the stock run in; drawn pulled out 90 mm (979 mm), which is my arithmetic from the M14's 337 mm length of pull, not a published figure | 308 triangles, 985 mm | 3,106 triangles with its scope, 981 mm |
+| M249 | TM 9-1005-201-10: 1,041 mm, 465 mm barrel | 484 triangles, 1,201 mm (15% long) | 1,930 triangles, 1,043 mm |
+| SCAR-H | 965 mm with the stock out, 406 mm barrel | 308 triangles, 933 mm | 2,274 triangles, 962 mm |
+| M107 | TM 9-1005-239-10: 1,448 mm, 737 mm barrel | 420 triangles, 1,500 mm | 2,460 triangles, 1,448 mm |
+| RPG-7 | 950 mm launcher, 40 mm bore | 536 triangles, a 1,220 mm launcher with the trigger grip behind the plain one | 1,516 triangles, 950 mm, grips the right way round |
+| LR-338 | ours: nothing to measure | 480 triangles | 2,092 triangles, same length and hold |
 | Survivors and zombies | body survey medians scaled to the survivor's height (recalled figures, not a looked-up table): head 13% smaller (`HEAD_K` 0.8), feet 12% longer (`FOOT_LENGTH`), thighs 12% fuller (`LEG_UP`), hips 9% wider (`pelvisK`) | head about 30% large, shoe 13.6% of the height | shoe 15.5% of the height; triangle counts unchanged |
 | Sedan, police car | hard points kept (4.4 m body, 2.7 m wheelbase, 1.86 m wide); outline of a mid-90s American sedan | 824 triangles, a box on octagons | 2,900 triangles, 1 draw call as before |
 
 Measured in the software renderer (SwiftShader, 1280x720, no GPU on the build machine, so read these as relative): the M4 over the shoulder costs 5% more of the frame than the old one, and 31% more down the sights, where the slimmer rifle also hides less of the arms behind it. The star flash and barrel smoke use the particle pools already in the scene. Models are code, so the download grew by the source of the kit and the outlines only.
 
+Every gun is now drawn this way. Overall lengths are the published ones; where each part sits along a gun (how far the trigger is from the breech, how tall a receiver is) is from memory of the real thing, not from a drawing laid under the model, so `/dev/models.html?gun=…&view=0` is the page to hold against one. Building them to real proportions moved the sights and the hands: the M17's sights sit lower, over a slimmer slide, the 870's support hand is a full stroke ahead of the receiver, the left hand is on the RPG's rear grip, and the eye sits further up the Mk 14, M249, SCAR and M107, whose stocks are their real, shorter length. `check:sights` passes on all of them. One of its cases reads the clock (the camera's sway), so a case within a cell of its limit can fail one run in several; the MP5's angled grip was the one, and its handguard was deepened to clear it.
+
+The rifle scope fitting, and the scopes on the M107 and the LR-338, are one lofted shape (`scope()`): eyepiece, tube, turrets, objective bell, two rings.
+
+Not measured again: frame cost. The heaviest of these is the Mk 14 at 3,106 triangles, under the M4 that was timed.
+
 ## Next
 
-- The other guns in `check:models`' waiting list, worst first: M249 (+15%), Mk 14 (+11%), M17 (-6%).
+- Hold each side view against a dimension drawing and correct the part positions.
+- Optics, suppressors and grips are still boxes and plain tubes, apart from the scope.
 - Cars: a damage state per crash, exhaust, and the truck.
