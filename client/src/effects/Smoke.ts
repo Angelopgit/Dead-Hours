@@ -90,6 +90,24 @@ export class SmokeWisps implements SmokeSink {
     });
   }
 
+  /**
+   * A puff out of a tailpipe: pale vapour at idle, more of it and greyer under power (`k` 0..1),
+   * nearly black when a cold engine catches (`rich` 1). `dir` is the way the pipe points, `vx` and
+   * `vz` the car's own speed (the puff is left behind), `red` how much the brake lights colour it.
+   */
+  exhaust(at: THREE.Vector3, dir: THREE.Vector3, vx: number, vz: number, k: number, rich = 0, red = 0): void {
+    if (!this.keep(at)) return;
+    const push = rand(0.5, 0.9) + k * 1.3;
+    const shade = (0.66 - 0.16 * k) * (1 - 0.6 * rich);
+    this.batch.emit({
+      x: at.x, y: at.y, z: at.z,
+      vx: dir.x * push + vx * 0.3 + rand(-0.07, 0.07), vy: rand(0.02, 0.1), vz: dir.z * push + vz * 0.3 + rand(-0.07, 0.07),
+      life: rand(1.0, 1.7) * (1 + 0.5 * rich), size: 0.05, size1: rand(0.28, 0.46) * (1 + 0.5 * k + 0.6 * rich),
+      r: shade * (1 + 0.6 * red), g: shade * (1 - 0.3 * red), b: (shade + 0.03) * (1 - 0.35 * red), alpha: 0.15 + 0.12 * k + 0.2 * rich,
+      erode0: 0.2, erode1: 0.9, drag: 2.4, lift: 0.1, spin: rand(-0.8, 0.8),
+    });
+  }
+
   exhale(at: THREE.Vector3, dir: THREE.Vector3, kind: SmokeKind, k: number): void {
     if (!this.keep(at)) return;
     const p = BREATH[kind];

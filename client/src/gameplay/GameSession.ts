@@ -1196,6 +1196,7 @@ export class GameSession {
 
     // Vehicles where they are drawn this frame; a survivor in a seat sits where theirs is.
     this.vehicleView.update(live, this.engine.camera, this.sim.vehicles.list, this.drawAt);
+    this.vehicleView.exhaust(live, this.effects.smoke);
     this.placeSeated();
     // Lying prone, swinging, throwing or bandaging props the chest up on one elbow.
     const hands = this.me.arsenal.action;
@@ -2476,6 +2477,7 @@ export class GameSession {
         break;
       case 'start':
         audio.wheels.engineCatch(at, v.kind === 'truck');
+        this.vehicleView.cough(e.vehicle, this.effects.smoke);
         break;
       case 'dry':
         audio.wheels.sputter(at);
@@ -2488,6 +2490,7 @@ export class GameSession {
       case 'crash': {
         const k = e.strength ?? VEHICLE.crashSound;
         audio.wheels.carCrash(at, k);
+        this.vehicleView.dent(e.vehicle, k);
         // The driver felt it already; the others in the car feel it now.
         if (inside && !this.driving) {
           this.cam.addTrauma(Math.min(0.8, 0.15 + k * 0.03));

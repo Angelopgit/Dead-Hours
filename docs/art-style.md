@@ -63,8 +63,17 @@ The rifle scope fitting, and the scopes on the M107 and the LR-338, are one loft
 
 Not measured again: frame cost. The heaviest of these is the Mk 14 at 3,106 triangles, under the M4 that was timed.
 
+## Effects on cars and blood
+
+- Exhaust: a running engine puffs from its tailpipe (now drawn on the sedan and the truck), pale and slow at idle, more and greyer under throttle, left behind as the car pulls away, red in the brake lights, and a few dark puffs when the starter catches. It uses the cigarette and barrel smoke pool, so it adds no draw call and stops 38 m from the camera. `/dev/cars.html?only=exhaust` (`&power=1`, `&brake=1`, `&truck=1`).
+- Crash damage: each crash loud enough to hear pushes in the end the car was rolling toward, up to 30 cm on a sedan and 14 cm on the truck, across the body ahead of the wheels and below the glass. The paint dulls and scrapes to steel at the corners, and past a hard hit one lamp on that end goes dark; the other always stays, so the beams and brake lights still have a lamp. It is the same merged mesh with its vertices moved, undone when the night ends. Looks only: collision, beams and the fuel fire are as before. `/dev/cars.html?only=damage&crash=3`.
+- Blood lands wet and dries: bright red with a highlight along the edge nearest the eye, drying dark brown from its thin edges in, a spatter in 22 seconds and a pool in 60. Real blood takes minutes for a drop and an hour or more for a pool; a night is short. It is the same instanced decal draw, with four more texture reads per pixel of a mark. `/dev/blood.html` shows five ages side by side.
+
+What these do not do: dents are not sent to someone who joins after the crash (they see a clean car until the next one), the wet highlight is a share of the light already on the ground, so it cannot be brighter than the street lets it, and none of this has been timed on a real GPU.
+
 ## Next
 
 - Hold each side view against a dimension drawing and correct the part positions.
 - Optics, suppressors and grips are still boxes and plain tubes, apart from the scope.
-- Cars: a damage state per crash, exhaust.
+- Cars: broken glass and bullet holes on the body; dents for late joiners.
+- Zombies and survivors: skin, cloth and wound detail on the surfaces.

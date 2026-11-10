@@ -112,13 +112,22 @@ function atlas(): THREE.CanvasTexture {
 const VERT = /* glsl */ `
   attribute float iCell;
   attribute vec4 iTint;
+  attribute vec2 iWet;
+  uniform float uTime;
   varying vec2 vUv;
   varying vec4 vTint;
+  varying vec2 vWet;
+  varying vec3 vToEye;
   #include <fog_pars_vertex>
   void main() {
     vUv = uv * 0.5 + vec2(mod(iCell, 2.0), 1.0 - floor(iCell / 2.0)) * 0.5;
     vTint = iTint;
+    // x: how far it has dried (0 as it lands, 1 dry); y: 1 for something that was ever wet (blood).
+    vWet = iWet.y > 0.0 ? vec2(clamp((uTime - iWet.x) / iWet.y, 0.0, 1.0), 1.0) : vec2(1.0, 0.0);
     vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+    // The way to the eye in the mark's own frame (x and y across it, z out of the surface).
+    vec3 toEye = cameraPosition - (modelMatrix * instanceMatrix * vec4(position, 1.0)).xyz;
+    vToEye = (toEye * mat3(instanceMatrix)) / vec3(vec2(length(instanceMatrix[0].xyz)), 1.0);
     gl_Position = projectionMatrix * mvPosition;
     #include <fog_vertex>
   }
@@ -128,9 +137,12 @@ const FRAG = /* glsl */ `
   uniform sampler2D uAtlas;
   varying vec2 vUv;
   varying vec4 vTint;
+  varying vec2 vWet;
+  varying vec3 vToEye;
   #include <fog_pars_fragment>
   void main() {
-    float a = texture2D(uAtlas, vUv).a * vTint.a;
+    float thick = texture2D(uAtlas, vUv).a;
+    float a = thick * vTint.a;
     #ifdef USE_FOG
       #ifdef FOG_EXP2
         float ff = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
@@ -140,8 +152,27 @@ const FRAG = /* glsl */ `
       a *= 1.0 - ff;
     #endif
     if (a < 0.004) discard;
-    // Multiply blend: result = dst * mix(1, tint, a).
-    gl_FragColor = vec4(vTint.rgb * a, a);
+    // Blood lands wet: brighter and redder than it dries, the thin edges of a mark drying before its middle.
+    float wet = vWet.y * (1.0 - smoothstep(0.0, 1.0, vWet.x * (2.0 - thick)));
+    vec3 tint = vTint.rgb * mix(vec3(1.0), mix(vec3(0.8, 1.25, 0.9), vec3(1.6, 0.5, 0.5), wet), vWet.y);
+    // And shines while it is wet: a little all over at a low angle, and a highlight along the edge
+    // nearest the eye, where the blood stands up off the ground and turns the torch's light back
+    // (the survivor's own light is the one that counts, and it is by the eye). The shine is a
+    // share of the light already on the ground under it (this blend only scales what is there),
+    // so it is dark where the street is.
+    // (The four taps are taken for every mark: a texture read inside a branch has no mip level to go by.)
+    vec3 eye = normalize(vToEye);
+    const vec2 E = vec2(0.005, 0.0);
+    vec2 slope = vec2(texture2D(uAtlas, vUv + E.xy).a - texture2D(uAtlas, vUv - E.xy).a, texture2D(uAtlas, vUv + E.yx).a - texture2D(uAtlas, vUv - E.yx).a);
+    float steep = length(slope);
+    vec3 lip = normalize(vec3(-slope / max(steep, 0.001) * 1.2, 1.0));
+    float glint = min(1.0, steep * 1.5) * pow(max(dot(lip, eye), 0.0), 12.0);
+    float sheen = wet * (a * (0.06 + 0.7 * pow(1.0 - max(eye.z, 0.0), 3.0)) + glint * 1.6);
+    #ifdef USE_FOG
+      sheen *= 1.0 - ff;
+    #endif
+    // Multiply blend: result = dst * (mix(1, tint, a) + sheen).
+    gl_FragColor = vec4(tint * a + sheen, a);
   }
 `;
 
@@ -156,7 +187,7 @@ function sendSlots(a: THREE.BufferAttribute, lo: number, hi = lo): void {
 
 /**
  * Surface marks (bullet holes, blood splatter, pools) as instanced quads that darken what is
- * under them (multiply blending). A fixed ring of slots: new marks recycle the oldest, and
+ * under them (multiply blending). Blood lands wet (bright, shining at a low angle) and dries dark. A fixed ring of slots: new marks recycle the oldest, and
  * every mark fades out at the end of its lifetime.
  */
 export class DecalBatch {
@@ -165,6 +196,8 @@ export class DecalBatch {
   private readonly tex: THREE.CanvasTexture;
   private readonly cell: Float32Array;
   private readonly tint: Float32Array;
+  /** Per mark: when it landed and how long it takes to dry (0: never wet). */
+  private readonly wet: Float32Array;
   private readonly slots: Slot[] = [];
   private readonly matrices: THREE.Matrix4[] = [];
   private next = 0;
@@ -186,14 +219,18 @@ export class DecalBatch {
     const aCell = new THREE.InstancedBufferAttribute(new Float32Array(maxCapacity), 1);
     const aTint = new THREE.InstancedBufferAttribute(new Float32Array(maxCapacity * 4), 4);
     aTint.setUsage(THREE.DynamicDrawUsage);
+    const aWet = new THREE.InstancedBufferAttribute(new Float32Array(maxCapacity * 2), 2);
+    aWet.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('iCell', aCell);
     geo.setAttribute('iTint', aTint);
+    geo.setAttribute('iWet', aWet);
     this.cell = aCell.array as Float32Array;
     this.tint = aTint.array as Float32Array;
+    this.wet = aWet.array as Float32Array;
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
-      uniforms: { ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog), uAtlas: { value: this.tex } },
+      uniforms: { ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog), uAtlas: { value: this.tex }, uTime: { value: 0 } },
       fog: true,
       transparent: true,
       depthWrite: false,
@@ -223,9 +260,10 @@ export class DecalBatch {
 
   /**
    * Adds a mark at `pos` facing `normal`. `along` (optional) orients the texture's +X (splatter
-   * streaks) along a surface direction; `grow` seconds makes it spread from nothing (pools).
+   * streaks) along a surface direction; `grow` seconds makes it spread from nothing (pools);
+   * `dry` seconds makes it land wet (blood) and dry to the colour given over that long.
    */
-  add(cell: number, pos: THREE.Vector3, normal: THREE.Vector3, size: number, r: number, g: number, b: number, alpha: number, life: number, grow = 0, along?: THREE.Vector3): void {
+  add(cell: number, pos: THREE.Vector3, normal: THREE.Vector3, size: number, r: number, g: number, b: number, alpha: number, life: number, grow = 0, along?: THREE.Vector3, dry = 0): void {
     const i = this.next;
     this.next = (this.next + 1) % this.capacity;
     const slot = this.slots[i];
@@ -258,11 +296,14 @@ export class DecalBatch {
     this.tint[i * 4 + 1] = g;
     this.tint[i * 4 + 2] = b;
     this.tint[i * 4 + 3] = alpha;
+    this.wet[i * 2] = this.time;
+    this.wet[i * 2 + 1] = dry;
     this.mesh.count = Math.max(this.mesh.count, i + 1);
     this.mesh.visible = true;
     // Only this slot goes to the GPU: the whole pool was 42 KB with every mark (bullet holes come a dozen a second).
     sendSlots(this.mesh.geometry.getAttribute('iCell') as THREE.BufferAttribute, i);
     sendSlots(this.mesh.geometry.getAttribute('iTint') as THREE.BufferAttribute, i);
+    sendSlots(this.mesh.geometry.getAttribute('iWet') as THREE.BufferAttribute, i);
     sendSlots(this.mesh.instanceMatrix, i);
   }
 
@@ -288,6 +329,7 @@ export class DecalBatch {
 
   update(dt: number): void {
     this.time += dt;
+    this.material.uniforms.uTime.value = this.time;
     // Only the span of marks that changed this frame (fading out, or a pool still spreading) is sent: the
     // whole tint buffer went up every frame, 8 KB, mostly unchanged and all of it with no marks at all.
     let tintLo = Infinity, tintHi = -1, matLo = Infinity, matHi = -1;

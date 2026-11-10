@@ -4,16 +4,21 @@
  * (through the glass), from the front, and low beside the sill to see that no feet come out
  * under the car, and cut open down the driver's side (the door taken away) to see the legs on
  * the floor. A parked car (scenery) is shown for comparison. Not part of the game build.
+ *
+ * `?only=truck` is the whole truck from four sides. `?only=damage&crash=N` is the car and the
+ * truck after N hard crashes on each end (0 for none). `?only=exhaust` runs an engine and looks
+ * at the tailpipe (`&truck=1` the truck's, `&power=1` under throttle, `&brake=1` on the brakes).
  */
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, NEIGHBORHOOD, VEHICLES, isDrivable, seatDrop, vehicleKindOf, type PropSpec } from '@dead-hours/shared';
+import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, isDrivable, seatDrop, vehicleKindOf, type PropSpec, type Vehicle } from '@dead-hours/shared';
 import { Humanoid, survivorLook } from '../src/characters/Humanoid';
 import { MaterialLibrary } from '../src/rendering/Materials';
 import { PropFactory } from '../src/environment/Props';
 import { Kit, type PropBuildResult } from '../src/environment/props/Kit';
 import { VehicleView } from '../src/gameplay/VehicleView';
 import { LightField } from '../src/lighting/LightField';
+import { SmokeWisps } from '../src/effects/Smoke';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -95,12 +100,31 @@ const cam = (label: string, p: PropSpec, local: [number, number, number], look: 
   cells.push({ label, camera, cut });
 };
 /** `?only=truck`: the whole truck from four sides, then into its cab. */
-const onlyTruck = new URLSearchParams(location.search).get('only') === 'truck';
+const query = new URLSearchParams(location.search);
+const only = query.get('only');
+const onlyTruck = only === 'truck';
+const special = only === 'damage' || only === 'exhaust';
+for (let n = Number(query.get('crash') ?? 0); n > 0; n--) for (let id = 0; id < view.count; id++) {
+  view.dent(id, 14, 0);
+  view.dent(id, 14, 1);
+}
 for (const i of picks) {
   const p = map.props[i];
   const name = p.kind === 'armoredTruck' ? 'truck' : p.kind === 'policeCar' ? 'police car' : 'car';
   const truck = p.kind === 'armoredTruck';
   if (onlyTruck && !truck) continue;
+  if (only === 'damage') {
+    if (p.kind === 'policeCar') continue;
+    const r = truck ? 1.35 : 1;
+    cam(`${name} · nose`, p, [5.4 * r, 1.7 * r, -3.2 * r], [1.5 * r, 0.6 * r, 0], 34);
+    cam(`${name} · tail`, p, [-5.4 * r, 1.7 * r, -3.2 * r], [-1.5 * r, 0.6 * r, 0], 34);
+    continue;
+  }
+  if (only === 'exhaust') {
+    if (truck !== (query.get('truck') === '1') || p.kind === 'policeCar') continue;
+    cam(`${name} · tailpipe`, p, [truck ? -6.6 : -5.2, 1.1, 2.6], [truck ? -3.4 : -2.5, 0.5, 0.3], 34);
+    continue;
+  }
   if (onlyTruck) {
     cam('truck · side', p, [0, 1.5, -10], [0, 1.4, 0], 36);
     cam('truck · front quarter', p, [8.2, 3.0, -5.6], [0.3, 1.2, 0], 36);
@@ -113,7 +137,7 @@ for (const i of picks) {
   cam(`${name} · low, under the sill`, p, [x, 0.12, -3.6], [x, 0.25, 0], 50);
   cam(`${name} · cut open down the driver's side`, p, [truck ? 2.2 : -0.1, truck ? 1.6 : 1.0, -3.4], [truck ? 2.2 : -0.1, truck ? 1.25 : 0.65, 0], 40, truck ? -0.85 : -0.8);
 }
-if (parkedAt >= 0 && !onlyTruck) cam('parked car (scenery)', map.props[parkedAt], [-0.2, 1.65, -4.2], [-0.2, 1.0, 0]);
+if (parkedAt >= 0 && !onlyTruck && !special) cam('parked car (scenery)', map.props[parkedAt], [-0.2, 1.65, -4.2], [-0.2, 1.0, 0]);
 
 const cols = Number(new URLSearchParams(location.search).get('cols') ?? 4);
 const rows = Math.ceil(cells.length / cols);
@@ -128,7 +152,24 @@ cells.forEach((c, i) => {
   document.body.append(el);
 });
 
+// An engine running in every vehicle, for the exhaust.
+const smoke = new SmokeWisps(220, new THREE.Color(0.55, 0.57, 0.62));
+scene.add(smoke.mesh);
+const flags = DRIVE_FLAG.lights | (query.get('power') === '1' ? DRIVE_FLAG.throttle : 0) | (query.get('brake') === '1' ? DRIVE_FLAG.brake : 0);
+const running = only !== 'exhaust' ? null : result.vehicles.map((v) => {
+  const p = map.props[v.prop];
+  return { pos: { x: p.x, y: p.y ?? 0, z: p.z }, yaw: p.rotY, speed: query.get('brake') === '1' ? 1 : 0, steer: 0, engine: true, wrecked: false, input: flags } as unknown as Vehicle;
+});
+let last = performance.now();
+
 function frame(): void {
+  const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (running && cells[0]) {
+    view.update(dt, cells[0].camera, running, null);
+    view.exhaust(dt, smoke);
+    smoke.update(dt, cells[0].camera);
+  }
   cells.forEach((c, i) => {
     const x = (i % cols) * cellW, y = innerHeight - (Math.floor(i / cols) + 1) * rowH;
     renderer.setViewport(x, y, cellW, rowH);

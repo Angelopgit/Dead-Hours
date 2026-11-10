@@ -1,18 +1,38 @@
 import * as THREE from 'three';
 import { bakeOcclusion } from '../rendering/Solid';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, seatDrop, vehicleKindOf, type Vec3, type VehicleDef, type Vehicle } from '@dead-hours/shared';
+import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, seatDrop, vehicleKindOf, type Vec3, type VehicleDef, type VehicleKind, type Vehicle } from '@dead-hours/shared';
 import type { VehicleParts } from '../environment/Props';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import { chain } from '../lighting/BakeShader';
 import type { Beam } from './Flashlight';
+import type { SmokeWisps } from '../effects/Smoke';
 
 /** Lamp colours (linear) times how bright they burn when lit. */
 const HEAD = new THREE.Color(1, 0.93, 0.8);
 const HEAD_GLOW = 2.6;
 const TAIL_ON = 0.9;
 const TAIL_BRAKE = 2.4;
+
+/** The end of each kind's tailpipe in its own frame (x toward the nose), as the models draw it. */
+const SEDAN_PIPE = { x: -2.33, y: 0.27, z: 0.52 };
+const PIPE: Record<VehicleKind, { x: number; y: number; z: number }> = {
+  car: SEDAN_PIPE, police: SEDAN_PIPE, wreck: SEDAN_PIPE,
+  truck: { x: -3.22, y: 0.4, z: 0.62 },
+};
+/** Puffs a second out of the pipe at idle, and what full throttle adds. */
+const PUFFS = 5, PUFFS_POWER = 9;
+
+/**
+ * Crash damage. A hit pushes the end that took it in by up to CRUSH a time, CRUSH_MAX all told
+ * (metres, for a sedan; a heavier body gives less), across the part of the body ahead of the
+ * wheels. One lamp on that end goes dark past LAMP_OUT; the other never does, so the beams and the
+ * brake lights the others steer by still have a lamp to come from.
+ */
+const CRUSH = 0.1, CRUSH_MAX = 0.3, LAMP_OUT = 0.1;
+/** Bare steel where the paint is scraped off. */
+const SCRAPE: [number, number, number] = [0.2, 0.2, 0.21];
 
 /** How a vehicle is drawn this frame, as the session says. */
 export interface VehicleDraw {
@@ -43,12 +63,39 @@ interface Drawn {
   still: number;
   /** Burnt out: its paint, finish and lamps as they were, to give back for the next night. */
   paint: { color: Float32Array; pbr: Float32Array; glow: Float32Array } | null;
+  /** The engine runs, and how hard it is being pushed (0 idle .. 1), eased. */
+  running: boolean;
+  power: number;
+  /** Puffs owed to the tailpipe (a fraction carries over each frame). */
+  puff: number;
+  /** Which way it last rolled (1 ahead, -1 back): the end a crash lands on. */
+  dir: number;
+  /** How far each end is pushed in (metres): nose, tail. */
+  crush: [number, number];
+  /** The body as it left the factory, kept from the first dent on. */
+  factory: { position: Float32Array; color: Float32Array; pbr: Float32Array; glow: Float32Array } | null;
 }
 
 /** Soot over what a vertex was painted: nearly black, a trace of the old colour, mottled. */
 export function soot(r: number, g: number, b: number, i: number): [number, number, number] {
   const n = 0.65 + 0.7 * (((i * 2654435761) >>> 0) / 4294967296);
   return [(0.022 + r * 0.05) * n, (0.019 + g * 0.045) * n, (0.017 + b * 0.04) * n];
+}
+
+/** A number in [0, 1) from a point and a salt: the same for every vertex at that point. */
+function hash3(x: number, y: number, z: number, salt: number): number {
+  const n = Math.sin(Math.round(x * 500) * 12.9898 + Math.round(y * 500) * 78.233 + Math.round(z * 500) * 37.719 + salt * 4.1) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+/** hash3 smoothed over patches a third of a metre across (a, b in metres). */
+function patch(a: number, b: number, salt: number): number {
+  const u = a * 3, v = b * 3;
+  const iu = Math.floor(u), iv = Math.floor(v);
+  const fu = u - iu, fv = v - iv;
+  const su = fu * fu * (3 - 2 * fu), sv = fv * fv * (3 - 2 * fv);
+  const at = (i: number, j: number) => hash3(i * 0.002, j * 0.002, 0, salt);
+  return (at(iu, iv) * (1 - su) + at(iu + 1, iv) * su) * (1 - sv) + (at(iu, iv + 1) * (1 - su) + at(iu + 1, iv + 1) * su) * sv;
 }
 
 const _m = new THREE.Matrix4();
@@ -241,6 +288,7 @@ export class VehicleView {
         id: this.drawn.length, def, group, body, mats, head, tail, probe, anchors: part.anchors,
         home: { x: p.x, y, z: p.z, yaw: p.rotY }, pos: new THREE.Vector3(p.x, y, p.z), yaw: p.rotY, speed: 0, pitch: 0, roll: 0,
         beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(), level: 0, dim: 1, head: true }, still: 0, paint: null,
+        running: false, power: 0, puff: 0, dir: 1, crush: [0, 0], factory: null,
       });
     }
     const blob = new THREE.MeshBasicMaterial({ color: 0x000000, alphaMap: blobTexture(), transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
@@ -301,6 +349,9 @@ export class VehicleView {
   reset(): void {
     for (const d of this.drawn) {
       this.char(d.id, false);
+      this.repair(d);
+      d.running = false;
+      d.power = d.puff = 0;
       d.pos.set(d.home.x, d.home.y, d.home.z);
       d.yaw = d.home.yaw;
       d.speed = d.pitch = d.roll = 0;
@@ -353,6 +404,9 @@ export class VehicleView {
           moved = true;
           d.still = 0;
         } else d.still += dt;
+        if (Math.abs(v.speed) > 1) d.dir = Math.sign(v.speed);
+        d.running = v.engine && !v.wrecked;
+        d.power += (((v.input & DRIVE_FLAG.throttle) !== 0 ? 1 : 0) - d.power) * (1 - Math.exp(-dt * 4));
         const lights = v.engine && (v.input & DRIVE_FLAG.lights) !== 0;
         const brake = (v.input & DRIVE_FLAG.brake) !== 0 && v.speed > 0.3;
         d.head.value = lights ? HEAD_GLOW : 0;
@@ -361,12 +415,134 @@ export class VehicleView {
       } else {
         d.head.value = d.tail.value = 0;
         d.beam.level = 0;
+        d.running = false;
         d.still += dt;
       }
       // Light probes: sampled while it moves; a parked one keeps the light it was given.
       d.probe.update(d.still < 0.5 ? dt : 0, d.pos, camera, 1);
     }
     if (moved) this.shadows.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Where a vehicle's tailpipe ends as it is drawn, and (into `dir`) the way it points. */
+  private pipe(d: Drawn, out: THREE.Vector3, dir: THREE.Vector3): void {
+    const p = PIPE[d.def.kind];
+    out.set(p.x, p.y, p.z).applyMatrix4(d.group.matrix);
+    dir.set(-Math.cos(d.yaw), 0, Math.sin(d.yaw));
+  }
+
+  /**
+   * Exhaust from every running engine: a slow pale thread at idle, more and greyer under power,
+   * left behind as the car pulls away, and red in the brake lights.
+   */
+  exhaust(dt: number, smoke: SmokeWisps): void {
+    for (const d of this.drawn) {
+      if (!d.running) {
+        d.puff = 0;
+        continue;
+      }
+      d.puff += dt * (PUFFS + PUFFS_POWER * d.power);
+      if (d.puff < 1) continue;
+      this.pipe(d, _p, _s);
+      const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
+      const red = d.tail.value >= TAIL_BRAKE ? 0.5 : d.tail.value > 0 ? 0.1 : 0;
+      for (; d.puff >= 1; d.puff -= 1) smoke.exhaust(_p, _s, c * d.speed, -s * d.speed, d.power, 0, red);
+    }
+  }
+
+  /** The engine catches: a few dark puffs of what the starter left in the pipe. */
+  cough(id: number, smoke: SmokeWisps): void {
+    const d = this.drawn[id];
+    if (!d) return;
+    this.pipe(d, _p, _s);
+    for (let i = 0; i < 5; i++) smoke.exhaust(_p, _s, 0, 0, 0.5 + i * 0.1, 1);
+  }
+
+  /**
+   * A crash of `strength` (the speed it lost, m/s): the end it was rolling toward is pushed in a
+   * little more, its paint scraped to the steel, and past a point one of its lamps is put out. Looks
+   * only: the body's collision and its beams stay as they were. Undone by reset(). `end` names the
+   * end (0 nose, 1 tail) for the dev page; the game leaves it to the way the car was rolling.
+   */
+  dent(id: number, strength: number, end?: 0 | 1): void {
+    const d = this.drawn[id];
+    if (!d || d.paint) return;
+    end ??= d.dir >= 0 ? 0 : 1;
+    const most = CRUSH_MAX / d.def.ram;
+    const now = Math.min(most, d.crush[end] + THREE.MathUtils.clamp((strength - 3) * 0.012, 0.015, CRUSH) / d.def.ram);
+    if (now <= d.crush[end]) return;
+    d.crush[end] = now;
+    this.reshape(d);
+  }
+
+  /** Rebuilds a dented body from the factory one and how far each end is pushed in. */
+  private reshape(d: Drawn): void {
+    const g = d.body.geometry;
+    const position = g.getAttribute('position') as THREE.BufferAttribute;
+    const color = g.getAttribute('color') as THREE.BufferAttribute;
+    const pbr = g.getAttribute('pbr') as THREE.BufferAttribute;
+    const glow = g.getAttribute('glow') as THREE.BufferAttribute;
+    const p = position.array as Float32Array, c = color.array as Float32Array, m = pbr.array as Float32Array, e = glow.array as Float32Array;
+    d.factory ??= { position: p.slice(), color: c.slice(), pbr: m.slice(), glow: e.slice() };
+    const f = d.factory;
+    p.set(f.position);
+    c.set(f.color);
+    m.set(f.pbr);
+    e.set(f.glow);
+    const def = d.def;
+    const most = CRUSH_MAX / def.ram;
+    for (let end = 0; end < 2; end++) {
+      // The crumple zone: from just past the tyres to the bumper, below the glass.
+      const zone = def.hx - (Math.abs(def.axles[end]) + def.wheelRadius + 0.04);
+      const crush = d.crush[end];
+      if (crush <= 0) continue;
+      const s = end === 0 ? 1 : -1;
+      const k = crush / most;
+      // Which lamp goes is the car's own.
+      const first = (d.id + end) % 2 === 0 ? 1 : -1;
+      for (let i = 0; i < position.count; i++) {
+        const x = f.position[i * 3], y = f.position[i * 3 + 1], z = f.position[i * 3 + 2];
+        const depth = (s * x - (def.hx - zone)) / zone;
+        if (depth <= 0 || y > def.low + 0.02) continue;
+        const t = Math.min(1.15, depth);
+        // A push that changes slowly across the end, so a lamp or a grille bar goes in with the panel it sits on.
+        const salt = d.id * 2 + end;
+        p[i * 3] = x - s * crush * t * (0.6 + 0.8 * patch(y, z, salt));
+        p[i * 3 + 1] = y + crush * t * (patch(z, y, salt + 31) - 0.5) * 0.5;
+        p[i * 3 + 2] = z * (1 + crush * t * (patch(y, z, salt + 57) - 0.35) * 0.3);
+        if (m[i * 3 + 2] > 0) {
+          // A lamp: dark and dull once its lens is smashed.
+          if (Math.sign(z) === first && crush >= LAMP_OUT / def.ram) {
+            m[i * 3 + 2] = 0;
+            m[i * 3] = 0.7;
+            c[i * 3] = c[i * 3 + 1] = c[i * 3 + 2] = 0.03;
+            e[i * 3] = e[i * 3 + 1] = e[i * 3 + 2] = 0;
+          }
+          continue;
+        }
+        // Paint: scuffed and dulled, and scraped to the steel at the corners that took the most.
+        const bare = THREE.MathUtils.clamp((k * t * 0.4 - hash3(x, y, z, salt)) * 4, 0, 1);
+        const dull = 1 - 0.3 * k * t;
+        for (let j = 0; j < 3; j++) c[i * 3 + j] = c[i * 3 + j] * dull * (1 - bare) + SCRAPE[j] * bare;
+        m[i * 3] = Math.min(1, m[i * 3] + 0.25 * k * t) * (1 - bare) + 0.5 * bare;
+        m[i * 3 + 1] = m[i * 3 + 1] * (1 - bare) + 0.85 * bare;
+      }
+    }
+    position.needsUpdate = color.needsUpdate = pbr.needsUpdate = glow.needsUpdate = true;
+  }
+
+  /** The body as it left the factory again. */
+  private repair(d: Drawn): void {
+    d.crush[0] = d.crush[1] = 0;
+    d.dir = 1;
+    if (!d.factory) return;
+    const g = d.body.geometry;
+    for (const name of ['position', 'color', 'pbr', 'glow'] as const) {
+      const a = g.getAttribute(name) as THREE.BufferAttribute;
+      (a.array as Float32Array).set(d.factory[name]);
+      a.needsUpdate = true;
+    }
+    d.factory = null;
   }
 
   /** Headlight beams of the vehicles with their lamps on (not `except`, which the survivor's own light draws). */

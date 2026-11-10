@@ -260,6 +260,8 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
       k.box(0.012, 0.12, 0.22, glass, t.tail - 0.012, 2.1, sz * 0.5, { cast: false });
     }
     k.add(dressed(chamferBox(0.2, 0.08, 2.2, 0.02)), steel, t.tail - 0.06, 0.56, 0);
+    // The exhaust, out under the step on the passenger's side (VehicleView puffs from its end).
+    k.rod(V(-2.5, 0.4, 0.62), V(t.tail - 0.16, 0.4, 0.62), 0.045, steel, 6);
     // Front: the ram bumper with its push bar and tow hooks.
     k.add(dressed(chamferBox(0.14, 0.3, 2.4, 0.03)), steel, 3.13, 0.7, 0);
     for (const sz of [-0.45, 0.45]) {

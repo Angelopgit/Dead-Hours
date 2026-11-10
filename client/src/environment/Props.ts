@@ -224,6 +224,8 @@ export class PropFactory {
       k.add(dressed(chamferBox(0.17, 0.2, 1.92, 0.04)), wreck ? chrome : trim, end * 2.2, 0.43, 0);
       k.box(0.012, 0.11, 0.32, k.mat(0xc9c6ba, 0.6), end * 2.292, 0.43, 0, { cast: false });
     }
+    // The tailpipe, under the bumper on the passenger's side (VehicleView puffs from its end).
+    k.rod(new THREE.Vector3(-1.95, 0.27, 0.52), new THREE.Vector3(-2.31, 0.27, 0.52), 0.028, chrome, 6);
     k.add(dressed(chamferBox(0.05, 0.13, 0.74, 0.012)), dark, 2.19, 0.635, 0, { cast: false });
     for (let i = -3; i <= 3; i++) k.box(0.012, 0.11, 0.012, chrome, 2.218, 0.635, i * 0.1, { cast: false });
     // Wheels: a tire with shoulders on a steel rim, a cap on the hub.

@@ -37,6 +37,12 @@ const SURFACES: Record<Surface, SurfaceFx> = {
 
 const BLOOD: [number, number, number] = [0.24, 0.008, 0.008];
 const BLOOD_DECAL: [number, number, number] = [0.34, 0.03, 0.025];
+/**
+ * Seconds a mark of blood takes to dry: a spatter is thin and skins over quickly, a pool stays wet
+ * at its middle most of the time it lies there. (Much quicker than life: minutes for a drop, an
+ * hour or more for a pool. A night is short.)
+ */
+const BLOOD_DRY = { splat: 22, pool: 60 };
 
 /** Rifles with a slotted flash hider: the flash vents sideways and up as well as forward. */
 const BIRDCAGE = new Set<WeaponId>(['ar', 'battle', 'lmg', 'marksman']);
@@ -109,7 +115,7 @@ export class Effects {
     this.chunks.onLand = (pos, strength, kind, normal) => {
       // Wet pieces leave a mark where they first come down; bone just clatters.
       if (this.gore !== 'off' && kind !== 'bone' && (strength > 0.15 || Math.random() < 0.5) && !this.isMoving?.(pos, normal)) {
-        this.decals.add(DECAL.splat, this.tmp3.copy(pos), normal, rand(0.09, 0.16) + strength * 0.14, BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.88, 50);
+        this.stain(DECAL.splat, this.tmp3.copy(pos), normal, rand(0.09, 0.16) + strength * 0.14, 0.88, 50);
       }
       this.onChunkLand?.(pos, strength, kind);
     };
@@ -131,6 +137,15 @@ export class Effects {
     this.chunks.enabled = gore !== 'off';
     this.gore = gore;
     this.reducedFlashing = reducedFlashing;
+  }
+
+  /**
+   * A mark of blood on a surface: wet, bright and shining when it lands, drying dark from its thin
+   * edges in. A pool is a touch darker and takes far longer.
+   */
+  private stain(cell: number, pos: THREE.Vector3, normal: THREE.Vector3, size: number, alpha: number, life: number, grow = 0, along?: THREE.Vector3): void {
+    const pool = cell === DECAL.pool;
+    this.decals.add(cell, pos, normal, size, BLOOD_DECAL[0] * (pool ? 0.85 : 1), BLOOD_DECAL[1], BLOOD_DECAL[2], alpha, life, grow, along, pool ? BLOOD_DRY.pool : BLOOD_DRY.splat);
   }
 
   /** Emission multiplier: full up close, thinning with distance from the camera. */
@@ -262,17 +277,17 @@ export class Effects {
     // Splatter on the wall or floor behind.
     if (opts.exit && (full || opts.killed) && !this.isMoving?.(opts.exit.pos, opts.exit.normal)) {
       const size = (0.45 + Math.min(0.6, damage / 90)) * (opts.head && opts.killed ? 1.4 : 1) * (full ? 1 : 0.6) * (1 + Math.min(0.6, pw * 0.4));
-      this.decals.add(DECAL.splat, opts.exit.pos, opts.exit.normal, size, BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 60, 0, dir);
+      this.stain(DECAL.splat, opts.exit.pos, opts.exit.normal, size, 0.92, 60, 0, dir);
       // A heavy round paints a second, longer run of it.
       if (pw >= 0.8 && full) {
         const at = this.tmp2.copy(opts.exit.pos).addScaledVector(dir, 0.25).addScaledVector(opts.exit.normal, 0.02);
-        this.decals.add(DECAL.splat, at, opts.exit.normal, size * rand(0.6, 0.85), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.85, 60, 0, dir);
+        this.stain(DECAL.splat, at, opts.exit.normal, size * rand(0.6, 0.85), 0.85, 60, 0, dir);
       }
     }
     // A kill lets a gout of it fall straight onto the ground underneath.
     if (opts.killed && floor > pos.y - 3) {
       this.tmp2.set(pos.x + dir.x * 0.3, floor, pos.z + dir.z * 0.3);
-      this.decals.add(DECAL.splat, this.tmp2, this.up, (0.3 + pw * 0.25) * (full ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.9, 70, 0.4, dir);
+      this.stain(DECAL.splat, this.tmp2, this.up, (0.3 + pw * 0.25) * (full ? 1 : 0.6), 0.9, 70, 0.4, dir);
     }
   }
 
@@ -310,7 +325,7 @@ export class Effects {
       if (!hit) continue;
       at.copy(pos).addScaledVector(ray, hit.distance);
       const n = new THREE.Vector3(hit.nx, hit.ny, hit.nz);
-      if (!this.isMoving?.(at, n)) this.decals.add(DECAL.splat, at, n, rand(0.5, 1.1) * (full === 1 ? 1 : 0.6) * (1 - hit.distance / 12), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 80, 0, ray);
+      if (!this.isMoving?.(at, n)) this.stain(DECAL.splat, at, n, rand(0.5, 1.1) * (full === 1 ? 1 : 0.6) * (1 - hit.distance / 12), 0.92, 80, 0, ray);
     }
   }
 
@@ -331,7 +346,7 @@ export class Effects {
     this.droplets(pos, up, this.n(8 + power * 10, k), [1, 2.6 + power], 0.55, floor);
     this.chunks.burst(pos, up, this.n(0.35 + power * 0.9, k), 'meat', [1, 2.5 + power], 0.6, 0.4, [0.03, 0.055]);
     this.tmp2.set(pos.x, floor, pos.z);
-    this.decals.add(DECAL.splat, this.tmp2, this.up, (0.22 + power * 0.18) * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.88, 60, 0, dir);
+    this.stain(DECAL.splat, this.tmp2, this.up, (0.22 + power * 0.18) * (full === 1 ? 1 : 0.6), 0.88, 60, 0, dir);
   }
 
   /** Scraps of meat (3D pieces) thrown off something torn apart, for callers outside the effects. */
@@ -417,7 +432,7 @@ export class Effects {
     if (hit) {
       const at = new THREE.Vector3().copy(pos).addScaledVector(ray, hit.distance);
       const n = new THREE.Vector3(hit.nx, hit.ny, hit.nz);
-      if (!this.isMoving?.(at, n)) this.decals.add(DECAL.splat, at, n, rand(0.5, 0.8) * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 70, 0, dir);
+      if (!this.isMoving?.(at, n)) this.stain(DECAL.splat, at, n, rand(0.5, 0.8) * (full === 1 ? 1 : 0.6), 0.92, 70, 0, dir);
     }
   }
 
@@ -462,10 +477,10 @@ export class Effects {
       if (!hit) continue;
       at.copy(pos).addScaledVector(ray, hit.distance);
       n.set(hit.nx, hit.ny, hit.nz);
-      if (!this.isMoving?.(at, n)) this.decals.add(DECAL.splat, at, n, rand(0.6, 1.2) * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, 80, 0, ray);
+      if (!this.isMoving?.(at, n)) this.stain(DECAL.splat, at, n, rand(0.6, 1.2) * (full === 1 ? 1 : 0.6), 0.92, 80, 0, ray);
     }
     at.set(pos.x, floor, pos.z);
-    this.decals.add(DECAL.pool, at, this.up, 1.8 * (full === 1 ? 1 : 0.6), BLOOD_DECAL[0] * 0.8, BLOOD_DECAL[1] * 1.2, BLOOD_DECAL[2], 0.9, 90, 3);
+    this.stain(DECAL.pool, at, this.up, 1.8 * (full === 1 ? 1 : 0.6), 0.9, 90, 3);
   }
 
   /** One pulse of blood from a fresh stump (several a second, weakening). */
@@ -515,7 +530,7 @@ export class Effects {
   splat(pos: THREE.Vector3, size: number): void {
     if (this.gore === 'off') return;
     this.tmp.set(pos.x, this.floorBelow(this.tmp.set(pos.x, pos.y + 0.2, pos.z), 0.6), pos.z);
-    this.decals.add(DECAL.splat, this.tmp, this.up, size * (this.gore === 'full' ? 1 : 0.6), BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.9, 60);
+    this.stain(DECAL.splat, this.tmp, this.up, size * (this.gore === 'full' ? 1 : 0.6), 0.9, 60);
   }
 
   /** Clubbing with a severed arm: the torn end splashes blood along the swing. */
@@ -559,14 +574,14 @@ export class Effects {
     this.dripBudget -= 1;
     this.tmp.set(x, y, z);
     const size = kind === 2 ? rand(0.12, 0.2) : rand(0.08, 0.16);
-    this.decals.add(DECAL.splat, this.tmp, this.up, size, BLOOD_DECAL[0], BLOOD_DECAL[1], BLOOD_DECAL[2], 0.85, 40);
+    this.stain(DECAL.splat, this.tmp, this.up, size, 0.85, 40);
   }
 
   /** Spreading pool under a body. */
   pool(pos: THREE.Vector3, size: number, life: number, grow = 5): void {
     if (this.gore === 'off') return;
     const s = size * (this.gore === 'full' ? 1 : 0.6);
-    this.decals.add(DECAL.pool, pos, this.up, s, BLOOD_DECAL[0] * 0.9, BLOOD_DECAL[1], BLOOD_DECAL[2], 0.92, life, grow);
+    this.stain(DECAL.pool, pos, this.up, s, 0.92, life, grow);
   }
 
   /**
