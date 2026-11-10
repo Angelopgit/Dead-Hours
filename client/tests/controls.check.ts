@@ -373,6 +373,14 @@ check(none === null, 'nothing near: full speed');
     && /\.results-main:not\(\.team\) > \.results-stats \{ grid-column: 2; grid-row: 1 \/ span 5;/.test(short)
     && css.indexOf('@media (max-height: 500px) and (min-width: 560px)') > css.indexOf('@media (max-height: 760px)'),
     'touch: the results page keeps RETRY on a sideways phone (stats beside the rest on short screens)');
+  // The co-op results row has six cells (the name, four stats and XP). The narrow layout kept five columns from before
+  // XP was a cell, so under 861 px XP wrapped beneath the name and each row was 30 px taller. Every layout wide
+  // enough for one line a row has a column for each cell.
+  const results = readFileSync(new URL('../src/ui/ResultsScreen.ts', import.meta.url), 'utf8');
+  const cells = (results.match(/h\('div', \{ class: `team-row[^]*?\n      \);/)?.[0].match(/\n        h\('div'/g) ?? []).length;
+  const columns = [...css.matchAll(/\.team-row \{ (?:display: grid; )?grid-template-columns: ([\d.]+fr) repeat\((\d+), 1fr\)/g)].map((m) => 1 + +m[2]);
+  check(cells === 6 && columns.length === 2 && columns.every((n) => n === cells),
+    `co-op results: a column for every cell of a survivor's row (${cells} cells, columns ${columns.join(' and ')})`);
   const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
   const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
   const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');

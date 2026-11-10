@@ -659,7 +659,9 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
 .spectate.net-lost { bottom: auto; top: 18vh; color: var(--accent); animation: net-lost 1.4s ease-in-out infinite; }
 @keyframes net-lost { 50% { opacity: 0.45; } }
 @media (max-width: 860px) {
-  .team-row { grid-template-columns: 1.3fr repeat(4, 1fr); gap: 0.6em; }
+  /* Six cells a row (the name, four stats and XP): with five columns XP wrapped under the name and every row was
+     30 px taller, enough to push the buttons off a sideways phone. */
+  .team-row { grid-template-columns: 1.3fr repeat(5, 1fr); gap: 0.6em; }
   .team-row b { font-size: 1.5em; }
   .team-row .team-name { font-size: 1.2em; }
   .board-list li { grid-template-columns: 2em 1fr auto 4.4em; }
@@ -693,6 +695,8 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
   .results-xp { margin-top: 0.5em; }
   .results-xp .xp-parts { margin: 0.2em 0 0.4em; }
   .results-xp .xp-unlocks { margin-top: 0.4em; }
+  .team-table { margin: 0.5em 0 0.6em; }
+  .team-row { padding: 0.35em 0; }
 }
 
 /* Voice and text chat */
