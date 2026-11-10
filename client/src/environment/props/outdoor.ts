@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { VEHICLES, isDrivable, type PropKind } from '@dead-hours/shared';
-import { gableRoof, jitter, type Kit } from './Kit';
+import { arch, dressed, gableRoof, jitter, sidePlate, type Kit } from './Kit';
+import { chamferBox, loft, type P2 } from '../../rendering/Solid';
 
 type Builder = (k: Kit) => void;
 
@@ -20,41 +21,97 @@ function water(k: Kit): THREE.MeshStandardMaterial {
 }
 
 /**
- * The cab of an armored truck that drives: a shell round the two front seats (on the chassis,
- * which is the floor, VEHICLES.truck.floor), the dashboard and the wheel, under clear glass. Its
- * roof stands higher than the closed cab's did, clear of the heads of the two sitting in it.
+ * The armored truck's hard points, which the seats, the colliders and the driving assume
+ * (shared/src/config/vehicles.ts): 6.2 m long on a 4.4 m wheelbase, 2.4 m wide, 1 m wheels, the
+ * two front seats forward of the front axle under a 2.12 m roof, the box 2.6 m inside.
  */
-function truckCab(k: Kit, body: Parameters<Kit['box']>[3]): void {
-  const def = VEHICLES.truck;
+const TRUCK = { nose: 3.1, tail: -3.04, skirt: 0.62, sill: 1.5, cabRoof: 2.12, boxRoof: 2.6, half: 1.2, axle: 2.2, wheelY: 0.5, wheelR: 0.5, archR: 0.62, wall: 1.3 };
+/** Where an arch of radius `archR` round a wheel meets the skirt line. */
+const TRUCK_ARCH = Math.asin((TRUCK.skirt - TRUCK.wheelY) / TRUCK.archR);
+
+/**
+ * The cab of the armored truck: a shell round the two front seats (on the chassis, which is the
+ * floor, VEHICLES.truck.floor) with a raked windshield. One that drives has clear glass, seats,
+ * a dashboard and the wheel; a parked one has dark glass and nothing behind it.
+ */
+function truckCab(k: Kit, body: Parameters<Kit['box']>[3], trim: Parameters<Kit['box']>[3], drives: boolean): void {
+  const t = TRUCK, def = VEHICLES.truck;
+  const top = t.cabRoof, rake = 0.36;
+  // Below the windows: each side with its wheel arch, the nose; the roof over them.
+  const side: P2[] = [
+    [t.wall, t.skirt], [t.wall, t.sill], [3.06, t.sill], [t.nose, 1.42], [t.nose, t.skirt],
+    [t.axle + Math.cos(TRUCK_ARCH) * t.archR, t.skirt], ...arch(t.axle, t.wheelY, t.archR, TRUCK_ARCH, Math.PI - TRUCK_ARCH, 8),
+  ];
+  // Pillars: the raked one beside the windshield, the upright one against the box.
+  const front: P2[] = [[3.06, t.sill], [3.06 - rake, top], [2.62, top], [2.96, t.sill]];
+  const back: P2[] = [[t.wall, t.sill], [t.wall, top], [1.62, top], [1.62, t.sill]];
+  const win: P2[] = [[1.62, t.sill], [1.62, top], [2.62, top], [2.96, t.sill]];
+  const dark = k.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.08, metalness: 0.8 }));
+  for (const sz of [-1, 1]) {
+    k.add(sidePlate(side, 0.07, 0.015), body, 0, 0, sz * 1.125);
+    k.add(sidePlate(front, 0.07, 0.012), body, 0, 0, sz * 1.125);
+    k.add(sidePlate(back, 0.07, 0.012), body, 0, 0, sz * 1.125);
+    if (drives) k.pane(sidePlate(win, 0.02, 0), 0, 0, sz * 1.125);
+    else k.add(sidePlate(win, 0.02, 0), dark, 0, 0, sz * 1.125, { cast: false });
+    // Door: its shut lines, the handle, the step under it, the mirror on its arm.
+    k.box(0.012, 0.86, 0.012, trim, 1.66, 1.06, sz * 1.163, { cast: false });
+    k.box(0.9, 0.012, 0.012, trim, 2.1, 0.66, sz * 1.163, { cast: false });
+    k.add(dressed(chamferBox(0.16, 0.035, 0.03, 0.008)), trim, 1.82, 1.36, sz * 1.17, { cast: false });
+    k.add(dressed(chamferBox(0.05, 0.05, 0.26, 0.01)), trim, 2.98, 1.62, sz * 1.27, { cast: false });
+    k.add(dressed(chamferBox(0.05, 0.3, 0.16, 0.015)), trim, 2.98, 1.76, sz * 1.42, { cast: false });
+    // The wheel well, seen through the arch and beside the seat.
+    k.block(1.3, 0.56, 0.3, trim, t.axle, 0.6, sz * 0.975);
+  }
+  k.add(dressed(chamferBox(0.07, t.sill - t.skirt, 2.32, 0.015)), body, 3.065, (t.sill + t.skirt) / 2, 0);
+  k.add(dressed(chamferBox(3.06 - rake - t.wall + 0.06, 0.06, 2.32, 0.02)), body, (3.06 - rake + t.wall) / 2 + 0.03, top + 0.03, 0);
+  // Windshield, leaning back, with a centre post.
+  const glass = new THREE.BoxGeometry(0.02, Math.hypot(rake, top - t.sill), 2.18);
+  const lean = Math.atan2(rake, top - t.sill);
+  if (drives) k.pane(glass, 3.06 - rake / 2, (top + t.sill) / 2, 0, { rz: lean });
+  else k.add(glass, dark, 3.06 - rake / 2, (top + t.sill) / 2, 0, { rz: lean, cast: false });
+  k.box(0.03, Math.hypot(rake, top - t.sill), 0.05, body, 3.07 - rake / 2, (top + t.sill) / 2, 0, { rz: lean, cast: false });
+  // Grille slats in the nose, the light bar on the roof.
+  k.add(dressed(chamferBox(0.03, 0.34, 1.1, 0.01)), trim, 3.105, 1.12, 0, { cast: false });
+  for (let i = 0; i < 4; i++) k.box(0.02, 0.03, 1.02, body, 3.125, 1.0 + i * 0.08, 0, { cast: false });
+  k.add(dressed(chamferBox(0.26, 0.08, 1.5, 0.02)), trim, 2.2, top + 0.1, 0, { cast: false });
+  for (const sz of [-1, 1]) {
+    k.box(0.2, 0.05, 0.56, k.mat(0x3a0d0d, 0.25, 0.2), 2.22, top + 0.11, sz * 0.4 - 0.02 * sz, { cast: false });
+  }
+  k.box(0.2, 0.05, 0.2, k.mat(0x0d1a3a, 0.25, 0.2), 2.22, top + 0.11, 0, { cast: false });
+  if (!drives) return;
+  // Seats, the dashboard, the wheel.
   const cloth = k.mat(0x2a2722, 0.95);
   const dash = k.mat(0x1a1b1c, 0.8);
-  const sill = 1.5, band = 0.62;
-  // Below the windows: the sides and the front; the back wall up to the roof; the roof.
-  for (const sz of [-1, 1]) k.block(1.8, sill - 0.85, 0.06, body, 2.2, 0.85, sz * 1.12);
-  k.block(0.06, sill - 0.85, 2.3, body, 3.07, 0.85, 0);
-  k.block(0.06, sill + band + 0.06 - 0.85, 2.3, body, 1.33, 0.85, 0);
-  k.block(1.8, 0.06, 2.3, body, 2.2, sill + band, 0);
-  // Round the windows: either side of each side window, and either side of the windshield.
-  for (const sz of [-1, 1]) {
-    k.block(0.5, band, 0.06, body, 2.8, sill, sz * 1.12);
-    k.block(0.3, band, 0.06, body, 1.5, sill, sz * 1.12);
-    k.block(0.06, band, 0.2, body, 3.07, sill, sz * 1.05);
-    k.pane(new THREE.BoxGeometry(0.9, band, 0.02), 2.1, sill + band / 2, sz * 1.12);
-  }
-  k.pane(new THREE.BoxGeometry(0.02, band, 1.9), 3.08, sill + band / 2, 0);
-  // Seats, the dashboard, the wheel.
   for (const s of def.seats.slice(0, 2)) {
     k.block(0.5, s.y - def.floor, 0.5, cloth, s.x - 0.02, def.floor, s.z);
     k.box(0.13, 0.62, 0.5, cloth, s.x - 0.28, s.y + 0.31, s.z, { rz: 0.14 });
   }
-  k.block(0.26, 0.2, 2.1, dash, 2.92, 1.3, 0);
+  k.block(0.26, 0.2, 2.1, dash, 2.86, 1.3, 0);
   const w = def.wheel, z = def.seats[0].z, tilt = 0.6;
   const rim = new THREE.TorusGeometry(0.17, 0.022, 6, 20);
   rim.rotateY(Math.PI / 2);
   rim.rotateZ(tilt);
   k.add(rim, dash, w.x, w.y, z, { cast: false });
   k.cyl(0.05, 0.05, 0.05, 8, dash, w.x + 0.01, w.y, z, { rz: tilt - Math.PI / 2, cast: false });
-  k.rod(V(w.x + 0.03, w.y - 0.02, z), V(2.85, 1.45, z), 0.03, dash);
+  k.rod(V(w.x + 0.03, w.y - 0.02, z), V(2.8, 1.45, z), 0.03, dash);
+}
+
+/** The armored truck's wheels: a tall tire with a groove round it, a steel rim, the hub. */
+function truckWheels(k: Kit): void {
+  const t = TRUCK, r = t.wheelR;
+  const tire = dressed(loft([
+    { z: -0.17, rx: 0.3 }, { z: -0.17, rx: r - 0.06 }, { z: -0.13, rx: r }, { z: -0.015, rx: r }, { z: -0.015, rx: r - 0.02 },
+    { z: 0.015, rx: r - 0.02 }, { z: 0.015, rx: r }, { z: 0.13, rx: r }, { z: 0.17, rx: r - 0.06 }, { z: 0.17, rx: 0.3 },
+  ], { segments: 16, caps: false }));
+  const rim = dressed(loft([{ z: -0.155, rx: 0.29 }, { z: -0.13, rx: 0.305 }, { z: 0.13, rx: 0.305 }, { z: 0.155, rx: 0.29 }], { segments: 12 }));
+  const hub = dressed(loft([{ z: -0.19, rx: 0.07 }, { z: -0.172, rx: 0.115 }, { z: 0.172, rx: 0.115 }, { z: 0.19, rx: 0.07 }], { segments: 8 }));
+  const rubber = k.mat(0x101010, 0.92), steel = k.mat(0x1c1d1f, 0.5, 0.6), bolt = k.mat(0x55585c, 0.4, 0.8);
+  for (const wx of [-t.axle, t.axle]) for (const wz of [-1.03, 1.03]) {
+    k.add(tire.clone(), rubber, wx, t.wheelY, wz);
+    k.add(rim.clone(), steel, wx, t.wheelY, wz, { cast: false });
+    k.add(hub.clone(), bolt, wx, t.wheelY, wz, { cast: false });
+  }
+  tire.dispose(); rim.dispose(); hub.dispose();
 }
 
 export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
@@ -147,25 +204,73 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
     k.cyl(0.08, 0.1, 0.1, 10, k.mat(0xd8d8d0, 0.4), 0, 0.42, 0, { cast: false });
   },
   armoredTruck(k) {
-    const body = k.mat(0x22261f, 0.6, 0.3);
+    const t = TRUCK;
+    const body = k.mat(0x22261f, 0.6, 0.3), trim = k.mat(0x151716, 0.7, 0.2), steel = k.mat(0x2c2e30, 0.45, 0.7);
     const glass = k.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.08, metalness: 0.8 }));
-    k.block(6.2, 0.5, 2.3, k.mat(0x151617, 0.7), 0, 0.45, 0);
-    k.block(4.3, 1.75, 2.4, body, -0.95, 0.85, 0);
-    if (isDrivable(k.p)) truckCab(k, body);
-    else {
-      k.block(1.8, 1.15, 2.3, body, 2.2, 0.85, 0);
-      k.box(0.05, 0.5, 1.9, glass, 3.11, 1.75, 0, { rz: -0.2 });
-      for (const sz of [-1, 1]) k.box(0.9, 0.42, 0.05, glass, 2.1, 1.72, sz * 1.16);
+    // Chassis between the wheels (its top is the floor), axles and the tank under the box.
+    k.block(6.0, 0.5, 1.68, trim, 0, 0.45, 0);
+    k.block(3.1, 0.5, 2.26, trim, 0, 0.45, 0);
+    k.block(1.3, 0.3, 1.68, trim, -t.axle, 0.88, 0);
+    k.cyl(0.2, 0.2, 0.9, 10, steel, -0.6, 0.6, 1.0, { rz: Math.PI / 2 });
+    // The armored box: one hull with its edges cut back, an arch over each rear wheel.
+    k.add(sidePlate([
+      [t.tail, t.skirt], [t.tail, 2.5], [t.tail + 0.16, t.boxRoof + 0.06], [t.wall, t.boxRoof + 0.06], [t.wall, t.skirt],
+      [-t.axle + Math.cos(TRUCK_ARCH) * t.archR, t.skirt], ...arch(-t.axle, t.wheelY, t.archR, TRUCK_ARCH, Math.PI - TRUCK_ARCH, 8),
+    ], 2.4, 0.09), body, 0, 0, 0);
+    truckCab(k, body, trim, isDrivable(k.p));
+    truckWheels(k);
+    k.box(2.0, 0.3, 0.02, k.text(['STATE POLICE'], { w: 512, h: 96, bg: '#22261f', fg: '#c8c2a8', border: null }), -0.15, 1.22, 1.205, { cast: false });
+    k.box(2.0, 0.3, 0.02, k.text(['STATE POLICE'], { w: 512, h: 96, bg: '#22261f', fg: '#c8c2a8', border: null }), -0.15, 1.22, -1.205, { cast: false, ry: Math.PI });
+    const port = dressed(loft([{ z: -0.014, rx: 0.09 }, { z: 0.006, rx: 0.09 }, { z: 0.014, rx: 0.075 }], { segments: 10 }));
+    for (const sz of [-1, 1]) {
+      const face = sz * 1.2;
+      for (const x of [-2.35, -1.15, 0.05]) {
+        // A vision block in its frame, the gun port under it with the cover swung shut.
+        k.add(dressed(chamferBox(0.46, 0.26, 0.03, 0.01)), trim, x, 2.0, face, { cast: false });
+        k.box(0.36, 0.16, 0.012, glass, x, 2.0, face + sz * 0.012, { cast: false });
+        const p = k.add(port.clone(), steel, x, 1.62, face, { cast: false });
+        if (sz < 0) p.rotation.y = Math.PI;
+        k.box(0.03, 0.05, 0.02, trim, x, 1.74, face + sz * 0.012, { cast: false });
+      }
+      // Seams between the plates, the side door of the box, a running board.
+      for (const x of [-1.75, -0.55]) k.box(0.03, 1.86, 0.014, trim, x, 1.56, face, { cast: false });
+      k.box(0.014, 1.5, 0.014, trim, 0.55, 1.42, face, { cast: false });
+      k.box(0.014, 1.5, 0.014, trim, 1.24, 1.42, face, { cast: false });
+      k.box(0.7, 0.014, 0.014, trim, 0.895, 2.17, face, { cast: false });
+      k.add(dressed(chamferBox(0.16, 0.035, 0.03, 0.008)), steel, 0.68, 1.36, face + sz * 0.012, { cast: false });
+      k.add(dressed(chamferBox(2.9, 0.05, 0.2, 0.012)), steel, -0.05, 0.56, sz * 1.24);
+      // Mud flaps behind the rear wheels, rails along the roof.
+      k.box(0.03, 0.42, 0.34, trim, -2.9, 0.62, sz * 1.03, { cast: false });
+      k.rod(V(-2.7, 2.74, sz * 0.98), V(1.0, 2.74, sz * 0.98), 0.018, steel);
+      for (const x of [-2.7, -0.85, 1.0]) k.box(0.03, 0.08, 0.03, steel, x, 2.7, sz * 0.98, { cast: false });
     }
-    k.box(2.0, 0.3, 0.02, k.text(['STATE POLICE'], { w: 512, h: 96, bg: '#22261f', fg: '#c8c2a8', border: null }), -1.2, 1.9, 1.205, { cast: false });
-    k.box(2.0, 0.3, 0.02, k.text(['STATE POLICE'], { w: 512, h: 96, bg: '#22261f', fg: '#c8c2a8', border: null }), -1.2, 1.9, -1.205, { cast: false, ry: Math.PI });
-    const rubber = k.mat(0x111111, 0.9);
-    for (const wx of [-2.2, -1.0, 2.2]) for (const wz of [-1.05, 1.05]) k.cyl(0.5, 0.5, 0.36, 12, rubber, wx, 0.5, wz, { rx: Math.PI / 2 });
-    k.box(0.08, 0.2, 2.2, k.mat(0x3a3a3a, 0.4, 0.8), 3.14, 0.7, 0);
-    // Lamps: a pair of headlights in the bumper, tail lights low on the back doors.
+    port.dispose();
+    // Roof: the hatch on its ring, a vent, the aerial.
+    k.cyl(0.42, 0.44, 0.06, 14, trim, -0.9, 2.69, 0, { cast: false });
+    k.add(dressed(chamferBox(0.62, 0.04, 0.62, 0.015)), body, -0.9, 2.74, 0, { cast: false });
+    k.box(0.1, 0.03, 0.03, steel, -0.9, 2.775, 0.2, { cast: false });
+    k.add(dressed(chamferBox(0.4, 0.07, 0.4, 0.02)), trim, -2.3, 2.695, 0, { cast: false });
+    k.rod(V(-2.85, 2.66, -0.95), V(-2.9, 3.5, -0.95), 0.008, trim, 4);
+    // Back: two doors with their hinges and bars, the step.
+    k.box(0.012, 1.7, 0.016, trim, t.tail - 0.004, 1.6, 0, { cast: false });
+    for (const sz of [-1, 1]) {
+      for (const y of [1.0, 1.6, 2.2]) k.add(dressed(chamferBox(0.03, 0.1, 0.05, 0.008)), steel, t.tail - 0.012, y, sz * 1.0, { cast: false });
+      k.add(dressed(chamferBox(0.03, 0.04, 0.5, 0.008)), steel, t.tail - 0.014, 1.45, sz * 0.32, { cast: false });
+      k.add(dressed(chamferBox(0.014, 0.2, 0.3, 0.004)), trim, t.tail - 0.004, 2.1, sz * 0.5, { cast: false });
+      k.box(0.012, 0.12, 0.22, glass, t.tail - 0.012, 2.1, sz * 0.5, { cast: false });
+    }
+    k.add(dressed(chamferBox(0.2, 0.08, 2.2, 0.02)), steel, t.tail - 0.06, 0.56, 0);
+    // Front: the ram bumper with its push bar and tow hooks.
+    k.add(dressed(chamferBox(0.14, 0.3, 2.4, 0.03)), steel, 3.13, 0.7, 0);
+    for (const sz of [-0.45, 0.45]) {
+      k.add(dressed(chamferBox(0.06, 0.62, 0.07, 0.015)), steel, 3.2, 1.0, sz, { cast: false });
+      k.add(dressed(chamferBox(0.05, 0.06, 0.1, 0.012)), k.mat(0x7a1a14, 0.5, 0.3), 3.21, 0.62, sz * 1.9, { cast: false });
+    }
+    for (const y of [0.98, 1.26]) k.add(dressed(chamferBox(0.05, 0.05, 0.97, 0.012)), steel, 3.2, y, 0, { cast: false });
+    // Lamps: a headlight either side of the grille, tail lights low on the back doors.
     for (const sz of [-0.82, 0.82]) {
-      k.box(0.05, 0.16, 0.3, k.mat(0x9aa0a6, 0.2, 0.5), 3.13, 1.02, sz).userData.lamp = 'head';
-      k.box(0.05, 0.14, 0.24, k.glow(0x5a0805, 0.6), -3.07, 1.0, sz, { cast: false }).userData.lamp = 'tail';
+      k.box(0.05, 0.16, 0.3, k.mat(0x9aa0a6, 0.2, 0.5), 3.115, 1.04, sz).userData.lamp = 'head';
+      k.box(0.05, 0.14, 0.24, k.glow(0x5a0805, 0.6), t.tail - 0.03, 1.0, sz, { cast: false }).userData.lamp = 'tail';
     }
   },
   boardSign(k) {

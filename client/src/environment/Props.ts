@@ -6,8 +6,8 @@ import { createLightConeMaterial } from './LightCone';
 import { LampGlare, patchLens } from './LampGlare';
 import { WIRE_RADIUS, wireCurves, wireMaterial } from './Wires';
 import { settings } from '../core/Settings';
-import { Kit, jitter, type Paint, type PropBuildResult, type Surface } from './props/Kit';
-import { chamferBox, loft, plate, type P2 } from '../rendering/Solid';
+import { Kit, arch, dressed, jitter, sidePlate, type Paint, type PropBuildResult, type Surface } from './props/Kit';
+import { chamferBox, loft, type P2 } from '../rendering/Solid';
 import { worldPieces } from './WorldPieces';
 import { INTERIOR } from './props/interior';
 import { OUTDOOR } from './props/outdoor';
@@ -46,30 +46,6 @@ function openCabinGeometry(len: number, h: number, wid: number, insetF: number, 
 }
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
-
-/** A kit geometry ready for the prop batches: no modeling attributes, texture coordinates present. */
-function dressed(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  g.deleteAttribute('edge');
-  if (!g.getAttribute('uv')) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count * 2), 2));
-  return g;
-}
-
-/** A car's side-view outline ([x, y] points, nose toward +X) extruded across the car and chamfered. */
-function sidePlate(outline: P2[], width: number, bevel: number): THREE.BufferGeometry {
-  const g = plate(outline, width, { bevel });
-  g.rotateY(Math.PI / 2);
-  return dressed(g);
-}
-
-/** Points along a wheel arch, from angle a0 to a1 (radians, 0 toward the nose). */
-function arch(cx: number, cy: number, r: number, a0: number, a1: number, n: number): P2[] {
-  const out: P2[] = [];
-  for (let i = 0; i <= n; i++) {
-    const a = a0 + ((a1 - a0) * i) / n;
-    out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
-  }
-  return out;
-}
 
 /**
  * The sedan's hard points, which the seats, the colliders and the driving all assume

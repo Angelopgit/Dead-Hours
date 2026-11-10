@@ -53,6 +53,7 @@ A full street is 90 x 4,200 = 380k zombie triangles; everything else on this pag
 | LR-338 | ours: nothing to measure | 480 triangles | 2,092 triangles, same length and hold |
 | Survivors and zombies | body survey medians scaled to the survivor's height (recalled figures, not a looked-up table): head 13% smaller (`HEAD_K` 0.8), feet 12% longer (`FOOT_LENGTH`), thighs 12% fuller (`LEG_UP`), hips 9% wider (`pelvisK`) | head about 30% large, shoe 13.6% of the height | shoe 15.5% of the height; triangle counts unchanged |
 | Sedan, police car | hard points kept (4.4 m body, 2.7 m wheelbase, 1.86 m wide); outline of a mid-90s American sedan | 824 triangles, a box on octagons | 2,900 triangles, 1 draw call as before |
+| Armored truck | hard points kept (6.2 m on a 4.4 m wheelbase, 2.4 m wide, 1 m wheels, the cab ahead of the front axle); the faceted hull, ports and vision blocks of an armored rescue truck, no one real model | 856 triangles, three axles drawn over two that drive | 5,518 triangles, 1 draw call plus glass and lettering as before |
 
 Measured in the software renderer (SwiftShader, 1280x720, no GPU on the build machine, so read these as relative): the M4 over the shoulder costs 5% more of the frame than the old one, and 31% more down the sights, where the slimmer rifle also hides less of the arms behind it. The star flash and barrel smoke use the particle pools already in the scene. Models are code, so the download grew by the source of the kit and the outlines only.
 
@@ -66,4 +67,4 @@ Not measured again: frame cost. The heaviest of these is the Mk 14 at 3,106 tria
 
 - Hold each side view against a dimension drawing and correct the part positions.
 - Optics, suppressors and grips are still boxes and plain tubes, apart from the scope.
-- Cars: a damage state per crash, exhaust, and the truck.
+- Cars: a damage state per crash, exhaust.

@@ -94,17 +94,26 @@ const cam = (label: string, p: PropSpec, local: [number, number, number], look: 
   const cut = cutZ === undefined ? undefined : new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(s, 0, c), w([0, 0, cutZ]));
   cells.push({ label, camera, cut });
 };
+/** `?only=truck`: the whole truck from four sides, then into its cab. */
+const onlyTruck = new URLSearchParams(location.search).get('only') === 'truck';
 for (const i of picks) {
   const p = map.props[i];
   const name = p.kind === 'armoredTruck' ? 'truck' : p.kind === 'policeCar' ? 'police car' : 'car';
   const truck = p.kind === 'armoredTruck';
+  if (onlyTruck && !truck) continue;
+  if (onlyTruck) {
+    cam('truck · side', p, [0, 1.5, -10], [0, 1.4, 0], 36);
+    cam('truck · front quarter', p, [8.2, 3.0, -5.6], [0.3, 1.2, 0], 36);
+    cam('truck · rear quarter', p, [-8.2, 3.0, -5.6], [-0.3, 1.2, 0], 36);
+    cam('truck · from above', p, [-3.5, 8.5, 5.5], [0, 1.4, 0], 36);
+  }
   const x = truck ? 2.1 : -0.2;
   cam(`${name} · driver's side, eye height`, p, [x, 1.65, -4.2], [x, 1.0, 0]);
   cam(`${name} · front, above`, p, [truck ? 7.5 : 5.2, truck ? 3.4 : 2.6, -1.4], [x, truck ? 1.3 : 0.8, 0]);
   cam(`${name} · low, under the sill`, p, [x, 0.12, -3.6], [x, 0.25, 0], 50);
   cam(`${name} · cut open down the driver's side`, p, [truck ? 2.2 : -0.1, truck ? 1.6 : 1.0, -3.4], [truck ? 2.2 : -0.1, truck ? 1.25 : 0.65, 0], 40, truck ? -0.85 : -0.8);
 }
-if (parkedAt >= 0) cam('parked car (scenery)', map.props[parkedAt], [-0.2, 1.65, -4.2], [-0.2, 1.0, 0]);
+if (parkedAt >= 0 && !onlyTruck) cam('parked car (scenery)', map.props[parkedAt], [-0.2, 1.65, -4.2], [-0.2, 1.0, 0]);
 
 const cols = Number(new URLSearchParams(location.search).get('cols') ?? 4);
 const rows = Math.ceil(cells.length / cols);
