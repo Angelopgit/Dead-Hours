@@ -924,6 +924,9 @@ body.touch-play .weapon-panel .w-bar { width: 100%; max-width: 12em; margin-left
 body.touch-play .weapon-panel .w-heal { margin-top: 0.34em; letter-spacing: 0.06em; font-size: 0.85em; }
 body.touch-play .weapon-panel .w-heal.w-throw { margin-top: 0.22em; }
 body.touch-play .weapon-panel .w-mode { font-size: 0.88em; }
+/* The pause menu stands in this column: PAUSED was printed over the item counts (and over the ammo at 568x320).
+   The ammo or the gauges and the boost chips hide under it; the health bar, above the title, stays. */
+body.touch-play #ui-root:has(> .pause) :is(.weapon-panel, .car-panel, .vitals .boosts) { visibility: hidden; }
 /* At the wheel the gauges take the ammo panel's place (the driver has no gun in hand); a passenger keeps the gun. */
 body.touch-play .hud.driving .weapon-panel, body.touch-play .hud.riding .car-panel { display: none !important; }
 body.touch-play .car-panel { bottom: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));

@@ -358,6 +358,10 @@ check(none === null, 'nothing near: full speed');
   check(+(prop('.inventory', 'z-index') ?? 0) > +(prop('.touch-controls', 'z-index') ?? 0)
     && prop('.inventory', 'pointer-events') === 'none !important' && prop('.inventory *', 'pointer-events') === 'none',
     'touch: the held bag covers the thumb buttons and touches still reach them');
+  // On a phone the pause menu stands in the HUD's left column: PAUSED was printed over the item counts, and over the
+  // ammo at 568x320 (nine crossings). The ammo or the gauges and the boost chips hide under it; health stays.
+  check(prop('body.touch-play #ui-root:has(> .pause) :is(.weapon-panel, .car-panel, .vitals .boosts)', 'visibility') === 'hidden',
+    'touch: the ammo panel and boost chips hide under the pause menu');
   const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
   const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
   const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');
