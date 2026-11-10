@@ -365,6 +365,14 @@ check(none === null, 'nothing near: full speed');
   // Tonight's goals sit at the top left, where the menu's title lands in a short window: online (five items) in a
   // 960x540 or 800x450 frame MENU was printed over the last goal. The card hides under the menu.
   check(prop('#ui-root:has(> .pause) .goals', 'visibility') === 'hidden', "tonight's goals hide under the pause menu");
+  // YOU DIED on a phone held sideways: in one column the page ran 488 px on an 844x390 screen and 572 px on 568x320
+  // after a long run, RETRY and MAIN MENU under the fold. On short screens the stats stand beside the rest.
+  const short = css.match(/@media \(max-height: 500px\) and \(min-width: 560px\) \{([^@]*)\n\}/)?.[1] ?? '';
+  check(/\.results-main:not\(\.team\) \{ display: grid; grid-template-columns: [^;]+;/.test(short)
+    && /\.results-main:not\(\.team\) > \* \{ grid-column: 1; \}/.test(short)
+    && /\.results-main:not\(\.team\) > \.results-stats \{ grid-column: 2; grid-row: 1 \/ span 5;/.test(short)
+    && css.indexOf('@media (max-height: 500px) and (min-width: 560px)') > css.indexOf('@media (max-height: 760px)'),
+    'touch: the results page keeps RETRY on a sideways phone (stats beside the rest on short screens)');
   const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
   const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
   const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');

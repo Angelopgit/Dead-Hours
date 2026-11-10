@@ -678,6 +678,22 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
   .team-table { margin: 0.8em 0 1.4em; }
   .team-row { padding: 0.5em 0; }
 }
+/* Results on a phone held sideways (under 501 px tall): in one column the page ran 488 px on an 844x390 screen and
+   572 px on 568x320 after a long run, RETRY and MAIN MENU cut off or under the fold. The stats stand beside the
+   rest there, not under it. */
+@media (max-height: 500px) and (min-width: 560px) {
+  .results-main:not(.team) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); column-gap: 2em; width: min(760px, 86vw); padding: 12px 0; }
+  .results-main:not(.team) > * { grid-column: 1; }
+  .results-main:not(.team) > .results-stats { grid-column: 2; grid-row: 1 / span 5; align-self: center; grid-template-columns: repeat(3, 1fr);
+    margin: 0; padding: 0 0 0 1.6em; border: 0; border-left: 1px solid var(--line); }
+  .results .title { font-size: 2em; }
+  .results .subtitle { margin-bottom: 0.5em; }
+  .results-time b { font-size: 2.2em; }
+  .results-ranks { margin-top: 0.3em; }
+  .results-xp { margin-top: 0.5em; }
+  .results-xp .xp-parts { margin: 0.2em 0 0.4em; }
+  .results-xp .xp-unlocks { margin-top: 0.4em; }
+}
 
 /* Voice and text chat */
 .lobby-entry { border-bottom: 1px solid var(--line); padding-bottom: 0.45em; }
