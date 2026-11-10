@@ -377,7 +377,7 @@ check(none === null, 'nothing near: full speed');
   // XP was a cell, so under 861 px XP wrapped beneath the name and each row was 30 px taller. Every layout wide
   // enough for one line a row has a column for each cell.
   const results = readFileSync(new URL('../src/ui/ResultsScreen.ts', import.meta.url), 'utf8');
-  const cells = (results.match(/h\('div', \{ class: `team-row[^]*?\n      \);/)?.[0].match(/\n        h\('div'/g) ?? []).length;
+  const cells = (results.match(/h\('div', \{ class: `team-row[^]*?\n {6}\);/)?.[0].match(/\n {8}h\('div'/g) ?? []).length;
   const columns = [...css.matchAll(/\.team-row \{ (?:display: grid; )?grid-template-columns: ([\d.]+fr) repeat\((\d+), 1fr\)/g)].map((m) => 1 + +m[2]);
   check(cells === 6 && columns.length === 2 && columns.every((n) => n === cells),
     `co-op results: a column for every cell of a survivor's row (${cells} cells, columns ${columns.join(' and ')})`);
