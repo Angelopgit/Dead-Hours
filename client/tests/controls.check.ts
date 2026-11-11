@@ -146,6 +146,16 @@ check(none === null, 'nothing near: full speed');
   const want = { xbox: 'A HOLD B RT HOLD LB', playstation: '✕ HOLD ○ R2 HOLD L1', nintendo: 'B HOLD A ZR HOLD L', generic: '▼ HOLD ▶ R2 HOLD L1' } as const;
   const wrongNames = (Object.keys(want) as (keyof typeof want)[]).filter((st) => names(st) !== want[st]).map((st) => `${st}: ${names(st)}`);
   check(!wrongNames.length, wrongNames.length ? `prompt names: ${wrongNames.join('; ')}` : 'controller: prompts name buttons the Xbox, PlayStation, Nintendo or generic way');
+  // The player's own mic line in PLAYERS: a phone has no keys and no radio, so it names the TALK button.
+  {
+    const { talkHint } = await import('../src/core/Input');
+    const phone = [talkHint(false, true, 'touch'), talkHint(false, false, 'touch'), talkHint(true, true, 'touch')];
+    const keys = talkHint(false, true, 'mouse'), padKeys = talkHint(false, true, 'pad');
+    check(phone.every((t) => !/RADIO|\bT\b|\bB\b|—/.test(t)) && /TALK BUTTON/.test(phone[0]) && /NIGHT STARTS/.test(phone[1]) && phone[2] === 'YOUR MIC OPENS WHEN YOU TALK',
+      `phone: the mic line names the TALK button, no keys and no radio ("${phone[0]}", in the lobby "${phone[1]}")`);
+    check(keys === 'HOLD T TO TALK, B FOR RADIO' && /FOR RADIO$/.test(padKeys) && padKeys !== keys && talkHint(true, true, 'mouse') === 'YOUR MIC OPENS WHEN YOU TALK. B FOR RADIO',
+      `keyboard and controller: the mic line still names their talk and radio buttons ("${keys}", "${padKeys}")`);
+  }
   L.setPadModel('DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)');
   const auto = names('auto');
   L.setPadModel('Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 05c4)');

@@ -516,6 +516,11 @@ export class Voice {
     }
   }
 
+  /** True during a night (the lobby has no TALK button on a phone). */
+  get inNight(): boolean {
+    return this.inGame;
+  }
+
   /** The game in progress places voices (null: the menu, lobby or results; everyone plays flat). */
   setInGame(on: boolean): void {
     this.inGame = on;

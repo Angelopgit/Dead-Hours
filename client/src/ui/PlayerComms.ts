@@ -1,7 +1,6 @@
 import type { LobbyPlayer } from '@dead-hours/shared';
 import { h } from './dom';
-import { actionLabel, codeLabel, inputDevice } from '../core/Input';
-import { plain } from '../core/PadLayout';
+import { talkHint } from '../core/Input';
 import { settings } from '../core/Settings';
 import { audio } from '../audio/AudioEngine';
 import { comms } from '../network/Comms';
@@ -10,8 +9,6 @@ import type { NetLink } from '../network/NetLink';
 /** What this player's own microphone is doing, in a few words. */
 export function micLine(link: NetLink): string {
   const v = settings.value.voice;
-  // On a controller its D-pad (named plainly: this line is text, not drawn buttons).
-  const key = (a: 'talk' | 'radio') => (inputDevice() === 'pad' ? plain(actionLabel(a)) : codeLabel(settings.value.controls.bindings[a][0] ?? '')) || '—';
   if (!v.enabled) return 'VOICE OFF (SETTINGS → VOICE)';
   const mic = link.voice.micState;
   if (mic === 'denied') return 'MICROPHONE BLOCKED: ALLOW IT IN THE BROWSER';
@@ -19,7 +16,7 @@ export function micLine(link: NetLink): string {
   if (mic === 'asking') return 'WAITING FOR MICROPHONE PERMISSION…';
   const sending = link.voice.sending;
   if (sending) return sending === 'radio' ? 'ON THE RADIO' : 'TALKING';
-  return v.mode === 'vad' ? `YOUR MIC OPENS WHEN YOU TALK. ${key('radio')} FOR RADIO` : `HOLD ${key('talk')} TO TALK, ${key('radio')} FOR RADIO`;
+  return talkHint(v.mode === 'vad', link.voice.inNight);
 }
 
 /**

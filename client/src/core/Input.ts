@@ -1,6 +1,6 @@
 import { settings, type Action } from './Settings';
 import { PadMenus } from '../ui/PadMenus';
-import { PAD, PAD_BUTTONS, padLabel, remap, setPadModel, styleOf, type GlyphStyle } from './PadLayout';
+import { PAD, PAD_BUTTONS, padLabel, plain, remap, setPadModel, styleOf, type GlyphStyle } from './PadLayout';
 import { Rumble, type RumbleKind } from './Rumble';
 
 /** What the survivor is played with right now (the last one touched). */
@@ -591,6 +591,20 @@ export function actionLabel(action: Action): string {
   if (current === 'touch') return '';
   const code = settings.value.controls.bindings[action][0];
   return code ? codeLabel(code) : '';
+}
+
+/**
+ * How to talk on the device in use, for the player's own line in PLAYERS. A phone has no keys and
+ * no radio: it talks with the TALK button, which is only on screen during the night.
+ */
+export function talkHint(openMic: boolean, inNight: boolean, device: Device = current): string {
+  if (device === 'touch') {
+    if (openMic) return 'YOUR MIC OPENS WHEN YOU TALK';
+    return inNight ? 'HOLD THE TALK BUTTON TO TALK' : 'THE TALK BUTTON SHOWS WHEN THE NIGHT STARTS';
+  }
+  // On a controller its D-pad (named plainly: this line is text, not drawn buttons).
+  const key = (a: 'talk' | 'radio') => (device === 'pad' ? plain(padLabel(a)) : codeLabel(settings.value.controls.bindings[a][0] ?? '')) || '—';
+  return openMic ? `YOUR MIC OPENS WHEN YOU TALK. ${key('radio')} FOR RADIO` : `HOLD ${key('talk')} TO TALK, ${key('radio')} FOR RADIO`;
 }
 
 export function codeLabel(code: string): string {
