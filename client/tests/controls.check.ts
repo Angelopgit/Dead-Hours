@@ -394,6 +394,12 @@ check(none === null, 'nothing near: full speed');
   // Online the chat column stands over the menu's lower items (it is drawn above the menu): three fresh lines were
   // printed across PLAYERS, SETTINGS and LEAVE GAME. It hides under the menu, like the goals.
   check(prop('#ui-root:has(> .pause) .comms-hud', 'visibility') === 'hidden', 'the chat column hides under the pause menu');
+  // Online the night is not blurred behind the menu, and a panel was 6% see-through: the timer and the prompt
+  // showed as faint letters under SETTINGS and PLAYERS. Over the running game a panel is solid.
+  const livePanel = prop('.pause.live > .panel', 'background') ?? '';
+  check(/rgb\(\d+, \d+, \d+\)$/.test(livePanel) && !/rgba|transparent|\/ *0?\./.test(livePanel)
+    && /backdrop-filter: none/.test(css.match(/\n\.pause\.live \{[^}]*\}/)?.[0] ?? ''),
+    `online: a panel over the running night is solid, the HUD does not show through (${livePanel})`);
   const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
   const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
   const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');

@@ -353,6 +353,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 /* Online the chat column stands over the menu's lower items: fresh lines were printed across PLAYERS, SETTINGS and
    LEAVE GAME. It hides under the menu too (CHAT in the menu closes the menu and opens the chat). */
 #ui-root:has(> .pause) .comms-hud { visibility: hidden; }
+/* Online nothing blurs the night behind a panel, and a panel is a little see-through: the timer and the prompt
+   showed as faint letters under the settings. Over the running game a panel is solid. */
+.pause.live > .panel { background: var(--grain), rgb(17, 16, 14); }
 /* Light letters on a dark plate: it has to read over a lit wall as well as the dark street. (The right
    padding is shorter by the letter spacing the last letter carries.) */
 .click-to-play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); letter-spacing: 0.1em; font-family: var(--font-display); color: var(--fg); font-size: 0.95em;
