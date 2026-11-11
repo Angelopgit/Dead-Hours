@@ -350,6 +350,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 /* Tonight's goals sit where the menu's title lands in a short window: online (five items) in a 960x540 frame, MENU
    was printed over the last goal. They hide under the menu. */
 #ui-root:has(> .pause) .goals { visibility: hidden; }
+/* Online the chat column stands over the menu's lower items: fresh lines were printed across PLAYERS, SETTINGS and
+   LEAVE GAME. It hides under the menu too (CHAT in the menu closes the menu and opens the chat). */
+#ui-root:has(> .pause) .comms-hud { visibility: hidden; }
 /* Light letters on a dark plate: it has to read over a lit wall as well as the dark street. (The right
    padding is shorter by the letter spacing the last letter carries.) */
 .click-to-play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); letter-spacing: 0.1em; font-family: var(--font-display); color: var(--fg); font-size: 0.95em;

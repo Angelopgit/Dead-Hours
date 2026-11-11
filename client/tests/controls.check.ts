@@ -381,6 +381,9 @@ check(none === null, 'nothing near: full speed');
   const columns = [...css.matchAll(/\.team-row \{ (?:display: grid; )?grid-template-columns: ([\d.]+fr) repeat\((\d+), 1fr\)/g)].map((m) => 1 + +m[2]);
   check(cells === 6 && columns.length === 2 && columns.every((n) => n === cells),
     `co-op results: a column for every cell of a survivor's row (${cells} cells, columns ${columns.join(' and ')})`);
+  // Online the chat column stands over the menu's lower items (it is drawn above the menu): three fresh lines were
+  // printed across PLAYERS, SETTINGS and LEAVE GAME. It hides under the menu, like the goals.
+  check(prop('#ui-root:has(> .pause) .comms-hud', 'visibility') === 'hidden', 'the chat column hides under the pause menu');
   const needle = -parseFloat(prop('.boost-chip .ico::after', 'right') ?? '0');
   const room = parseFloat(prop('.boost-chip .ico', 'margin-right') ?? '0');
   const phoneTime = em('body.touch-play .vitals') * em('body.touch-play .boost-chip') * em('body.touch-play .boost-chip .t');
