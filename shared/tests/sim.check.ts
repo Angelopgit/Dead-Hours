@@ -907,7 +907,7 @@ section('Exclusive supply drop weapons');
     }
     for (const d of sim.drops) if (d.body) physics.world.removeRigidBody(d.body);
     sim.drops.length = 0;
-    sim.interactables.splice(0, sim.interactables.length, ...sim.interactables.filter((it) => it.kind !== 'supply' && it.kind !== 'exclusive' && it.kind !== 'serum'));
+    sim.interactables.splice(0, sim.interactables.length, ...sim.interactables.filter((it) => it.kind !== 'supply' && (it.kind !== 'exclusive' || it.rack) && it.kind !== 'serum'));
     check(lateN > 500 && late2 / lateN >= 0.09 && late2 / lateN <= 0.16,
       `flown for real: ${late2} of ${lateN} drops after three minutes carried one (${(100 * late2 / lateN).toFixed(1)}%), ${early2} of ${earlyN} before`);
     console.log(`       ${nightsWithOne} of ${nights} twelve-minute nights saw at least one exclusive weapon`);
@@ -932,7 +932,7 @@ section('Exclusive supply drop weapons');
   if (drop) {
     const f = drop.flight;
     res = run(sim, f.land - sim.time + 0.2, clear);
-    const wcase = sim.interactables.find((it) => it.kind === 'exclusive');
+    const wcase = sim.interactables.find((it) => it.kind === 'exclusive' && !it.rack);
     check(!!wcase && wcase.weapon === 'sniper' && wcase.supply === 1, 'a weapon case lands with the crate, one gun inside');
     const c = caseSpot(f);
     const off = Math.hypot(c.x - f.ground.x, c.z - f.ground.z);

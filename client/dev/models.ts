@@ -8,7 +8,11 @@
  */
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { defaultBuild, type WeaponId } from '@dead-hours/shared';
+import { VEHICLES, defaultBuild, vehicleKindOf, type PropKind, type PropSpec, type WeaponId } from '@dead-hours/shared';
+import { MaterialLibrary } from '../src/rendering/Materials';
+import { Kit, type PropBuildResult } from '../src/environment/props/Kit';
+import { INTERIOR } from '../src/environment/props/interior';
+import { OUTDOOR } from '../src/environment/props/outdoor';
 import { createWeaponModel } from '../src/weapons/WeaponModels';
 
 const q = new URLSearchParams(location.search);
@@ -30,7 +34,35 @@ function gun(): Subject {
   return { root: m.root, label: id };
 }
 
-const subject = gun();
+/** `prop=humvee` (with `length`, `variant`, `weapon`): a map prop as its builder makes it, nose toward +Z; a vehicle with a roof gun gets it. */
+function prop(): Subject {
+  const kind = q.get('prop') as PropKind;
+  const spec: PropSpec = { kind, x: 0, z: 0, rotY: 0, variant: Number(q.get('variant') ?? 0), ...(q.get('length') ? { length: Number(q.get('length')) } : {}), ...(q.get('weapon') ? { weapon: q.get('weapon') as WeaponId, stock: 2 } : {}) };
+  const lib = new MaterialLibrary(256, 1);
+  lib.paintProcedural();
+  const out: PropBuildResult = { dynamic: [], anchors: [], landmarks: {}, vehicles: [] };
+  const kit = new Kit(lib, out);
+  const inner = new THREE.Group(), dyn = new THREE.Group();
+  kit.begin(spec, inner, dyn);
+  (INTERIOR[kind] ?? OUTDOOR[kind])?.(kit);
+  inner.add(dyn);
+  const vk = vehicleKindOf({ ...spec, drive: true });
+  const ts = vk ? VEHICLES[vk].turret : undefined;
+  if (vk && ts) {
+    const g = createWeaponModel(ts.weapon);
+    const seat = VEHICLES[vk].seats[ts.seat];
+    g.root.rotation.y = Math.PI / 2;
+    g.root.position.set(seat.x + ts.pivot, ts.y, seat.z);
+    inner.add(g.root);
+  }
+  inner.rotation.y = -Math.PI / 2;
+  const root = new THREE.Group();
+  root.add(inner);
+  root.updateMatrixWorld(true);
+  return { root, label: kind };
+}
+
+const subject = q.get('prop') ? prop() : gun();
 const box = new THREE.Box3().setFromObject(subject.root);
 const size = box.getSize(new THREE.Vector3());
 const centre = box.getCenter(new THREE.Vector3());

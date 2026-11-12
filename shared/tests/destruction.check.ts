@@ -354,6 +354,8 @@ section('Blowing a hole in a wall');
   const z = sim.spawnZombie('walker', { x: outside.x, y: ground(outside.x, outside.z) + 0.02, z: outside.z }, 'approach');
   let nearest = Infinity, got = false;
   for (let i = 0; i < 60 * 12 && !got; i++) {
+    // The survivor inside keeps making noise, so the rocket's echo is not what it goes looking for.
+    if (i % 30 === 0) sim.noise(p.motion.pos, 30, 'p1');
     sim.step(DT);
     physics.world.step();
     sim.drain();

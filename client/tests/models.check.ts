@@ -40,11 +40,11 @@ const BUDGET = {
  * Overall length in millimetres, from the makers' and the services' own figures: M4A1 with the
  * stock out (TM 9-1005-319-10), MP5A2 with the fixed stock (HK operator's manual), Remington 870
  * Police with an 18 inch barrel, Mk 14 Mod 0 EBR (889 mm with the stock run in, held here with it pulled out 90 mm), SIG M17 (TM 9-1005-470-10), M249 (TM 9-1005-201-10),
- * FN SCAR-H with a 16 inch barrel and the stock out, Barrett M107 with a 29 inch barrel (TM 9-1005-239-10).
+ * FN SCAR-H with a 16 inch barrel and the stock out, Barrett M107 with a 29 inch barrel (TM 9-1005-239-10), M136 AT4 (TM 9-1315-886-12), Browning M2HB (TM 9-1005-213-10).
  */
-const REAL_LENGTH: Partial<Record<WeaponId, number>> = { ar: 838, smg: 680, shotgun: 978, marksman: 979, pistol: 203, lmg: 1041, battle: 965, sniper: 1448 };
+const REAL_LENGTH: Partial<Record<WeaponId, number>> = { ar: 838, smg: 680, shotgun: 978, marksman: 979, pistol: 203, lmg: 1041, battle: 965, sniper: 1448, at4: 1016, m2: 1654 };
 /** Guns rebuilt from measurements so far: these must match. */
-const REBUILT = new Set<WeaponId>(['ar', 'pistol', 'smg', 'shotgun', 'marksman', 'lmg', 'battle', 'sniper']);
+const REBUILT = new Set<WeaponId>(['ar', 'pistol', 'smg', 'shotgun', 'marksman', 'lmg', 'battle', 'sniper', 'at4', 'm2']);
 
 console.log('\nHeld weapons');
 for (const id of Object.keys(WEAPONS) as WeaponId[]) {

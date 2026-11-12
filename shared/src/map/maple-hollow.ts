@@ -4,6 +4,7 @@ import { divider, fenceLine, streetlight } from './dressing';
 import { buildHome, type HomePlan } from './homes';
 import { OAK, oakClear, oakStreet } from './oak-street';
 import { COURT, downtown, downtownClear } from './downtown';
+import { baseClear, militaryBase, pellWestWalk } from './base';
 
 /**
  * Vesper: a 250 x 300 m suburban neighbourhood on the edge of town.
@@ -14,7 +15,8 @@ import { COURT, downtown, downtownClear } from './downtown';
  * backyards, and woods close the map to the north and south. Kinney Street, the next street over,
  * tees into Pell Lane 94 m south of Hale and shares Hale's south alley (oak-street.ts). Court
  * Street, the downtown block with its stores, square and water tower, tees in 86 m north of Hale
- * (downtown.ts).
+ * (downtown.ts). Camp Tolliver, the National Guard's walled post, stands in the woods across Pell
+ * Lane from Court Street (base.ts).
  *
  * Axes: +X east, +Z south, +Y up.
  */
@@ -43,7 +45,8 @@ function roads(b: MapBuilder): void {
     b.boxMinMax(x0, 0, -RW - SW, x1, CURB, -RW, 'sidewalk');
     b.boxMinMax(x0, 0, RW, x1, CURB, RW + SW, 'sidewalk');
   }
-  for (const [z0, z1] of [[-far, -RW - SW], [RW + SW, farSouth]]) b.boxMinMax(BIRCH - RW - SW, 0, z0, BIRCH - RW, CURB, z1, 'sidewalk');
+  // The west side breaks for Camp Tolliver's road.
+  for (const [z0, z1] of pellWestWalk(far, farSouth)) b.boxMinMax(BIRCH - RW - SW, 0, z0, BIRCH - RW, CURB, z1, 'sidewalk');
   // The east side breaks for Court Street's and Kinney Street's junctions as well as Hale's.
   for (const [z0, z1] of [[-far, COURT.z - RW - SW], [COURT.z + RW + SW, -RW - SW], [RW + SW, OAK.z - RW - SW], [OAK.z + RW + SW, farSouth]]) {
     b.boxMinMax(BIRCH + RW, 0, z0, BIRCH + RW + SW, CURB, z1, 'sidewalk');
@@ -570,7 +573,7 @@ function woods(b: MapBuilder): void {
     if (r() < 0.12) return; // clearings
     const rot = r() * Math.PI * 2, variant = Math.floor(r() * 6);
     // Drawn whether or not the tree stands, so the woods elsewhere keep their old layout.
-    if (oakClear(jx, jz) || downtownClear(jx, jz)) return;
+    if (oakClear(jx, jz) || downtownClear(jx, jz) || baseClear(jx, jz)) return;
     b.prop('pine', jx, jz, rot, { variant, forest: true });
   };
   // The original square, then the belt past Kinney Street on the same grid with its own stream.
@@ -601,6 +604,7 @@ function build(): MapDefinition {
   frontYards(b);
   oakStreet(b);
   downtown(b);
+  militaryBase(b);
   woods(b);
   b.area('PELL LANE', BIRCH - RW - SW, BIRCH + RW + SW, -HALF, SOUTH);
   b.area('HALE STREET', -HALF, HALF, -16, 16);

@@ -38,6 +38,7 @@
     "check:windows": "tsx server/tests/vault.check.ts",
     "check:vehicles": "tsx shared/tests/vehicles.check.ts && tsx server/tests/vehicles.check.ts && tsx client/tests/vehicles.check.ts",
     "check:bike": "tsx shared/tests/bicycles.check.ts && tsx server/tests/bike.check.ts",
+    "check:base": "tsx shared/tests/base.check.ts",
     "check:boosts": "tsx server/tests/boosts.check.ts",
     "balance:guns": "tsx shared/tests/guns.ts",
     "trailer": "node client/tools/trailer/render.mjs",

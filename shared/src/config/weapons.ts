@@ -1,6 +1,7 @@
 export type WeaponSlot = 'primary' | 'secondary' | 'melee';
 export type WeaponId = 'ar' | 'smg' | 'shotgun' | 'marksman' | 'pistol' | 'machete' | 'lmg' | 'battle' | 'sniper'
-  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith' | 'katanas' | 'akimbo';
+  | 'katana' | 'bat' | 'crowbar' | 'wrench' | 'hockey' | 'rpg' | 'wraith' | 'katanas' | 'akimbo'
+  | 'at4' | 'mgl' | 'm2';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -39,6 +40,15 @@ export interface WeaponDef {
   exclusive?: boolean;
   /** Fires a rocket: it goes off where it hits (a grenade's blast, see BLAST), after `damage` to whatever it struck. */
   explosive?: boolean;
+  /** The blast's size against a frag grenade's (radius and damage), for rockets and launched grenades (default 1). */
+  blast?: number;
+  /**
+   * Lobs a grenade instead of firing a round: it leaves the muzzle at `speed` m/s, `lift` radians
+   * above the crosshair, falls like a thrown one and goes off on whatever it hits first.
+   */
+  launch?: { speed: number; lift: number };
+  /** Fixed to a vehicle (a Humvee's turret gun): worked by whoever mans it, never carried. */
+  mounted?: boolean;
   /** How the model is held: two-handed long gun, pistol, a pistol in each hand, or blade. */
   hold: 'rifle' | 'pistol' | 'akimbo' | 'melee';
   /** 0..1 summary bars for the loadout screen. */
@@ -156,6 +166,33 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     mode: 'SEMI', noise: 30, draw: 0.85, penetration: 2, maxReserve: 40, hold: 'rifle',
     stats: { damage: 0.9, fireRate: 0.1, handling: 0.3, range: 1 },
   },
+  // Camp Tolliver's armory (map/base.ts): what the Guard left on the racks.
+  at4: {
+    id: 'at4', name: 'Anti-Tank Rocket', model: 'AT4', slot: 'primary', exclusive: true, explosive: true, blast: 1.35,
+    description: 'An 84 mm rocket in a throwaway tube. Opens a wall or empties a street; each spare is another tube on your back.',
+    damage: 260, pellets: 1, fireRate: 30, magazine: 1, startReserve: 2, reloadTime: 2.9,
+    hipSpread: 2.2, aimSpread: 0.25, recoil: 1.8, range: 220, auto: false,
+    mode: 'SEMI', noise: 125, draw: 1.15, penetration: 0, maxReserve: 3, crateMags: 1, hold: 'rifle',
+    stats: { damage: 1, fireRate: 0.04, handling: 0.15, range: 0.9 },
+  },
+  mgl: {
+    id: 'mgl', name: 'Grenade Launcher', model: 'M32A1 MGL', slot: 'primary', exclusive: true, blast: 0.75,
+    launch: { speed: 46, lift: 0.045 },
+    description: 'Six 40 mm grenades in a cylinder, lobbed as fast as you can pull. They go off on what they hit: aim past your own feet.',
+    damage: 0, pellets: 1, fireRate: 150, magazine: 6, startReserve: 12, reloadTime: 5.4,
+    hipSpread: 1.6, aimSpread: 0.5, recoil: 1.2, range: 150, auto: false,
+    mode: 'SEMI', noise: 70, draw: 0.9, penetration: 0, perShell: true, maxReserve: 18, crateMags: 0.5, hold: 'rifle',
+    stats: { damage: 0.95, fireRate: 0.35, handling: 0.3, range: 0.6 },
+  },
+  // The Humvee's turret gun (config/vehicles.ts): its belt stays with the truck.
+  m2: {
+    id: 'm2', name: 'Heavy Machine Gun', model: 'M2 .50 CAL', slot: 'primary', exclusive: true, mounted: true,
+    description: 'Ma Deuce on the Humvee\u2019s ring. A hundred rounds of .50 to the can; it goes through anything that walks, and everything hears it.',
+    damage: 95, pellets: 1, fireRate: 500, magazine: 100, startReserve: 200, reloadTime: 6.2,
+    hipSpread: 1.5, aimSpread: 0.6, recoil: 0.5, range: 280, auto: true,
+    mode: 'AUTO', noise: 125, draw: 0.6, penetration: 3, maxReserve: 200, hold: 'rifle',
+    stats: { damage: 0.95, fireRate: 0.6, handling: 0.1, range: 1 },
+  },
   katana: found('katana', 'Katana', 'Long, razor sharp. Takes limbs off clean and cuts through a crowd.', { damage: 0.85, fireRate: 0.3, handling: 0.75, range: 0.1 }),
   bat: found('bat', 'Baseball Bat', 'Slow, heavy two-handed swing that knocks a crowd back.', { damage: 0.6, fireRate: 0.2, handling: 0.5, range: 0.09 }),
   crowbar: found('crowbar', 'Crowbar', 'Cast iron. Caves skulls in.', { damage: 0.7, fireRate: 0.25, handling: 0.6, range: 0.07 }),
@@ -170,6 +207,9 @@ export const PRIMARY_WEAPONS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman'];
 export const SECONDARY_WEAPONS: WeaponId[] = ['pistol', 'akimbo'];
 /** Primaries that only come out of supply drops. */
 export const EXCLUSIVE_WEAPONS: WeaponId[] = ['lmg', 'battle', 'sniper', 'rpg', 'wraith'];
+
+/** What stands on the racks of Camp Tolliver's armory: the heavy weapons, there for the taking every night. */
+export const ARMORY_WEAPONS: WeaponId[] = ['at4', 'lmg', 'sniper', 'mgl'];
 
 /** Handguns (one or a pair): the M17's sights, optics and fittings. */
 export const isHandgun = (id: WeaponId): boolean => WEAPONS[id]?.hold === 'pistol' || WEAPONS[id]?.hold === 'akimbo';

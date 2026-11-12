@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { bakeOcclusion } from '../rendering/Solid';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, seatDrop, vehicleKindOf, type Vec3, type VehicleDef, type VehicleKind, type Vehicle } from '@dead-hours/shared';
+import { DRIVE_FLAG, NEIGHBORHOOD, VEHICLES, seatDrop, seatStands, vehicleKindOf, type Vec3, type VehicleDef, type VehicleKind, type Vehicle } from '@dead-hours/shared';
 import type { VehicleParts } from '../environment/Props';
 import type { LightField } from '../lighting/LightField';
 import { DynamicProbe } from '../lighting/Probes';
 import { chain } from '../lighting/BakeShader';
 import type { Beam } from './Flashlight';
 import type { SmokeWisps } from '../effects/Smoke';
+import { createWeaponModel, type WeaponModel } from '../weapons/WeaponModels';
 
 /** Lamp colours (linear) times how bright they burn when lit. */
 const HEAD = new THREE.Color(1, 0.93, 0.8);
@@ -20,6 +21,7 @@ const SEDAN_PIPE = { x: -2.33, y: 0.27, z: 0.52 };
 const PIPE: Record<VehicleKind, { x: number; y: number; z: number }> = {
   car: SEDAN_PIPE, police: SEDAN_PIPE, wreck: SEDAN_PIPE,
   truck: { x: -3.22, y: 0.4, z: 0.62 },
+  humvee: { x: -2.46, y: 0.52, z: 0.78 },
 };
 /** Puffs a second out of the pipe at idle, and what full throttle adds. */
 const PUFFS = 5, PUFFS_POWER = 9;
@@ -38,6 +40,23 @@ const SCRAPE: [number, number, number] = [0.2, 0.2, 0.21];
 export interface VehicleDraw {
   pos: Vec3;
   yaw: number;
+}
+
+/**
+ * A roof gun: it turns on the ring (`yaw`, about the hatch) and tips at its trunnion (`pitch`),
+ * following whoever stands at it. The gun, its cradle and its shield are one weapon model.
+ */
+interface Turret {
+  yaw: THREE.Group;
+  pitch: THREE.Group;
+  gun: WeaponModel;
+  /** Where it points in the vehicle's frame, and where it is being swung to. */
+  angle: number;
+  tip: number;
+  toAngle: number;
+  toTip: number;
+  /** Recoil: how far the gun has jumped back in its cradle (m). */
+  kick: number;
 }
 
 interface Drawn {
@@ -74,6 +93,7 @@ interface Drawn {
   crush: [number, number];
   /** The body as it left the factory, kept from the first dent on. */
   factory: { position: Float32Array; color: Float32Array; pbr: Float32Array; glow: Float32Array } | null;
+  turret: Turret | null;
 }
 
 /** Soot over what a vertex was painted: nearly black, a trace of the old colour, mottled. */
@@ -277,6 +297,25 @@ export class VehicleView {
         if ((o as THREE.Mesh).isMesh && mm instanceof THREE.MeshStandardMaterial) mats.push(mm);
       });
       for (const o of part.root.children) (o as THREE.Mesh).geometry?.dispose();
+      let turret: Turret | null = null;
+      const ts = def.turret;
+      if (ts) {
+        const ring = def.seats[ts.seat];
+        const yaw = new THREE.Group(), pitch = new THREE.Group();
+        yaw.position.set(ring.x, ts.ring, ring.z);
+        pitch.position.set(ts.pivot, ts.y - ts.ring, 0);
+        const gun = createWeaponModel(ts.weapon);
+        // Weapon models point down +Z; the vehicle's nose is +X.
+        gun.root.rotation.y = Math.PI / 2;
+        gun.root.traverse((o) => {
+          o.castShadow = true;
+        });
+        pitch.add(gun.root);
+        yaw.add(pitch);
+        group.add(yaw);
+        mats.push(...gun.materials);
+        turret = { yaw, pitch, gun, angle: 0, tip: 0, toAngle: 0, toTip: 0, kick: 0 };
+      }
       const probe = new DynamicProbe(this.field, 0.15);
       probe.attach(mats);
       const y = p.y ?? 0;
@@ -288,7 +327,7 @@ export class VehicleView {
         id: this.drawn.length, def, group, body, mats, head, tail, probe, anchors: part.anchors,
         home: { x: p.x, y, z: p.z, yaw: p.rotY }, pos: new THREE.Vector3(p.x, y, p.z), yaw: p.rotY, speed: 0, pitch: 0, roll: 0,
         beam: { origin: new THREE.Vector3(), dir: new THREE.Vector3(), level: 0, dim: 1, head: true }, still: 0, paint: null,
-        running: false, power: 0, puff: 0, dir: 1, crush: [0, 0], factory: null,
+        running: false, power: 0, puff: 0, dir: 1, crush: [0, 0], factory: null, turret,
       });
     }
     const blob = new THREE.MeshBasicMaterial({ color: 0x000000, alphaMap: blobTexture(), transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
@@ -358,6 +397,7 @@ export class VehicleView {
       d.head.value = d.tail.value = 0;
       d.beam.level = 0;
       d.still = 0;
+      if (d.turret) d.turret.angle = d.turret.tip = d.turret.toAngle = d.turret.toTip = d.turret.kick = 0;
       this.pose(d);
       this.placeShadow(d);
     }
@@ -374,6 +414,95 @@ export class VehicleView {
       const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
       a.anchor.position.set(d.pos.x + a.offset.x * c + a.offset.z * s, d.pos.y + a.offset.y, d.pos.z - a.offset.x * s + a.offset.z * c);
     }
+    this.poseTurret(d);
+  }
+
+  /** Sets the roof gun as it points now, so its muzzle and grips can be read before the frame is drawn. */
+  private poseTurret(d: Drawn): void {
+    const t = d.turret;
+    if (!t) return;
+    t.yaw.rotation.y = t.angle;
+    t.pitch.rotation.z = t.tip;
+    t.gun.root.position.x = -t.kick;
+    // The pintle and the shield stand upright while the gun tips in its cradle.
+    if (t.gun.action) t.gun.action.rotation.x = t.tip;
+    d.group.updateMatrixWorld(true);
+  }
+
+  /**
+   * Swings a vehicle's roof gun toward where its gunner aims (`aim`: a world direction), as fast
+   * as a gunner can throw it round; with no one at it (null) it stays where it was left.
+   */
+  aimTurret(id: number, aim: { x: number; y: number; z: number } | null, dt: number): void {
+    const d = this.drawn[id];
+    const t = d?.turret;
+    const ts = d?.def.turret;
+    if (!d || !t || !ts) return;
+    if (aim) {
+      const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
+      const lx = aim.x * c - aim.z * s, lz = aim.x * s + aim.z * c;
+      const flat = Math.hypot(lx, lz);
+      if (flat > 1e-4) t.toAngle = Math.atan2(-lz, lx);
+      t.toTip = THREE.MathUtils.clamp(Math.atan2(aim.y, flat), ts.pitch[0], ts.pitch[1]);
+    }
+    const k = 1 - Math.exp(-dt * 16);
+    const turn = Math.atan2(Math.sin(t.toAngle - t.angle), Math.cos(t.toAngle - t.angle));
+    const before = t.angle + t.tip + t.kick;
+    t.angle += turn * k;
+    t.tip += (t.toTip - t.tip) * k;
+    t.kick *= Math.exp(-dt * 26);
+    if (t.kick < 1e-4) t.kick = 0;
+    if (Math.abs(t.angle + t.tip + t.kick - before) > 1e-5) this.poseTurret(d);
+  }
+
+  /** A round left the roof gun: it jumps back in its cradle. */
+  turretFired(id: number): void {
+    const t = this.drawn[id]?.turret;
+    if (t) t.kick = Math.min(0.035, t.kick + 0.016);
+  }
+
+  /** The trunnion of a vehicle's roof gun as drawn: where its aim is measured from. */
+  turretPivot(id: number, out: THREE.Vector3): boolean {
+    const t = this.drawn[id]?.turret;
+    if (!t) return false;
+    t.pitch.getWorldPosition(out);
+    return true;
+  }
+
+  /** The roof gun's muzzle and the way its barrel points (world). */
+  turretMuzzle(id: number, out: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const t = this.drawn[id]?.turret;
+    if (!t) return false;
+    t.gun.root.localToWorld(out.copy(t.gun.muzzle));
+    t.pitch.getWorldPosition(dir);
+    dir.subVectors(out, dir).normalize();
+    return true;
+  }
+
+  /** Where the roof gun throws its cases out, and which way. */
+  turretEject(id: number, out: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const t = this.drawn[id]?.turret;
+    if (!t) return false;
+    t.gun.root.localToWorld(out.copy(t.gun.eject));
+    dir.set(0, -0.4, 1).applyQuaternion(t.yaw.getWorldQuaternion(_q)).normalize();
+    return true;
+  }
+
+  /** The roof gun's spade grips (world): where its gunner's hands go. */
+  turretGrips(id: number, left: THREE.Vector3, right: THREE.Vector3): boolean {
+    const d = this.drawn[id];
+    const t = d?.turret;
+    const ts = d?.def.turret;
+    if (!t || !ts) return false;
+    t.pitch.localToWorld(left.set(-ts.grips, 0, -0.085));
+    t.pitch.localToWorld(right.set(-ts.grips, 0, 0.085));
+    return true;
+  }
+
+  /** Whether a seat is stood in (the hatch under a roof gun). */
+  stands(id: number, seat: number): boolean {
+    const d = this.drawn[id];
+    return !!d && seatStands(d.def, seat);
   }
 
   /**
@@ -611,6 +740,7 @@ export class VehicleView {
     for (const d of this.drawn) {
       for (const o of d.group.children) if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose();
       for (const m of d.mats) m.dispose();
+      d.turret?.gun.dispose();
     }
     this.shadows.geometry.dispose();
     (this.shadows.material as THREE.Material).dispose();

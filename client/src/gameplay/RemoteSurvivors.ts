@@ -82,6 +82,9 @@ export interface SeatSource {
   seatPoint(id: number, seat: number, out: THREE.Vector3): number | null;
   wheelPoints(id: number, left: THREE.Vector3, right: THREE.Vector3): boolean;
   seatDrop(id: number, seat: number): number;
+  /** Whether that seat is stood in (a roof gun's hatch), and where its gun's grips are. */
+  stands(id: number, seat: number): boolean;
+  turretGrips(id: number, left: THREE.Vector3, right: THREE.Vector3): boolean;
 }
 
 /**
@@ -199,14 +202,16 @@ export class RemoteSurvivors {
     b.bike = null;
     const ahead = yaw + Math.PI / 2;
     const driver = seat === 0;
-    const facing = driver || !m.aiming ? ahead : m.yaw + Math.PI;
+    // At a roof gun they stand in the hatch and turn with it, both hands on its grips.
+    const stand = this.seats.stands(vehicle, seat);
+    const facing = stand ? m.yaw + Math.PI : driver || !m.aiming ? ahead : m.yaw + Math.PI;
     r.facing += wrap(facing - r.facing) * (1 - Math.exp(-dt * 14));
     b.root.position.copy(r.pos);
-    b.root.position.y -= 0.88;
+    if (!stand) b.root.position.y -= 0.88;
     b.root.rotation.y = r.facing;
     r.seat.yaw = wrap(ahead - r.facing);
     r.seat.drop = this.seats.seatDrop(vehicle, seat);
-    b.seat = r.seat;
+    b.seat = stand ? null : r.seat;
     if (r.downed) {
       r.downed = false;
       b.downTarget = 0;
@@ -215,10 +220,10 @@ export class RemoteSurvivors {
     b.lookPitch += ((m.aiming ? m.pitch : m.pitch * 0.35) - b.lookPitch) * (1 - Math.exp(-dt * 12));
     b.update(dt, { speed: 0, crouch: 0, aim: m.aiming && !driver ? 1 : 0, grounded: true, strafe: 0, moveAngle: 0, turn: 0 });
     const cp = Math.cos(m.pitch);
-    const eye = r.pos.y + VEHICLE.seatEye;
+    const eye = r.pos.y + (stand ? PLAYER.eyeHeight : VEHICLE.seatEye);
     _aim.set(r.pos.x - Math.sin(m.yaw) * cp * 30, eye + Math.sin(m.pitch) * 30, r.pos.z - Math.cos(m.yaw) * cp * 30);
-    const wheel = driver && this.seats.wheelPoints(vehicle, _wl, _wr) ? { left: _wl, right: _wr } : null;
-    r.weapon.update(dt, p.arsenal, { aim: driver ? 0 : p.arsenal.aim, sprinting: false, aimPoint: _aim, wheel });
+    const wheel = (driver && this.seats.wheelPoints(vehicle, _wl, _wr)) || (stand && this.seats.turretGrips(vehicle, _wl, _wr)) ? { left: _wl, right: _wr } : null;
+    r.weapon.update(dt, p.arsenal, { aim: wheel ? 0 : p.arsenal.aim, sprinting: false, aimPoint: _aim, wheel });
     this.light(r, p, dt, _aim, camera);
     r.probe.update(dt, r.pos, camera);
     this.placeTag(r, _q.copy(r.pos).setY(eye + 0.45), camera, p, false);

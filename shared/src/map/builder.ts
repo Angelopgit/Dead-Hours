@@ -1,4 +1,5 @@
 import type {
+  GarrisonSpec,
   AreaSpec,
   DoorSpec,
   HouseSpec,
@@ -180,6 +181,7 @@ export class MapBuilder {
   readonly areas: AreaSpec[] = [];
   readonly structures: StructureSpec[] = [];
   readonly parts: StructurePart[] = [];
+  readonly garrisons: GarrisonSpec[] = [];
 
   /** Registers something explosives can bring down (buildings register themselves in `house`). */
   structure(s: StructureSpec): void {
@@ -456,7 +458,7 @@ export class MapBuilder {
       name, halfExtent, bounds: { ...bounds },
       solids: this.solids, houses: this.houses, windows: this.windows, doors: this.doors,
       props: this.props, lights: this.lights, excavations: this.excavations, stairs: this.stairways, areas: this.areas,
-      structures: this.structures, parts: this.parts, playerSpawns,
+      structures: this.structures, parts: this.parts, garrisons: this.garrisons, playerSpawns,
     };
   }
 }

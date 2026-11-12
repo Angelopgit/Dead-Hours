@@ -136,7 +136,7 @@ export type SimEvent =
   /** A survivor started a throw (the hand comes back with it in `release` seconds). */
   | { type: 'throwStart'; player: string; kind: ThrowKind }
   /** A grenade or Molotov left the hand: where from, how fast, and (frags) when it goes off. */
-  | { type: 'thrown'; id: number; kind: ThrowKind; player: string; pos: Vec3; vel: Vec3; fuseAt: number }
+  | { type: 'thrown'; id: number; kind: ThrowKind; player: string; pos: Vec3; vel: Vec3; fuseAt: number; /** Fired from a grenade launcher: bursts on contact. */ shell?: boolean }
   /** It bounced (or came to rest, speed 0): its new state, for clients drawing the flight. */
   | { type: 'bounce'; id: number; pos: Vec3; vel: Vec3; surface: Surface; speed: number }
   /**

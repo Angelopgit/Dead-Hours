@@ -1,5 +1,7 @@
 import { RAPIER, GROUP, groups, BODY_FILTER } from '../physics/Physics';
-import { VEHICLE, VEHICLES, vehicleKindOf, type VehicleDef, type VehicleKind } from '../config/vehicles';
+import { VEHICLE, VEHICLES, mansTurret, vehicleKindOf, type VehicleDef, type VehicleKind } from '../config/vehicles';
+import { WEAPONS } from '../config/weapons';
+import type { WeaponState } from './Arsenal';
 import { PLAYER } from '../config/player';
 import type { PropSpec } from '../types/world';
 import { clamp, rng, type Vec3 } from './math';
@@ -36,6 +38,8 @@ export interface Vehicle extends DriveBody {
   touched: boolean;
   /** Blown up (sim/Volatiles): a burnt shell nobody gets into. */
   wrecked: boolean;
+  /** The roof gun's belt and what is left in its cans (vehicles with a turret; whoever mans it works it). */
+  gun: WeaponState | null;
   body: RAPIER.RigidBody;
   hull: RAPIER.Collider;
   cabin: RAPIER.Collider;
@@ -123,9 +127,11 @@ export class Vehicles {
       sim.physics.setSurface(hull, 'metal');
       sim.physics.setSurface(cabin, 'glass');
       const gas = def.fuel[0] + rand() * (def.fuel[1] - def.fuel[0]);
+      const tw = def.turret ? WEAPONS[def.turret.weapon] : null;
       this.list.push({
         id: this.list.length, kind, def, prop: p, pos, yaw: p.rotY, speed: 0, vel: { x: 0, y: 0, z: 0 }, steer: 0,
         gas, engine: false, crank: 0, input: 0, seats: def.seats.map(() => null), lastDriver: null, touched: false, wrecked: false,
+        gun: tw ? { id: tw.id, mag: tw.magazine, reserve: tw.startReserve } : null,
         body, hull, cabin, hits: new Map(), noiseT: 0, prev: { ...pos }, prevYaw: p.rotY,
       });
     }
@@ -145,6 +151,30 @@ export class Vehicles {
   driven(player: string): Vehicle | null {
     const s = this.seated.get(player);
     return s && s[1] === 0 ? s[0] : null;
+  }
+
+  /** The vehicle whose roof gun a survivor mans, if any. */
+  manning(player: string): Vehicle | null {
+    const s = this.seated.get(player);
+    return s && mansTurret(s[0].def, s[1]) ? s[0] : null;
+  }
+
+  /** Whoever stands at a vehicle's roof gun. */
+  gunner(v: Vehicle): SimPlayer | null {
+    const id = v.def.turret ? v.seats[v.def.turret.seat] : null;
+    return id ? this.sim.players.get(id) ?? null : null;
+  }
+
+  /**
+   * Puts a survivor's hands where their seat has them: on the roof gun in the gunner's hatch (its
+   * belt is the vehicle's), else back on their own. Called whenever who sits where changes.
+   */
+  private hands(id: string): void {
+    const p = this.sim.players.get(id);
+    if (!p) return;
+    const gun = this.manning(id)?.gun ?? null;
+    if (gun) p.arsenal.mount(gun);
+    else p.arsenal.dismount();
   }
 
   driver(v: Vehicle): SimPlayer | null {
@@ -194,6 +224,7 @@ export class Vehicles {
     this.seated.set(p.id, [v, s]);
     p.work = null;
     this.place(p, v, s);
+    this.hands(p.id);
     this.sim.emit({ type: 'vehicle', vehicle: v.id, stage: 'in', player: p.id, seat: s });
     if (s === 0) this.takeWheel(v, p);
     return true;
@@ -211,6 +242,7 @@ export class Vehicles {
       v.seats[s] = p.id;
       this.seated.set(p.id, [v, s]);
       this.place(p, v, s);
+      this.hands(p.id);
       this.sim.emit({ type: 'vehicle', vehicle: v.id, stage: 'seat', player: p.id, seat: s });
       if (from === 0) this.leftWheel(v);
       if (s === 0) this.takeWheel(v, p);
@@ -234,6 +266,7 @@ export class Vehicles {
     const pos = spot ?? this.fallback(v, s);
     v.seats[s] = null;
     this.seated.delete(p.id);
+    this.hands(p.id);
     const m = p.motion;
     m.pos.x = pos.x;
     m.pos.y = pos.y;
@@ -329,7 +362,7 @@ export class Vehicles {
     m.vel.x = v.vel.x;
     m.vel.y = 0;
     m.vel.z = v.vel.z;
-    m.eyeHeight = VEHICLE.seatEye;
+    m.eyeHeight = v.def.seats[seat]?.stand ? PLAYER.eyeHeight : VEHICLE.seatEye;
     m.grounded = true;
     m.crouching = false;
     m.sprinting = false;
@@ -590,6 +623,8 @@ export class Vehicles {
         if (old && (old[0] !== v || old[1] !== i) && old[0].seats[old[1]] === want) old[0].seats[old[1]] = null;
         this.seated.set(want, [v, i]);
       }
+      if (was) this.hands(was);
+      if (want) this.hands(want);
     }
   }
 
@@ -609,6 +644,7 @@ export class Vehicles {
       if (old) old[0].seats[old[1]] = null;
       this.seated.delete(e.player);
     }
+    this.hands(e.player);
   }
 
   dispose(): void {

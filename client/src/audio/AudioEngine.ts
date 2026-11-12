@@ -16,7 +16,8 @@ import { FRAGMENTS, THEME, THEME_BEATS, beatSeconds, midiHz, type Note } from '.
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
 /** Guns voiced by another's sounds: the akimbo pair is two M17s. */
-const SOUND_OF: Record<string, string> = { akimbo: 'pistol' };
+// The AT4 and the M32 launch with the RPG's thump; the M2 fires the M107's .50 BMG round.
+const SOUND_OF: Record<string, string> = { akimbo: 'pistol', at4: 'rpg', mgl: 'rpg', m2: 'sniper' };
 /** The GUN_SOUNDS / recordings entry a weapon is heard as ('ar' for anything unknown). */
 const soundOf = (weapon: string): string => (GUN_SOUNDS[weapon] ? weapon : SOUND_OF[weapon] ?? 'ar');
 

@@ -25,6 +25,9 @@ export const THROWABLES: Record<ThrowKind, ThrowableDef> = {
   molotov: { kind: 'molotov', name: 'Molotov', start: 1, max: 2, speed: 15, lift: 0.15, radius: 0.05, restitution: 0.25, friction: 0.5 },
 };
 
+/** A 40 mm grenade from a launcher in flight: it never bounces, it goes off on whatever it meets. */
+export const SHELL: ThrowableDef = { kind: 'frag', name: '40 mm Grenade', start: 0, max: 0, speed: 46, lift: 0.045, radius: 0.03, restitution: 0, friction: 0 };
+
 /** The throwing motion and the flight. */
 export const THROWING = {
   /** Seconds the whole throw takes; it leaves the hand `release` seconds in. */

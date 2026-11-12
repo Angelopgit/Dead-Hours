@@ -10,6 +10,15 @@
 - The town's water tower stands past the square with VESPER on its tank and a red light on top that shows through the fog. Two paths lead back to the alley behind Hale Street.
 - Three more cars you can drive are parked downtown.
 
+### Camp Tolliver
+
+- An Ohio National Guard camp stands west of Pell Lane, across from Court Street. Concrete walls topped with wire run all the way round it. Walk or drive in through the gate, or climb in through the gap blown in its far wall.
+- Inside are a guard tower you can climb, a barracks with bunks and lockers, a motor pool and an armory. The dead hold the camp: they stand to the first time anyone comes near on a night, a brute among them.
+- The armory's racks hold weapons you take as your primary: four AT4 rocket launchers, two M249 SAWs, two .50 cal M107 rifles and two M32 grenade launchers. One each, and a rack that is empty stays empty for the night. Ammunition crates stand beside them.
+- The AT4 fires one heavy rocket at a time. The M32 holds six 40 mm shells that fly in an arc and burst on what they hit, with a smaller blast than a rocket.
+- Two Humvees are parked in the motor pool and both run. Each seats five. The seat after the driver's is the roof hatch: stand in it and you fire the .50 cal M2 on the ring, which turns all the way round and has its own belt of ammunition. The driver drives while the gunner shoots.
+- All of it is the same for everyone in an online night.
+
 ### Destruction
 
 - Cars blow up. Rounds and blasts wear one down: about half way it smokes, then it catches fire, burns for a few seconds (less the more you shoot it) and goes up in a fireball bigger than a grenade's, leaving burning fuel on the road and a burnt shell. Parked cars, the ones you drive, police cars, wrecks and the armored truck all do; the truck takes far more.

@@ -33,6 +33,7 @@ export const VOLATILES: Partial<Record<PropKind, VolatileDef>> = {
   policeCar: { ...CAR, health: 560, fuse: [3.2, 4.6], power: 1.25 },
   wreckedCar: { ...CAR, health: 300, fuse: [2.4, 3.6], power: 1.05, fire: 5 },
   armoredTruck: { health: 1500, armor: 0.4, fuse: [4, 5.5], power: 1.5, fire: 9, spread: 4, shell: true, centre: 1.3, hx: 3.1, hz: 1.2 },
+  humvee: { health: 1300, armor: 0.45, fuse: [3.8, 5.2], power: 1.4, fire: 8, spread: 3.8, shell: true, centre: 1.0, hx: 2.5, hz: 1.15 },
   pump: { health: 220, armor: 1, fuse: [1.6, 2.4], power: 1.3, fire: 8, spread: 3.4, shell: true, centre: 0.9, hx: 0.45, hz: 0.3 },
   oilDrum: { health: 70, armor: 1, fuse: [0.9, 1.6], power: 0.8, fire: 5, spread: 2.4, shell: false, centre: 0.45, hx: 0.3, hz: 0.3 },
 };

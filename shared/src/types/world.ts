@@ -1,3 +1,5 @@
+import type { WeaponId } from '../config/weapons';
+
 /** Surface/material keys shared by the renderer (visuals) and the simulation (impact types later). */
 export type MaterialKey =
   | 'asphalt'
@@ -185,7 +187,9 @@ export type PropKind =
   | 'waterHeater' | 'desk' | 'dresser' | 'rug' | 'floorLamp' | 'storeShelf' | 'storeCounter' | 'cooler'
   | 'ceilingLamp' | 'stairs' | 'railing' | 'pallet' | 'mattress' | 'firstAid' | 'toilet' | 'bathtub' | 'vanity'
   // downtown
-  | 'flagpole';
+  | 'flagpole'
+  // Camp Tolliver
+  | 'humvee' | 'tWall' | 'hesco' | 'bunk' | 'locker' | 'gunRack' | 'gateArm';
 
 export interface PropSpec {
   kind: PropKind;
@@ -212,7 +216,10 @@ export interface PropSpec {
   use?: 'weapons';
   /** Knocked over (chairs lie on their side, floor lamps on the floor). */
   tipped?: boolean;
-  /** Cars, cruisers, wrecks and the armored truck: this one still runs and can be driven (the rest stay parked scenery). */
+  /** Gun racks: the weapon standing in it, and how many of them (one survivor takes one). */
+  weapon?: WeaponId;
+  stock?: number;
+  /** Cars, cruisers, wrecks, the armored truck and Humvees: this one still runs and can be driven (the rest stay parked scenery). */
   drive?: boolean;
 }
 
@@ -266,6 +273,19 @@ export interface AreaSpec extends Rect {
   y1?: number;
 }
 
+/**
+ * The dead that hold a place: they stand at their posts from the moment a survivor first comes
+ * within `range` of it (once a night), so the place is never empty and never costs anything
+ * while nobody is near.
+ */
+export interface GarrisonSpec {
+  name: string;
+  x: number;
+  z: number;
+  range: number;
+  posts: { x: number; y: number; z: number }[];
+}
+
 export interface MapDefinition {
   name: string;
   /**
@@ -288,5 +308,6 @@ export interface MapDefinition {
   /** What explosives can bring down, and the pieces of each they destroy one at a time. */
   structures: StructureSpec[];
   parts: StructurePart[];
+  garrisons?: GarrisonSpec[];
   playerSpawns: { x: number; y: number; z: number; yaw: number }[];
 }

@@ -47,12 +47,13 @@ const BLOOD_DRY = { splat: 22, pool: 60 };
 /** Rifles with a slotted flash hider: the flash vents sideways and up as well as forward. */
 const BIRDCAGE = new Set<WeaponId>(['ar', 'battle', 'lmg', 'marksman']);
 /** One shot of these heats the barrel as much as a burst. */
-const HEAVY = new Set<WeaponId>(['shotgun', 'sniper', 'wraith', 'rpg']);
+const HEAVY = new Set<WeaponId>(['shotgun', 'sniper', 'wraith', 'rpg', 'at4', 'mgl']);
 const FLASH: Partial<Record<WeaponId, { size: number; light: number }>> = {
   ar: { size: 0.42, light: 1 }, smg: { size: 0.32, light: 0.8 }, shotgun: { size: 0.65, light: 1.4 },
   marksman: { size: 0.55, light: 1.2 }, pistol: { size: 0.3, light: 0.7 }, akimbo: { size: 0.3, light: 0.7 }, machete: { size: 0, light: 0 },
   lmg: { size: 0.45, light: 1.0 }, battle: { size: 0.5, light: 1.1 }, sniper: { size: 0.85, light: 1.7 },
   rpg: { size: 1.1, light: 2.2 }, wraith: { size: 0.12, light: 0.25 },
+  at4: { size: 1.2, light: 2.4 }, mgl: { size: 0.5, light: 0.9 }, m2: { size: 0.95, light: 1.8 },
 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);

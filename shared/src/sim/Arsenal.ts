@@ -97,6 +97,11 @@ export class Arsenal {
   /** The boost syringe being injected (while the action is 'inject'). */
   injectKind: BoostId | null = null;
   private injectPending = false;
+  /**
+   * A gun fixed to a vehicle that this survivor mans (a Humvee's turret gun, kept by the vehicle):
+   * the trigger and the reload work it while their own guns stay slung.
+   */
+  mounted: WeaponState | null = null;
   /** Reloads take this share of their time (a rapid reload boost; see Simulation.syncBoosts). */
   reloadScale = 1;
   /** Spread and recoil bloom are multiplied by this (a focus boost). */
@@ -110,7 +115,35 @@ export class Arsenal {
   }
 
   get weapon(): WeaponState {
-    return this.active === 'primary' ? this.primary : this.secondary;
+    return this.mounted ?? (this.active === 'primary' ? this.primary : this.secondary);
+  }
+
+  /** Takes hold of a mounted gun (its belt is the vehicle's): a moment to get the hands on its grips. */
+  mount(gun: WeaponState): void {
+    if (this.mounted === gun) return;
+    this.cancelReload();
+    this.meleeOut = false;
+    this.mounted = gun;
+    this.interruptedSlot = null;
+    if (!HANDS_FULL.has(this.action)) {
+      this.action = 'draw';
+      this.actionTotal = this.actionT = this.def.draw;
+    }
+    this.cooldown = Math.max(this.cooldown, 0);
+    this.bloom = 0;
+  }
+
+  /** Lets go of the mounted gun (a reload under way is left undone): their own gun comes back up. */
+  dismount(): void {
+    if (!this.mounted) return;
+    this.cancelReload();
+    this.mounted = null;
+    if (!HANDS_FULL.has(this.action)) {
+      this.action = 'draw';
+      this.actionTotal = this.actionT = this.def.draw;
+    }
+    this.cooldown = Math.max(this.cooldown, 0);
+    this.bloom = 0;
   }
 
   get def(): WeaponDef {
@@ -218,6 +251,8 @@ export class Arsenal {
   }
 
   switchTo(slot: 'primary' | 'secondary'): boolean {
+    // Both hands are on the mounted gun.
+    if (this.mounted) return false;
     if (slot === this.active && this.action !== 'draw' && !this.meleeOut) return false;
     if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
@@ -234,7 +269,7 @@ export class Arsenal {
    * picked again. Not with an arm in the hands, mid-swing, bandaging, throwing or injecting.
    */
   drawMelee(): boolean {
-    if (this.meleeOut || this.limb) return false;
+    if (this.meleeOut || this.limb || this.mounted) return false;
     if (HANDS_FULL.has(this.action)) return false;
     this.cancelReload();
     this.meleeOut = true;
@@ -370,7 +405,7 @@ export class Arsenal {
     const total = Math.round(share * (nd.magazine + nd.startReserve));
     const mag = Math.min(nd.magazine, total);
     this.primary = { id, mag, reserve: total - mag };
-    if (this.active === 'primary' && !this.meleeOut) {
+    if (this.active === 'primary' && !this.meleeOut && !this.mounted) {
       this.cancelReload();
       this.action = 'draw';
       this.actionTotal = this.actionT = nd.draw;
@@ -390,6 +425,7 @@ export class Arsenal {
     }
     for (const k of Object.keys(this.throwables) as ThrowKind[]) this.throwables[k] = Math.max(this.throwables[k], THROWABLES[k].start);
     this.limb = null;
+    this.mounted = null;
     this.meleeOut = false;
     this.meleeWith = 'machete';
     this.releasePending = false;

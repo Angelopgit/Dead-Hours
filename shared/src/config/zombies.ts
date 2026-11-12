@@ -113,6 +113,17 @@ export const SPECIALS = {
 } as const;
 
 /** Spawner tuning: how many of the dead are out at once, and how that grows over a night. */
+/** The dead that hold a place on the map (MapDefinition.garrisons): how many turn out. */
+export const GARRISON = {
+  /** For one survivor, and more for each teammate (never more than the place has posts). */
+  base: 11,
+  perPlayer: 3,
+  /** Share of them that run. */
+  runners: 0.22,
+  /** The post (by index) a brute holds. */
+  bruteAt: 5,
+} as const;
+
 export const SPAWNING = {
   /**
    * Population when the outbreak starts, and how it grows (for one survivor). Kept low on purpose:

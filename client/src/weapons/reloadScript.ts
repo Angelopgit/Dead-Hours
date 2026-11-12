@@ -38,6 +38,15 @@ export const RELOAD_STEPS: Record<string, ReloadStep[]> = {
   wraith: [...rifleSwap(), { cue: 'bolt', at: 0.88, only: 'empty' }],
   // RPG-7: the next rocket pulled from the bag, pushed into the muzzle till it clicks, the hammer cocked.
   rpg: [{ cue: 'pouchGrab', at: 0.35 }, { cue: 'magIn', at: 0.74 }, { cue: 'charge', at: 0.88, only: 'empty' }],
+  // AT4: the spent tube is thrown down and the next one slung round, its sights flipped up.
+  at4: [{ cue: 'magDrop', at: 0.12, delay: 0.5 }, { cue: 'pouchGrab', at: 0.4 }, { cue: 'charge', at: 0.86 }],
+  // M32: the cylinder swung out, each 40 mm round thumbed into its chamber.
+  mgl: [{ cue: 'shellGrab', at: 0.12 }, { cue: 'shellIn', at: 0.5 }],
+  // M2: cover up, the old belt's last links swept out, a fresh belt across the tray, cover down, charged twice.
+  m2: [
+    { cue: 'coverOpen', at: 0.1 }, { cue: 'pouchGrab', at: 0.36 }, { cue: 'belt', at: 0.6 }, { cue: 'coverClose', at: 0.74 },
+    { cue: 'charge', at: 0.84 }, { cue: 'charge', at: 0.94 },
+  ],
   // M249: cover up, box out, box in, the belt laid on the tray, cover down; charged when the bolt went home.
   lmg: [
     { cue: 'coverOpen', at: 0.08 }, ...rifleSwap(), { cue: 'belt', at: 0.8 }, { cue: 'coverClose', at: 0.87 },

@@ -3,7 +3,7 @@ import type { DoorBody } from '../physics/DoorBody';
 import { COMBAT, PRIMARY_WEAPONS, WEAPONS, ZONE_MULTIPLIER, type HitZone, type WeaponDef, type WeaponId } from '../config/weapons';
 import { GAME } from '../config/game';
 import { DIVE, DOWNED, PLAYER, PRONE } from '../config/player';
-import { HORDES, LULLS, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
+import { GARRISON, HORDES, LULLS, SPAWNING, SPECIALS, type ZombieKind } from '../config/zombies';
 import { SERUM, SUPPLY_DROPS } from '../config/drops';
 import { LEGS, LIMBS, isLeg, limbClub, type ArmCut, type ArmZone, type LegCut, type LegZone } from '../config/limbs';
 import { MELEE, MELEE_PICKUPS, isMelee, type MeleeId } from '../config/melee';
@@ -194,6 +194,8 @@ export interface Interactable {
   room?: string;
   /** Boost syringes: which dose it holds. */
   boost?: BoostId;
+  /** An armory gun rack (a map prop), not a case from a drop. */
+  rack?: boolean;
 }
 
 /** One helicopter supply drop, from the flight in to the crate being emptied or taken away. */
@@ -421,6 +423,8 @@ export class Simulation {
       if (p.kind === 'ammoCrate') this.interactables.push({ id: id++, kind: 'ammo', pos: { x: p.x, y: y + 0.45, z: p.z }, supply: COMBAT.crateUses, range: COMBAT.interactRange });
       else if (p.kind === 'firstAid') this.interactables.push({ id: id++, kind: 'medical', pos: { x: p.x, y: y, z: p.z }, supply: COMBAT.aidBoxBandages, range: COMBAT.interactRange });
       else if (p.use === 'weapons') this.interactables.push({ id: id++, kind: 'weapons', pos: { x: p.x, y: y + 0.95, z: p.z }, supply: Infinity, range: 2.1 });
+      // An armory rack: the gun it holds, a few of them, free to whoever gets that far.
+      else if (p.kind === 'gunRack' && p.weapon) this.interactables.push({ id: id++, kind: 'exclusive', pos: { x: p.x, y: y + 1.1, z: p.z }, supply: p.stock ?? 2, range: 2.2, weapon: p.weapon, rack: true });
       for (const o of propOccluders(p)) this.overhead.push({ x: o.x, z: o.z, r: o.r });
       if (p.kind === 'streetlight' || p.kind === 'utilityPole' || p.kind === 'floodlight' || p.kind === 'signPylon' || p.kind === 'parkLamp') {
         this.overhead.push({ x: p.x, z: p.z, r: 2.8 });
@@ -922,6 +926,12 @@ export class Simulation {
     a.consume();
     p.stats.shotsFired++;
     this.noise(p.motion.pos, def.noise, id);
+    // A grenade launcher lobs its round: nothing is traced, the shell flies and bursts on its own.
+    if (def.launch) {
+      this.emit({ type: 'shot', player: id, weapon: a.weapon.id, origin: { ...o }, pellets: [] });
+      this.explosives.launch(p, o, d, def);
+      return 'fired';
+    }
     const rand = rng(seed >>> 0 || 1);
     const pellets: PelletTrace[] = [];
     let anyHit = false;
@@ -941,7 +951,7 @@ export class Simulation {
         const ex = r.end.x - o.x, ey = r.end.y - o.y, ez = r.end.z - o.z;
         const L = Math.hypot(ex, ey, ez) || 1;
         const back = Math.min(0.3, L);
-        this.explosives.explode({ x: r.end.x - (ex / L) * back, y: r.end.y - (ey / L) * back, z: r.end.z - (ez / L) * back }, p, 0, { breach: BREACH.rocket });
+        this.explosives.explode({ x: r.end.x - (ex / L) * back, y: r.end.y - (ey / L) * back, z: r.end.z - (ez / L) * back }, p, 0, { breach: BREACH.rocket, ...(def.blast ? { power: def.blast } : {}) });
       }
     }
     return 'fired';
@@ -1531,7 +1541,8 @@ export class Simulation {
         this.emit({ type: 'notice', player: id, text: 'YOU ALREADY CARRY ONE' });
         return false;
       }
-      it.supply = 0;
+      // A case holds one; an armory rack holds a few.
+      it.supply--;
       this.dropLimb(p, false);
       // Comes loaded with its own ammunition; whatever primary they had stays behind.
       p.arsenal.replacePrimary(it.weapon, true);
@@ -2360,6 +2371,8 @@ export class Simulation {
       this.raid.update(dt, zombies);
     }
 
+    if (zombies && this.phase !== 'over') this.runGarrisons();
+
     for (const d of this.doors) d?.update(dt);
     this.updateLimbs();
     if (this.phase !== 'over') this.stepDowned(dt);
@@ -2681,6 +2694,33 @@ export class Simulation {
       z.removeBody();
       this.zombies.splice(i, 1);
       this.emit({ type: 'zombieRemoved', zombie: z.id });
+    }
+  }
+
+  /** Garrisons (by index in the map) that have turned out tonight. */
+  readonly garrisoned = new Set<number>();
+
+  /**
+   * The dead that hold a place stand to when a survivor first comes near it: one at each post
+   * (fewer for a lone survivor), mostly walkers with runners among them and a brute at the heart.
+   */
+  private runGarrisons(): void {
+    const list = this.map.garrisons;
+    if (!list || this.garrisoned.size >= list.length) return;
+    for (let i = 0; i < list.length; i++) {
+      const g = list[i];
+      if (this.garrisoned.has(i)) continue;
+      let near = false;
+      for (const p of this.players.values()) if (p.alive && Math.hypot(p.motion.pos.x - g.x, p.motion.pos.z - g.z) < g.range) near = true;
+      if (!near) continue;
+      this.garrisoned.add(i);
+      const n = Math.min(g.posts.length, GARRISON.base + GARRISON.perPlayer * (this.players.size - 1));
+      for (let k = 0; k < n; k++) {
+        const at = g.posts[k];
+        const roll = this.rand();
+        const kind: ZombieKind = k === GARRISON.bruteAt ? 'brute' : roll < GARRISON.runners ? 'runner' : 'walker';
+        this.spawnZombie(kind, { x: at.x, y: at.y, z: at.z }, 'idle');
+      }
     }
   }
 

@@ -57,6 +57,8 @@ const FIXED_SIGHTS: Partial<Record<WeaponId, { eye: V3; fov: number; optic: Opti
   sniper: { eye: [0, 0.16, -0.12], fov: 7, optic: 'scope' },
   rpg: { eye: [0, 0.125, -0.16], fov: 46, optic: 'iron' },
   wraith: { eye: [0, 0.14, -0.2], fov: 9, optic: 'scope' },
+  at4: { eye: [0, 0.154, -0.19], fov: 46, optic: 'iron' },
+  mgl: { eye: [0, 0.16, -0.1], fov: 50, optic: 'dot' },
 };
 
 /** Iron sights each gun comes with: eye position and zoom. */
@@ -1252,7 +1254,224 @@ function hockey(): Spec {
   }, -0.06);
 }
 
-const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, akimbo: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith,
+/** Olive drab fibreglass and the black rubber of the AT4's bumpers. */
+const OD_TUBE = 0x454a33;
+const BUMPER = 0x151617;
+
+/**
+ * M136 AT4 (TM 9-1315-886-12): a sealed 84 mm fibreglass tube 1,016 mm long that is thrown away
+ * once fired. Rubber bumpers on both ends, pop-up sights under sliding covers, the firing rod in
+ * its housing along the top with the cocking lever and the red trigger button, the folding
+ * shoulder stop and the sling. Carried by the forward grip of the shoulder stop bracket here.
+ */
+function at4(): Spec {
+  const d = drawn(0.035, 0.07);
+  const R = 0.047;
+  const b = new Builder();
+  b.as({ rough: 0.72, metal: 0.05, wear: 0.3, worn: 0x6f7355 })
+    // The tube, open at both ends (the muzzle cover is off, the venturi behind).
+    .loft([
+      { z: d.z(-470), rx: R }, { z: d.z(455), rx: R }, { z: d.z(455), rx: R - 0.005 }, { z: d.z(300), rx: R - 0.005 },
+    ], OD_TUBE, { segments: 16, caps: false }, 0, d.y(0))
+    .tube(R - 0.005, d.z(299), d.z(300), PORT, 0, d.y(0), 16)
+    .loft([{ z: d.z(-470), rx: R - 0.006 }, { z: d.z(-380), rx: R - 0.016 }], 0x202124, { segments: 16, caps: false }, 0, d.y(0))
+    .tube(R - 0.016, d.z(-381), d.z(-380), PORT, 0, d.y(0), 16)
+    // Stencilled bands: the yellow high-explosive band and the black instruction label.
+    .loft([{ z: d.z(338), rx: R + 0.0006 }, { z: d.z(352), rx: R + 0.0006 }], 0xb39a2a, { segments: 16, caps: false }, 0, d.y(0))
+    .loft([{ z: d.z(-330), rx: R + 0.0006 }, { z: d.z(-250), rx: R + 0.0006 }], 0x23261c, { segments: 16, caps: false }, 0, d.y(0))
+    .as(SURF.rubber)
+    // Muzzle bumper and the flared venturi bumper.
+    .loft([{ z: d.z(430), rx: R + 0.004 }, { z: d.z(440), rx: R + 0.014 }, { z: d.z(500), rx: R + 0.014 }, { z: d.z(508), rx: R + 0.008 }, { z: d.z(508), rx: R - 0.003 }, { z: d.z(456), rx: R - 0.003 }], BUMPER, { segments: 16, caps: false }, 0, d.y(0))
+    .loft([{ z: d.z(-420), rx: R + 0.004 }, { z: d.z(-432), rx: R + 0.012 }, { z: d.z(-500), rx: R + 0.02 }, { z: d.z(-508), rx: R + 0.016 }, { z: d.z(-508), rx: R + 0.004 }, { z: d.z(-470), rx: R - 0.004 }], BUMPER, { segments: 16, caps: false }, 0, d.y(0))
+    .as(SURF.polymer)
+    // Sight housings with their covers slid back, the leaves standing.
+    .slab(0.034, 0.02, 0.085, 0.004, 0x1f2119, 0, d.y(R * 1000 + 8), d.z(250))
+    .slab(0.034, 0.02, 0.085, 0.004, 0x1f2119, 0, d.y(R * 1000 + 8), d.z(-70))
+    .as(SURF.steel)
+    .plate(d.p([[244, R * 1000 + 16], [247, R * 1000 + 40], [253, R * 1000 + 40], [256, R * 1000 + 16]]), 0.004, BLACK, 0.0006)
+    .box(0.014, 0.004, 0.004, BLACK, 0, d.y(R * 1000 + 30), d.z(250))
+    .plate(d.p([[-76, R * 1000 + 16], [-74, R * 1000 + 32], [-66, R * 1000 + 32], [-64, R * 1000 + 16]]), 0.022, BLACK, 0.0008)
+    .ring(0.004, 0.003, d.z(-73), d.z(-67), BLACK, 0, d.y(R * 1000 + 37), 10)
+    // Firing rod housing along the top right, the cocking lever and the forward safety.
+    .tube(0.0075, d.z(-390), d.z(-110), 0x1f2119, -0.028, d.y(R * 1000 - 6), 8)
+    .slab(0.02, 0.016, 0.07, 0.003, 0x1f2119, -0.03, d.y(R * 1000 - 4), d.z(-140))
+    .slab(0.01, 0.01, 0.05, 0.002, BLACK, -0.042, d.y(R * 1000 - 2), d.z(-150), 0, 0.25)
+    .slab(0.012, 0.008, 0.03, 0.002, BLACK, -0.036, d.y(R * 1000 - 12), d.z(-100))
+    .as({ rough: 0.5, metal: 0.1 })
+    .slab(0.014, 0.008, 0.022, 0.002, 0x8a1c16, -0.026, d.y(R * 1000 + 2), d.z(-176))
+    .as(SURF.steel)
+    // Bracket and grip under the tube, the folding shoulder stop behind it.
+    .plate(d.p([[-30, -R * 1000 + 2], [90, -R * 1000 + 2], [84, -R * 1000 - 5], [-24, -R * 1000 - 5]]), 0.03, 0x1f2119, 0.003)
+    .plate(d.p([[-262, -R * 1000 + 2], [-232, -R * 1000 + 2], [-236, -R * 1000 - 96], [-258, -R * 1000 - 100], [-268, -R * 1000 - 92]]), 0.05, 0x1f2119, 0.006)
+    // Sling swivels.
+    .ring(0.008, 0.003, d.z(380), d.z(384), STEEL, 0.03, d.y(-R * 1000 - 4), 8)
+    .ring(0.008, 0.003, d.z(-360), d.z(-356), STEEL, 0.03, d.y(-R * 1000 - 4), 8)
+    .as(SURF.polymer)
+    .plate(a2Grip(d, 181), 0.03, 0x1f2119, 0.007)
+    .as({ rough: 0.9, metal: 0 })
+    // The sling, slack along the left side.
+    .plate(d.p([[380, -R * 1000 - 6], [200, -R * 1000 - 22], [0, -R * 1000 - 30], [-200, -R * 1000 - 22], [-358, -R * 1000 - 6], [-358, -R * 1000 - 10], [-200, -R * 1000 - 26], [0, -R * 1000 - 34], [200, -R * 1000 - 26], [380, -R * 1000 - 10]]), 0.022, 0x2f3324, 0.0005, 0.032)
+    .as(null);
+  return {
+    body: b,
+    muzzle: [0, 0.07, d.z(508)], fore: [0.04, d.y(-R * 1000 - 8), d.z(210)], eject: [0, 0.07, d.z(-508)], stock: [0, 0.06, -0.3], bolt: [-0.04, d.y(R * 1000 - 2), d.z(-150)],
+  };
+}
+
+/**
+ * M32A1 multi-shot grenade launcher (Milkor MGL): six 40 mm chambers in a spring-wound cylinder,
+ * the short 226 mm barrel in line with the top chamber, a rail over it with the reflex sight, a
+ * vertical foregrip under the barrel and an M4 stock. 711 mm long with the stock in.
+ */
+function m32(): Spec {
+  const BORE = 0.076, AXIS = 0.03;
+  const c0 = 0.07, c1 = 0.215;
+  const b = new Builder();
+  b.as(SURF.anodized)
+    // Frame: the rear plate with the firing mechanism, the top strap, the front plate that carries the barrel.
+    .plate([[-0.02, -0.03], [-0.02, 0.1], [0.012, 0.118], [c0 - 0.004, 0.118], [c0 - 0.004, -0.03]], 0.058, RECV, 0.005)
+    .plate([[c0 - 0.004, 0.106], [c0 - 0.004, 0.118], [c1 + 0.05, 0.118], [c1 + 0.05, 0.106]], 0.04, RECV, 0.003)
+    .plate([[c1 + 0.004, -0.02], [c1 + 0.004, 0.112], [c1 + 0.05, 0.112], [c1 + 0.05, 0.03], [c1 + 0.03, -0.02]], 0.06, RECV, 0.005)
+    // Rail on the strap.
+    .slab(0.021, 0.006, 0.24, 0.001, 0x202124, 0, 0.121, 0.13);
+  for (let k = 0; k < 22; k++) b.box(0.0212, 0.003, 0.0052, 0x202124, 0, 0.1245, 0.02 + k * 0.01);
+  b.as(SURF.steel)
+    // The cylinder: six chambers, the flutes between them, the axis pin and the winding knob in front.
+    .loft([{ z: c0, rx: 0.07 }, { z: c0 + 0.006, rx: 0.076 }, { z: c1 - 0.006, rx: 0.076 }, { z: c1, rx: 0.07 }], DARK, { segments: 18 }, 0, AXIS)
+    .tube(0.012, c0 - 0.004, c1 + 0.03, STEEL, 0, AXIS, 8);
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2;
+    const cx = Math.sin(a) * 0.046, cy = AXIS + Math.cos(a) * 0.046;
+    // Chamber mouths (the top one is behind the barrel), each with the nose of its grenade.
+    if (k !== 0) {
+      b.tube(0.0205, c1, c1 + 0.0008, PORT, cx, cy, 10)
+        .as(SURF.brass).tube(0.017, c1 + 0.0008, c1 + 0.004, 0xb39a2a, cx, cy, 10, 0.012).as(SURF.steel);
+    }
+    const f = a + Math.PI / 6;
+    b.box(0.016, 0.004, c1 - c0 - 0.03, 0x17181a, Math.sin(f) * 0.0755, AXIS + Math.cos(f) * 0.0755, (c0 + c1) / 2, 0, 0, -f);
+  }
+  b.as(SURF.steel)
+    // Barrel with its muzzle ring; the bore.
+    .loft([{ z: c1 + 0.004, rx: 0.026 }, { z: c1 + 0.2, rx: 0.026 }, { z: c1 + 0.2, rx: 0.0285 }, { z: c1 + 0.226, rx: 0.0285 }, { z: c1 + 0.226, rx: 0.0205 }, { z: c1 + 0.15, rx: 0.0205 }], PARK, { segments: 14, caps: false }, 0, BORE)
+    .tube(0.0205, c1 + 0.149, c1 + 0.15, PORT, 0, BORE, 14)
+    // Hand guard rail under the barrel and the vertical foregrip.
+    .slab(0.024, 0.012, 0.15, 0.002, RECV, 0, BORE - 0.036, c1 + 0.11)
+    .box(0.008, 0.012, 0.012, STEEL, 0, 0.0, -0.012, 0.5);
+  guard(b, drawn(0.0, 0.05), 30, -50, 0x1c1d1f);
+  // Reflex sight on the rail: the housing, its window, the dot.
+  const sy = 0.127, sz = 0.06;
+  b.as(SURF.anodized)
+    .slab(0.036, 0.016, 0.06, 0.003, BLACK, 0, sy + 0.008, sz)
+    .box(0.044, 0.005, 0.03, BLACK, 0, sy + 0.05, sz + 0.012)
+    .box(0.005, 0.034, 0.03, BLACK, 0.0195, sy + 0.032, sz + 0.012)
+    .box(0.005, 0.034, 0.03, BLACK, -0.0195, sy + 0.032, sz + 0.012)
+    .glow(0.003, 0.003, 0.0008, 0xff2414, 0, sy + 0.033, sz + 0.02)
+    .as(SURF.polymer)
+    .plate(a2Grip(drawn(0.0, 0.05), 150), 0.03, POLY, 0.007)
+    .slab(0.032, 0.1, 0.036, 0.008, POLY, 0, BORE - 0.092, c1 + 0.11)
+    // Buffer tube and the M4 stock on it.
+    .as(SURF.anodized)
+    .tube(0.0145, -0.25, -0.02, RECV, 0, 0.074, 10)
+    .as(SURF.polymer)
+    .plate([[-0.12, 0.094], [-0.262, 0.094], [-0.27, 0.086], [-0.27, -0.03], [-0.25, -0.036], [-0.225, 0.03], [-0.12, 0.052]], 0.04, POLY, 0.006)
+    .as(SURF.rubber).slab(0.04, 0.12, 0.006, 0.002, 0x101011, 0, 0.03, -0.272)
+    .as(null);
+  return {
+    body: b,
+    muzzle: [0, BORE, c1 + 0.226], fore: [0.03, BORE - 0.1, c1 + 0.11], eject: [-0.07, AXIS, (c0 + c1) / 2], stock: [0, 0.04, -0.275], bolt: [0.06, AXIS + 0.03, c1 - 0.02],
+  };
+}
+
+/** NATO green of the Guard's trucks and gun shields. */
+const NATO_GREEN = 0x3f4634;
+
+/**
+ * Browning M2HB on a Humvee's ring (TM 9-1005-213-10): 1,654 mm long with its 1,143 mm barrel,
+ * the receiver 115 mm high and 80 mm across, spade grips and the butterfly trigger on the back
+ * plate, a 100-round can in the tray on its left. The origin is the trunnion pin it tips on. The
+ * pintle, its yoke and the gun shield are the `action`: they turn with the gun but stay upright.
+ */
+function m2hb(): Spec {
+  const BORE = 0.05;
+  const b = new Builder();
+  b.as(SURF.steel)
+    // Receiver, the top cover with its latch, the back plate.
+    .plate([[-0.36, -0.008], [-0.36, 0.1], [0.2, 0.1], [0.2, -0.008]], 0.08, PARK, 0.004)
+    .plate([[-0.2, 0.1], [-0.2, 0.118], [-0.185, 0.124], [0.13, 0.124], [0.16, 0.11], [0.16, 0.1]], 0.076, 0x202124, 0.004)
+    .slab(0.03, 0.01, 0.03, 0.002, STEEL, 0, 0.128, -0.17)
+    .slab(0.084, 0.118, 0.012, 0.003, 0x202124, 0, 0.046, -0.366)
+    // Rear sight leaf and the front blade on the trunnion block.
+    .plate([[-0.3, 0.1], [-0.297, 0.15], [-0.283, 0.15], [-0.28, 0.1]], 0.03, BLACK, 0.001)
+    .box(0.003, 0.03, 0.006, BLACK, 0, 0.115, 0.185)
+    // Bolt latch release between the grips, the retracting slide handle on the right.
+    .slab(0.03, 0.03, 0.02, 0.004, STEEL, 0, 0.046, -0.385)
+    .slab(0.012, 0.012, 0.16, 0.002, 0x202124, -0.046, 0.03, -0.1)
+    .pin(0.008, 0.05, STEEL, -0.07, 0.03, -0.04, 8)
+    // Spade grips: two D frames off the back plate.
+    .box(0.014, 0.012, 0.07, 0x202124, 0.085, 0.1, -0.4)
+    .box(0.014, 0.012, 0.07, 0x202124, 0.085, -0.01, -0.4)
+    .box(0.014, 0.012, 0.07, 0x202124, -0.085, 0.1, -0.4)
+    .box(0.014, 0.012, 0.07, 0x202124, -0.085, -0.01, -0.4)
+    .box(0.184, 0.012, 0.014, 0x202124, 0, 0.1, -0.372)
+    .box(0.184, 0.012, 0.014, 0x202124, 0, -0.01, -0.372)
+    // Butterfly trigger.
+    .slab(0.07, 0.016, 0.01, 0.002, STEEL, 0, 0.07, -0.392, 0.3)
+    // Barrel support, perforated, and the heavy barrel with its carrying handle.
+    .loft([{ z: 0.2, rx: 0.032 }, { z: 0.46, rx: 0.032 }, { z: 0.47, rx: 0.026 }], PARK, { segments: 12 }, 0, BORE)
+    .loft([{ z: 0.47, rx: 0.0235 }, { z: 0.78, rx: 0.0225 }, { z: 1.194, rx: 0.019 }, { z: 1.194, rx: 0.021 }, { z: 1.218, rx: 0.021 }], 0x1c1d1f, { segments: 12 }, 0, BORE)
+    .tube(0.0065, 1.2176, 1.2186, PORT, 0, BORE, 8)
+    .slab(0.012, 0.04, 0.03, 0.003, STEEL, 0.03, BORE + 0.03, 0.56, 0, 0, -0.6)
+    .tube(0.011, 0.5, 0.62, WOOD, 0.052, BORE + 0.05, 8);
+  for (let k = 0; k < 4; k++) {
+    for (const a of [0.6, 1.57, 2.54, -0.6, -1.57, -2.54]) {
+      b.box(0.012, 0.003, 0.03, PORT, Math.sin(a) * 0.0315, BORE + Math.cos(a) * 0.0315, 0.245 + k * 0.058, 0, 0, -a);
+    }
+  }
+  // Cradle under the receiver: the trunnion pin and the bracket for the can.
+  b.slab(0.05, 0.03, 0.34, 0.004, 0x202124, 0, -0.022, -0.08)
+    .pin(0.014, 0.13, STEEL, 0, 0, 0, 10)
+    .slab(0.2, 0.008, 0.2, 0.002, 0x202124, 0.14, -0.05, 0.05)
+    .box(0.008, 0.06, 0.012, 0x202124, 0.05, -0.02, 0.05)
+    // The can, its lid open on the far side, the belt up over the feed tray into the gun.
+    .as({ rough: 0.6, metal: 0.4, wear: 0.4, worn: 0x7b8068 })
+    .slab(0.155, 0.19, 0.305, 0.006, OLIVE, 0.145, 0.05, 0.03)
+    .box(0.157, 0.006, 0.307, 0x2c3125, 0.145, 0.07, 0.03)
+    .box(0.02, 0.03, 0.12, 0x2c3125, 0.225, 0.11, 0.03)
+    .as(SURF.brass)
+    .box(0.1, 0.012, 0.1, BRASS, 0.1, 0.15, 0.06)
+    .box(0.03, 0.03, 0.1, BRASS, 0.05, 0.135, 0.06);
+  for (let k = 0; k < 7; k++) b.box(0.006, 0.0125, 0.102, 0x4a4b4e, 0.062 + k * 0.013, 0.15, 0.06);
+  b.as(null);
+  // What stays upright: the pintle in its socket, the yoke, the shield with its wings and the sight slot.
+  const m = new Builder();
+  m.as(SURF.steel)
+    .slab(0.07, 0.3, 0.07, 0.008, 0x202124, 0, -0.2, 0)
+    .slab(0.012, 0.11, 0.07, 0.003, 0x202124, 0.072, -0.03, 0)
+    .slab(0.012, 0.11, 0.07, 0.003, 0x202124, -0.072, -0.03, 0)
+    .slab(0.156, 0.02, 0.07, 0.004, 0x202124, 0, -0.085, 0)
+    .slab(0.16, 0.05, 0.16, 0.01, 0x202124, 0, -0.355, 0)
+    // Shield arms.
+    .box(0.03, 0.03, 0.3, 0x202124, 0.26, -0.2, 0.17)
+    .box(0.03, 0.03, 0.3, 0x202124, -0.26, -0.2, 0.17)
+    .box(0.55, 0.03, 0.03, 0x202124, 0, -0.2, 0.03)
+    .as({ rough: 0.78, metal: 0.25, wear: 0.45, worn: 0x8a8c80 })
+    .slab(0.43, 0.62, 0.012, 0.003, NATO_GREEN, -0.285, -0.03, 0.33)
+    .slab(0.43, 0.62, 0.012, 0.003, NATO_GREEN, 0.285, -0.03, 0.33)
+    .slab(0.14, 0.24, 0.012, 0.003, NATO_GREEN, 0, -0.22, 0.33)
+    .slab(0.2, 0.62, 0.012, 0.003, NATO_GREEN, -0.585, -0.03, 0.278, 0, -0.55)
+    .slab(0.2, 0.62, 0.012, 0.003, NATO_GREEN, 0.585, -0.03, 0.278, 0, 0.55)
+    // Vision slot frames and the bolts along the edges.
+    .as(SURF.steel)
+    .slab(0.16, 0.05, 0.016, 0.003, 0x202124, -0.3, 0.2, 0.332)
+    .slab(0.16, 0.05, 0.016, 0.003, 0x202124, 0.3, 0.2, 0.332)
+    .as(null);
+  return {
+    body: b, action: { b: m, at: [0, 0, 0] },
+    muzzle: [0, BORE, 1.2186], fore: [0.085, 0.045, -0.42], eject: [-0.01, -0.03, 0.02], stock: [0, 0.045, -0.44], bolt: [-0.07, 0.03, -0.04],
+  };
+}
+
+const SPECS: Record<WeaponId, () => Spec> = { ar: m4, smg: mp5, shotgun: m870, marksman: mk14, pistol: m17, akimbo: m17, machete, lmg: m249, battle: scarH, sniper: m107, rpg: rpg7, wraith, at4, mgl: m32, m2: m2hb,
   katana, katanas: katana, bat, crowbar, wrench, hockey,
 };
 

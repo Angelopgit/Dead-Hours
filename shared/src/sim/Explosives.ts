@@ -1,6 +1,6 @@
 import { WORLD_FILTER, type Physics, type RAPIER, type Surface } from '../physics/Physics';
-import { BLAST, FIRE, THROWABLES, THROWING, type ThrowableDef, type ThrowKind } from '../config/throwables';
-import type { HitZone } from '../config/weapons';
+import { BLAST, FIRE, SHELL, THROWABLES, THROWING, type ThrowableDef, type ThrowKind } from '../config/throwables';
+import type { HitZone, WeaponDef } from '../config/weapons';
 import type { ArmZone } from '../config/limbs';
 import { PLAYER } from '../config/player';
 import { BREACH } from '../config/destruction';
@@ -42,6 +42,8 @@ export interface SimThrowable {
   fuseAt: number;
   /** When it last bounced (sound and event spacing). */
   bouncedAt: number;
+  /** A launcher's 40 mm grenade: bursts on the first thing it meets, this big against a frag. */
+  shell?: number;
 }
 
 /** One burning patch of spilled fuel. */
@@ -182,10 +184,45 @@ export class Explosives {
     return t;
   }
 
+  /** A grenade launcher's round leaves the muzzle: an arc toward where the camera ray points. */
+  launch(p: SimPlayer, origin: Vec3, dir: Vec3, def: WeaponDef): SimThrowable {
+    const sim = this.sim;
+    const l = def.launch ?? { speed: SHELL.speed, lift: SHELL.lift };
+    const pitch = Math.asin(clamp(dir.y, -1, 1)) + l.lift;
+    const h = Math.hypot(dir.x, dir.z) || 1;
+    const cp = Math.cos(pitch);
+    const d = { x: (dir.x / h) * cp, y: Math.sin(pitch), z: (dir.z / h) * cp };
+    // From just ahead of the eye, kept on this side of any wall.
+    const lead = 0.6;
+    const hit = sim.physics.raycast(origin.x, origin.y, origin.z, d.x, d.y, d.z, lead + 0.1);
+    const k = hit === null ? lead : Math.max(0, hit - 0.12);
+    const t: SimThrowable = {
+      id: this.nextId++, kind: 'frag', by: p, pos: { x: origin.x + d.x * k, y: origin.y + d.y * k - 0.06, z: origin.z + d.z * k },
+      vel: { x: d.x * l.speed, y: d.y * l.speed, z: d.z * l.speed }, rest: false, thrownAt: sim.time, fuseAt: Infinity, bouncedAt: -1,
+      shell: def.blast ?? 1,
+    };
+    this.thrown.push(t);
+    sim.emit({ type: 'thrown', id: t.id, kind: 'frag', player: p.id, pos: { ...t.pos }, vel: { ...t.vel }, fuseAt: 0, shell: true });
+    return t;
+  }
+
   step(dt: number): void {
     const sim = this.sim;
     for (let i = this.thrown.length - 1; i >= 0; i--) {
       const t = this.thrown[i];
+      if (t.shell !== undefined) {
+        const before = { ...t.pos };
+        const speed = Math.hypot(t.vel.x, t.vel.y, t.vel.z);
+        const hit = flightStep(sim.physics, t, SHELL, dt, (c, at, d) => sim.smashPane(c, at, d));
+        // Fast enough to step over a body in one tick: the path is checked, not only where it ends.
+        const z = this.zombieOn(before, t.pos, SHELL.radius);
+        const stopped = Math.hypot(t.vel.x, t.vel.y, t.vel.z) < speed * 0.8;
+        if (z || hit || stopped || t.rest || sim.time - t.thrownAt > THROWING.maxFlight) {
+          this.thrown.splice(i, 1);
+          this.explode(z ? { x: z.pos.x, y: Math.max(z.pos.y, Math.min(t.pos.y, z.pos.y + z.def.height)), z: z.pos.z } : t.pos, t.by, t.id, { power: t.shell });
+        }
+        continue;
+      }
       const def = THROWABLES[t.kind];
       const hit = flightStep(sim.physics, t, def, dt, (c, at, d) => sim.smashPane(c, at, d));
       if (t.kind === 'molotov') {
@@ -236,6 +273,17 @@ export class Explosives {
       const top = z.state === 'down' ? 0.5 : z.def.height;
       if (p.y < z.pos.y - 0.05 || p.y > z.pos.y + top) continue;
       return z;
+    }
+    return null;
+  }
+
+  /** The first zombie a fast round passes through between two points. */
+  private zombieOn(a: Vec3, b: Vec3, r: number): Zombie | null {
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) / 0.3));
+    for (let i = 1; i <= n; i++) {
+      const k = i / n;
+      const z = this.zombieAt({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k }, r);
+      if (z) return z;
     }
     return null;
   }

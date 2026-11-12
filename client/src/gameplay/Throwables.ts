@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  FIRE, THROWABLES, THROWING, VOLATILE_STAGE, flightStep, throwLaunch,
+  FIRE, SHELL, THROWABLES, THROWING, VOLATILE_STAGE, flightStep, throwLaunch,
   type SimEvent, type Simulation, type ThrowKind, type Vec3,
 } from '@dead-hours/shared';
 import type { Physics } from '../core/Physics';
@@ -20,6 +20,8 @@ interface Flying {
   born: number;
   /** Bounce sounds come from the server's events; locally the flight only draws. */
   lastClank: number;
+  /** A launcher's 40 mm round: flies flat and fast, gone where it bursts. */
+  shell: boolean;
 }
 
 const ARC_POINTS = 90;
@@ -144,9 +146,13 @@ export class Throwables {
         const model = createThrowableModel(e.kind);
         this.scene.add(model.root);
         model.root.position.set(e.pos.x, e.pos.y, e.pos.z);
-        const spin = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(e.kind === 'frag' ? 14 : 9);
-        this.flying.set(e.id, { id: e.id, kind: e.kind, model, f: { pos: { ...e.pos }, vel: { ...e.vel }, rest: false }, spin, born: this.time, lastClank: 0 });
-        audio.throwWhoosh(_v.set(e.pos.x, e.pos.y, e.pos.z));
+        const shell = !!e.shell;
+        // A launched round spins about the way it flies (rifling), a thrown one tumbles.
+        const spin = shell ? new THREE.Vector3(e.vel.x, e.vel.y, e.vel.z).normalize().multiplyScalar(30)
+          : new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(e.kind === 'frag' ? 14 : 9);
+        if (shell) model.root.scale.setScalar(0.85);
+        this.flying.set(e.id, { id: e.id, kind: e.kind, model, f: { pos: { ...e.pos }, vel: { ...e.vel }, rest: false }, spin, born: this.time, lastClank: 0, shell });
+        if (!shell) audio.throwWhoosh(_v.set(e.pos.x, e.pos.y, e.pos.z));
         return true;
       }
       case 'bounce': {
@@ -209,13 +215,15 @@ export class Throwables {
         this.drop(fl.id);
         continue;
       }
-      const def = THROWABLES[fl.kind];
+      const def = fl.shell ? SHELL : THROWABLES[fl.kind];
       // Small steps so it bounces where the simulation's does.
       const steps = Math.max(1, Math.ceil(dt / (1 / 60)));
       for (let i = 0; i < steps; i++) {
         const hit = flightStep(this.physics, fl.f, def, dt / steps, throughGlass);
-        if (hit && fl.kind === 'molotov') fl.f.rest = true;
+        if (hit && (fl.kind === 'molotov' || fl.shell)) fl.f.rest = true;
       }
+      // It burst where it struck: the blast (the next event) takes it away.
+      if (fl.shell && fl.f.rest) fl.model.root.visible = false;
       const r = fl.model.root;
       r.position.set(fl.f.pos.x, fl.f.pos.y, fl.f.pos.z);
       const speed = Math.hypot(fl.f.vel.x, fl.f.vel.y, fl.f.vel.z);

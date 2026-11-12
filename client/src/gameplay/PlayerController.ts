@@ -153,7 +153,7 @@ export class PlayerController {
    * In a vehicle's seat (null on foot): which one, and whether at the wheel. The session puts the
    * survivor on the seat every frame (seatAt); the capsule is out of the world meanwhile.
    */
-  seated: { vehicle: number; seat: number; driver: boolean } | null = null;
+  seated: { vehicle: number; seat: number; driver: boolean; stand: boolean } | null = null;
   /** The vehicle's heading as drawn (its yaw: the nose along (cos, -sin)), and its velocity. */
   private seatYaw = 0;
   private readonly seatVel = new THREE.Vector3();
@@ -231,7 +231,7 @@ export class PlayerController {
   }
 
   get eyeHeight(): number {
-    if (this.seated) return VEHICLE.seatEye;
+    if (this.seated) return this.seated.stand ? PLAYER.eyeHeight : VEHICLE.seatEye;
     if (this.downed) return DOWNED.eyeHeight;
     if (this.prone || (this.dive && !this.dive.air)) return PRONE.eyeHeight;
     const eye = this.height - 0.2;
@@ -296,7 +296,7 @@ export class PlayerController {
    * seat), the capsule out of the world (the car's body is what others bump into). `drop`: how
    * high the cushion is over the cabin floor (the feet go down to it).
    */
-  sitIn(vehicle: number, seat: number, driver: boolean, drop: number): void {
+  sitIn(vehicle: number, seat: number, driver: boolean, drop: number, stand = false): void {
     this.seatPose.drop = drop;
     this.ride = null;
     this.vault = null;
@@ -319,7 +319,7 @@ export class PlayerController {
     this.collider.setEnabled(false);
     this.intent.set(0, 0, 0);
     this.grounded = true;
-    this.seated = { vehicle, seat, driver };
+    this.seated = { vehicle, seat, driver, stand };
   }
 
   /** Pushed aside by something moving into them (a car): along the ground, never through a wall. */
@@ -527,7 +527,7 @@ export class PlayerController {
       return {
         pos: { x: this.position.x, y: this.position.y, z: this.position.z },
         vel: { x: this.seatVel.x, y: 0, z: this.seatVel.z },
-        yaw: cameraYaw, pitch: cameraPitch, eyeHeight: VEHICLE.seatEye,
+        yaw: cameraYaw, pitch: cameraPitch, eyeHeight: this.seated.stand ? PLAYER.eyeHeight : VEHICLE.seatEye,
         crouching: false, sprinting: false, aiming: this.aiming && !this.seated.driver, grounded: true, pushing: false,
       };
     }
@@ -824,7 +824,8 @@ export class PlayerController {
     this.jumpBuffered = 0;
     this.intent.set(0, 0, 0);
     const ahead = this.seatYaw + Math.PI / 2;
-    const toCamera = !s.driver && (this.aiming || this.faceT > 0);
+    // Whoever stands at a roof gun turns with it.
+    const toCamera = !s.driver && (s.stand || this.aiming || this.faceT > 0);
     const desired = toCamera ? cameraYaw + Math.PI : ahead;
     const diff = Math.atan2(Math.sin(desired - this.facing), Math.cos(desired - this.facing));
     const turned = diff * (1 - Math.exp(-dt * (toCamera ? 20 : 14)));
@@ -1216,7 +1217,7 @@ export class PlayerController {
     else if (!this.seated) this.renderPosition.lerpVectors(this.prevPosition, this.position, alpha);
     if (this.dead) return;
     this.character.root.position.copy(this.renderPosition);
-    if (this.seated) this.character.root.position.y -= 0.88;
+    if (this.seated && !this.seated.stand) this.character.root.position.y -= 0.88;
     // Lying on a slope the body tilts along it (head up the slope).
     this.tilt += ((this.prone ? this.tiltTo : 0) - this.tilt) * (1 - Math.exp(-dt * 8));
     this.character.root.rotation.order = 'YXZ';
@@ -1259,7 +1260,8 @@ export class PlayerController {
     c.dive = this.dive?.air ? 1 : 0;
     if (this.seated) {
       this.seatPose.yaw = wrap(this.seatYaw + Math.PI / 2 - this.facing);
-      c.seat = this.seatPose;
+      // Standing in a roof hatch: on their feet, the gun's grips in both hands.
+      c.seat = this.seated.stand ? null : this.seatPose;
       c.bike = null;
       this.character.update(dt, { speed: 0, crouch: 0, aim: this.aiming ? 1 : 0, grounded: true, strafe: 0, moveAngle: 0, turn: 0 });
       return;

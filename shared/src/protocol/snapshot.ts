@@ -22,7 +22,7 @@ const KINDS: ZombieKind[] = ['walker', 'runner', 'brute', 'crawler', 'screamer',
 const STATES: ZombieState[] = ['idle', 'wander', 'approach', 'investigate', 'chase', 'attack', 'bash', 'stagger', 'down', 'dead', 'scream', 'breach', 'vault'];
 const PHASES: SimPhase[] = ['preparation', 'survival', 'over'];
 const ACTIONS: ArsenalAction[] = ['idle', 'draw', 'reload', 'melee', 'bandage', 'throw', 'inject'];
-const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper', 'katana', 'bat', 'crowbar', 'wrench', 'hockey', 'rpg', 'wraith', 'katanas', 'akimbo'];
+const WEAPON_IDS: WeaponId[] = ['ar', 'smg', 'shotgun', 'marksman', 'pistol', 'machete', 'lmg', 'battle', 'sniper', 'katana', 'bat', 'crowbar', 'wrench', 'hockey', 'rpg', 'wraith', 'katanas', 'akimbo', 'at4', 'mgl', 'm2'];
 const ITEM_KINDS: InteractKind[] = ['weapons', 'ammo', 'medical', 'supply', 'exclusive', 'serum', 'melee', 'boost'];
 const THROWS: ThrowKind[] = ['frag', 'molotov'];
 const ARM_STATES: ArmState[] = ['intact', 'elbow', 'shoulder'];
@@ -105,6 +105,8 @@ export interface Snapshot {
    * [id, x, y, z (cm), yaw (mrad), vx, vz, speed (cm/s), steer (mrad), gas (‰), DRIVE_FLAG bits, then each seat's survivor id or 0].
    */
   vh?: (number | string)[][];
+  /** Roof guns of the vehicles in `vh` that have one: [vehicle id, rounds on the belt, rounds in the cans]... */
+  vt?: number[];
   /** Bicycles: [id, x, y, z (cm), yaw (mrad), rider id or 0, passenger id or 0, look]. */
   bk?: (number | string)[][];
   /** Tonight's goals: [kind (GOAL_KINDS), progress, target] for each (sim/Contracts). */
@@ -241,6 +243,9 @@ export function captureSnapshot(sim: Simulation, facing: ReadonlyMap<string, num
     ]);
   }
   if (cars.length) snap.vh = cars;
+  const guns: number[] = [];
+  for (const v of sim.vehicles.list) if (v.touched && v.gun) guns.push(v.id, v.gun.mag, v.gun.reserve);
+  if (guns.length) snap.vt = guns;
   snap.ct = sim.contracts.pack();
   const vo = sim.volatiles.pack();
   if (vo.length) snap.vo = vo;
@@ -802,6 +807,15 @@ export class Mirror {
         }
       } else this.carTracks.delete(id);
       sim.vehicles.remote(id, !mine, pos, yaw, { x: n[5] / 100, y: 0, z: n[6] / 100 }, n[7] / 100, n[8] / 1000, n[9] / 1000, n[10], seats);
+    }
+
+    if (s.vt) {
+      for (let i = 0; i + 2 < s.vt.length; i += 3) {
+        const gun = sim.vehicles.vehicle(s.vt[i])?.gun;
+        if (!gun) continue;
+        gun.mag = s.vt[i + 1];
+        gun.reserve = s.vt[i + 2];
+      }
     }
 
     // Bicycles (older servers send none: the copy keeps its own, placed from the same seed).

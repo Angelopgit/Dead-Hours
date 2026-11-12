@@ -114,6 +114,41 @@ function truckWheels(k: Kit): void {
   tire.dispose(); rim.dispose(); hub.dispose();
 }
 
+/**
+ * The Humvee's hard points (an M1114: 4.9 m long on a 3.3 m wheelbase, 2.3 m wide, 1.9 m to the
+ * roof, 0.94 m tyres), which the seats, the colliders and the driving assume
+ * (shared/src/config/vehicles.ts): the belt line at 1.3 m, the cabin from the windshield at
+ * 1.05 m to the slant back at -1.3 m, the gunner's hatch over the tunnel between the rear seats.
+ */
+const HMV = { nose: 2.45, tail: -2.45, sill: 0.5, belt: 1.3, roof: 1.9, half: 1.1, axle: 1.65, wheelY: 0.47, wheelR: 0.47, archR: 0.62, front: 1.05, back: -1.3, hatch: 0.46 };
+const HMV_ARCH = Math.asin((HMV.sill - HMV.wheelY) / HMV.archR);
+const HMV_GREEN = 0x3f4634;
+
+function humveeWheels(k: Kit): void {
+  const h = HMV, r = h.wheelR;
+  // Run-flat tyres with a deep shoulder tread, the eight-bolt rim, the geared hub's cap.
+  const tire = dressed(loft([
+    { z: -0.16, rx: 0.25 }, { z: -0.16, rx: r - 0.07 }, { z: -0.125, rx: r }, { z: -0.04, rx: r }, { z: -0.04, rx: r - 0.022 },
+    { z: 0.04, rx: r - 0.022 }, { z: 0.04, rx: r }, { z: 0.125, rx: r }, { z: 0.16, rx: r - 0.07 }, { z: 0.16, rx: 0.25 },
+  ], { segments: 16, caps: false }));
+  const rim = dressed(loft([{ z: -0.15, rx: 0.2 }, { z: -0.135, rx: 0.255 }, { z: 0.135, rx: 0.255 }, { z: 0.15, rx: 0.2 }], { segments: 12 }));
+  const hub = dressed(loft([{ z: -0.2, rx: 0.05 }, { z: -0.17, rx: 0.09 }, { z: 0.17, rx: 0.09 }, { z: 0.2, rx: 0.05 }], { segments: 8 }));
+  const rubber = k.mat(0x0f0f10, 0.94), steel = k.mat(0x30362a, 0.6, 0.4), cap = k.mat(0x1c1d1f, 0.5, 0.6);
+  for (const wx of [-h.axle, h.axle]) for (const wz of [-0.93, 0.93]) {
+    k.add(tire.clone(), rubber, wx, h.wheelY, wz);
+    k.add(rim.clone(), steel, wx, h.wheelY, wz, { cast: false });
+    k.add(hub.clone(), cap, wx, h.wheelY, wz, { cast: false });
+  }
+  tire.dispose(); rim.dispose(); hub.dispose();
+}
+
+/** A ring of plate lying flat (the turret race on the roof): outer and inner radius, height. */
+function flatRing(outer: number, inner: number, h: number): THREE.BufferGeometry {
+  const g = loft([{ z: 0, rx: outer }, { z: h, rx: outer }, { z: h, rx: inner }, { z: 0, rx: inner }, { z: 0, rx: outer }], { segments: 18, caps: false });
+  g.rotateX(-Math.PI / 2);
+  return dressed(g);
+}
+
 export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
   // ── Street ────────────────────────────────────────────────────────────────
   streetSign(k) {
@@ -294,6 +329,199 @@ export const OUTDOOR: Partial<Record<PropKind, Builder>> = {
     }
   },
 
+  // ── Camp Tolliver ─────────────────────────────────────────────────────────
+  humvee(k) {
+    const h = HMV, def = VEHICLES.humvee;
+    const drives = isDrivable(k.p);
+    const body = k.mat(HMV_GREEN, 0.78, 0.2), dark = k.mat(0x2b3024, 0.8, 0.2), trim = k.mat(0x141514, 0.75, 0.2), steel = k.mat(0x2a2c2e, 0.5, 0.7);
+    const tinted = k.lib.custom('car-glass', () => new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.08, metalness: 0.8 }));
+    const glass = (g: THREE.BufferGeometry, x: number, y: number, z: number, o: Parameters<Kit['add']>[5] = {}) => {
+      if (drives) k.pane(g, x, y, z, o);
+      else k.add(g, tinted, x, y, z, { ...o, cast: false });
+    };
+    // Frame rails and the floor pan; the tunnel over the drivetrain the gunner stands on.
+    k.block(4.5, 0.2, 1.5, trim, 0, 0.42, 0);
+    k.block(2.3, 0.3, 0.56, dark, -0.12, 0.62, 0);
+    k.block(0.9, 0.04, 0.9, steel, -0.45, 0.88, 0);
+    // The hull below the belt line: each side with both wheel arches.
+    const side: P2[] = [
+      [h.tail, h.sill + 0.12], [h.tail, h.belt], [h.front, h.belt], [h.nose, 1.2], [h.nose, h.sill + 0.16],
+      [h.axle + Math.cos(HMV_ARCH) * h.archR, h.sill], ...arch(h.axle, h.wheelY, h.archR, HMV_ARCH, Math.PI - HMV_ARCH, 6),
+      [-h.axle + Math.cos(HMV_ARCH) * h.archR, h.sill], ...arch(-h.axle, h.wheelY, h.archR, HMV_ARCH, Math.PI - HMV_ARCH, 6),
+    ];
+    for (const sz of [-1, 1]) {
+      k.add(sidePlate(side, 0.08, 0.018), body, 0, 0, sz * (h.half - 0.04));
+      // Wheel wells seen through the arches.
+      for (const wx of [-h.axle, h.axle]) k.block(1.2, 0.5, 0.3, trim, wx, 0.62, sz * 0.72);
+      // Doors: shut lines, the X pressed into each skin, handles, the rocker step.
+      for (const [x0, x1] of [[0.02, 0.98], [-1.2, -0.06]]) {
+        const mid = (x0 + x1) / 2, w = x1 - x0;
+        k.box(0.014, 0.76, 0.014, trim, x0, 0.9, sz * (h.half + 0.002), { cast: false });
+        k.box(0.014, 0.76, 0.014, trim, x1, 0.9, sz * (h.half + 0.002), { cast: false });
+        for (const r of [-1, 1]) k.box(Math.hypot(w, 0.66) - 0.08, 0.03, 0.012, dark, mid, 0.9, sz * (h.half + 0.003), { rz: r * Math.atan2(0.66, w), cast: false });
+        k.add(dressed(chamferBox(0.14, 0.035, 0.03, 0.008)), trim, x0 + 0.14, 1.2, sz * (h.half + 0.012), { cast: false });
+      }
+      k.add(dressed(chamferBox(2.3, 0.05, 0.14, 0.012)), steel, -0.1, h.sill + 0.02, sz * (h.half + 0.03));
+      // Above the belt: the raked pillar by the windshield, the post between the doors, the one at the back, the rail under the roof.
+      k.add(sidePlate([[h.front, h.belt], [h.front - 0.15, h.roof], [h.front - 0.27, h.roof], [h.front - 0.1, h.belt]], 0.07, 0.012), body, 0, 0, sz * (h.half - 0.04));
+      k.add(sidePlate([[-0.1, h.belt], [-0.1, h.roof], [0.02, h.roof], [0.02, h.belt]], 0.07, 0.012), body, 0, 0, sz * (h.half - 0.04));
+      k.add(sidePlate([[h.back, h.belt], [h.back, h.roof], [h.back + 0.12, h.roof], [h.back + 0.12, h.belt]], 0.07, 0.012), body, 0, 0, sz * (h.half - 0.04));
+      // Armoured door glass: small, set in a steel frame.
+      for (const [x0, x1] of [[0.02, h.front - 0.19], [h.back + 0.12, -0.1]]) {
+        const mid = (x0 + x1) / 2, w = x1 - x0;
+        k.box(w, 0.16, 0.06, body, mid, h.belt + 0.08, sz * (h.half - 0.04));
+        k.box(w, 0.07, 0.06, body, mid, h.roof - 0.035, sz * (h.half - 0.04));
+        glass(new THREE.BoxGeometry(w, h.roof - h.belt - 0.23, 0.03), mid, (h.belt + 0.16 + h.roof - 0.07) / 2, sz * (h.half - 0.04));
+      }
+      // The slant back's cheek, the mirror on its arm, a lifting eye on the hood.
+      k.add(sidePlate([[h.back, h.belt], [h.back, h.roof], [h.tail, h.belt + 0.06], [h.tail, h.belt]], 0.07, 0.012), body, 0, 0, sz * (h.half - 0.04));
+      k.box(0.04, 0.04, 0.22, trim, h.front - 0.02, 1.5, sz * (h.half + 0.12), { cast: false });
+      k.add(dressed(chamferBox(0.05, 0.26, 0.15, 0.012)), trim, h.front - 0.02, 1.6, sz * (h.half + 0.26), { cast: false });
+      k.add(dressed(chamferBox(0.1, 0.05, 0.05, 0.012)), steel, 2.2, 1.26, sz * 0.82, { cast: false });
+      // Lamps: the headlight in its pocket, the blackout marker under it, the tail lamp.
+      k.cyl(0.1, 0.1, 0.05, 10, k.mat(0x9aa0a6, 0.2, 0.5), h.nose + 0.03, 1.0, sz * 0.84, { rz: Math.PI / 2 }).userData.lamp = 'head';
+      k.box(0.03, 0.06, 0.12, k.mat(0x6b4a14, 0.4, 0.2), h.nose + 0.03, 0.82, sz * 0.84, { cast: false });
+      k.box(0.05, 0.16, 0.12, k.glow(0x5a0805, 0.6), h.tail - 0.03, 1.12, sz * 0.92, { cast: false }).userData.lamp = 'tail';
+      // Tow shackles front and back.
+      k.add(dressed(chamferBox(0.07, 0.09, 0.05, 0.012)), steel, h.nose + 0.2, 0.72, sz * 0.5, { cast: false });
+      k.add(dressed(chamferBox(0.07, 0.09, 0.05, 0.012)), steel, h.tail - 0.14, 0.7, sz * 0.5, { cast: false });
+    }
+    // Hood, sloping to the nose, with its air intake grille and the hinge line.
+    k.add(sidePlate([[h.front, h.belt - 0.08], [h.front, h.belt + 0.02], [h.nose, 1.22], [h.nose, 1.12]], h.half * 2 - 0.08, 0.02), body, 0, 0, 0);
+    k.add(dressed(chamferBox(0.5, 0.03, 0.9, 0.01)), dark, 1.75, 1.295, 0, { rz: -0.057, cast: false });
+    for (let i = 0; i < 5; i++) k.box(0.03, 0.012, 0.8, trim, 1.56 + i * 0.095, 1.325 - i * 0.0055, 0, { rz: -0.057, cast: false });
+    // Nose: the grille of upright slats, the bumper.
+    k.add(dressed(chamferBox(0.08, 0.62, h.half * 2 - 0.1, 0.02)), body, h.nose - 0.02, 0.92, 0);
+    k.box(0.02, 0.4, 1.24, trim, h.nose + 0.022, 0.98, 0, { cast: false });
+    for (let i = 0; i < 7; i++) k.box(0.03, 0.4, 0.07, body, h.nose + 0.03, 0.98, -0.51 + i * 0.17, { cast: false });
+    k.add(dressed(chamferBox(0.16, 0.2, h.half * 2 + 0.04, 0.03)), steel, h.nose + 0.1, 0.62, 0);
+    // Windshield: two flat panes either side of a centre post, the wipers' cowl under them.
+    const rake = 0.15, wh = Math.hypot(rake, h.roof - h.belt), lean = Math.atan2(rake, h.roof - h.belt);
+    for (const sz of [-1, 1]) glass(new THREE.BoxGeometry(0.03, wh - 0.1, 0.94), h.front - rake / 2 - 0.02, (h.roof + h.belt) / 2, sz * 0.5, { rz: lean });
+    k.box(0.05, wh, 0.08, body, h.front - rake / 2 - 0.02, (h.roof + h.belt) / 2, 0, { rz: lean, cast: false });
+    k.box(0.07, 0.07, h.half * 2 - 0.1, body, h.front - rake - 0.01, h.roof - 0.03, 0, { cast: false });
+    k.box(0.09, 0.06, h.half * 2 - 0.1, body, h.front - 0.01, h.belt + 0.03, 0, { cast: false });
+    // Roof round the hatch, the turret race on it.
+    const rx = def.seats[1].x, hole = h.hatch;
+    const top = h.roof + 0.03;
+    k.add(dressed(chamferBox(h.front - rake - (rx + hole) + 0.04, 0.06, h.half * 2 - 0.06, 0.015)), body, (h.front - rake + rx + hole) / 2 + 0.02, top, 0);
+    k.add(dressed(chamferBox(rx - hole - h.back + 0.04, 0.06, h.half * 2 - 0.06, 0.015)), body, (rx - hole + h.back) / 2 - 0.02, top, 0);
+    for (const sz of [-1, 1]) k.box(hole * 2, 0.06, h.half - 0.03 - hole, body, rx, top, sz * (hole + (h.half - 0.03 - hole) / 2));
+    k.add(flatRing(hole + 0.1, hole - 0.01, 0.07), steel, rx, h.roof + 0.05, 0, { cast: false });
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      k.box(0.03, 0.02, 0.03, trim, rx + Math.cos(a) * (hole + 0.045), h.roof + 0.125, Math.sin(a) * (hole + 0.045), { cast: false });
+    }
+    // Slant back with the hatch seam, the tailgate, the bumper, the pintle hook.
+    k.add(sidePlate([[h.back, h.roof - 0.05], [h.back, h.roof + 0.01], [h.tail, h.belt + 0.07], [h.tail, h.belt + 0.01]], h.half * 2 - 0.06, 0.015), body, 0, 0, 0);
+    k.box(0.9, 0.012, 0.012, trim, -1.86, 1.655, 0, { rz: Math.atan2(h.roof - h.belt - 0.06, h.tail - h.back) + Math.PI, cast: false });
+    k.add(dressed(chamferBox(0.07, h.belt - h.sill - 0.1, h.half * 2 - 0.1, 0.018)), body, h.tail + 0.03, (h.belt + h.sill + 0.12) / 2, 0);
+    k.box(0.012, 0.5, 0.012, trim, h.tail - 0.008, 0.98, 0, { cast: false });
+    k.add(dressed(chamferBox(0.12, 0.16, h.half * 2, 0.025)), steel, h.tail - 0.07, 0.62, 0);
+    k.add(dressed(chamferBox(0.16, 0.08, 0.1, 0.02)), steel, h.tail - 0.18, 0.6, 0, { cast: false });
+    // Exhaust out past the right rear wheel (VehicleView puffs from its end), the aerial on its spring.
+    k.rod(V(-1.0, 0.52, 0.78), V(-2.46, 0.52, 0.78), 0.04, steel, 6);
+    k.cyl(0.03, 0.035, 0.12, 6, trim, h.back - 0.2, 1.83, 0.95, { cast: false });
+    k.rod(V(h.back - 0.2, 1.88, 0.95), V(h.back - 0.5, 3.3, 0.95), 0.008, trim, 4);
+    // Unit markings stencilled on the bumpers.
+    for (const sz of [-1, 1]) {
+      k.box(0.012, 0.09, 0.3, k.mat(0x24281f, 0.8), h.nose + 0.185, 0.62, sz * 0.82, { cast: false });
+      k.box(0.012, 0.09, 0.3, k.mat(0x24281f, 0.8), h.tail - 0.133, 0.62, sz * 0.82, { cast: false });
+    }
+    humveeWheels(k);
+    if (!drives) return;
+    // Seats, the dashboard, the wheel, the radio rack on the tunnel.
+    const cloth = k.mat(0x33382b, 0.95), dash = k.mat(0x1a1b1c, 0.8);
+    for (const s of def.seats) {
+      if (s.stand) continue;
+      k.block(0.5, s.y - def.floor, 0.5, cloth, s.x - 0.02, def.floor, s.z);
+      k.box(0.12, 0.6, 0.5, cloth, s.x - 0.28, s.y + 0.3, s.z, { rz: 0.12 });
+    }
+    k.block(0.24, 0.24, h.half * 2 - 0.2, dash, h.front - 0.16, 1.04, 0);
+    k.block(0.3, 0.2, 0.4, k.mat(0x2b3024, 0.7, 0.3), 0.55, 0.92, 0);
+    const w = def.wheel, z = def.seats[0].z, tilt = 0.5;
+    const rim = new THREE.TorusGeometry(0.18, 0.02, 6, 18);
+    rim.rotateY(Math.PI / 2);
+    rim.rotateZ(tilt);
+    k.add(rim, dash, w.x, w.y, z, { cast: false });
+    k.cyl(0.045, 0.045, 0.05, 8, dash, w.x + 0.01, w.y, z, { rz: tilt - Math.PI / 2, cast: false });
+    k.rod(V(w.x + 0.03, w.y - 0.02, z), V(h.front - 0.14, 1.2, z), 0.028, dash);
+  },
+  tWall(k) {
+    // Precast blast wall: sections 1.5 m wide on an inverted-T foot, two lifting holes in each.
+    const len = k.p.length ?? 6;
+    const c = k.lib.get('concrete').material;
+    const n = Math.max(1, Math.round(len / 1.5));
+    const w = len / n;
+    const stain = k.mat(0x3c3d3a, 0.95), hole = k.mat(0x111211, 0.9);
+    k.block(len, 0.26, 0.56, c, 0, 0, 0);
+    for (let i = 0; i < n; i++) {
+      const x = -len / 2 + w * (i + 0.5);
+      const top = 3.6 - k.rand(i + (k.p.variant ?? 0) * 7) * 0.05;
+      const stem = new THREE.BoxGeometry(w - 0.025, top - 0.26, 0.26);
+      // Thinner at the top than at the foot.
+      const p = stem.getAttribute('position') as THREE.BufferAttribute;
+      for (let v = 0; v < p.count; v++) if (p.getY(v) > 0) p.setZ(v, p.getZ(v) * 0.7);
+      stem.computeVertexNormals();
+      k.add(stem, c, x, 0.26 + (top - 0.26) / 2, 0);
+      for (const sz of [-1, 1]) {
+        for (const sx of [-1, 1]) k.box(0.09, 0.09, 0.012, hole, x + sx * w * 0.28, top - 0.42, sz * 0.097, { cast: false });
+        // Rain streaks under the cap.
+        if (k.rand(i * 13 + sz) > 0.45) k.box(w * (0.2 + k.rand(i * 5 + sz) * 0.4), 0.5 + k.rand(i * 3 + sz) * 0.9, 0.008, stain, x + (k.rand(i * 11 + sz) - 0.5) * w * 0.4, top - 0.5, sz * 0.1, { cast: false });
+      }
+    }
+    // Razor wire along the top: coils between pickets.
+    const wire = k.mat(0x6f7478, 0.4, 0.8);
+    const coils = Math.max(2, Math.round(len / 0.5));
+    for (let i = 0; i < coils; i++) {
+      const g = new THREE.TorusGeometry(0.2, 0.008, 3, 10);
+      g.rotateY(Math.PI / 2 + (i % 2 ? 0.35 : -0.35));
+      k.add(g, wire, -len / 2 + (len * (i + 0.5)) / coils, 3.76, 0, { cast: false });
+    }
+    for (let x = -len / 2 + 0.2; x < len / 2; x += 2.6) k.block(0.03, 0.42, 0.03, wire, x, 3.56, 0);
+  },
+  hesco(k) {
+    // Wire-mesh baskets lined with fabric and filled with earth, 1.1 m to a cell.
+    const len = k.p.length ?? 3.3;
+    const n = Math.max(1, Math.round(len / 1.1));
+    const w = len / n;
+    const fabric = k.mat(0x857a60, 0.96), dirt = k.mat(0x4f4434, 1), mesh = k.mat(0x53575a, 0.5, 0.7);
+    for (let i = 0; i < n; i++) {
+      const x = -len / 2 + w * (i + 0.5);
+      const g = jitter(new THREE.BoxGeometry(w - 0.03, 1.34, 1.04, 2, 2, 2), 0.035, i * 17 + Math.round(k.p.x * 3));
+      k.add(g, fabric, x, 0.67, 0);
+      k.add(jitter(new THREE.BoxGeometry(w - 0.1, 0.12, 0.94, 3, 1, 3), 0.05, i * 29 + Math.round(k.p.z * 3)), dirt, x, 1.37, 0, { cast: false });
+      // The mesh: uprights at the corners, the top rim, two bands.
+      for (const sz of [-1, 1]) {
+        for (const y of [0.45, 0.9, 1.36]) k.box(w, 0.014, 0.014, mesh, x, y, sz * 0.535, { cast: false });
+        for (let j = 0; j <= 3; j++) k.box(0.014, 1.36, 0.014, mesh, x - w / 2 + (w * j) / 3, 0.68, sz * 0.535, { cast: false });
+      }
+      k.box(0.014, 0.014, 1.07, mesh, x - w / 2, 1.36, 0, { cast: false });
+    }
+    k.box(0.014, 0.014, 1.07, mesh, len / 2, 1.36, 0, { cast: false });
+  },
+  gateArm(k) {
+    // The gate's barrier, left standing open: the cabinet, the counterweight, the striped boom.
+    const cab = k.mat(0x3f4634, 0.7, 0.2), steel = k.mat(0x2a2c2e, 0.5, 0.7);
+    k.add(dressed(chamferBox(0.32, 1.1, 0.32, 0.02)), cab, 0, 0.55, 0);
+    k.box(0.36, 0.04, 0.36, steel, 0, 1.12, 0, { cast: false });
+    k.cyl(0.05, 0.05, 0.44, 8, steel, 0, 0.98, 0, { rx: Math.PI / 2, cast: false });
+    const up = 1.32;
+    const boom = new THREE.Group();
+    boom.position.set(0, 0.98, 0.2);
+    boom.rotation.z = up;
+    k.root.add(boom);
+    const part = (g: THREE.BufferGeometry, color: number, x: number) => {
+      const m = k.add(g, k.mat(color, 0.6), 0, 0, 0, { cast: color !== 0xb0261c });
+      m.removeFromParent();
+      m.position.set(x, 0, 0);
+      boom.add(m);
+    };
+    part(new THREE.BoxGeometry(4.6, 0.1, 0.06), 0xd8d6cc, 1.9);
+    for (let i = 0; i < 5; i++) part(new THREE.BoxGeometry(0.42, 0.102, 0.062), 0xb0261c, 0.5 + i * 0.84);
+    part(new THREE.BoxGeometry(0.5, 0.3, 0.12), 0x2a2c2e, -0.55);
+    k.box(0.5, 0.36, 0.02, k.text(['STOP', 'SHOW ID'], { w: 256, h: 192, bg: '#b0261c', fg: '#eae6da', border: '#eae6da' }), 0, 0.7, 0.171, { cast: false });
+  },
   // ── Gas station ───────────────────────────────────────────────────────────
   pump(k) {
     const white = k.mat(0xb8b6ae, 0.5);

@@ -143,6 +143,60 @@ export const INTERIOR: Partial<Record<PropKind, Builder>> = {
     // Gun rack on the pegboard.
     for (let i = 0; i < 2; i++) k.block(1.2, 0.07, 0.06, gun, 0.4, 1.55 + i * 0.22, -0.31, { rz: 0.02 });
   },
+  // ── Camp Tolliver ─────────────────────────────────────────────────────────
+  bunk(k) {
+    // Steel double bunk: two decks of springs, a thin mattress and a wool blanket on each, a ladder at the foot.
+    const v = k.p.variant ?? 0;
+    const steel = k.mat(0x4d5248, 0.55, 0.5), tick = k.mat(0x8f8a78, 0.95, 0, false), wool = k.mat([0x4b5038, 0x5a5444, 0x3e4436][v % 3], 0.98, 0, false);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.block(0.045, 1.7, 0.045, steel, sx * 0.97, 0, sz * 0.44);
+    for (const y of [0.42, 1.28]) {
+      for (const sz of [-1, 1]) k.box(1.94, 0.05, 0.03, steel, 0, y, sz * 0.44);
+      for (const sx of [-1, 1]) k.box(0.03, 0.05, 0.88, steel, sx * 0.97, y, 0);
+      k.box(1.9, 0.015, 0.86, k.mat(0x2e302c, 0.6, 0.5), 0, y + 0.01, 0, { cast: false });
+      k.soft(1.88, 0.1, 0.82, 0.04, tick, 0, y + 0.02, 0);
+      // Made, or thrown back by whoever left it in a hurry.
+      const made = k.rand(y * 10 + v) > 0.4;
+      k.soft(made ? 1.3 : 0.8, 0.045, 0.84, 0.02, wool, made ? -0.26 : -0.5, y + 0.115, 0, made ? {} : { ry: 0.12 });
+      k.soft(0.4, 0.09, 0.56, 0.04, k.mat(0xb9b4a4, 0.95, 0, false), 0.68, y + 0.12, 0);
+    }
+    for (const sx of [-1, 1]) k.box(0.03, 0.3, 0.88, steel, sx * 0.97, 1.55, 0, { cast: false });
+    for (const sz of [0.3, 0.02]) k.block(0.025, 1.3, 0.025, steel, -1.0, 0.1, sz + 0.14);
+    for (let i = 0; i < 4; i++) k.box(0.02, 0.02, 0.28, steel, -1.0, 0.36 + i * 0.3, 0.3, { cast: false });
+  },
+  locker(k) {
+    // Wall locker: two doors with louvres, a name tape, a duffel on top of some.
+    const v = k.p.variant ?? 0;
+    const paint = k.mat([0x4a5044, 0x565a52, 0x3f4a44][v % 3], 0.6, 0.4), dark = k.mat(0x23261f, 0.7, 0.3), steel = k.mat(0x8a8d8f, 0.35, 0.8);
+    k.block(0.8, 1.86, 0.5, paint, 0, 0.04, 0);
+    k.block(0.74, 0.04, 0.44, dark, 0, 0, 0);
+    k.box(0.012, 1.8, 0.01, dark, 0, 0.97, 0.252, { cast: false });
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 4; i++) k.box(0.2, 0.012, 0.01, dark, sx * 0.2, 1.62 + i * 0.04, 0.252, { cast: false });
+      k.box(0.02, 0.1, 0.03, steel, sx * 0.06, 1.0, 0.262, { cast: false });
+      k.box(0.16, 0.04, 0.008, k.mat(0xc9c4b0, 0.8), sx * 0.2, 1.48, 0.252, { cast: false });
+    }
+    // One door of some stands ajar.
+    if (v % 4 === 1) k.box(0.38, 1.8, 0.016, paint, 0.52, 0.97, 0.4, { ry: -1.1 });
+    if (v % 3 === 0) k.add(jitter(new THREE.BoxGeometry(0.62, 0.26, 0.32, 3, 2, 2), 0.035, v + 3), k.mat(0x3f4634, 0.95), 0, 2.03, 0);
+  },
+  gunRack(k) {
+    // Armory rack: a steel frame bolted to the wall, a shelf the butts stand on, a notched bar the barrels lean in, a stencilled plate.
+    const steel = k.mat(0x3a3e38, 0.55, 0.5), dark = k.mat(0x70766a, 0.8, 0.15), rubber = k.mat(0x141514, 0.95);
+    for (const sx of [-1, 1]) {
+      k.block(0.05, 2.0, 0.05, steel, sx * 0.97, 0, -0.14);
+      k.block(0.05, 0.3, 0.38, steel, sx * 0.97, 0, 0);
+      k.box(0.04, 0.04, 0.3, steel, sx * 0.97, 1.3, 0, { cast: false });
+    }
+    k.box(1.98, 1.7, 0.02, dark, 0, 1.12, -0.17);
+    k.block(1.98, 0.05, 0.36, steel, 0, 0.26, 0.01);
+    k.box(1.94, 0.012, 0.32, rubber, 0, 0.317, 0.01, { cast: false });
+    k.box(1.98, 0.05, 0.06, steel, 0, 1.3, 0.12);
+    for (let i = 0; i < 9; i++) k.box(0.02, 0.07, 0.1, steel, -0.88 + i * 0.22, 1.3, 0.09, { cast: false });
+    k.box(1.98, 0.04, 0.04, steel, 0, 1.96, -0.14, { cast: false });
+    // Padlocked chain hanging loose from the bar.
+    k.box(0.03, 0.34, 0.03, k.mat(0x8a8d8f, 0.35, 0.8), 0.9, 1.1, 0.14, { rz: 0.1, cast: false });
+    k.box(0.07, 0.09, 0.03, k.mat(0xa8882a, 0.4, 0.7), 0.92, 0.9, 0.14, { cast: false });
+  },
   metalShelf(k) {
     const m = k.mat(0x55595c, 0.5, 0.6);
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.block(0.04, 1.9, 0.04, m, sx * 0.58, 0, sz * 0.2);

@@ -41,13 +41,13 @@ const MATERIAL_SURFACE: Record<MaterialKey, Surface> = {
 };
 
 const METAL_PROPS = new Set<PropKind>([
-  'car', 'policeCar', 'wreckedCar', 'armoredTruck', 'streetlight', 'parkLamp', 'floodlight', 'mailbox', 'hydrant', 'streetSign',
+  'car', 'policeCar', 'wreckedCar', 'armoredTruck', 'humvee', 'locker', 'gunRack', 'gateArm', 'bunk', 'streetlight', 'parkLamp', 'floodlight', 'mailbox', 'hydrant', 'streetSign',
   'stopSign', 'pump', 'signPylon', 'dumpster', 'oilDrum', 'swingSet', 'slide', 'merryGoRound', 'metalShelf', 'fridge', 'stove',
   'washer', 'waterHeater', 'ironFence', 'bbq', 'trampoline', 'cooler', 'storeShelf', 'patioTable', 'floorLamp',
 ]);
 const SOFT_PROPS = new Set<PropKind>(['sofa', 'armchair', 'bed', 'mattress', 'tent', 'cone', 'trashBin', 'iceChest', 'tireStack', 'trashBag']);
-const CONCRETE_PROPS = new Set<PropKind>(['jerseyBarrier', 'toilet', 'bathtub', 'vanity']);
-const DIRT_PROPS = new Set<PropKind>(['sandbags']);
+const CONCRETE_PROPS = new Set<PropKind>(['jerseyBarrier', 'tWall', 'toilet', 'bathtub', 'vanity']);
+const DIRT_PROPS = new Set<PropKind>(['sandbags', 'hesco']);
 
 function propSurface(kind: PropKind): Surface {
   if (METAL_PROPS.has(kind)) return 'metal';

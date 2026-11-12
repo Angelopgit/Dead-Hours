@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, LIMB_NAME,
+  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, seatStands, mansTurret, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -20,6 +20,7 @@ import { PlayerController } from './PlayerController';
 import { ThirdPersonCamera } from './ThirdPersonCamera';
 import type { Door, DoorSystem } from './Doors';
 import { WeaponRack } from './WeaponRack';
+import { ArmoryRacks } from './ArmoryRacks';
 import { SupplyDrops } from './SupplyDrops';
 import { RemoteSurvivors } from './RemoteSurvivors';
 import type { NetLink } from '../network/NetLink';
@@ -235,6 +236,7 @@ export class GameSession {
   private driving: Driving | null = null;
   private driveT = 0;
   private carHinted = false;
+  private gunHinted = false;
   /** Online: where the server let this survivor out of a vehicle (until the session has put them there). */
   private readonly exitSpot = new ExitSpot();
   /** This frame's interpolation between fixed steps (where this survivor's own car is drawn). */
@@ -259,6 +261,8 @@ export class GameSession {
   /** The bike under this survivor's feet on someone's pegs, where it is drawn this frame. */
   private readonly underPegs: BikePose = { pos: new THREE.Vector3(), yaw: 0, lean: 0, steer: 0, crank: 0, pedalling: false, brake: 0, air: false };
   private readonly drops: SupplyDrops;
+  /** The guns standing in the armory's racks (Camp Tolliver). */
+  private readonly armory: ArmoryRacks;
   private readonly helis = new Map<number, { pos: THREE.Vector3; hover: number }>();
   private readonly rack: WeaponRack | null = null;
   private table: WeaponTablePanel | null = null;
@@ -482,6 +486,7 @@ export class GameSession {
     this.limbs.onLand = (pos, strength) => audio.limbLand(pos, strength);
     this.barricades = new BarricadeView(engine.scene, this.sim, field);
     this.drops = new SupplyDrops(engine.scene, physics);
+    this.armory = new ArmoryRacks(engine.scene, NEIGHBORHOOD, field);
     this.drops.onSmoke = (pos, strong) => this.effects.flareSmoke(pos, strong);
     this.drops.onLand = (pos) => {
       this.effects.landingDust(pos);
@@ -1197,6 +1202,7 @@ export class GameSession {
     // Vehicles where they are drawn this frame; a survivor in a seat sits where theirs is.
     this.vehicleView.update(live, this.engine.camera, this.sim.vehicles.list, this.drawAt);
     this.vehicleView.exhaust(live, this.effects.smoke);
+    this.aimTurrets(live);
     this.placeSeated();
     // Lying prone, swinging, throwing or bandaging props the chest up on one elbow.
     const hands = this.me.arsenal.action;
@@ -1255,8 +1261,10 @@ export class GameSession {
       this.fill.intensity = 1.6 * (1 - 0.8 * ads);
       this.hud.setScope(scope);
       const driver = p.seated?.driver ?? false;
-      const wheel = driver && this.vehicleView.wheelPoints(p.seated!.vehicle, this.wheelL, this.wheelR) ? { left: this.wheelL, right: this.wheelR } : null;
-      this.weapon.update(dt, a, { aim: driver ? 0 : a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming, wheel });
+      // At the wheel both hands are on it; at a roof gun, on its grips.
+      const wheel = (driver && this.vehicleView.wheelPoints(p.seated!.vehicle, this.wheelL, this.wheelR))
+        || (p.seated?.stand && this.vehicleView.turretGrips(p.seated.vehicle, this.wheelL, this.wheelR)) ? { left: this.wheelL, right: this.wheelR } : null;
+      this.weapon.update(dt, a, { aim: wheel ? 0 : a.aim, sprinting: p.sprinting, aimPoint: this.cam.aimPoint, ads, eye: this.cam.eye, view: this.cam.view, priming: this.throws.priming, wheel });
     }
     this.updateLamp(dt);
     this.probe.update(dt, this.ragdoll ? this.ragdoll.center(this.tmpA).setY(this.ragdoll.floorY) : p.renderPosition, this.engine.camera);
@@ -1291,6 +1299,7 @@ export class GameSession {
     if (this.work) this.work.t += live;
     this.bleedHeldLimb(live);
     if (running) this.drops.update(live, renderTime, this.engine.camera.position);
+    this.armory.update(this.sim.interactables, this.engine.camera);
     this.drops.helicopters(this.helis);
     audio.helicopters(this.phase === 'paused' && !this.link ? new Map() : this.helis);
     if (this.effects.barrelWarm) this.effects.barrel(this.weapon.muzzleWorld(this.tmpA), live);
@@ -1427,7 +1436,7 @@ export class GameSession {
 
   /** The active weapon's sights when aiming should look down them (first person). */
   private adsSight(): Sight | null {
-    if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing' || this.player.seated?.driver) return null;
+    if (settings.value.controls.aimView !== 'sights' || this.phase !== 'playing' || this.player.seated?.driver || this.player.seated?.stand) return null;
     const a = this.me.arsenal;
     if (a.action === 'reload' || a.action === 'draw' || a.limb || a.meleeOut) return null;
     return this.sightFor(a.weapon.id);
@@ -1839,6 +1848,14 @@ export class GameSession {
   /** Muzzle flash, report, recoil and the spent case for this survivor's own shot. */
   private shotFeedback(weapon: WeaponId): void {
     const def = this.me.arsenal.defOf(weapon);
+    const manned = def.mounted ? this.sim.vehicles.manning(this.myId) : null;
+    if (manned && this.turretShot(manned.id, weapon, true)) {
+      // The mount takes the recoil: the hatch shakes, the view barely climbs.
+      this.cam.addRecoil(0.0035, (Math.random() - 0.5) * 0.004);
+      this.cam.addTrauma(0.07);
+      this.input.rumble(0.4, 70, 'shot');
+      return;
+    }
     // First, so the flash and the case come from the gun of a pair that fired (the rounds left say which).
     this.weapon.fired(def, this.me.arsenal.weapon.mag);
     const muzzle = this.weapon.muzzleWorld(this.tmpA);
@@ -1856,7 +1873,7 @@ export class GameSession {
       // Bolt action: worked by hand after every round, the case flicked out as it comes back.
       this.later.push({ t: 0.32, fn: () => audio.foley('bolt', this.handPos(), 'wraith', 0, true) });
       this.later.push({ t: 0.4, fn: () => this.ejectCasing(false) });
-    } else if (weapon !== 'rpg') this.ejectCasing(false);
+    } else if (!def.explosive && !def.launch) this.ejectCasing(false);
   }
 
   /** Another survivor fired: their muzzle, their report from where they stand, tracers to where it went. */
@@ -1876,6 +1893,11 @@ export class GameSession {
   private remoteShot(e: Extract<SimEvent, { type: 'shot' }>): void {
     const r = this.remotes!;
     const shooter = this.sim.players.get(e.player)?.arsenal;
+    const manned = WEAPONS[e.weapon].mounted ? this.sim.vehicles.manning(e.player) : null;
+    if (manned && this.turretShot(manned.id, e.weapon, false, e.pellets.map((p) => p.end), e.player)) {
+      for (const p of e.pellets) this.effects.tracer(this.tmpA, v3(p.end, this.tmpC));
+      return;
+    }
     const w = r.weaponOf(e.player);
     // First, so an akimbo pair's flash, tracers and case come from the gun that fired.
     w?.fired(shooter ? shooter.defOf(e.weapon) : WEAPONS[e.weapon]);
@@ -1888,7 +1910,7 @@ export class GameSession {
     }
     audio.gunshot(e.weapon, muzzle, false, e.pellets.map((p) => p.end), shooter?.builds[e.weapon]?.muzzle === 'suppressor' || e.weapon === 'wraith', e.player);
     if (w) {
-      if (e.weapon === 'rpg') return;
+      if (WEAPONS[e.weapon].explosive || WEAPONS[e.weapon].launch) return;
       const pos = this.tmpC, d = this.tmpD;
       w.ejectWorld(pos, d);
       const floor = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 3);
@@ -2251,15 +2273,18 @@ export class GameSession {
       const [v, seat] = at;
       if (cur && cur.vehicle === v.id && cur.seat === seat) return;
       this.exitSpot.sat();
-      p.sitIn(v.id, seat, seat === 0, seatDrop(v.def, seat));
-      this.cam.seat = seat === 0 ? 'driver' : 'passenger';
+      // The gunner stands in the hatch: the view is the one on foot, from up there.
+      const stand = seatStands(v.def, seat);
+      p.sitIn(v.id, seat, seat === 0, seatDrop(v.def, seat), stand);
+      this.cam.seat = seat === 0 ? 'driver' : stand ? null : 'passenger';
       this.cam.seeThrough = this.assist.seeThrough = v.body;
       this.touch.setSeat(seat === 0 ? 'driver' : 'passenger');
       this.throws.priming = null;
       this.driving = seat === 0 ? new Driving(this.physics, this.sim, v) : null;
       this.driveT = 0;
       if (this.driving) this.mirror?.dropVehicleTrack(v.id);
-      if (!cur) this.carHint(seat === 0);
+      if (stand) this.gunHint();
+      else if (!cur) this.carHint(seat === 0);
       return;
     }
     if (!cur) return;
@@ -2268,6 +2293,15 @@ export class GameSession {
     this.cam.seeThrough = this.assist.seeThrough = null;
     this.touch.setSeat(null);
     this.driving = null;
+  }
+
+  /** The first time at a roof gun: what it is and how to leave it. */
+  private gunHint(): void {
+    if (this.gunHinted) return;
+    this.gunHinted = true;
+    const d = this.input.device;
+    const k = (a: Action, alt: string) => actionLabel(a) || alt;
+    this.hud.notify('ROOF GUN', d === 'touch' ? 'THE .50 FIRES WHERE YOU AIM, SEAT MOVES OVER, USE GETS OUT' : `THE .50 FIRES WHERE YOU AIM, ${k('reload', 'R')} NEW BELT, ${k('barricade', 'G')} CHANGE SEAT, ${k('interact', 'E')} GET OUT`, 4.5);
   }
 
   /** The first time in a vehicle: how it's driven (or what a passenger can do). */
@@ -2286,6 +2320,45 @@ export class GameSession {
         ? `${k('fire', 'RT')} GAS, ${k('aim', 'LT')} BRAKE, ${this.moveStick()} STEERS, ${k('jump', 'A')} HANDBRAKE, ${k('melee', 'R3')} HORN, ${k('flashlight', '↑')} LIGHTS, ${k('interact', 'RB')} GET OUT`
         : `${k('forward', 'W')} GAS, ${k('back', 'S')} BRAKE AND REVERSE, ${k('left', 'A')}/${k('right', 'D')} STEER, ${k('jump', 'SPACE')} HANDBRAKE, ${k('melee', 'F')} HORN, ${k('flashlight', 'L')} LIGHTS, ${k('interact', 'E')} GET OUT`,
       5);
+  }
+
+  /** Every roof gun follows whoever stands at it: this survivor's crosshair, or where the others say they look. */
+  private aimTurrets(dt: number): void {
+    for (const v of this.sim.vehicles.list) {
+      const ts = v.def.turret;
+      if (!ts) continue;
+      const who = v.seats[ts.seat];
+      const g = who ? this.sim.players.get(who) : null;
+      if (!g || !g.up) {
+        this.vehicleView.aimTurret(v.id, null, dt);
+        continue;
+      }
+      const aim = this.tmpE;
+      if (who === this.myId && this.vehicleView.turretPivot(v.id, aim)) {
+        aim.subVectors(this.cam.aimPoint, aim);
+        // Something right in front of the gun: it points where the survivor looks, not back at it.
+        if (aim.lengthSq() < 4) this.engine.camera.getWorldDirection(aim);
+      } else {
+        const m = g.motion, cp = Math.cos(m.pitch);
+        aim.set(-Math.sin(m.yaw) * cp, Math.sin(m.pitch), -Math.cos(m.yaw) * cp);
+      }
+      this.vehicleView.aimTurret(v.id, aim, dt);
+    }
+  }
+
+  /** A round from a vehicle's roof gun: its flash, its report, the gun's jump and the big case over the side. */
+  private turretShot(vehicle: number, weapon: WeaponId, own: boolean, ends?: Vec3[], by?: string): boolean {
+    const muzzle = this.tmpA, dir = this.tmpB;
+    if (!this.vehicleView.turretMuzzle(vehicle, muzzle, dir)) return false;
+    this.vehicleView.turretFired(vehicle);
+    this.effects.muzzle(muzzle, dir, weapon, own);
+    audio.gunshot(weapon, muzzle, own, ends, false, by);
+    const pos = this.tmpC, d = this.tmpD;
+    if (this.vehicleView.turretEject(vehicle, pos, d)) {
+      const floor = this.physics.raycast(pos.x, pos.y, pos.z, 0, -1, 0, 4);
+      this.effects.eject(pos, d, floor !== null ? pos.y - floor : 2, false, this.tmpE.set(0, 0, 0));
+    }
+    return true;
   }
 
   /** Puts this survivor on their seat as the vehicle is drawn this frame. */
@@ -2418,7 +2491,7 @@ export class GameSession {
     }
     this.cam.rush = THREE.MathUtils.smoothstep(Math.abs(speed), 8, 26) * 0.8;
     const state = v.crank > 0 ? 'STARTING' : v.engine ? (d && !d.lights ? 'LIGHTS OFF' : '') : v.gas <= 0 ? 'OUT OF GAS' : seat === 0 ? 'ENGINE OFF' : '';
-    this.hud.setVehicle({ name: v.def.name, seat: seat === 0 ? 'DRIVING' : 'PASSENGER', mph: Math.abs(speed) * 2.237, gas: v.gas, state });
+    this.hud.setVehicle({ name: v.def.name, seat: seat === 0 ? 'DRIVING' : mansTurret(v.def, seat) ? 'GUNNER' : 'PASSENGER', mph: Math.abs(speed) * 2.237, gas: v.gas, state });
   }
 
   /** Engines running and horns sounding near the listener: the nearest three are heard. */
@@ -2441,7 +2514,8 @@ export class GameSession {
         e.d = e.pos.distanceToSquared(cam);
         if (e.d > 160 * 160) continue;
         e.id = v.id;
-        e.kind = v.kind;
+        // A Humvee's diesel is the truck's.
+        e.kind = v.kind === 'humvee' ? 'truck' : v.kind;
         e.running = v.engine;
         e.speed = mine ? mine.body.speed : v.speed;
         e.top = v.def.top;
@@ -2476,7 +2550,7 @@ export class GameSession {
         audio.wheels.starter(at, v.def.crank);
         break;
       case 'start':
-        audio.wheels.engineCatch(at, v.kind === 'truck');
+        audio.wheels.engineCatch(at, v.kind === 'truck' || v.kind === 'humvee');
         this.vehicleView.cough(e.vehicle, this.effects.smoke);
         break;
       case 'dry':
@@ -2999,7 +3073,8 @@ export class GameSession {
         }
         // Online the flash, report and kick came the moment the trigger was pulled.
         if (!this.link) this.shotFeedback(e.weapon);
-        const muzzle = this.weapon.muzzleWorld(A);
+        const gun = WEAPONS[e.weapon].mounted ? this.sim.vehicles.manning(this.myId) : null;
+        const muzzle = gun && this.vehicleView.turretMuzzle(gun.id, A, B) ? A : this.weapon.muzzleWorld(A);
         for (let i = 0; i < e.pellets.length; i++) {
           // A shotgun's pellets would be a solid sheet of light; a few streaks read better.
           if (e.pellets.length > 1 && i % 3 !== 0) continue;
@@ -4117,6 +4192,7 @@ export class GameSession {
     this.pickups.dispose();
     this.syringes.dispose();
     this.drops.dispose();
+    this.armory.dispose();
     audio.helicopters(new Map());
     if (sceneSmoke() === this.effects.smoke) setSceneSmoke(null);
     this.effects.dispose();

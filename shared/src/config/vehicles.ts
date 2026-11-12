@@ -1,14 +1,32 @@
 import type { PropSpec } from '../types/world';
+import type { WeaponId } from './weapons';
 
-/** What a drivable vehicle is: a family car, a police cruiser, a beaten-up wreck, or the armored truck. */
-export type VehicleKind = 'car' | 'police' | 'wreck' | 'truck';
+/** What a drivable vehicle is: a family car, a police cruiser, a beaten-up wreck, the armored truck, or a Humvee. */
+export type VehicleKind = 'car' | 'police' | 'wreck' | 'truck' | 'humvee';
 
 /** A seat, in the vehicle's own frame: +x toward the nose, +z the passenger side, y up from the road. */
 export interface SeatSpec {
   x: number;
-  /** Height of the cushion (where the hips sit). */
+  /** Height of the cushion (where the hips sit), or of the step a standing gunner's feet are on. */
   y: number;
   z: number;
+  /** Stood in, not sat on: the gunner's place in a roof hatch. */
+  stand?: boolean;
+}
+
+/** A gun on a ring in the roof, worked by whoever stands in the hatch. */
+export interface TurretSpec {
+  /** The seat that mans it (the ring is centred over it). */
+  seat: number;
+  weapon: WeaponId;
+  /** Height of the ring (the roof it turns on) and of the gun's trunnion above the road. */
+  ring: number;
+  y: number;
+  /** How far ahead of the ring's centre the gun pivots, and how far behind the pivot its grips are. */
+  pivot: number;
+  grips: number;
+  /** How far the barrel swings below and above level (radians). */
+  pitch: [number, number];
 }
 
 export interface VehicleDef {
@@ -64,6 +82,8 @@ export interface VehicleDef {
   ram: number;
   /** Share of the speed lost for each zombie run down (brutes cost more). */
   slow: number;
+  /** A roof gun (Humvees). */
+  turret?: TurretSpec;
 }
 
 const CAR_SEATS: SeatSpec[] = [
@@ -117,6 +137,28 @@ export const VEHICLES: Record<VehicleKind, VehicleDef> = {
     top: 17, reverse: 5, accel: 3.8, brake: 9, steer: 0.5, grip: 9,
     fuel: [0.4, 0.75], burn: 0.0005, idle: 0.0009, crank: 1.4,
     ram: 2.2, slow: 0.025,
+  },
+  // M1114 up-armored HMMWV: 4.99 m long on a 3.30 m wheelbase, 2.3 m wide, 1.9 m to the roof,
+  // 0.94 m tyres. Seat 1 is the gunner's step under the roof ring, so the driver moves straight
+  // to the gun; the three other seats follow.
+  humvee: {
+    kind: 'humvee', name: 'HUMVEE',
+    hx: 2.5, hz: 1.15, low: 1.3, clear: 0.4,
+    cabin: { x0: -1.25, x1: 1.0, top: 1.9, hz: 1.08 },
+    seats: [
+      { x: 0.35, y: 1.0, z: -0.68 },
+      { x: -0.45, y: 0.92, z: 0, stand: true },
+      { x: 0.35, y: 1.0, z: 0.68 },
+      { x: -0.72, y: 1.0, z: -0.74 },
+      { x: -0.72, y: 1.0, z: 0.74 },
+    ],
+    floor: 0.62,
+    wheel: { x: 0.8, y: 1.34 },
+    wheelbase: 3.3, axles: [1.65, -1.65], wheelRadius: 0.47, track: 0.93,
+    top: 21, reverse: 6, accel: 5.2, brake: 11, steer: 0.52, grip: 10,
+    fuel: [0.45, 0.8], burn: 0.00046, idle: 0.0008, crank: 1.1,
+    ram: 1.8, slow: 0.035,
+    turret: { seat: 1, weapon: 'm2', ring: 1.92, y: 2.3, pivot: 0.74, grips: 0.42, pitch: [-0.32, 0.7] },
   },
 };
 
@@ -182,11 +224,23 @@ export function vehicleKindOf(p: PropSpec): VehicleKind | null {
       return 'police';
     case 'armoredTruck':
       return 'truck';
+    case 'humvee':
+      return 'humvee';
     case 'wreckedCar':
       return (p.variant ?? 0) >= 10 ? null : 'wreck';
     default:
       return null;
   }
+}
+
+/** Whether a seat is stood in (the gunner's step under a roof ring). */
+export function seatStands(def: VehicleDef, seat: number): boolean {
+  return !!def.seats[seat]?.stand;
+}
+
+/** Whether a seat mans the vehicle's roof gun. */
+export function mansTurret(def: VehicleDef, seat: number): boolean {
+  return def.turret?.seat === seat;
 }
 
 /** How high a seat's cushion is over the cabin floor (the legs reach down that far to it). */

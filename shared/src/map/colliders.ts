@@ -20,6 +20,11 @@ const SIMPLE: Partial<Record<PropKind, LocalBox>> = {
   policeCar: [0, 0.75, 0, 2.25, 0.75, 0.95],
   wreckedCar: [0, 0.75, 0, 2.25, 0.75, 0.95],
   armoredTruck: [0, 1.3, 0, 3.1, 1.3, 1.2],
+  humvee: [0, 0.95, 0, 2.5, 0.95, 1.15],
+  bunk: [0, 0.85, 0, 1.0, 0.85, 0.48],
+  locker: [0, 0.95, 0, 0.4, 0.95, 0.26],
+  gunRack: [0, 1.0, 0, 1.0, 1.0, 0.2],
+  gateArm: [0, 0.6, 0, 0.16, 0.6, 0.16],
   streetlight: [0, 3, 0, 0.15, 3, 0.15],
   parkLamp: [0, 2, 0, 0.12, 2, 0.12],
   floodlight: [0, 3.8, 0, 0.5, 3.8, 0.5],
@@ -138,6 +143,10 @@ export function propColliders(p: PropSpec): OrientedBox[] {
       return [at([0, 0.75, 0, (len ?? 6) / 2, 0.75, 0.05])];
     case 'railing':
       return [at([0, 0.5, 0, (len ?? 2) / 2, 0.5, 0.04])];
+    case 'tWall':
+      return [at([0, 1.8, 0, (len ?? 6) / 2, 1.8, 0.28])];
+    case 'hesco':
+      return [at([0, 0.7, 0, (len ?? 3.3) / 2, 0.7, 0.55])];
     case 'sandbags':
       return [at([0, 0.375, 0, (len ?? 2.4) / 2, 0.375, 0.3])];
     case 'counter':
