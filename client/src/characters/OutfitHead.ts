@@ -64,7 +64,7 @@ function facePaint(a: Appearance, b: Body, hairHex: number, covered: boolean): F
     if (a.facialHair === 'stubble') add(mixHex(hairHex, b.skin, 0.55), (x, y, an) => 0.62 * beardK(x, y, an));
     if (mk.cheeks !== undefined) add(mk.cheeks, (x, y) => 0.7 * gs((Math.abs(x) - 0.07) / 0.02, (y - 0.096) / 0.015));
     if (mk.lids !== undefined) add(mk.lids, (x, y) => 0.85 * gs((Math.abs(x) - 0.044) / 0.021, (y - 0.1505) / 0.0055));
-    if (a.makeup === 'eyeblack') add(0x141214, (x, y) => 0.95 * gs((Math.abs(x) - 0.046) / 0.017, (y - 0.119) / 0.006));
+    if (a.makeup === 'eyeblack') add(0x141214, (x, y) => 0.95 * gs((Math.abs(x) - 0.048) / 0.02, (y - 0.124) / 0.008));
     // Lips: a little redder than the skin, or painted; the upper one darker, turned from the light.
     const lipHex = mk.lips ?? mixHex(b.skin, b.female ? 0xa04a58 : 0x8a4c48, b.female ? 0.34 : 0.24);
     add(lipHex, (x, y) => lipK(x, y) * (y > MOUTH_Y ? 0.92 : 1));
@@ -113,7 +113,7 @@ export function face(h: Kit, neck: Kit, a: Appearance, b: Body, hairHex: number,
     if (covered || b.mask?.brows) continue;
     const brow = luminance(hairHex) > 0.7 ? shade(hairHex, 0.85) : hairHex;
     // Women's brows thinner and arched, men's heavier and flatter.
-    h.put(browGeometry(f, s, e.browY + (b.female ? 0.002 : 0), e.brow * 0.55, b.female ? 0.0068 : 0.0125, b.female ? 0.0042 : 0.0012), brow);
+    h.put(browGeometry(f, s, e.browY + (b.female ? 0.002 : 0), e.brow * 0.55, b.female ? 0.0066 : 0.0105, b.female ? 0.0042 : 0.0016), brow);
   }
 }
 
@@ -205,7 +205,7 @@ export function eyeParts(a: Appearance): EyePart[] {
     const frame = mat([s * EYE_X, 0, EYE_Z], [0, s * EYE_YAW, 0]);
     const at = (p: V3, r: V3, sc: V3 | number) => frame.clone().multiply(mat(p, r, sc));
     add(new THREE.SphereGeometry(1, 12, 8), 0xdfd9cf, at(O, O, R));
-    const ir = 0.0068;
+    const ir = 0.0078;
     add(new THREE.SphereGeometry(1, 12, 6), iris, at([0, 0, R[2] - 0.0019], O, [ir, ir, 0.0026]), true);
     add(new THREE.SphereGeometry(1, 8, 5), 0x050505, at([0, 0, R[2] - 0.0004], O, [ir * 0.42, ir * 0.42, 0.0014]), true);
     add(new THREE.SphereGeometry(1, 5, 4), 0xffffff, at([-s * ir * 0.3 + s * 0.0006, ir * 0.36, R[2] + 0.0008], O, ir * 0.15), true);
@@ -452,13 +452,15 @@ export function hair(h: Kit, a: Appearance, b: Body, hx: number, cover: Cover): 
       fringe([0, 0.215, -0.085], [0.095, 0.06, 0.055], [-0.35, 0, 0]);
       break;
     case 'crew':
-      // Clipped close all over, a little longer on top.
-      scalp(0.007, 1.48, 0.5, shaved);
-      if (scalpOk) h.cap(hx, [0.117 + 0.012, 0.14 + 0.012, 0.13 + 0.012], 0, 0.95, [0, 0.12, 0.004], [-0.22, 0, 0], { w: 10, h: 3 });
+      // Clipped close all over, a little longer on top. The top stands well clear of the
+      // clipped layer: two caps of different facets a few millimetres apart cut through each other.
+      scalp(0.006, 1.48, 0.5, shaved);
+      if (scalpOk) h.cap(hx, [0.117 + 0.017, 0.14 + 0.017, 0.13 + 0.017], 0, 0.98, [0, 0.12, 0], O, { w: 12, h: 3 });
       break;
     case 'hightight':
-      // Skin at the sides and back, a short flat patch left on top.
-      if (scalpOk) h.cap(mixHex(hx, b.skin, 0.15), [0.117 + 0.009, 0.14 + 0.009, 0.13 + 0.009], 0, 0.72, [0, 0.12, 0.006], [-0.2, 0, 0], { w: 10, h: 3 });
+      // Shaved to a shadow at the sides and back, a short flat patch left on top.
+      scalp(0.005, 1.45, 0.5, mixHex(hx, b.skin, 0.66));
+      if (scalpOk) h.cap(hx, [0.117 + 0.016, 0.14 + 0.016, 0.13 + 0.016], 0, 0.8, [0, 0.12, 0], [0.18, 0, 0], { w: 12, h: 3 });
       break;
     case 'afropuffs':
       scalp(0.018, 1.6, 0.45);
@@ -555,9 +557,10 @@ export function headwear(h: Kit, a: Appearance, hex: number): void {
     }
     case 'beanie':
     case 'pombeanie': {
-      const f = frame(0.22);
-      dome(f, hex, 0.019, 1.78, { pattern: PATTERN.knit });
-      const rr = rim(0.019, 1.78);
+      // Pulled down to just over the brows in front, to the nape behind.
+      const f = frame(0.32);
+      dome(f, hex, 0.019, 1.62, { pattern: PATTERN.knit });
+      const rr = rim(0.019, 1.62);
       f.cyl(hex, rr.rx + 0.008, rr.rx + 0.01, 0.045, [0, rr.y + 0.02, 0], O, [1, 1, rr.rz / rr.rx], { seg: 18 }, { pattern: PATTERN.knit });
       if (a.headwear === 'pombeanie') f.ico(mixHex(hex, 0xf2efe8, 0.6), 0.042, [0, domeR(0.019)[1] + 0.02, 0], O, 1, 1);
       break;
@@ -605,9 +608,9 @@ export function headwear(h: Kit, a: Appearance, hex: number): void {
       break;
     }
     case 'army': {
-      const f = frame(0.15);
-      dome(f, hex, 0.035, 1.7, { pattern: PATTERN.camo, accent: shade(hex, 0.7) });
-      const rr = rim(0.035, 1.7);
+      const f = frame(0.3);
+      dome(f, hex, 0.035, 1.6, { pattern: PATTERN.camo, accent: shade(hex, 0.7) });
+      const rr = rim(0.035, 1.6);
       f.cyl(shade(hex, 0.85), rr.rx + 0.02, rr.rx + 0.028, 0.016, [0, rr.y, 0], O, [1, 1, rr.rz / rr.rx], { seg: 20 });
       h.torus(0x3a3226, 0.1, 0.004, [0, 0.06, 0.0], [0, Math.PI / 2, 0], [1, 1.1, 1], 3, 12, Math.PI);
       break;
@@ -618,8 +621,9 @@ export function headwear(h: Kit, a: Appearance, hex: number): void {
       h.box(dark, [0.2, 0.012, 0.03], [0, 0.04, 0.15], [0.2, 0, 0]);
       break;
     case 'football': {
-      const f = frame(0.18);
-      dome(f, hex, 0.04, 1.95);
+      // The shell's edge is at the brow in front and down over the ears and the nape.
+      const f = frame(0.47);
+      dome(f, hex, 0.04, 1.8);
       const R = domeR(0.04);
       f.box(0xe8e6e0, [0.03, 0.01, 0.3], [0, R[1], 0], [0, 0, 0]);
       for (const y of [0.04, 0.085]) h.torus(0x9a9ca0, 0.115, 0.0055, [0, y, 0.035], [Math.PI / 2, 0, 0], [1.05, 1, 1.15], 4, 12, Math.PI);
@@ -830,21 +834,21 @@ export function headwear(h: Kit, a: Appearance, hex: number): void {
     case 'gogglehelmet': {
       // The issue helmet in its cloth cover: down over the ears, a bracket for night vision on
       // the brow, the band round it; one wears goggles pushed up on the shell.
-      const f = frame(0.1);
+      const f = frame(0.3);
       const cam: Surface = { pattern: PATTERN.camo, accent: camoOf(hex) };
-      dome(f, hex, 0.036, 1.74, cam);
-      const R = domeR(0.036), rr = rim(0.036, 1.74);
+      dome(f, hex, 0.036, 1.62, cam);
+      const R = domeR(0.036), rr = rim(0.036, 1.62);
       f.cyl(shade(hex, 0.78), rr.rx + 0.004, rr.rx + 0.004, 0.016, [0, rr.y + 0.004, 0], O, [1, 1, rr.rz / rr.rx], { seg: 12 });
-      onDome(f, R, 1.12, 0x2b2d31, [0.042, 0.036, 0.012], 0.004);
-      const by = Math.cos(1.38) * R[1], bs = Math.sin(1.38);
+      onDome(f, R, 1.3, 0x2b2d31, [0.042, 0.036, 0.012], 0.004);
+      const by = Math.cos(1.46) * R[1], bs = Math.sin(1.46);
       f.cyl(shade(hex, 0.62), R[0] * bs + 0.003, R[0] * bs + 0.003, 0.02, [0, by, 0], O, [1, 1, R[2] / R[0]], { seg: 12, open: true });
       for (const s of [1, -1]) f.box(0xc8d0a8, [0.012, 0.012, 0.004], [s * 0.022, by, -R[2] * bs - 0.004]);
       h.torus(0x3a3226, 0.1, 0.004, [0, 0.06, 0.0], [0, Math.PI / 2, 0], [1, 1.1, 1], 3, 12, Math.PI);
       if (a.headwear === 'gogglehelmet') {
-        const gy = Math.cos(1.0) * R[1], gs = Math.sin(1.0);
+        const gy = Math.cos(1.16) * R[1], gs = Math.sin(1.16);
         f.cyl(0x18191b, R[0] * gs + 0.004, R[0] * gs + 0.004, 0.026, [0, gy, 0], O, [1, 1, R[2] / R[0]], { seg: 12, open: true });
-        onDome(f, R, 1.0, 0x1d1e20, [0.15, 0.056, 0.03], 0.008);
-        onDome(f, R, 1.0, 0x8a6a2a, [0.13, 0.04, 0.006], 0.026);
+        onDome(f, R, 1.16, 0x1d1e20, [0.15, 0.056, 0.03], 0.008);
+        onDome(f, R, 1.16, 0x8a6a2a, [0.13, 0.04, 0.006], 0.026);
       }
       break;
     }
@@ -949,12 +953,22 @@ function headset(h: Kit, hex: number): void {
   h.box(0x18191b, [0.016, 0.012, 0.012], [0.082, 0.062, 0.105], [0.3, -0.42, 0]);
 }
 
+/** The arms of a pair of glasses: from the hinge at the lens's outer edge back over the ear. */
 function temples(h: Kit, hex: number, y = 0.14): void {
-  for (const s of [1, -1]) h.box(hex, [0.004, 0.005, 0.12], [s * 0.112, y, 0.07], [0, s * -0.08, 0]);
+  for (const s of [1, -1]) {
+    // An end piece out past the lens to the hinge, so the arm clears the side of the head.
+    h.box(hex, [0.024, 0.004, 0.004], [s * 0.08, y, 0.128]);
+    h.box(hex, [0.004, 0.005, 0.135], [s * 0.105, y, 0.0615], [0, s * -0.196, 0]);
+  }
 }
 
-export function faceGear(h: Kit, a: Appearance, b: Body, hex: number): void {
+/** Spectacles are built for eyes 84 mm apart on a flat face: this sets them over the eyes as sculpted, in front of the brow. */
+const SPECS: [V3, V3, V3] = [[0, 0, -0.004], O, [EYE_X / 0.042, 1, 1]];
+
+export function faceGear(head: Kit, a: Appearance, b: Body, hex: number): void {
   if (b.zombie && a.face !== 'surgical') return;
+  const specs = a.face === 'glasses' || a.face === 'round' || a.face === 'sunglasses' || a.face === 'aviators' || a.face === 'cateye' || a.face === 'oversized' || a.face === 'heartglasses';
+  const h = specs ? head.at(...SPECS) : head;
   switch (a.face) {
     case 'glasses':
       for (const s of [1, -1]) h.torus(hex, 0.0215, 0.0028, [s * 0.042, EYE_Y + 0.001, 0.134], [0, 0, Math.PI / 4], [1.2, 0.82, 1], 4, 4);
@@ -980,56 +994,61 @@ export function faceGear(h: Kit, a: Appearance, b: Body, hex: number): void {
       temples(h, 0xc9a233, EYE_Y + 0.008);
       break;
     case 'goggles':
-      h.cyl(0x18191b, 0.142, 0.142, 0.028, [0, EYE_Y + 0.004, -0.004], O, [0.935, 1, 1.0], { seg: 20, open: true });
-      h.front(hex, [0.13, 0.03, 0.142], Math.PI / 2 - 0.6, 1.2, 1.9, [0, EYE_Y + 0.004, 0], O, undefined, 14, 3);
-      h.front(0xd07a2a, [0.134, 0.024, 0.146], Math.PI / 2 - 0.6, 1.2, 1.6, [0, EYE_Y + 0.004, 0], O, undefined, 12, 3);
+      h.cyl(0x18191b, 0.14, 0.14, 0.03, [0, EYE_Y + 0.004, -0.004], O, [0.9, 1, 1.0], { seg: 20, open: true });
+      // A tall, nearly flat band: a rounder one tucks its top and bottom edges back into the brow and cheeks.
+      h.front(hex, [0.126, 0.09, 0.146], Math.PI / 2 - 0.3, 0.6, 1.9, [0, EYE_Y + 0.002, 0], O, undefined, 14, 2);
+      h.front(0xd07a2a, [0.129, 0.075, 0.15], Math.PI / 2 - 0.3, 0.6, 1.6, [0, EYE_Y + 0.002, 0], O, undefined, 12, 2);
       break;
     case 'ballistic':
       // Low goggles on a wide strap: a dark frame hugging the eyes, a smoked lens.
-      h.cyl(shade(hex, 0.9), 0.142, 0.142, 0.024, [0, EYE_Y + 0.004, -0.004], O, [0.935, 1, 1.0], { seg: 12, open: true });
-      h.front(0x1d1e20, [0.129, 0.04, 0.143], Math.PI / 2 - 0.6, 1.2, 1.75, [0, EYE_Y + 0.002, 0], O, undefined, 8, 2);
-      h.front(0x2c343c, [0.132, 0.03, 0.1465], Math.PI / 2 - 0.6, 1.2, 1.5, [0, EYE_Y + 0.002, 0], O, undefined, 8, 2);
+      h.cyl(shade(hex, 0.9), 0.14, 0.14, 0.026, [0, EYE_Y + 0.004, -0.004], O, [0.9, 1, 1.0], { seg: 12, open: true });
+      h.front(0x1d1e20, [0.126, 0.085, 0.146], Math.PI / 2 - 0.3, 0.6, 1.75, [0, EYE_Y + 0.001, 0], O, undefined, 8, 2);
+      h.front(0x2c343c, [0.129, 0.07, 0.1495], Math.PI / 2 - 0.3, 0.6, 1.5, [0, EYE_Y + 0.001, 0], O, undefined, 8, 2);
       break;
     case 'shooting':
       // One wrapped lens, amber, on thin arms.
-      h.front(0x7a5a1c, [0.127, 0.03, 0.139], Math.PI / 2 - 0.62, 1.24, 1.7, [0, EYE_Y - 0.002, 0], O, undefined, 8, 2);
-      h.box(0x1d1e20, [0.118, 0.005, 0.006], [0, EYE_Y + 0.016, 0.136]);
-      temples(h, 0x1d1e20, EYE_Y + 0.013);
+      h.front(0x7a5a1c, [0.124, 0.07, 0.141], Math.PI / 2 - 0.3, 0.6, 1.7, [0, EYE_Y - 0.002, 0], O, undefined, 8, 2);
+      h.box(0x1d1e20, [0.118, 0.005, 0.006], [0, EYE_Y + 0.02, 0.137]);
+      temples(h, 0x1d1e20, EYE_Y + 0.019);
       break;
     case 'eyepatch':
-      h.ball(0x0d0d0e, [0.024, 0.021, 0.007], [-0.042, EYE_Y, 0.127], [0, -0.2, 0], undefined, 10, 6);
+      h.ball(0x0d0d0e, [0.026, 0.022, 0.007], [-EYE_X, EYE_Y, 0.118], [0, -0.2, 0], undefined, 10, 6);
       h.torus(0x0d0d0e, 0.133, 0.0028, [0, 0.16, -0.004], [Math.PI / 2 - 0.05, 0.0, 0.5], [0.92, 1, 1.02], 3, 22);
       break;
     case 'bandanamask': {
+      // Tied over the nose: cloth lying on the face from the bridge of the nose down, a point
+      // hanging off the chin, the band round to a knot at the back.
       const fl: Surface = { pattern: PATTERN.floral, accent: 0xe8e2d6 };
-      h.front(hex, [0.126, 0.15, 0.142], 1.62, 0.95, 2.9, [0, 0.12, 0], O, fl);
-      h.cone(hex, 0.075, 0.085, [0, -0.015, 0.11], [Math.PI + 0.35, 0, 0], [1, 1, 0.35], 4, fl);
+      h.put(faceLayer(b.face, (_x, y, an) => (y < 0.121 && Math.abs(an) < 2.2 ? 0.007 : -1)), hex, O, O, 1, fl);
+      h.cone(hex, 0.07, 0.085, [0, -0.02, 0.118], [Math.PI + 0.3, 0, 0], [1, 1, 0.3], 4, fl);
+      h.ico(hex, 0.02, [0, 0.105, -0.148], O, 1, 1, fl);
       break;
     }
     case 'surgical':
-      h.front(0xa9cfe0, [0.124, 0.148, 0.139], 1.7, 0.75, 2.3, [0, 0.12, 0], O, { pattern: PATTERN.stripes, accent: 0x9bc2d4 });
+      // Pleated paper over the nose, mouth and chin, loops to the ears.
+      h.put(faceLayer(b.face, (_x, y, an) => (y < 0.118 && y > 0.012 && Math.abs(an) < 1.05 ? 0.007 : -1)), 0xa9cfe0, O, O, 1, { pattern: PATTERN.stripes, accent: 0x9bc2d4 });
       for (const s of [1, -1]) h.torus(0xe8ecee, 0.028, 0.0018, [s * 0.112, 0.1, 0.0], [0, Math.PI / 2, 0], 1, 3, 10);
       break;
     case 'gasmask':
-      h.front(0x23262a, [0.128, 0.152, 0.145], 1.2, 1.38, 2.6, [0, 0.12, 0]);
+      h.front(0x23262a, [0.128, 0.152, 0.162], 1.2, 1.38, 2.6, [0, 0.12, 0]);
       for (const s of [1, -1]) {
-        h.cyl(0x2c3a40, 0.022, 0.022, 0.012, [s * 0.043, EYE_Y, 0.137], [Math.PI / 2, 0, 0], 1, { seg: 12 });
-        h.torus(0x15171a, 0.023, 0.004, [s * 0.043, EYE_Y, 0.143], O, 1, 4, 12);
+        h.cyl(0x2c3a40, 0.022, 0.022, 0.012, [s * 0.045, EYE_Y, 0.15], [Math.PI / 2, 0, 0], 1, { seg: 12 });
+        h.torus(0x15171a, 0.023, 0.004, [s * 0.045, EYE_Y, 0.156], O, 1, 4, 12);
       }
-      h.cyl(0x55603a, 0.034, 0.03, 0.055, [0, 0.048, 0.165], [Math.PI / 2 + 0.35, 0, 0], 1, { seg: 12 });
-      h.cyl(0x15171a, 0.024, 0.024, 0.02, [0, 0.055, 0.14], [Math.PI / 2 + 0.35, 0, 0], 1, { seg: 10 });
+      h.cyl(0x55603a, 0.034, 0.03, 0.055, [0, 0.048, 0.18], [Math.PI / 2 + 0.35, 0, 0], 1, { seg: 12 });
+      h.cyl(0x15171a, 0.024, 0.024, 0.02, [0, 0.055, 0.155], [Math.PI / 2 + 0.35, 0, 0], 1, { seg: 10 });
       h.torus(0x15171a, 0.135, 0.006, [0, 0.15, -0.01], [Math.PI / 2, 0, 0], [0.92, 1, 1], 3, 20);
       break;
     case 'hockey':
-      h.front(0xe8e4da, [0.129, 0.152, 0.142], 0.8, 1.85, 2.3, [0, 0.12, 0]);
+      h.front(0xe8e4da, [0.129, 0.152, 0.162], 0.8, 1.85, 2.3, [0, 0.12, 0]);
       for (const s of [1, -1]) {
-        h.ball(0x0d0d0e, [0.017, 0.012, 0.004], [s * 0.042, EYE_Y, 0.1335], [0, s * 0.3, 0], undefined, 8, 4);
-        for (const [dy, dz] of [[0.035, 0.1], [0.06, 0.085]] as const) h.box(0xb01e2a, [0.018, 0.005, 0.004], [s * 0.05, EYE_Y + dy, dz + 0.035], [0, s * 0.3, s * 0.6]);
+        h.ball(0x0d0d0e, [0.019, 0.014, 0.004], [s * 0.045, EYE_Y, 0.151], [0, s * 0.3, 0], undefined, 8, 4);
+        for (const [dy, dz] of [[0.035, 0.139], [0.06, 0.126]] as const) h.box(0xb01e2a, [0.018, 0.005, 0.004], [s * 0.05, EYE_Y + dy, dz], [0.35, s * 0.3, s * 0.6]);
       }
-      for (let i = 0; i < 6; i++) h.ball(0x0d0d0e, 0.0035, [(i % 3 - 1) * 0.018, 0.06 - Math.floor(i / 3) * 0.018, 0.141], O, undefined, 5, 3);
+      for (let i = 0; i < 6; i++) h.ball(0x0d0d0e, 0.0035, [(i % 3 - 1) * 0.018, 0.06 - Math.floor(i / 3) * 0.018, 0.151 - Math.floor(i / 3) * 0.004], O, undefined, 5, 3);
       break;
     case 'clown':
-      h.ico(0xd21f1f, 0.022, [0, 0.1, 0.142], O, 1, 1);
+      h.ico(0xd21f1f, 0.024, [0, 0.099, 0.152], O, 1, 1);
       break;
     case 'cateye':
       // Frames sweeping up into points at the outer corners.

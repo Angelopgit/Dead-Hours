@@ -1130,12 +1130,18 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   }
   const belt = (F ? 0.176 : 0.172) * bp;
   // A dress covers the waistband, and so does a shirt worn out over it.
-  const dress = a.top === 'sundress' || UNTUCKED.has(a.top);
+  // (Long coats hang clear of a man's belt; a woman's hips fill them, and the belt would cut through.)
+  const dress = a.top === 'sundress' || UNTUCKED.has(a.top) || (F && (a.top === 'raincoat' || a.top === 'peacoat'));
   if (!dress && (a.pants === 'jeans' || a.pants === 'work' || a.pants === 'cargo' || a.pants === 'flares' || a.pants === 'denimshorts' || issue)) {
-    hp.cyl(issue ? 0x6b5d3f : 0x2a1d14, belt, belt, 0.032, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 });
-    hp.box(issue ? 0x2b2d31 : 0xb8a46a, [0.035, 0.026, 0.008], [0, 0.082, (F ? 0.127 : 0.124) * bp]);
+    // A woman's belt lies on her hips' own surface: a plain ring cuts in and out of it.
+    if (F) pelvisLayer(hp, b, issue ? 0x6b5d3f : 0x2a1d14, 0.004, 0.066, 0.098);
+    else hp.cyl(issue ? 0x6b5d3f : 0x2a1d14, belt, belt, 0.032, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 });
+    hp.box(issue ? 0x2b2d31 : 0xb8a46a, [0.035, 0.026, 0.008], [0, 0.082, F ? pelvisR(b, 0.082) * PELVIS_DEPTH + 0.005 : 0.124 * bp]);
   }
-  if (!dress && (a.pants === 'joggers' || a.pants === 'leggings')) hp.cyl(shade(hex, 0.8), belt, belt, 0.035, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 }, { pattern: PATTERN.knit });
+  if (!dress && (a.pants === 'joggers' || a.pants === 'leggings')) {
+    if (F) pelvisLayer(hp, b, shade(hex, 0.8), 0.004, 0.064, 0.099, { pattern: PATTERN.knit });
+    else hp.cyl(shade(hex, 0.8), belt, belt, 0.035, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 }, { pattern: PATTERN.knit });
+  }
   if (a.pants === 'overalls') {
     const y0 = 0.02, y1 = 0.3;
     if (F) {

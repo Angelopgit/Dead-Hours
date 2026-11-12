@@ -42,7 +42,7 @@ export interface FaceSpec {
 }
 
 export function faceSpec(female: boolean, zombie: boolean): FaceSpec {
-  return { female, zombie, gaunt: zombie ? 0.8 : 0, jaw: 0, nose: 1, lipless: 0, lips: female ? 1.35 : 1, brow: female ? 0.002 : 0.0045, tear: 0, lite: zombie };
+  return { female, zombie, gaunt: zombie ? 0.8 : 0, jaw: 0, nose: 1, lipless: 0, lips: female ? 1.35 : 1, brow: female ? 0.0035 : 0.0075, tear: 0, lite: zombie };
 }
 
 const g2 = (dx: number, dy: number) => Math.exp(-(dx * dx + dy * dy));
@@ -53,28 +53,31 @@ const ez = (x: number, y: number) => HEAD_R[2] * Math.sqrt(Math.max(0, 1 - (x / 
 
 /** How far the nose's ridge stands off the face at height y: nothing between the brows, most at the tip, tucked back under it. */
 function noseRidge(y: number): number {
-  if (y >= 0.158) return 0;
-  if (y >= 0.097) return (0.003 + 0.0235 * Math.pow(THREE.MathUtils.clamp((0.156 - y) / 0.059, 0, 1), 1.2)) * sstep(0.158 - y, 0, 0.008);
-  if (y >= 0.083) return 0.0265 - 0.0215 * Math.pow((0.097 - y) / 0.014, 1.3);
+  if (y >= 0.162) return 0;
+  // The bridge dips under the brow, then stands further off the face all the way to the tip.
+  if (y >= 0.097) return (0.002 + 0.031 * Math.pow(THREE.MathUtils.clamp((0.158 - y) / 0.061, 0, 1), 1.3)) * sstep(0.162 - y, 0, 0.01);
+  if (y >= 0.083) return 0.033 - 0.028 * Math.pow((0.097 - y) / 0.014, 1.3);
   return 0.005 * (1 - sstep(0.083 - y, 0, 0.007));
 }
-const noseW = (y: number) => 0.0072 + 0.0058 * sstep(0.15 - y, 0, 0.055);
+const noseW = (y: number) => 0.009 + 0.0075 * sstep(0.15 - y, 0, 0.055);
 
 /** How far the face stands in front of (or behind) the ellipsoid at (x, y). */
 function faceDz(f: FaceSpec, x: number, y: number): number {
   const ax = Math.abs(x);
   let d = 0;
   // Eye sockets under the brow, and the brow ridge over them.
-  const sock = f.zombie ? 0.012 + 0.005 * f.gaunt : 0.009;
-  d -= sock * g2((ax - EYE_X) / 0.025, (y - EYE_Y) / (f.zombie ? 0.019 : 0.016));
+  // The sockets are deepest beside the nose and shallow at the outer rim, so the lids stand in
+  // them with both corners of the eye clear of the skin, set back under the brow.
+  const sock = 0.0185 + (f.zombie ? 0.004 * f.gaunt : 0);
+  d -= sock * g2((ax - EYE_X + 0.007) / 0.026, (y - EYE_Y) / (f.zombie ? 0.019 : 0.017));
   d += f.brow * Math.exp(-(((y - 0.1605) / 0.0105) ** 2)) * Math.exp(-((ax / 0.078) ** 4));
-  d -= 0.0035 * g2(ax / 0.014, (y - 0.147) / 0.009);
+  d -= 0.003 * g2(ax / 0.014, (y - 0.15) / 0.008);
   // Nose: the ridge, and the wings round the nostrils.
   d += noseRidge(y) * f.nose * Math.exp(-((ax / noseW(y)) ** 2));
   d += 0.011 * f.nose * g2((ax - 0.0132) / 0.0072, (y - 0.0905) / 0.0078);
   // Cheekbones, and the hollows under them.
-  d += (0.003 + 0.0035 * f.gaunt) * g2((ax - 0.07) / 0.022, (y - 0.108) / 0.015);
-  d -= (0.0015 + 0.012 * f.gaunt) * g2((ax - 0.066) / 0.022, (y - 0.062) / 0.027);
+  d += (0.004 + 0.0035 * f.gaunt) * g2((ax - 0.07) / 0.022, (y - 0.108) / 0.015);
+  d -= ((f.female ? 0.002 : 0.004) + 0.012 * f.gaunt) * g2((ax - 0.066) / 0.022, (y - 0.062) / 0.027);
   // The mouth: the muzzle the teeth push out, the two lips and the line between, the fold
   // under the lower lip, the chin.
   const lip = f.lips * (1 - 0.7 * f.lipless);
@@ -112,7 +115,34 @@ export function jawSwing(p: THREE.Vector3, angle: number): THREE.Vector3 {
 // columns at the nose's ridge and wings, the corners of the eyes and mouth, the cheekbones, the
 // temples, the ears, then round the back of the skull.
 const ROWS = [0.252, 0.228, 0.198, 0.174, 0.1605, 0.149, 0.138, 0.127, 0.108, 0.097, 0.0885, 0.079, 0.0668, MOUTH_Y, 0.0545, 0.0415, 0.02, -0.011];
-const COLS = [...[0, 0.013, 0.027, 0.043, 0.064, 0.088].map((x) => Math.asin(x / HEAD_R[0])), 1.15, 1.5, 2.1, Math.PI];
+const COLS = [...[0, 0.013, 0.027, 0.0465, 0.068, 0.09].map((x) => Math.asin(x / HEAD_R[0])), 1.15, 1.5, 2.1, Math.PI];
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _n1 = new THREE.Vector3(), _n2 = new THREE.Vector3();
+const triNormal = (pos: number[], i: number, j: number, k: number, out: THREE.Vector3) => {
+  _a.fromArray(pos, i * 3);
+  _b.fromArray(pos, j * 3).sub(_a);
+  _c.fromArray(pos, k * 3).sub(_a);
+  return out.crossVectors(_b, _c).normalize();
+};
+/** How nearly two triangles lie in one plane (1: they do). */
+const flatness = (pos: number[], a: number, b: number, c: number, d: number, e: number, f: number) => triNormal(pos, a, b, c, _n1).dot(triNormal(pos, d, e, f, _n2));
+
+/**
+ * The rows that shape each column, counted out from the nose (the last entry serves the rest of
+ * the way round); none: every row does. The first and last rows are always among them.
+ */
+const SKULL_ROWS = [0.252, 0.228, 0.198, 0.174, 0.1605];
+const KEY_ROWS: (number[] | undefined)[] = [
+  undefined, undefined,
+  // The inner corner of the eye and the corner of the mouth, then through the middle of the
+  // eye: the socket, then the cheek down past the mouth to the chin.
+  [...SKULL_ROWS, 0.149, 0.138, 0.127, 0.108, 0.079, MOUTH_Y, 0.0415, 0.02, -0.011],
+  [...SKULL_ROWS, 0.149, 0.138, 0.127, 0.108, 0.079, MOUTH_Y, 0.0415, 0.02, -0.011],
+  // The outer corner of the eye: the socket's rim, the cheekbone, the jaw.
+  [...SKULL_ROWS, 0.149, 0.138, 0.127, 0.108, MOUTH_Y, 0.02, -0.011],
+  // The temple, the cheekbone, the jaw's corner, and on round the skull.
+  [...SKULL_ROWS, 0.138, 0.108, MOUTH_Y, 0.02, -0.011],
+];
 
 /** What is painted over the skin: color (linear r, g, b) and how much of it, by where on the face. */
 export type FacePaint = (x: number, y: number, a: number, out: Float32Array) => void;
@@ -140,15 +170,35 @@ export function headGeometry(f: FaceSpec, paint?: FacePaint): THREE.BufferGeomet
     pnt.push(px[0], px[1], px[2], px[3]);
   };
   add(0, HEAD_C[1] + HEAD_R[1], 0, 0, HEAD_C[1] + HEAD_R[1], 0);
+  // Where the surface is on row r of column c, before the mouth opens.
+  const surface = (r: number, c: number, out: THREE.Vector3) => {
+    const by = rows[r], a = cols[c];
+    const st = Math.sqrt(Math.max(0, 1 - ((by - HEAD_C[1]) / HEAD_R[1]) ** 2));
+    const sa = Math.sin(a), ca = Math.cos(a), aa = Math.abs(a);
+    const bx = HEAD_R[0] * st * sa;
+    // The sides: the corner of the jaw under the ear, the temples sunk in beside the brow.
+    const side = (f.female ? 0.003 : 0.011) * g2((by - 0.035) / 0.03, (aa - 1.2) / 0.45) - (0.0015 + 0.005 * f.gaunt) * g2((by - 0.166) / 0.03, (aa - 1.05) / 0.3);
+    return out.set(bx + sa * side, by, HEAD_R[2] * st * ca + ca * side + sstep(ca, 0.2, 0.7) * faceDz(f, bx, by));
+  };
+  const lo = new THREE.Vector3(), hi = new THREE.Vector3();
   rows.forEach((by, r) => {
     const st = Math.sqrt(Math.max(0, 1 - ((by - HEAD_C[1]) / HEAD_R[1]) ** 2));
-    for (const a of cols) {
-      const sa = Math.sin(a), ca = Math.cos(a), aa = Math.abs(a);
-      const bx = HEAD_R[0] * st * sa;
+    cols.forEach((a, c) => {
+      const ca = Math.cos(a);
+      const bx = HEAD_R[0] * st * Math.sin(a);
       const front = sstep(ca, 0.2, 0.7);
-      // The sides: the corner of the jaw under the ear, the temples sunk in beside the brow.
-      const side = (f.female ? 0.003 : 0.011) * g2((by - 0.035) / 0.03, (aa - 1.2) / 0.45) - (0.0015 + 0.005 * f.gaunt) * g2((by - 0.166) / 0.03, (aa - 1.05) / 0.3);
-      v.set(bx + sa * side, by, HEAD_R[2] * st * ca + ca * side + front * faceDz(f, bx, by));
+      // Away from the nose and mouth only the key rows shape the surface; the rows between lie
+      // on the straight line from one to the next, so a cheek or a temple is one plane.
+      const keys = KEY_ROWS[Math.min(c < half.length ? c : n - c, KEY_ROWS.length - 1)];
+      if (!keys || keys.includes(by)) surface(r, c, v);
+      else {
+        let r0 = r, r1 = r;
+        while (!keys.includes(rows[r0])) r0--;
+        while (!keys.includes(rows[r1])) r1++;
+        surface(r0, c, hi);
+        surface(r1, c, lo);
+        v.lerpVectors(hi, lo, (rows[r0] - by) / (rows[r0] - rows[r1]));
+      }
       // The dead: lips drawn back off the teeth.
       if (f.lipless > 0 && r !== mouthRow) {
         const near = g2(bx / 0.03, (by - MOUTH_Y) / 0.009) * front;
@@ -165,7 +215,7 @@ export function headGeometry(f: FaceSpec, paint?: FacePaint): THREE.BufferGeomet
         }
       }
       add(v.x, v.y, v.z, bx, by, a);
-    }
+    });
   });
   add(0, HEAD_C[1] - HEAD_R[1], 0.004, 0, HEAD_C[1] - HEAD_R[1], 0);
   const idx: number[] = [];
@@ -176,8 +226,11 @@ export function headGeometry(f: FaceSpec, paint?: FacePaint): THREE.BufferGeomet
     idx.push(last, at(rows.length - 1, c + 1), at(rows.length - 1, c));
     for (let r = 0; r + 1 < rows.length; r++) {
       const A = at(r, c), B = at(r, c + 1), C = at(r + 1, c + 1), D = at(r + 1, c);
-      // Diagonals mirrored left to right.
-      if (cols[c] >= 0 && cols[(c + 1) % n] > 0) idx.push(A, D, B, B, D, C);
+      // Each quad is folded along the diagonal that leaves it flattest, so it reads as one
+      // plane and not as two triangles; where it makes no odds, diagonals mirror left to right.
+      const bd = flatness(pos, A, D, B, B, D, C), ac = flatness(pos, A, D, C, A, C, B);
+      const mirrored = cols[c] >= 0 && cols[(c + 1) % n] > 0;
+      if (Math.abs(bd - ac) > 1e-4 ? bd > ac : mirrored) idx.push(A, D, B, B, D, C);
       else idx.push(A, D, C, A, C, B);
     }
   }
@@ -203,11 +256,11 @@ export interface EyeOpening {
 }
 
 /** The ball of the lids, a little over the eyeball inside it. */
-const LID_R: V3 = [0.0235, 0.0135, 0.0128];
-export const EYEBALL_R: V3 = [0.0215, 0.0118, 0.0116];
+const LID_R: V3 = [0.0245, 0.0146, 0.0128];
+export const EYEBALL_R: V3 = [0.0225, 0.0128, 0.0116];
 
 /** Height of the upper and lower lid edges at u (-1 inner corner, 1 outer). */
-export const lidUp = (e: EyeOpening, u: number) => e.up * (1 - Math.pow(Math.abs(u), 2.4)) + (e.tilt + e.lidTilt) * u * e.a - e.lidTilt * e.a * 0.4;
+export const lidUp = (e: EyeOpening, u: number) => e.up * (1 - Math.pow(Math.abs(u), 2.2)) + (e.tilt + e.lidTilt) * u * e.a - e.lidTilt * e.a * 0.4;
 export const lidDown = (e: EyeOpening, u: number) => -e.down * (1 - u * u) + e.tilt * u * e.a;
 
 const onBall = (R: V3, x: number, y: number, inf = 0) => (R[2] + inf) * Math.sqrt(Math.max(0, 1 - (x / (R[0] + inf)) ** 2 - (y / (R[1] + inf)) ** 2));

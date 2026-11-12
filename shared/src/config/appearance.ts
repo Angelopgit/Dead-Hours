@@ -447,7 +447,7 @@ export const APPEARANCE_FIELDS: readonly (readonly [keyof Appearance, FieldKind]
 export const DEFAULT_APPEARANCE: Appearance = {
   skin: 2, build: 'average',
   hair: 'swept', hairColor: 2, facialHair: 'beard',
-  eyes: 'narrow', eyeColor: 1,
+  eyes: 'almond', eyeColor: 1,
   headwear: 'none', headwearColor: 13,
   top: 'henley', topColor: 8, topAccent: 1,
   pants: 'cargo', pantsColor: 9,

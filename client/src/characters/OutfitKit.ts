@@ -213,9 +213,17 @@ export const HEAD_X = 0.9;
 export const HEAD_Z = 0.95;
 /** How far the chin is brought forward of the ellipsoid it was built on. */
 const CHIN_FWD = 0.03;
+/** How far the back of the head tucks in toward the neck below the ears (of its depth): a skull, not a ball. */
+const NAPE = 0.2;
 
-/** How much of the jaw narrowing applies at head-space height y: none at the cheekbones, all of it at the chin. */
+/** How much of the jaw's tuck under the skull applies at head-space height y: none at the cheekbones, all of it at the chin. */
 const jawK = (y: number) => THREE.MathUtils.smoothstep(-y, -0.1, 0.005);
+/**
+ * How wide the head is drawn at height y, of the ellipsoid it was built on: all of it across the
+ * skull, less at the cheekbones, less again at the corners of the jaw and at the chin. A ball is
+ * widest at the nose, which is a moon face; a skull is widest above the ears.
+ */
+const faceW = (y: number) => 1 - 0.07 * THREE.MathUtils.smoothstep(-y, -0.168, -0.105) - 0.07 * THREE.MathUtils.smoothstep(-y, -0.105, -0.03) - 0.05 * THREE.MathUtils.smoothstep(-y, -0.03, 0.01);
 /** How much of the chin's reach applies at height y (none above the mouth), and how far forward of the ears a point must be to move with it. */
 const chinK = (y: number) => THREE.MathUtils.smoothstep(0.075 - y, 0, 0.075);
 const chinZ = (z: number) => THREE.MathUtils.smoothstep(z, -0.05, 0.05);
@@ -227,8 +235,8 @@ const _w = new THREE.Vector3();
  */
 export function headWarp(v: THREE.Vector3): THREE.Vector3 {
   const j = jawK(v.y);
-  const z = (v.z < 0 ? v.z * (1 - 0.06 * j) : v.z) + CHIN_FWD * chinK(v.y) * chinZ(v.z);
-  return v.set(v.x * (1 - 0.12 * j) * HEAD_K * HEAD_X, v.y * HEAD_K, z * HEAD_K * HEAD_Z);
+  const z = (v.z < 0 ? v.z * (1 - NAPE * j) : v.z) + CHIN_FWD * chinK(v.y) * chinZ(v.z);
+  return v.set(v.x * faceW(v.y) * HEAD_K * HEAD_X, v.y * HEAD_K, z * HEAD_K * HEAD_Z);
 }
 
 /** The other way: a drawn head-space point back to where it was built. */
@@ -238,9 +246,9 @@ export function headUnwarp(v: THREE.Vector3): THREE.Vector3 {
   let z = zt;
   for (let i = 0; i < 8; i++) {
     const g = zt - c * chinZ(z);
-    z = g < 0 ? g / (1 - 0.06 * j) : g;
+    z = g < 0 ? g / (1 - NAPE * j) : g;
   }
-  return v.set(v.x / ((1 - 0.12 * j) * HEAD_K * HEAD_X), y, z);
+  return v.set(v.x / (faceW(y) * HEAD_K * HEAD_X), y, z);
 }
 
 /**
@@ -254,13 +262,13 @@ export function headSink(sink: PartSink): PartSink {
     const nor = g.getAttribute('normal') as THREE.BufferAttribute | undefined;
     for (let i = 0; i < pos.count; i++) {
       _w.fromBufferAttribute(pos, i);
-      const j = jawK(_w.y);
+      const wide = faceW(_w.y);
       headWarp(_w);
       pos.setXYZ(i, _w.x, _w.y, _w.z);
       if (nor) {
         // Squeezed from the sides, a surface turns to face more sideways.
         _w.fromBufferAttribute(nor, i);
-        _w.set(_w.x / ((1 - 0.12 * j) * HEAD_X), _w.y, _w.z / HEAD_Z).normalize();
+        _w.set(_w.x / (wide * HEAD_X), _w.y, _w.z / HEAD_Z).normalize();
         nor.setXYZ(i, _w.x, _w.y, _w.z);
       }
     }
@@ -343,17 +351,17 @@ export const COVERS_FACE = new Set(['moto', 'knight']);
 /** An eye shape: its opening between the lids (HeadSculpt.EyeOpening), and the brow over it (slope of its outer end, height). */
 interface EyeShape extends EyeOpening { brow: number; browY: number }
 export const EYES: Record<string, EyeShape> = {
-  round: { a: 0.0186, up: 0.0068, down: 0.0052, tilt: 0, lidTilt: 0, brow: -0.03, browY: 0.1625 },
-  almond: { a: 0.0202, up: 0.0058, down: 0.0044, tilt: 0.14, lidTilt: 0, brow: 0.04, browY: 0.1605 },
-  wide: { a: 0.0202, up: 0.008, down: 0.0058, tilt: 0, lidTilt: 0, brow: -0.08, browY: 0.1645 },
-  narrow: { a: 0.0198, up: 0.0043, down: 0.0034, tilt: 0.06, lidTilt: 0, brow: 0.1, browY: 0.158 },
-  sleepy: { a: 0.0194, up: 0.0038, down: 0.0048, tilt: -0.08, lidTilt: -0.06, brow: -0.1, browY: 0.161 },
-  fierce: { a: 0.0196, up: 0.0052, down: 0.004, tilt: 0.2, lidTilt: 0.22, brow: 0.34, browY: 0.1575 },
+  round: { a: 0.0196, up: 0.007, down: 0.0066, tilt: 0, lidTilt: 0, brow: -0.03, browY: 0.1635 },
+  almond: { a: 0.0205, up: 0.0062, down: 0.0058, tilt: 0.04, lidTilt: 0, brow: 0.04, browY: 0.162 },
+  wide: { a: 0.0205, up: 0.0088, down: 0.0072, tilt: 0, lidTilt: 0, brow: -0.08, browY: 0.166 },
+  narrow: { a: 0.0205, up: 0.0054, down: 0.0046, tilt: 0.02, lidTilt: 0, brow: 0.1, browY: 0.1595 },
+  sleepy: { a: 0.02, up: 0.0046, down: 0.0058, tilt: -0.07, lidTilt: -0.06, brow: -0.1, browY: 0.1625 },
+  fierce: { a: 0.02, up: 0.0058, down: 0.005, tilt: 0.06, lidTilt: 0.2, brow: 0.34, browY: 0.159 },
 };
 /** The eyes: height of the eye line, half the distance between them, the eyeballs' centres behind the lids (head space as built). */
 export const EYE_Y = 0.138;
-export const EYE_X = 0.042;
-export const EYE_Z = 0.1035;
+export const EYE_X = 0.045;
+export const EYE_Z = 0.099;
 
 /** One piece of the eyes; `iris` pieces (iris, pupil, glint) move together when the eyes look about. */
 export interface EyePart { g: THREE.BufferGeometry; hex: number; m: THREE.Matrix4; iris?: boolean }

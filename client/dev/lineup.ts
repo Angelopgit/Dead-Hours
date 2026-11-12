@@ -114,6 +114,12 @@ const camera = new THREE.PerspectiveCamera(view === 'head' ? 24 : view === 'body
 if (view === 'head') {
   camera.position.set(0, 1.76, 1.55);
   camera.lookAt(0, 1.68, 0);
+} else if (view === 'face') {
+  // The face alone, level with the eyes.
+  camera.fov = 16;
+  camera.position.set(0, 1.72, 1.5);
+  camera.lookAt(0, 1.7, 0);
+  camera.updateProjectionMatrix();
 } else if (view === 'torso') {
   camera.position.set(0, 1.42, 2.3);
   camera.lookAt(0, 1.2, 0);

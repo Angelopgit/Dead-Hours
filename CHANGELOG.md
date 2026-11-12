@@ -10,6 +10,8 @@
 - Balaclavas and wraps are their own choice under Eyewear & masks, in any cloth color: a balaclava, an open-faced one, a skull print, a shemagh wrap and a neck gaiter. They go under any helmet or goggles.
 - An Outfits tab dresses the survivor in one press: Drifter, Army soldier, Garrison duty, Marine, Marine in cover, Operator, Special forces, Recon and Night raid. Each changes clothes and gear only, and any piece can be changed after.
 - Some raiders now wear plate carriers or chest rigs, and a dead Guardsman walks among the zombies.
+- Faces are reshaped: larger, level eyes set back under a brow ridge, a nose with a bridge, a narrower face with a defined jaw, and a skull that tucks in at the nape. Cheeks, temples and jaws are single clean planes.
+- Everything worn on the head is refitted to the new faces: glasses rest on the nose with arms that reach the ears, goggles cover the eyes, bandana and surgical masks lie on the face, and beanies and helmets sit above the brows. The crew cut and the high and tight are redrawn, and a woman's belt follows her hips.
 
 ### Downtown
 
