@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Humanoid, Limb } from '../characters/Humanoid';
-import { ARM, SHOULDER_X } from '../characters/Outfit';
+import { ARM, SHOULDER_X, SHOULDER_Y } from '../characters/Outfit';
 
 /**
  * How a hand closes on a melee weapon's handle. The rig has no wrist joint: the hand is part of the
@@ -315,7 +315,7 @@ const _aX = new THREE.Vector3(), _aY = new THREE.Vector3(), _aM = new THREE.Matr
  */
 export function armPose(k: ArmPose, side: 1 | -1, at: THREE.Vector3, q: THREE.Quaternion, elbow?: THREE.Vector3, wrist?: THREE.Vector3): void {
   const L1 = ARM.upper, L2 = ARM.lower;
-  const S = _aS.set(side * SHOULDER_X.male, 0.48, 0);
+  const S = _aS.set(side * SHOULDER_X.male, SHOULDER_Y, 0);
   const u = _aU.set(k.arm[0], k.arm[1], k.arm[2]).normalize();
   const d = THREE.MathUtils.clamp(k.reach, 0.3, 0.995) * (L1 + L2);
   const W = _aW.copy(S).addScaledVector(u, d);

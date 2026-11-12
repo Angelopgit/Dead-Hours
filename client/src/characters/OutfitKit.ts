@@ -4,6 +4,7 @@
  * OutfitHead.ts both read.
  */
 import * as THREE from 'three';
+import type { EyeOpening, FaceSpec } from './HeadSculpt';
 
 /** Fabric patterns, drawn per pixel by the character material from bind-pose position. */
 export const PATTERN = { none: 0, plaid: 1, stripes: 2, camo: 3, floral: 4, knit: 5, denim: 6 } as const;
@@ -201,37 +202,71 @@ function latheGeometry(rings: readonly Ring[], rk: number, inf: number, seg: num
 }
 
 /**
- * The head and everything on it is drawn this much smaller than it is built (about the neck),
- * so bodies stand a little over seven heads tall.
+ * The head and everything on it is built on a ball-like ellipsoid and drawn as a real head's
+ * oval: HEAD_K of its built height, narrower from ear to ear (HEAD_X) and a little shallower
+ * front to back (HEAD_Z). At 0.9 a 1.84 m survivor stands 7.3 heads tall: a touch more head than
+ * a tape measure gives (7.6), because a real-sized head reads as too small on a clothed body
+ * seen from across a street.
  */
-export const HEAD_K = 0.8;
+export const HEAD_K = 0.9;
+export const HEAD_X = 0.86;
+export const HEAD_Z = 0.95;
+/** How far the chin is brought forward of the ellipsoid it was built on. */
+const CHIN_FWD = 0.03;
 
 /** How much of the jaw narrowing applies at head-space height y: none at the cheekbones, all of it at the chin. */
 const jawK = (y: number) => THREE.MathUtils.smoothstep(-y, -0.1, 0.005);
+/** How much of the chin's reach applies at height y (none above the mouth), and how far forward of the ears a point must be to move with it. */
+const chinK = (y: number) => THREE.MathUtils.smoothstep(0.075 - y, 0, 0.075);
+const chinZ = (z: number) => THREE.MathUtils.smoothstep(z, -0.05, 0.05);
 
 const _w = new THREE.Vector3();
-/** A head-space point as built to where it is drawn: the jawline narrowing, then HEAD_K (see headSink). */
+/**
+ * A head-space point as built to where it is drawn: the jaw narrowing toward the chin and
+ * tucking in under the skull, the chin and lower face brought forward, then the head's oval.
+ */
 export function headWarp(v: THREE.Vector3): THREE.Vector3 {
   const j = jawK(v.y);
-  return v.set(v.x * (1 - 0.12 * j) * HEAD_K, v.y * HEAD_K, (v.z < 0 ? v.z * (1 - 0.06 * j) : v.z) * HEAD_K);
+  const z = (v.z < 0 ? v.z * (1 - 0.06 * j) : v.z) + CHIN_FWD * chinK(v.y) * chinZ(v.z);
+  return v.set(v.x * (1 - 0.12 * j) * HEAD_K * HEAD_X, v.y * HEAD_K, z * HEAD_K * HEAD_Z);
+}
+
+/** The other way: a drawn head-space point back to where it was built. */
+export function headUnwarp(v: THREE.Vector3): THREE.Vector3 {
+  const y = v.y / HEAD_K, j = jawK(y), c = CHIN_FWD * chinK(y);
+  const zt = v.z / (HEAD_K * HEAD_Z);
+  let z = zt;
+  for (let i = 0; i < 8; i++) {
+    const g = zt - c * chinZ(z);
+    z = g < 0 ? g / (1 - 0.06 * j) : g;
+  }
+  return v.set(v.x / ((1 - 0.12 * j) * HEAD_K * HEAD_X), y, z);
 }
 
 /**
- * Head bone parts go through here: a jawline (the lower face narrowing toward the chin, the back
- * of the jaw tucking in under the skull), then shrunk by HEAD_K. Everything on the head (beards,
- * masks, makeup, helmets) is warped alike, so whatever sat on the face still does.
+ * Head bone parts go through here and are warped as one (headWarp): the head's own skin and
+ * everything on it (beards, masks, makeup, helmets), so whatever sat on the face still does.
  */
 export function headSink(sink: PartSink): PartSink {
   return (g, bone, hex, m, surf, blend) => {
     g.applyMatrix4(m);
     const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    const nor = g.getAttribute('normal') as THREE.BufferAttribute | undefined;
     for (let i = 0; i < pos.count; i++) {
-      headWarp(_w.fromBufferAttribute(pos, i));
+      _w.fromBufferAttribute(pos, i);
+      const j = jawK(_w.y);
+      headWarp(_w);
       pos.setXYZ(i, _w.x, _w.y, _w.z);
+      if (nor) {
+        // Squeezed from the sides, a surface turns to face more sideways.
+        _w.fromBufferAttribute(nor, i);
+        _w.set(_w.x / ((1 - 0.12 * j) * HEAD_X), _w.y, _w.z / HEAD_Z).normalize();
+        nor.setXYZ(i, _w.x, _w.y, _w.z);
+      }
     }
     pos.needsUpdate = true;
     const shade = surf?.shade;
-    const s = shade ? { ...surf, shade: (x: number, y: number, z: number, c: THREE.Color) => shade(x / HEAD_K, y / HEAD_K, z / HEAD_K, c) } : surf;
+    const s = shade ? { ...surf, shade: (x: number, y: number, z: number, c: THREE.Color) => { headUnwarp(_w.set(x, y, z)); shade(_w.x, _w.y, _w.z, c); } } : surf;
     sink(g, bone, hex, new THREE.Matrix4(), s, blend);
   };
 }
@@ -239,27 +274,26 @@ export function headSink(sink: PartSink): PartSink {
 const gauss = (d2: number) => Math.exp(-d2);
 
 /**
- * Soft shading on the face (head space, as built): shadow under the jaw and chin, eye sockets,
- * beside and under the nose, toward the temples; warmth on the cheeks, nose and ears.
+ * Soft shading on the face (head space, as built). The sculpted face makes its own shadows now;
+ * this is what the lamps don't give: the dark under the jaw, the nostrils, the socket's depth,
+ * and blood under the skin of the cheeks, nose and ears.
  */
 export const faceShade: Shade = (x, y, z, c) => {
   const ax = Math.abs(x);
   const front = THREE.MathUtils.smoothstep(z, 0.02, 0.09);
   let k = 1;
-  // Under the jaw: the bottom of the head falls into shadow, deepest toward the neck (the chin's
-  // front much less, or it reads as stubble).
-  k *= 1 - 0.3 * THREE.MathUtils.smoothstep(-y, -0.045, 0.005) * (1 - 0.65 * front);
-  // Eye sockets, under the brow.
-  k *= 1 - 0.17 * front * gauss(((ax - 0.042) / 0.03) ** 2 + ((y - 0.142) / 0.024) ** 2);
-  // Beside the nose, and the little shadow under it.
-  k *= 1 - 0.12 * front * gauss(((ax - 0.021) / 0.012) ** 2 + ((y - 0.1) / 0.022) ** 2);
-  k *= 1 - 0.08 * front * gauss((x / 0.016) ** 2 + ((y - 0.08) / 0.008) ** 2);
-  // Temples and the sides of the face turn away.
-  k *= 1 - 0.07 * THREE.MathUtils.smoothstep(ax, 0.075, 0.115);
+  // Under the jaw: the bottom of the head falls into shadow, deepest toward the neck.
+  k *= 1 - 0.28 * THREE.MathUtils.smoothstep(-y, -0.03, 0.012) * (1 - 0.7 * front);
+  // Eye sockets, deepest at the inner corners by the nose.
+  k *= 1 - 0.14 * front * gauss(((ax - 0.036) / 0.024) ** 2 + ((y - 0.141) / 0.014) ** 2);
+  // Nostrils, and the shadow under the nose and the lower lip.
+  k *= 1 - 0.5 * front * gauss(((ax - 0.0085) / 0.0045) ** 2 + ((y - 0.0845) / 0.004) ** 2);
+  k *= 1 - 0.1 * front * gauss((x / 0.02) ** 2 + ((y - 0.079) / 0.006) ** 2);
+  k *= 1 - 0.1 * front * gauss((x / 0.022) ** 2 + ((y - 0.042) / 0.007) ** 2);
   c.multiplyScalar(k);
   // Blood under the skin: cheeks, nose tip, ears.
-  const warm = 0.9 * front * gauss(((ax - 0.066) / 0.026) ** 2 + ((y - 0.092) / 0.022) ** 2) + 0.7 * front * gauss((x / 0.014) ** 2 + ((y - 0.098) / 0.014) ** 2) + 0.6 * gauss(((ax - 0.113) / 0.012) ** 2 + ((y - 0.115) / 0.03) ** 2);
-  c.r *= 1 + 0.07 * warm;
+  const warm = 0.8 * front * gauss(((ax - 0.064) / 0.026) ** 2 + ((y - 0.094) / 0.022) ** 2) + 0.7 * front * gauss((x / 0.014) ** 2 + ((y - 0.098) / 0.014) ** 2) + 0.6 * gauss(((ax - 0.113) / 0.014) ** 2 + ((y - 0.115) / 0.035) ** 2);
+  c.r *= 1 + 0.06 * warm;
   c.g *= 1 - 0.025 * warm;
   c.b *= 1 - 0.04 * warm;
 };
@@ -296,24 +330,28 @@ export interface Body {
   bulk: number;
   /** What covers the shins, once the legs are dressed (knee pads go over it). */
   shins?: Shins;
+  /** The face's build: the head, and the brows, beards and teeth laid on it, share it. */
+  face: FaceSpec;
 }
 
 /** Where each hair part may go under headwear. */
 export type Cover = 'none' | 'hat' | 'full';
 export const COVERS_FACE = new Set(['moto', 'knight']);
 
-interface EyeShape { sx: number; sy: number; tilt: number; lid: number; lidTilt: number; brow: number; browY: number }
+/** An eye shape: its opening between the lids (HeadSculpt.EyeOpening), and the brow over it (slope of its outer end, height). */
+interface EyeShape extends EyeOpening { brow: number; browY: number }
 export const EYES: Record<string, EyeShape> = {
-  round: { sx: 0.019, sy: 0.019, tilt: 0, lid: 0, lidTilt: 0, brow: -0.04, browY: 0.176 },
-  almond: { sx: 0.023, sy: 0.0145, tilt: 0.14, lid: 0, lidTilt: 0, brow: 0.05, browY: 0.17 },
-  wide: { sx: 0.024, sy: 0.021, tilt: 0, lid: 0, lidTilt: 0, brow: -0.1, browY: 0.181 },
-  narrow: { sx: 0.022, sy: 0.0095, tilt: 0.06, lid: 0, lidTilt: 0, brow: 0.12, browY: 0.164 },
-  sleepy: { sx: 0.021, sy: 0.018, tilt: -0.08, lid: 0.55, lidTilt: -0.12, brow: -0.14, browY: 0.172 },
-  fierce: { sx: 0.022, sy: 0.016, tilt: 0.24, lid: 0.32, lidTilt: 0.42, brow: 0.42, browY: 0.165 },
+  round: { a: 0.0186, up: 0.0068, down: 0.0052, tilt: 0, lidTilt: 0, brow: -0.03, browY: 0.1625 },
+  almond: { a: 0.0202, up: 0.0058, down: 0.0044, tilt: 0.14, lidTilt: 0, brow: 0.04, browY: 0.1605 },
+  wide: { a: 0.0202, up: 0.008, down: 0.0058, tilt: 0, lidTilt: 0, brow: -0.08, browY: 0.1645 },
+  narrow: { a: 0.0198, up: 0.0043, down: 0.0034, tilt: 0.06, lidTilt: 0, brow: 0.1, browY: 0.158 },
+  sleepy: { a: 0.0194, up: 0.0038, down: 0.0048, tilt: -0.08, lidTilt: -0.06, brow: -0.1, browY: 0.161 },
+  fierce: { a: 0.0196, up: 0.0052, down: 0.004, tilt: 0.2, lidTilt: 0.22, brow: 0.34, browY: 0.1575 },
 };
-export const EYE_Y = 0.135;
+/** The eyes: height of the eye line, half the distance between them, the eyeballs' centres behind the lids (head space as built). */
+export const EYE_Y = 0.138;
 export const EYE_X = 0.042;
-export const EYE_Z = 0.107;
+export const EYE_Z = 0.1035;
 
 /** One piece of the eyes; `iris` pieces (iris, pupil, glint) move together when the eyes look about. */
 export interface EyePart { g: THREE.BufferGeometry; hex: number; m: THREE.Matrix4; iris?: boolean }

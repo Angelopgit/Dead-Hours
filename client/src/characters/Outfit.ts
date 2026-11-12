@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { SHAPE_MID, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE } from './rig';
-import { PATTERN, type Surface, type PartSink, O, TAU, mixHex, shade, luminance, Kit, type Ring, headSink, type Body, type Cover, COVERS_FACE, type Shins } from './OutfitKit';
+import { PATTERN, type Surface, type PartSink, O, TAU, mixHex, shade, luminance, Kit, type Ring, headSink, type Body, type Cover, COVERS_FACE, COVERS_MOUTH, type Shins } from './OutfitKit';
+import { faceSpec } from './HeadSculpt';
 import { face, earrings, hair, beard, headwear, faceGear, smokable } from './OutfitHead';
 
 /** Bone lengths of the rig (Humanoid builds its limbs from these). */
@@ -73,20 +74,31 @@ function stripe(k: Kit, rings: readonly Ring[], rk: number, inf: number, side: n
 function hand(lo: Kit, s: number, b: Body, palm: number, fingers: number, inf: number): void {
   const h = lo.at([0, -ARM.lower, 0], O, b.hand);
   const i2 = inf * 2;
-  h.box(palm, [0.032 + i2, 0.076 + inf, 0.07 + i2], [s * 0.002, -0.034, 0.002]);
-  // Survivors' fingers half closed (round a grip, or relaxed at the side), zombies' clawing.
-  const [c1, c2] = b.zombie ? [0.38, 0.55] : [0.42, 0.55];
-  // Each knuckle's box reaches back into the one before, so bending opens no notch.
-  const k1 = h.at([s * 0.001, -0.068, 0.001], [0, 0, -s * c1]);
-  k1.box(fingers, [0.023 + i2, 0.05, 0.068 + i2], [0, -0.016, 0]);
-  const k2 = k1.at([0, -0.04, 0], [0, 0, -s * c2]);
-  k2.box(fingers, [0.02 + i2, 0.034, 0.064 + i2], [0, -0.012, 0]);
-  // Thumb from the heel of the hand on the front edge, wrapped round toward the fingers.
-  const dir = b.zombie ? new THREE.Vector3(-s * 0.25, -0.75, 0.5) : new THREE.Vector3(-s * 0.42, -0.82, 0.3);
-  dir.normalize();
-  const base = new THREE.Vector3(-s * 0.004, -0.024, 0.031).addScaledVector(dir, 0.025);
-  if (b.zombie) h.putAlong(new THREE.BoxGeometry(0.019 + i2, 0.05, 0.02 + i2), fingers, [base.x, base.y, base.z], dir);
-  else h.putAlong(new THREE.CylinderGeometry(0.0095 + inf, 0.0118 + inf, 0.05, 5), fingers, [base.x, base.y, base.z], dir);
+  const z = b.zombie;
+  h.box(palm, [0.026 + i2, 0.074 + inf, 0.071 + i2], [s * 0.002, -0.036, 0.001]);
+  // Four fingers, index (in front) to little finger: where each leaves the palm, its length and width.
+  // Survivors' half closed (round a grip, or relaxed at the side, the little finger most);
+  // the dead's longer, spread and hooked.
+  const nail = z && inf === 0 ? mixHex(fingers, 0x1a1210, 0.22) : fingers;
+  const FINGERS = [[0.0262, 0.068, 0.0158, -0.071], [0.009, 0.076, 0.0162, -0.074], [-0.0082, 0.07, 0.0156, -0.072], [-0.0246, 0.056, 0.0138, -0.066]] as const;
+  FINGERS.forEach(([fz, len, w, fy], i) => {
+    const L = len * (z ? 1.14 : 1);
+    const c1 = z ? 0.18 + 0.07 * i : 0.43 + 0.05 * i, c2 = z ? 0.85 - 0.05 * i : 0.56 + 0.05 * i;
+    const l1 = L * 0.56, l2 = L * 0.5;
+    // Each joint's box reaches back into the one before, so bending opens no notch.
+    const k1 = h.at([s * 0.001, fy, fz], [-(z ? 0.17 : 0.035) * (1.5 - i), 0, -s * c1]);
+    k1.box(fingers, [0.0155 + i2, l1 + 0.01, w + i2], [0, -l1 / 2 + 0.005, 0]);
+    const k2 = k1.at([0, -l1 + 0.002, 0], [0, 0, -s * c2]);
+    k2.box(nail, [0.0136 + i2, l2, w * 0.9 + i2], [0, -l2 / 2 + 0.003, 0]);
+  });
+  // Thumb from the heel of the hand on the front edge, in two joints, wrapped round toward the fingers.
+  const d1 = (z ? new THREE.Vector3(-s * 0.12, -0.6, 0.78) : new THREE.Vector3(-s * 0.4, -0.86, 0.2)).normalize();
+  const d2 = (z ? new THREE.Vector3(-s * 0.3, -0.86, 0.4) : new THREE.Vector3(-s * 0.52, -0.85, 0.06)).normalize();
+  const p0 = new THREE.Vector3(-s * 0.004, z ? -0.022 : -0.028, z ? 0.028 : 0.024);
+  const p1 = p0.clone().addScaledVector(d1, z ? 0.036 : 0.032);
+  const m1 = p0.clone().addScaledVector(d1, 0.016), m2 = p1.clone().addScaledVector(d2, 0.014);
+  h.putAlong(new THREE.BoxGeometry(0.019 + i2, 0.042, 0.02 + i2), fingers, [m1.x, m1.y, m1.z], d1);
+  h.putAlong(new THREE.BoxGeometry(0.016 + i2, 0.03, 0.017 + i2), nail, [m2.x, m2.y, m2.z], d2);
 }
 
 // ── Head ────────────────────────────────────────────────────────────────────────────────
@@ -120,7 +132,7 @@ const BUILD = { slim: [0.9, 0.93, 0.92], average: [1, 1, 1], broad: [1.11, 1.08,
 const FEMALE_TORSO: readonly (readonly [number, number])[] = [[-0.2, 0.194], [0.02, 0.171], [0.13, 0.142], [0.52, 0.188]];
 /** Torso radius (x, before build scale) at spine-space height y. */
 function torsoR(b: Body, y: number): number {
-  if (!b.female) return 0.16 + 0.1 * (y - 0.02);
+  if (!b.female) return 0.158 + 0.084 * (y - 0.02);
   const k = FEMALE_TORSO, hip = hipF(b, y + SPINE_Y);
   if (y <= k[0][0]) return k[0][1] * hip;
   for (let i = 1; i < k.length; i++) {
@@ -143,7 +155,17 @@ const hipF = (b: Body, y: number) => 1 + (b.hipW - 1) * THREE.MathUtils.smoothst
 const depthK = (b: Body, y: number) => (b.female ? 0.62 + 0.09 * THREE.MathUtils.clamp((0.07 - y) / 0.15, 0, 1) : 0.62);
 const frontZ = (b: Body, y: number) => depthK(b, y) * b.bz * torsoR(b, y);
 /** Shoulder joints' distance from the spine (the Humanoid's arm bones). */
-export const SHOULDER_X = { male: 0.22, female: 0.205 } as const;
+export const SHOULDER_X = { male: 0.2, female: 0.185 } as const;
+/** Height of the shoulder joints over the spine bone: below the top of the torso, which slopes down to them from the neck. */
+export const SHOULDER_Y = 0.455;
+/**
+ * The shoulders' slope: how much of the torso's width is left at spine height y. Full up to the
+ * armpits, then rounding in to the flat the neck stands on (collars and straps lie on that).
+ */
+const shoulderK = (y: number) => (y <= 0.465 ? 1 : 1 - 0.45 * Math.min(1, (y - 0.465) / 0.055) ** 2);
+/** Rows a man's torso is built from: few up the trunk (it is nearly straight), close together over the shoulders. */
+const MALE_ROWS = [-0.16, -0.06, 0.02, 0.14, 0.27, 0.39, 0.465, 0.49, 0.508, 0.52];
+const MALE_ROWS_LITE = [-0.16, 0.02, 0.27, 0.465, 0.495, 0.52];
 /** Outer layer thickness of each top (open jackets, coats, puffer rings). */
 const TOP_BULK: Record<string, number> = {
   openflannel: 0.014, ziphoodie: 0.012, denim: 0.02, leather: 0.021, raincoat: 0.015, camo: 0.016, puffer: 0.032, cardigan: 0.014, peacoat: 0.018,
@@ -157,7 +179,9 @@ const TOP_BULK: Record<string, number> = {
  */
 const BUST = { x: 0.05, y: 0.335, rx: 0.074, up: 0.1, down: 0.064, depth: 0.04 };
 /** Rows the female torso surface is built from: dense over the chest, where it curves most. */
-const FEMALE_ROWS = [-0.16, -0.08, 0.02, 0.08, 0.13, 0.19, 0.23, 0.255, 0.275, 0.295, 0.315, 0.335, 0.355, 0.38, 0.41, 0.44, 0.48, 0.52];
+const FEMALE_ROWS = [-0.16, -0.08, 0.02, 0.08, 0.13, 0.19, 0.23, 0.255, 0.275, 0.295, 0.315, 0.335, 0.355, 0.38, 0.41, 0.44, 0.47, 0.492, 0.508, 0.52];
+/** The same for the dead: half the rows over the chest. */
+const FEMALE_ROWS_LITE = [-0.16, -0.08, 0.02, 0.13, 0.23, 0.275, 0.315, 0.355, 0.41, 0.465, 0.492, 0.508, 0.52];
 
 /** How far the bust stands out of the chest at (x, y). */
 function bustBump(b: Body, x: number, y: number): number {
@@ -220,15 +244,17 @@ const chestZ = (b: Body, x: number, y: number) => torsoZ(b, x, y) + bustBump(b, 
 const chestMax = (b: Body, y: number, w: number) => Math.max(...[-1, -0.5, 0, 0.5, 1].map((t) => chestZ(b, t * w, y)));
 
 /**
- * One layer of the female torso (skin, a shirt, an open jacket) from y0 up to y1, `inf` out from
- * the body, open at the front by `gap` radians: a lathed surface following the waist, hips and
- * bust, so whatever is worn hugs the same shape.
+ * One layer of the torso (skin, a shirt, an open jacket) from y0 up to y1, `inf` out from the
+ * body, open at the front by `gap` radians: a turned surface following the waist, the hips and
+ * bust of a woman and the slope of the shoulders, so whatever is worn hugs the same shape.
  */
-function femaleLayer(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, gap: number, surf?: Surface, rb0?: number): void {
-  const ys = [y0, ...FEMALE_ROWS.filter((y) => y > y0 + 0.008 && y < y1 - 0.008), y1];
-  const g = sculpt(ys, gap, gap === 0, 32, (y, i) => {
+function bodyLayer(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, gap: number, surf?: Surface, rb0?: number): void {
+  const rows = b.female ? (b.zombie ? FEMALE_ROWS_LITE : FEMALE_ROWS) : b.zombie ? MALE_ROWS_LITE : MALE_ROWS;
+  const ys = [y0, ...rows.filter((y) => y > y0 + 0.008 && y < y1 - 0.008), y1];
+  const g = sculpt(ys, gap, gap === 0, b.zombie ? 12 : b.female ? 28 : 20, (y, i) => {
     const r = i === 0 && rb0 !== undefined ? Math.max(rb0, torsoR(b, y)) : torsoR(b, y);
-    return { ax: r * b.bx + inf, az: depthK(b, y) * b.bz * r + inf };
+    const k = shoulderK(y);
+    return { ax: (r * b.bx + inf) * k, az: (depthK(b, y) * b.bz * r + inf) * (0.5 + 0.5 * k) };
   }, (x, y, z) => (z > 0 ? z + bustBump(b, x, y) : z - seatBump(b, x, y + SPINE_Y)));
   sp.put(g, hex, O, O, 1, surf);
 }
@@ -340,8 +366,22 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
     female, hand: female ? 0.9 : 1, leg: 1 + (build[0] * g - 1) * 0.6, seg: o.zombie ? 7 : 10,
     bustK: 1 + SHAPE.bust * bs, bustR: 1 + SHAPE.bustSpread * bs, hipW: 1 + SHAPE.hips * hs,
     seat: female ? (SHAPE.seat + SHAPE.seatRange * gs) * build[1] * g : 0,
-    zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0,
+    zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0, face: faceSpec(female, o.zombie),
   };
+  const f = b.face;
+  if (o.zombie) {
+    // No two of the dead rotted alike: how wasted the face is, how far the jaw hangs and the
+    // lips have drawn back, whether the nose or a cheek is gone.
+    f.gaunt = o.mutation === 'bloater' ? 0.15 : 0.55 + o.rand() * 0.45;
+    f.jaw = o.mutation === 'screamer' ? 0.62 : 0.05 + o.rand() ** 2 * 0.3;
+    f.lipless = 0.35 + o.rand() * 0.65;
+    f.nose = o.rand() < 0.25 ? 0.35 : 0.8 + o.rand() * 0.2;
+    f.tear = o.rand() < 0.3 ? (o.rand() < 0.5 ? 1 : -1) : 0;
+    f.brow = 0.0055;
+  } else if (COVERS_MOUTH.has(a.face)) {
+    // A mask presses the nose flat under it.
+    f.nose = 0.5;
+  }
   const kit = (bone: number) => new Kit(sink, bone);
   // The neck keeps its length; the head on it is shaped and scaled (headSink).
   const neckKit = kit(BONE.head), head = new Kit(headSink(sink), BONE.head), spine = kit(BONE.spine), hips = kit(BONE.hips);
@@ -371,18 +411,14 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
 
 function mutate(head: Kit, spine: Kit, kit: (bone: number) => Kit, b: Body, m: Mutation): void {
   const skin = b.skin;
-  if (m === 'screamer') {
-    // The jaw hangs open in a permanent scream.
-    head.ball(0x1c0606, [0.034, 0.05, 0.012], [0, 0.045, 0.114], [0.12, 0, 0], undefined, 10, 7);
-    head.ball(0x5a1a14, [0.024, 0.008, 0.02], [0, 0.012, 0.108], O, undefined, 8, 5);
-    return;
-  }
+  // Screamers: the jaw hangs open in a permanent scream (the face is built that way, see dress).
+  if (m === 'screamer') return;
   // A gut swollen with gas, split skin and boils, straining out under the shirt.
   const gut = mixHex(skin, 0xb7b06a, 0.3);
   const rx = 0.24 * b.bx, rz = 0.2 * b.bz, cz = 0.1 * b.bz;
   spine.ball(gut, [rx, 0.23, rz], [0, 0.13, cz], O, undefined, 16, 12);
   spine.ball(mixHex(gut, 0x5a2d3d, 0.4), [0.07, 0.012, 0.03], [0.05, 0.1, cz + rz * 0.97], [0.4, 0, 0.5], undefined, 8, 5);
-  const boil = 0xc8b84a;
+  const boil = 0xb0a66a;
   // Boils on the gut, and on the back where the shirt rides up.
   for (const [x, y] of [[0.12, 0.2], [-0.16, 0.1], [0.05, 0.02], [-0.08, 0.26]] as const) {
     const ey = (y - 0.13) / 0.23;
@@ -400,22 +436,11 @@ type Sleeve = 'none' | 'short' | 'long' | 'jacket' | 'puffy';
 
 /** A torso layer from spine-space height y0 to y1, `inf` meters out, open at the front by `gap` radians. */
 function shell(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, gap = 0, surf?: Surface, rbOverride?: number): void {
-  if (b.female) {
-    femaleLayer(sp, b, hex, inf, y0, y1, gap, surf, rbOverride);
-    return;
-  }
-  const rt = torsoR(b, y1), rb = rbOverride ?? torsoR(b, y0);
-  const rm = (rt + rb) / 2;
-  const sx = (b.bx * rm + inf) / (rm + inf), sz = (0.62 * b.bz * rm + inf) / (rm + inf);
-  sp.cyl(hex, rt + inf, rb + inf, y1 - y0, [0, (y0 + y1) / 2, 0], O, [sx, 1, sz], { seg: 14, open: gap > 0, t0: gap / 2, tl: TAU - gap }, surf);
+  bodyLayer(sp, b, hex, inf, y0, y1, gap, surf, rbOverride);
 }
 
 function torso(sp: Kit, b: Body, hex: number, surf?: Surface): void {
-  if (b.female) {
-    femaleLayer(sp, b, hex, 0, 0.02, 0.52, 0, surf);
-    return;
-  }
-  sp.cyl(hex, 0.21, 0.16, 0.5, [0, 0.27, 0], O, [b.bx, 1, 0.62 * b.bz], { seg: 14 }, surf);
+  bodyLayer(sp, b, hex, 0, 0.02, 0.52, 0, surf);
 }
 
 /** Elbow and knee balls' size relative to the joint ring: inside the limb's flat sides while it is straight. */
@@ -443,7 +468,7 @@ function sleeves(kit: (bone: number) => Kit, b: Body, kind: Sleeve, hex: number,
     const loHex = kind === 'long' || kind === 'jacket' || kind === 'puffy' ? (torn ? skin : hex) : skin;
     const upInf = upHex === skin ? 0 : inf, loInf = loHex === skin ? 0 : inf;
     const upSurf = upHex === skin ? undefined : surf, loSurf = loHex === skin ? undefined : surf;
-    up.ball(kind === 'none' ? skin : hex, 0.062 * k + inf, [0, -0.01, 0], O, kind === 'none' ? undefined : surf, 8, 6);
+    up.ball(kind === 'none' ? skin : hex, 0.058 * k + inf, [0, -0.012, 0], O, kind === 'none' ? undefined : surf, b.zombie ? 8 : 10, b.zombie ? 6 : 7);
     // A sleeve ending at the elbow is closed off there (the bare forearm runs on inside it).
     up.lathe(upHex, UP, k, upInf, b.seg, { top: true, bottom: upInf !== loInf }, upSurf, { bone: lb, y: -ARM.upper, band: BEND });
     lo.lathe(loHex, LO, k, loInf, b.seg, { top: upInf !== loInf, bottom: true }, loSurf, { bone: ub, y: 0, band: BEND });
@@ -1389,5 +1414,5 @@ function gear(sp: Kit, hp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Bo
 }
 
 
-export { PATTERN, type Shade, type Surface, type SkinBlend, type PartSink, mixHex, shade, type Ring, HEAD_K, EYE_Y, type EyePart, type SmokeKind, type SmokeRig } from './OutfitKit';
-export { eyeParts, smokeRig } from './OutfitHead';
+export { PATTERN, type Shade, type Surface, type SkinBlend, type PartSink, mixHex, shade, type Ring, HEAD_K, HEAD_X, HEAD_Z, EYE_Y, type EyePart, type SmokeKind, type SmokeRig } from './OutfitKit';
+export { eyeParts, shutLids, deadEyes, smokeRig } from './OutfitHead';

@@ -6,18 +6,7 @@ import * as THREE from 'three';
 import { paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE } from './rig';
 import { PATTERN, type Surface, type PartSink, type V3, O, TAU, mat, mixHex, shade, luminance, Kit, crumple, headWarp, headSink, faceShade, neckShade, type Body, type Cover, COVERS_FACE, EYES, EYE_Y, EYE_X, EYE_Z, type EyePart, DOME_C, domeR, taperTube, type SmokeKind, type SmokeShape, SMOKES, COVERS_MOUTH, EMBER_LEN, CHAR, type SmokeRig } from './OutfitKit';
-
-/**
- * A patch painted on the head's surface (makeup) around head-space (x, y) on the face, `w` wide
- * and `hgt` tall, standing `inf` off the skin.
- */
-function facePatch(h: Kit, hex: number, x: number, y: number, w: number, hgt: number, inf = 0.0022): void {
-  const theta = Math.acos(THREE.MathUtils.clamp((y - 0.12) / 0.1404, -1, 1));
-  const sinT = Math.max(0.2, Math.sin(theta));
-  const phi = Math.acos(THREE.MathUtils.clamp(-(x / 0.117) / sinT, -1, 1));
-  const dt = hgt / 0.1404 / 2, dp = w / (0.123 * sinT) / 2;
-  h.cap(hex, [0.117 + inf, 0.1404 + inf, 0.13 + inf], theta - dt, 2 * dt, [0, 0.12, 0], O, { p0: phi - dp, pl: 2 * dp, w: 5, h: 3 });
-}
+import { EYEBALL_R, EYE_YAW, MOUTH_Y, browGeometry, earGeometry, faceLayer, faceZ, headGeometry, lidGeometry, lidUp, shutLidGeometry, teethGeometry, type FacePaint } from './HeadSculpt';
 
 /** Lip, lid and cheek colors the makeup gives (undefined: bare). */
 function makeupColors(a: Appearance, b: Body): { lips?: number; lids?: number; cheeks?: number } {
@@ -33,57 +22,98 @@ function makeupColors(a: Appearance, b: Body): { lips?: number; lids?: number; c
   }
 }
 
-export function face(h: Kit, neck: Kit, a: Appearance, b: Body, hairHex: number, covered: boolean): void {
-  const skin = b.skin;
-  const soft: Surface = { shade: faceShade };
-  // A neck that narrows up into the jaw.
-  if (b.female) neck.cyl(skin, 0.042, 0.055, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: 10 }, { shade: neckShade });
-  else neck.cyl(skin, 0.05, 0.063, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: 10 }, { shade: neckShade });
-  h.put(new THREE.IcosahedronGeometry(1, 2), skin, [0, 0.12, 0], O, [0.117, 0.1404, 0.13], soft);
-  for (const s of [1, -1]) h.ball(shade(skin, 0.94), [0.016, 0.03, 0.022], [s * 0.113, 0.115, -0.008], [0, 0, s * 0.1], soft, 6, 5);
-  h.box(shade(skin, 0.97), [0.024, 0.038, 0.024], [0, 0.102, 0.122], [-0.32, 0, 0], soft);
+const gs = (dx: number, dy: number) => Math.exp(-(dx * dx + dy * dy));
+const sstep = THREE.MathUtils.smoothstep;
+
+/** How much of a point on the face (as built) is lip: all of it between the lips' edges, none past the corners. */
+function lipK(x: number, y: number): number {
+  const xf = 1 - sstep(Math.abs(x), 0.019, 0.0285);
+  return xf * (y > MOUTH_Y ? 1 - sstep(y, 0.0665, 0.0705) : 1 - sstep(MOUTH_Y - y, 0.0075, 0.0125));
+}
+
+/** Where a full beard grows: below a line from under the nose round to the ears, not on the lips. */
+function beardK(x: number, y: number, a: number): number {
+  const ax = Math.abs(x), aa = Math.abs(a);
+  if (ax < 0.0295 && y > 0.0465 && y < 0.0705) return 0;
+  const line = ax < 0.034 && aa < 0.5 ? 0.081 : 0.066 + 0.05 * sstep(aa, 0.45, 1.35);
+  return sstep(line - y, 0, 0.012) * (1 - sstep(aa, 1.5, 1.75));
+}
+
+/**
+ * What is painted into the skin of the face: lips, the line of the mouth, stubble and makeup on
+ * the living; on the dead, sockets gone black, lips rotted back to raw meat and a mouth that is
+ * a dark hole.
+ */
+function facePaint(a: Appearance, b: Body, hairHex: number, covered: boolean): FacePaint {
+  const f = b.face;
+  const col = (hex: number) => new THREE.Color(hex);
+  const layers: { c: THREE.Color; k: (x: number, y: number, a: number) => number }[] = [];
+  const add = (hex: number, k: (x: number, y: number, a: number) => number) => layers.push({ c: col(hex), k });
+  const mouthLine = (x: number, y: number) => (Math.abs(y - MOUTH_Y) < 0.0006 ? 1 - sstep(Math.abs(x), 0.024, 0.03) : 0);
   if (b.zombie) {
-    // A slack, dark mouth.
-    h.ball(0x2a0c0a, [0.026, 0.012, 0.008], [0, 0.058, 0.115], [0.1, 0, 0], undefined, 8, 5);
+    // Sockets sunk into shadow, the skin round the mouth dark with old blood, lips raw.
+    add(0x120809, (x, y) => 0.9 * gs((Math.abs(x) - EYE_X) / 0.021, (y - EYE_Y) / 0.0155));
+    add(0x240a08, (x, y) => 0.55 * gs(x / 0.036, (y - 0.056) / 0.022));
+    add(0x2c0b09, (x, y) => lipK(x, y) * (0.6 + 0.4 * f.lipless));
+    add(0x0a0303, mouthLine);
+    // A nose rotted down to the hole in the skull.
+    if (f.nose < 0.6) add(0x150808, (x, y) => 0.95 * gs(x / 0.011, (y - 0.094) / 0.011));
+    if (f.tear !== 0) add(0x3a0c0a, (x, y) => 0.9 * gs((x - f.tear * 0.052) / 0.014, (y - 0.068) / 0.012));
+  } else if (!covered) {
+    const mk = makeupColors(a, b);
+    if (a.facialHair === 'stubble') add(mixHex(hairHex, b.skin, 0.55), (x, y, an) => 0.62 * beardK(x, y, an));
+    if (mk.cheeks !== undefined) add(mk.cheeks, (x, y) => 0.7 * gs((Math.abs(x) - 0.07) / 0.02, (y - 0.096) / 0.015));
+    if (mk.lids !== undefined) add(mk.lids, (x, y) => 0.85 * gs((Math.abs(x) - 0.044) / 0.021, (y - 0.1505) / 0.0055));
+    if (a.makeup === 'eyeblack') add(0x141214, (x, y) => 0.95 * gs((Math.abs(x) - 0.046) / 0.017, (y - 0.119) / 0.006));
+    // Lips: a little redder than the skin, or painted; the upper one darker, turned from the light.
+    const lipHex = mk.lips ?? mixHex(b.skin, b.female ? 0xa04a58 : 0x8a4c48, b.female ? 0.34 : 0.24);
+    add(lipHex, (x, y) => lipK(x, y) * (y > MOUTH_Y ? 0.92 : 1));
+    add(mixHex(lipHex, 0x2a0c10, 0.7), (x, y) => 0.9 * mouthLine(x, y));
+  }
+  return (x, y, an, out) => {
+    for (const l of layers) {
+      const k = l.k(x, y, an);
+      if (k <= 0.003) continue;
+      const a0 = out[3], a1 = a0 + k * (1 - a0);
+      out[0] = (out[0] * a0 * (1 - k) + l.c.r * k) / a1;
+      out[1] = (out[1] * a0 * (1 - k) + l.c.g * k) / a1;
+      out[2] = (out[2] * a0 * (1 - k) + l.c.b * k) / a1;
+      out[3] = a1;
+    }
+  };
+}
+
+/**
+ * The head: a neck narrowing up into the jaw, the sculpted skull and face (HeadSculpt), ears,
+ * eyelids over the eyes and brows on the ridge above them; the dead get their teeth.
+ */
+export function face(h: Kit, neck: Kit, a: Appearance, b: Body, hairHex: number, covered: boolean): void {
+  const skin = b.skin, f = b.face;
+  const soft: Surface = { shade: faceShade };
+  const nk = (b.female ? 0.82 : 1) * (b.zombie ? 0.9 : 1);
+  neck.cyl(skin, 0.054 * nk, 0.065 * nk, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: b.zombie ? 8 : 12 }, { shade: neckShade });
+  h.put(headGeometry(f, facePaint(a, b, hairHex, covered)), skin, O, O, 1, soft);
+  for (const s of [1, -1]) h.put(earGeometry(s, b.zombie), shade(skin, 0.96), [s * 0.1125, 0.113, -0.012], [-0.18, -s * 0.3, 0], 1, soft);
+  if (b.zombie) {
+    // Teeth, behind lips drawn back off them.
+    h.put(teethGeometry(f, true, b.rand), 0xb9ad86);
+    h.put(teethGeometry(f, false, b.rand), 0xb9ad86);
     return;
   }
-  if (covered) return;
-  const lip = a.facialHair === 'beard' ? 0.013 : a.facialHair === 'goatee' || a.facialHair === 'stubble' ? 0.004 : 0;
-  const mk = makeupColors(a, b);
-  if (b.female || mk.lips !== undefined) {
-    // Fuller lips: upper and lower, natural or painted, with the line between them.
-    const lipHex = mk.lips ?? mixHex(skin, 0xa04a58, 0.3);
-    h.ball(lipHex, [0.0205, 0.0062, 0.0085], [0, 0.0672, 0.1165 + lip], [-0.25, 0, 0], undefined, 10, 5);
-    h.ball(shade(lipHex, 1.06), [0.0185, 0.0074, 0.0092], [0, 0.0566, 0.1148 + lip], [0.2, 0, 0], undefined, 10, 5);
-    h.box(mixHex(lipHex, 0x2a0c10, 0.65), [0.031, 0.0022, 0.006], [0, 0.0622, 0.1215 + lip], [-0.15, 0, 0]);
-  } else {
-    h.box(mixHex(skin, 0x4a1c1c, 0.55), [0.038, 0.0055, 0.008], [0, 0.063, 0.118 + lip], [-0.15, 0, 0]);
-  }
   const e = EYES[a.eyes] ?? EYES.almond;
-  const brow = luminance(hairHex) > 0.7 ? shade(hairHex, 0.85) : hairHex;
+  const mk = makeupColors(a, b);
+  const liner = a.makeup === 'liner' || a.makeup === 'glam' || a.makeup === 'smoky';
+  const lash = new THREE.Color(liner ? 0x0b0909 : b.female ? 0x1a1210 : mixHex(skin, 0x1a1210, 0.6));
+  const rim = new THREE.Color(mixHex(skin, 0x8a4a48, 0.35));
+  const lidHex = mk.lids !== undefined ? mixHex(mk.lids, skin, 0.2) : shade(skin, 0.97);
   for (const s of [1, -1]) {
-    if (b.female) {
-      // Thinner, arched brows: the body rising from the nose, the tail falling away.
-      h.box(brow, [0.03, 0.0058, 0.008], [s * 0.039, e.browY + 0.003, 0.1145], [-0.25, s * 0.18, s * (e.brow - 0.12)]);
-      h.box(brow, [0.017, 0.0048, 0.0075], [s * 0.061, e.browY + 0.0015, 0.108], [-0.22, s * 0.35, s * (e.brow - 0.62)]);
-    } else {
-      h.box(brow, [0.036, 0.0085, 0.009], [s * 0.043, e.browY, 0.114], [-0.25, s * 0.18, s * e.brow]);
-    }
-    // Upper lid: a shell over the top of the eye, rotated down to cover `lid` of it. It stays put
-    // while the eye itself squashes to blink.
-    if (e.lid > 0) {
-      const tilt = Math.asin(THREE.MathUtils.clamp((2 * e.lid - 1) * e.sy / 0.018, -1, 1));
-      const lidHex = mk.lids !== undefined ? mixHex(mk.lids, skin, 0.2) : shade(skin, 0.92);
-      h.at([s * EYE_X, EYE_Y, EYE_Z], [0, s * 0.2, s * e.tilt])
-        .cap(lidHex, [e.sx * 1.14, e.sy * 1.18, 0.0192], 0, Math.PI / 2, O, [tilt, 0, -s * e.lidTilt], { w: 12, h: 6 });
-    }
-    // Makeup painted on: lids between eye and brow, cheeks, or a footballer's eye black.
-    if (mk.lids !== undefined) {
-      const y0 = EYE_Y + e.sy * (e.lid > 0 ? 1.2 : 0.95), y1 = e.browY - 0.004;
-      if (y1 > y0 + 0.004) facePatch(h, mk.lids, s * (EYE_X + 0.004), (y0 + y1) / 2, 0.044, y1 - y0);
-    }
-    if (mk.cheeks !== undefined) facePatch(h, mk.cheeks, s * 0.074, 0.094, 0.036, 0.022, 0.0026);
-    if (a.makeup === 'eyeblack' && !b.zombie) facePatch(h, 0x141214, s * 0.046, EYE_Y - e.sy - 0.014, 0.034, 0.009, 0.0026);
+    const eye = h.at([s * EYE_X, EYE_Y, EYE_Z], [0, s * EYE_YAW, 0]);
+    eye.put(lidGeometry(e, s, true, 8, lash), lidHex, O, O, 1, mk.lids !== undefined ? undefined : soft);
+    eye.put(lidGeometry(e, s, false, 8, rim), shade(skin, 0.97), O, O, 1, soft);
+    if (covered) continue;
+    const brow = luminance(hairHex) > 0.7 ? shade(hairHex, 0.85) : hairHex;
+    // Women's brows thinner and arched, men's heavier and flatter.
+    h.put(browGeometry(f, s, e.browY + (b.female ? 0.002 : 0), e.brow * 0.55, b.female ? 0.0062 : 0.0098, b.female ? 0.0042 : 0.002), brow);
   }
 }
 
@@ -92,7 +122,7 @@ export function earrings(h: Kit, a: Appearance, cover: Cover): void {
   if (cover === 'full' || a.ears === 'none') return;
   const gold = 0xd8b04a, silver = 0xc8ccd2;
   for (const s of [1, -1]) {
-    const x = s * 0.1235, y = 0.09, z = 0.001;
+    const x = s * 0.1235, y = 0.086, z = -0.004;
     switch (a.ears) {
       case 'studs':
       case 'goldstuds':
@@ -118,36 +148,66 @@ export function earrings(h: Kit, a: Appearance, cover: Cover): void {
   }
 }
 
-/** Eye geometry (head-bone space as built, relative to the eye line at EYE_Y): sclera, iris, pupil, glint, lids. */
+/**
+ * Eye geometry (head-bone space as built, relative to the eye line at EYE_Y): the eyeball, iris,
+ * pupil and glint behind the lids, and the lashes and liner that stay on the lid's edge.
+ */
 export function eyeParts(a: Appearance): EyePart[] {
   const e = EYES[a.eyes] ?? EYES.almond;
   const iris = paletteColor('eye', a.eyeColor);
   const out: EyePart[] = [];
   const add = (g: THREE.BufferGeometry, hex: number, m: THREE.Matrix4, moves = false) => out.push({ g, hex, m, iris: moves });
+  const R = EYEBALL_R;
   for (const s of [1, -1]) {
-    const frame = mat([s * EYE_X, 0, EYE_Z], [0, s * 0.2, s * e.tilt]);
+    const frame = mat([s * EYE_X, 0, EYE_Z], [0, s * EYE_YAW, 0]);
     const at = (p: V3, r: V3, sc: V3 | number) => frame.clone().multiply(mat(p, r, sc));
-    add(new THREE.SphereGeometry(1, 12, 8), 0xe9e4dc, at(O, O, [e.sx, e.sy, 0.016]));
-    const ir = Math.min(0.0115, e.sy * 0.95);
-    add(new THREE.SphereGeometry(1, 12, 8), iris, at([0, 0, 0.0115], O, [ir, ir, 0.0055]), true);
-    add(new THREE.SphereGeometry(1, 10, 6), 0x050505, at([0, 0, 0.0145], O, [ir * 0.45, ir * 0.45, 0.003]), true);
-    add(new THREE.SphereGeometry(1, 6, 4), 0xffffff, at([-s * ir * 0.35 + s * 0.001, ir * 0.4, 0.0168], O, ir * 0.17), true);
-    // Lash line along the top edge of an open eye (lidded eyes have the lid's edge instead).
+    add(new THREE.SphereGeometry(1, 12, 8), 0xdfd9cf, at(O, O, R));
+    const ir = 0.0068;
+    add(new THREE.SphereGeometry(1, 12, 6), iris, at([0, 0, R[2] - 0.0019], O, [ir, ir, 0.0026]), true);
+    add(new THREE.SphereGeometry(1, 8, 5), 0x050505, at([0, 0, R[2] - 0.0004], O, [ir * 0.42, ir * 0.42, 0.0014]), true);
+    add(new THREE.SphereGeometry(1, 5, 4), 0xffffff, at([-s * ir * 0.3 + s * 0.0006, ir * 0.36, R[2] + 0.0008], O, ir * 0.15), true);
     const female = a.body === 'female';
     const liner = a.makeup === 'liner' || a.makeup === 'glam' || a.makeup === 'smoky';
-    if (e.lid === 0) {
-      add(new THREE.TorusGeometry(1, liner ? 0.17 : female ? 0.14 : 0.1, 3, 14, Math.PI), liner ? 0x0b0909 : 0x1a1210, at([0, 0, 0.007], [-0.35, 0, 0], [e.sx * 1.04, e.sy * 1.04, 0.01]));
-      // Lashes flicking up at the outer corner.
-      if (female) {
-        for (let i = 0; i < 3; i++) {
-          const t = 0.42 + i * 0.2;
-          add(new THREE.ConeGeometry(0.0022, 0.008, 3), 0x120d0b,
-            at([s * Math.cos(t) * e.sx * 1.02, Math.sin(t) * e.sy * 1.05 + 0.002, 0.009], [0.3, 0, -s * (0.35 + (1.2 - t) * 0.6)], 1));
-        }
+    // Lashes flicking up at the outer corner, off the upper lid's edge.
+    if (female) {
+      for (let i = 0; i < 3; i++) {
+        const u = 0.35 + i * 0.25;
+        add(new THREE.ConeGeometry(0.0011, 0.0052, 3), 0x120d0b,
+          at([s * u * e.a, lidUp(e, u) + 0.0018, 0.0122 - u * 0.0035], [0.5, 0, -s * (0.25 + u * 0.7)], 1));
       }
     }
     // Winged liner sweeping up past the outer corner.
-    if (liner) add(new THREE.BoxGeometry(0.016, 0.0026, 0.004), 0x0b0909, at([s * (e.sx + 0.005), e.sy * 0.32, 0.006], [0, 0, s * 0.42], 1));
+    if (liner) add(new THREE.BoxGeometry(0.0075, 0.0016, 0.002), 0x0b0909, at([s * (e.a + 0.0028), lidUp(e, 1) + 0.0014, 0.0052], [0, s * 0.5, s * 0.5], 1));
+  }
+  return out;
+}
+
+/** Both eyes' lids shut (relative to the eye line, like eyeParts): shown for a blink, and on the dead. */
+export function shutLids(a: Appearance, skinHex: number): THREE.BufferGeometry[] {
+  const e = EYES[a.eyes] ?? EYES.almond;
+  const skin = new THREE.Color(shade(skinHex, 0.93)), lash = new THREE.Color(mixHex(skinHex, 0x1a1210, a.body === 'female' ? 0.9 : 0.6));
+  return [1, -1].map((s) => shutLidGeometry(e, s, 8, skin, lash).applyMatrix4(mat([s * EYE_X, 0, EYE_Z], [0, s * EYE_YAW, 0])));
+}
+
+/** The dead's eyes (head space as built): clouded balls sunk in the sockets, each with a pinprick that still catches the light. */
+export function deadEyes(glowHex: number): THREE.BufferGeometry[] {
+  const out: THREE.BufferGeometry[] = [];
+  const glow = new THREE.Color(glowHex);
+  const paint = (g: THREE.BufferGeometry, c: THREE.Color) => {
+    const n = g.getAttribute('position').count;
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) c.toArray(col, i * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    return g;
+  };
+  // The ball: a dim film of the eye's color over grey. The pupil: all of it.
+  const film = new THREE.Color(0x24231f).lerp(glow, 0.2);
+  for (const s of [1, -1]) {
+    const z = EYE_Z - 0.0075;
+    out.push(paint(new THREE.SphereGeometry(0.0108, 8, 6).translate(s * EYE_X, EYE_Y, z), film));
+    out.push(paint(new THREE.SphereGeometry(1, 6, 4).scale(0.0036, 0.0036, 0.0016).translate(s * (EYE_X - 0.0008), EYE_Y - 0.0006, z + 0.0102), glow));
   }
   return out;
 }
@@ -370,35 +430,40 @@ function longBack(h: Kit, hx: number, len: number): void {
   h.ball(hx, [0.118, len, 0.062], [0, 0.23 - len, -0.09], [0.12, 0, 0], undefined, 12, 7);
 }
 
+/**
+ * Facial hair grown off the face's own surface (HeadSculpt.faceLayer), so it follows the jaw and
+ * chin whatever their shape and leaves the lips showing. Stubble is painted into the skin (facePaint).
+ */
 export function beard(h: Kit, a: Appearance, b: Body, hx: number): void {
   if (b.zombie && a.facialHair !== 'beard') return;
-  const r = (inf: number): V3 => [0.117 + inf, 0.1404 + inf, 0.13 + inf];
-  const stache = (thick = 1) => {
-    for (const s of [1, -1]) h.ball(hx, [0.021, 0.0085 * thick, 0.011], [s * 0.016, 0.077, 0.119], [-0.2, 0, s * -0.25], undefined, 8, 5);
-  };
+  const f = b.face;
+  // Above the upper lip, out to just past the corners of the mouth, parted under the nose.
+  const stache = (x: number, y: number, thick: number) =>
+    thick * (1 - sstep(Math.abs(x), 0.027, 0.037)) * sstep(y, 0.066, 0.0695) * (1 - sstep(y, 0.0775, 0.083)) * (0.72 + 0.28 * sstep(Math.abs(x), 0.002, 0.009)) || -1;
+  const grow = (lift: (x: number, y: number, a: number) => number) => h.put(faceLayer(f, lift), hx);
   switch (a.facialHair) {
-    case 'stubble':
-      h.front(mixHex(hx, b.skin, 0.72), r(0.0025), 1.82, 0.9, 2.3, [0, 0.12, 0]);
-      break;
     case 'mustache':
-      stache(1.3);
+      grow((x, y) => stache(x, y, 0.0062));
       break;
     case 'handlebar':
-      stache(1.1);
-      for (const s of [1, -1]) h.cone(hx, 0.006, 0.028, [s * 0.04, 0.084, 0.11], [0, 0, -s * 0.9]);
+      grow((x, y) => stache(x, y, 0.0055));
+      for (const s of [1, -1]) h.cone(hx, 0.0055, 0.03, [s * 0.041, 0.079, faceZ(f, 0.041, 0.076) + 0.003], [0, 0, -s * 0.9]);
       break;
     case 'goatee':
-      stache();
-      h.ball(hx, [0.022, 0.026, 0.013], [0, 0.026, 0.104], [0.3, 0, 0], undefined, 8, 6);
+      grow((x, y) => Math.max(stache(x, y, 0.0045), 0.0075 * (1 - sstep(Math.abs(x), 0.019, 0.029)) * (1 - sstep(y, 0.036, 0.0465)) || -1));
       break;
     case 'beard':
-      h.front(hx, r(0.01), 1.8, 0.95, 3.0, [0, 0.12, 0]);
-      h.ball(hx, [0.055, 0.042, 0.04], [0, 0.012, 0.07], O, undefined, 10, 6);
-      stache(1.2);
+      grow((x, y, an) => {
+        const k = beardK(x, y, an);
+        return k > 0.02 ? k * (0.0045 + 0.0105 * sstep(0.075 - y, 0, 0.07)) : -1;
+      });
       break;
     case 'chops':
-      for (const s of [1, -1]) h.ball(hx, [0.022, 0.055, 0.045], [s * 0.1, 0.07, 0.035], [0, 0, s * 0.15], undefined, 8, 6);
-      stache();
+      grow((x, y, an) => {
+        const aa = Math.abs(an);
+        const k = sstep(aa, 0.62, 0.8) * (1 - sstep(aa, 1.45, 1.62)) * sstep(y, 0.012, 0.03) * (1 - sstep(y, 0.118, 0.132));
+        return Math.max(stache(x, y, 0.0045), k > 0.02 ? k * 0.0085 : -1);
+      });
       break;
   }
 }

@@ -170,7 +170,7 @@ export const PRONE_POSES: Record<Hold, Record<'ready' | 'aim' | 'reload', PoseDe
   // The right gun of a pair (the left mirrors it): out ahead on both elbows, a shoulder apart.
   akimbo: {
     ready: { at: [-0.16, 0.24, 0.95], rot: [0.25, 0.04, 0] },
-    aim: { at: [-0.15, 0.4, 1.0] },
+    aim: { at: [-0.15, 0.4, 0.975] },
     reload: { at: [-0.14, 0.24, 0.85], rot: [-0.2, 0.15, 0.3] },
   },
 };
@@ -1660,7 +1660,8 @@ export class PlayerWeapon {
     const b = t * Br.rate + side * 0.9;
     const x = side * T.at[0] + f.x + Math.sin(ph) * B.x * move + Math.sin(t * 0.7 + side) * Br.x * still;
     const y = T.at[1] + f.y - (1 - Math.cos(2 * ph)) * 0.5 * B.y * move + Math.sin(b) * Br.y * still + r.pitch * K.up;
-    const z = T.at[2] + r.z * K.back;
+    // Lying prone the shoulders are further behind the eye: the guns come in a little so the arms still reach.
+    const z = T.at[2] + r.z * K.back + 0.04 * this.body.proneWeight;
     // Gun space after FLIP: +X pitch dips the muzzle, +Y yaw swings it to the screen's left, +Z roll leans the top left.
     const pitch = f.pitch + Math.sin(2 * ph + 0.6) * B.pitch * move + Math.sin(b + 0.5) * Br.pitch * still - r.pitch * K.pitch;
     const yaw = f.yaw + side * T.toe + Math.sin(ph) * 0.4 * B.roll * move + r.yaw * K.yaw;

@@ -24,7 +24,7 @@ Sized for the worst street: 90 zombies, four survivors and their guns, on a phon
 | --- | --- | --- | --- | --- |
 | Held gun | 4,500 | 5 (body, magazine, action, lit sights) | none | none: at most 8 are ever drawn |
 | Melee weapon | 1,500 | 3 | none | none |
-| Survivor | 9,000 | 3 | none (vertex color, fabric pattern in the shader) | none: at most 4 |
+| Survivor | 11,000 | 3 | none (vertex color, fabric pattern in the shader) | none: at most 4 |
 | Zombie | 4,200 average over the 30 looks, 6,500 heaviest | 2 | shared 32³ noise | lite decay shader on Phone and Low |
 | Drivable car | 6,000 | 3 (body, glass, lettering) | none | parked cars stay in the static batches |
 
@@ -53,6 +53,7 @@ A full street is 90 x 4,200 = 380k zombie triangles; everything else on this pag
 | LR-338 | ours: nothing to measure | 480 triangles | 2,092 triangles, same length and hold |
 | Survivors and zombies | body survey medians scaled to the survivor's height (recalled figures, not a looked-up table): head 13% smaller (`HEAD_K` 0.8), feet 12% longer (`FOOT_LENGTH`), thighs 12% fuller (`LEG_UP`), hips 9% wider (`pelvisK`) | head about 30% large, shoe 13.6% of the height | shoe 15.5% of the height; triangle counts unchanged |
 | Sedan, police car | hard points kept (4.4 m body, 2.7 m wheelbase, 1.86 m wide); outline of a mid-90s American sedan | 824 triangles, a box on octagons | 2,900 triangles, 1 draw call as before |
+| Faces, heads and hands | one sculpted face surface in `HeadSculpt.ts` (brow ridge, eye sockets, nose with nostrils, lips, chin, jaw line, cheek hollows) in place of a ball with a box nose; eyeballs set in the sockets under real lids (a second lid mesh shuts them to blink); an oval head 12% larger than the last pass (`HEAD_K` 0.9, which had shrunk it too far), on shoulders 2.5 cm lower, 2 cm narrower each side and sloped (`SHOULDER_Y`, `SHOULDER_X`, `shoulderK`); four jointed fingers and a thumb. Zombies: sunken sockets, torn cheeks, missing lips over bared teeth, a jaw that hangs, clouded eyes with a pinprick of light, grey dead skin tones, long clawed fingers, uneven arms and a slumped spine; clothes muted and muddied; skin and cloth mottled by smooth noise, not a tint per triangle | man 4,332 triangles, woman 8,492; zombies 3,941 average, 6,184 heaviest | man 6,688, woman 10,248 (the survivor budget is 11,000 since this pass); zombies 4,161 average, 6,102 heaviest |
 | Armored truck | hard points kept (6.2 m on a 4.4 m wheelbase, 2.4 m wide, 1 m wheels, the cab ahead of the front axle); the faceted hull, ports and vision blocks of an armored rescue truck, no one real model | 856 triangles, three axles drawn over two that drive | 5,518 triangles, 1 draw call plus glass and lettering as before |
 
 Measured in the software renderer (SwiftShader, 1280x720, no GPU on the build machine, so read these as relative): the M4 over the shoulder costs 5% more of the frame than the old one, and 31% more down the sights, where the slimmer rifle also hides less of the arms behind it. The star flash and barrel smoke use the particle pools already in the scene. Models are code, so the download grew by the source of the kit and the outlines only.

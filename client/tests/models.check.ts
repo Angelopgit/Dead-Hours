@@ -20,7 +20,8 @@ const count = (root: THREE.Object3D) => {
   let tris = 0, draws = 0;
   root.traverse((o) => {
     const m = o as THREE.Mesh;
-    if (!m.isMesh) return;
+    // A hidden mesh is not drawn (survivors' shut lids show only for a blink).
+    if (!m.isMesh || !m.visible) return;
     draws++;
     tris += (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3;
   });
@@ -31,7 +32,7 @@ const count = (root: THREE.Object3D) => {
 const BUDGET = {
   gun: { tris: 4500, draws: 5 },
   melee: { tris: 1500, draws: 3 },
-  survivor: { tris: 9000, draws: 3 },
+  survivor: { tris: 11000, draws: 3 },
   zombie: { tris: 6500, average: 4200, draws: 2 },
 };
 

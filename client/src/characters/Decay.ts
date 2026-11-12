@@ -149,9 +149,10 @@ export const DECAY_COMMON = /* glsl */ `
 #else
       float raw = zN(q * 31.0).y;
 #endif
-      c = mix(c, mix(vec3(0.3, 0.03, 0.03), vec3(0.5, 0.14, 0.11), raw), rim * (0.55 + 0.4 * raw));
-      c = mix(c, vec3(0.06, 0.028, 0.018), core);
-      wet = max(wet, rim * (1.0 - core) * 0.85);
+      // Old wounds: dark, dried meat with a black middle, not fresh red.
+      c = mix(c, mix(vec3(0.085, 0.03, 0.036), vec3(0.2, 0.065, 0.055), raw), rim * (0.5 + 0.4 * raw));
+      c = mix(c, vec3(0.03, 0.016, 0.012), core);
+      wet = max(wet, rim * (1.0 - core) * 0.55);
     }
 #ifndef DECAY_LITE
     if (near > 0.01) {
@@ -163,9 +164,10 @@ export const DECAY_COMMON = /* glsl */ `
     if (uZ.z > 1.5) {
       float bn = zN(q * 40.0 + 1.7).w;
       float boil = smoothstep(0.76, 0.79, bn);
-      c = mix(c, vec3(0.62, 0.55, 0.16), boil);
-      c = mix(c, vec3(0.3, 0.06, 0.04), smoothstep(0.71, 0.75, bn) * (1.0 - boil) * 0.8);
-      wet = max(wet, boil);
+      // Pus under tight skin, an angry ring round each.
+      c = mix(c, vec3(0.5, 0.45, 0.27), boil * 0.85);
+      c = mix(c, vec3(0.2, 0.05, 0.04), smoothstep(0.71, 0.75, bn) * (1.0 - boil) * 0.8);
+      wet = max(wet, boil * 0.45);
     }
     return c;
   }
@@ -195,12 +197,13 @@ export const DECAY_SURFACE = /* glsl */ `
 #else
     float tn = t1.x * 0.6 + zN(zq * 23.0).y * 0.4;
 #endif
-    float th = 0.71 - 0.08 * uZ.y - vWound * 0.14;
+    float th = 0.735 - 0.08 * uZ.y - vWound * 0.14;
     float hole = smoothstep(th, th + 0.012, tn);
     float fray = smoothstep(th - 0.045, th, tn) * (1.0 - hole);
     diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.3 + vec3(0.05, 0.012, 0.0), fray * 0.9);
     diffuseColor.rgb *= 1.0 - smoothstep(0.6, 0.8, t1.w) * 0.35;
-    if (hole > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, zRot(uZSkin * 0.85, zq, zNear, zWet), hole);
+    // What shows through is in the cloth's shade.
+    if (hole > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, zRot(uZSkin * 0.6, zq, zNear, zWet), hole);
   }
 `;
 
@@ -208,7 +211,7 @@ export const DECAY_SURFACE = /* glsl */ `
 export const DECAY_BLOOD = /* glsl */ `
   if (uZ.w > 0.5 && uZBody > 0.5) {
     // Feeding: blood from the mouth down the chin and the front of the chest.
-    float yy = 1.662 - zp.y;  // the mouth (the head is drawn HEAD_K of its built size)
+    float yy = 1.668 - zp.y;  // the mouth (bind pose: the head bone at 1.61, the mouth HEAD_K * 0.06 above it)
     float len = 0.14 + 0.32 * fract(uZ.x * 0.173);
     if (!zHard && yy > -0.012 && yy < len && zFront > 0.0) {
       vec4 mn = zN(vec3(zp.y * 7.0, uZ.x, 1.0));
@@ -219,9 +222,10 @@ export const DECAY_BLOOD = /* glsl */ `
       float streak = smoothstep(0.45, 0.6, zN(vec3(zp.x * 70.0, uZ.x * 3.0, 2.0)).z);
       m *= mix(1.0, streak, smoothstep(0.05, 0.1, yy));
       m *= zFront * (1.0 - smoothstep(len * 0.6, len, yy));
-      vec3 bl = zSkin ? vec3(0.2, 0.012, 0.01) : vec3(0.1, 0.012, 0.008);
-      diffuseColor.rgb = mix(diffuseColor.rgb, bl, m * 0.92);
-      zWet = max(zWet, m * (zSkin ? 0.9 : 0.5));
+      // Mostly dried, days old.
+      vec3 bl = zSkin ? vec3(0.085, 0.01, 0.008) : vec3(0.05, 0.008, 0.006);
+      diffuseColor.rgb = mix(diffuseColor.rgb, bl, m * 0.9);
+      zWet = max(zWet, m * (zSkin ? 0.45 : 0.25));
     }
 
     // Local wounds: hole, raw ring, and blood soaking out from them. A cheap pass first: most
