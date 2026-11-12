@@ -467,6 +467,21 @@ check(none === null, 'nothing near: full speed');
   check(/wheelScrollsSideways\(this\.tabsEl\)/.test(creator), 'the creator hands its category strip to the wheel');
 }
 
+// The creator's survivor stands near the bottom of its picture (the boots reach 96% of the way down it), and the turn
+// row (25 px tall, "DRAG TO TURN" between its two buttons) is set over the stage's bottom edge: the boots were drawn
+// into the row at every phone size (15 to 26 px) and at 1280x720 (3 px). The picture ends short of the stage's edge.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  const room = 16 * +(css.match(/\n\.creator-canvas \{[^}]*height: calc\(100% - ([\d.]+)em\)/)?.[1] ?? 0);
+  // The row's own letters are 0.72em, and its bottom is set in them: [upright and desktop, a phone on its side].
+  const bottoms = [...css.matchAll(/\.creator-turn \{[^}]*?bottom: ([\d.]+)em/g)].map((m) => +m[1] * 0.72 * 16);
+  // Stage heights measured in the browser: phones on their side, upright phones, 1280x720 and 1920x1080.
+  const stages: [number, number][] = [[268, 1], [323, 1], [338, 1], [343, 0], [371, 0], [650, 0], [1010, 0]];
+  const into = stages.map(([h, b]) => Math.round(0.962 * (h - room) - (h - bottoms[b] - 25)));
+  check(bottoms.length === 2 && room > 0 && into.every((px) => px < 0),
+    `creator: the survivor's boots stay above the turn row at every stage height (${into.map((px) => -px).join(', ')} px clear)`);
+}
+
 // The YOU DIED screen after a long run (three lines of unlocks) is about 740 px tall at full size: on a 1366x768
 // laptop (about 650 px) RETRY and MAIN MENU sat 60 px under the fold, and in a half-screen window (683 px wide,
 // two stat columns) 190 px. The compact sizes reach up to 760 px tall, and three stat columns down to 601 px wide.

@@ -543,7 +543,10 @@ body.touch-play .inv-keys, body.touch-play .inv-k { display: none; }
 .creator-tab:hover, .creator-tab:focus-visible { color: var(--fg); outline: none; }
 .creator-tab.on { color: #f0ebe2; border-left-color: var(--accent); padding-left: 0.9em; }
 .creator-stage { position: relative; min-height: 0; }
-.creator-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+/* The survivor stands near the picture's bottom edge and the turn row is set over it: the boots were drawn into
+   the row, over DRAG TO TURN (15 to 26 px on phones, 3 px at 1280x720). The picture ends short of the stage's
+   bottom edge, so the feet stand above the row at every window size. */
+.creator-canvas { position: absolute; inset: 0; width: 100%; height: calc(100% - 2.4em); display: block; cursor: grab; touch-action: none; }
 .creator-canvas:active { cursor: grabbing; }
 .creator-turn { position: absolute; left: 50%; bottom: 1.4em; transform: translateX(-50%); display: flex; align-items: center; gap: 1.2em;
   font-family: var(--font-display); font-size: 0.72em; letter-spacing: 0.07em; color: var(--fg-faint); white-space: nowrap; }
