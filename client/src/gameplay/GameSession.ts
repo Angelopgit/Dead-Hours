@@ -4023,7 +4023,7 @@ export class GameSession {
       reserve: a.weapon.reserve,
       mode: a.meleeOut && !limb ? 'MELEE' : def.mode,
       reload: a.action === 'reload' ? a.progress : null,
-      slot: a.meleeOut ? 'melee' : a.active,
+      slot: a.out,
       meleeModel: WEAPONS[a.meleeId].model,
       primaryModel: WEAPONS[a.primary.id].model,
       secondaryModel: WEAPONS[a.secondary.id].model,

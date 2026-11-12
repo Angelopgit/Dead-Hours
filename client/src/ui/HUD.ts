@@ -14,7 +14,8 @@ export interface WeaponReadout {
   mode: string;
   /** 0..1 while reloading, otherwise null. */
   reload: number | null;
-  slot: 'primary' | 'secondary' | 'melee';
+  /** Which of the survivor's own weapons is out (none while they man a mounted gun). */
+  slot: 'primary' | 'secondary' | 'melee' | null;
   primaryModel: string;
   secondaryModel: string;
   /** The melee weapon (its own quick slot). */

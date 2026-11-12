@@ -118,6 +118,11 @@ export class Arsenal {
     return this.mounted ?? (this.active === 'primary' ? this.primary : this.secondary);
   }
 
+  /** Which of their own slots is in the hands. None on a mounted gun: both hands are on it and their own stay slung. */
+  get out(): 'primary' | 'secondary' | 'melee' | null {
+    return this.mounted ? null : this.meleeOut ? 'melee' : this.active;
+  }
+
   /** Takes hold of a mounted gun (its belt is the vehicle's): a moment to get the hands on its grips. */
   mount(gun: WeaponState): void {
     if (this.mounted === gun) return;

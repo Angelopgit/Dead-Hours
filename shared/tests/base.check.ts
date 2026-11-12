@@ -208,6 +208,8 @@ section('The Humvee and its gun');
   check(sim.fire('p1', p.eye, { x: 1, y: 0, z: 0 }, true, 1) === 'busy', 'and can\'t shoot');
   check(sim.switchSeat('p1') && sim.vehicles.seatOf('p1')?.[1] === def.turret!.seat, 'the next seat is the gunner\'s');
   check(sim.vehicles.manning('p1') === v && sim.vehicles.gunner(v) === p && p.arsenal.weapon.id === 'm2', 'in the hatch their weapon is the .50');
+  // The HUD's slot row underlined "1 M4A1" on the roof gun, as if the rifle were out.
+  check(p.arsenal.out === null && !p.arsenal.switchTo('secondary'), 'none of their own weapons is out, or can be drawn, while both hands are on it');
   run(sim, 0.3);
   check(p.eye.y > v.pos.y + def.turret!.ring, 'their head is above the roof');
   const before = v.gun!.mag;
@@ -232,7 +234,7 @@ section('The Humvee and its gun');
   check(copy.vehicles.manning('p1') === cv && copy.players.get('p1')!.arsenal.weapon.id === 'm2', 'and knows who is on the gun');
   copy.dispose();
   // Leaving the gun.
-  check(sim.switchSeat('p1') && sim.vehicles.manning('p1') === null && p.arsenal.weapon.id !== 'm2', 'moving on gives them their own weapon back');
+  check(sim.switchSeat('p1') && sim.vehicles.manning('p1') === null && p.arsenal.weapon.id !== 'm2' && p.arsenal.out === p.arsenal.active, 'moving on gives them their own weapon back');
   sim.enterVehicle('p1', v.id, def.turret!.seat);
   check(sim.exitVehicle('p1') && p.arsenal.weapon.id !== 'm2' && sim.vehicles.gunner(v) === null, 'and so does getting out');
   // Kill power: a .50 round drops a walker in one.
