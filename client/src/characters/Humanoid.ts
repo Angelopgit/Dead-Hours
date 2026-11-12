@@ -267,6 +267,9 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
     geo.deleteAttribute('uv');
     // Bone space first: soft shading and joint weights are laid out there.
     geo.applyMatrix4(m);
+    // Faceted: every triangle is one flat plane, lit as a whole (docs/art-style.md). The
+    // corners are already apart (no index), so this costs no vertices.
+    geo.computeVertexNormals();
     const P = geo.getAttribute('position');
     const n = P.count;
     const col = new Float32Array(n * 3);
@@ -456,8 +459,15 @@ export function patchWounds(mat: THREE.MeshStandardMaterial, wounds: Float32Arra
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.85, 0.62, 0.12), smoothstep(0.86, 0.88, n));
           } else if (t < 5.5) {
             diffuseColor.rgb *= 0.86 + 0.16 * step(0.5, fract(u * 60.0));
-          } else {
+          } else if (t < 6.5) {
             diffuseColor.rgb *= 0.9 + 0.18 * WN(vec3((u + q.y) * 70.0, q.y * 14.0, u * 9.0));
+          } else {
+            // Digital camo: the same blotches, cut into 1.2 cm squares.
+            vec3 c = (floor(q * 80.0) + 0.5) / 80.0;
+            float n = WN(c * 8.0) * 0.6 + WN2(c * 21.0) * 0.4;
+            diffuseColor.rgb = mix(base, acc, step(0.47, n));
+            diffuseColor.rgb = mix(diffuseColor.rgb, base * 0.45, step(0.64, n));
+            diffuseColor.rgb = mix(diffuseColor.rgb, mix(base, acc, 0.5) * 1.25, step(n, 0.3));
           }
         }
         #ifdef ZOMBIE_DECAY
@@ -1966,9 +1976,11 @@ export function zombieLook(i: number, kind: ZombieGait = 'walker'): HumanoidLook
   if (a.hair === 'afro' || a.hair === 'mohawk') a.hair = 'messy';
   a.face = k === 4 ? 'surgical' : 'none';
   a.back = k === 6 ? 'backpack' : 'none';
-  a.gear = k === 2 ? 'hivis' : k === 9 ? 'tactical' : 'none';
+  a.gear = k === 2 ? 'hivis' : 'none';
   a.neck = 'none';
   a.gloves = 'none';
+  // One of them was a Guardsman from Camp Tolliver, still in helmet and plates.
+  if (k === 9) Object.assign(a, { body: 'male', hair: 'crew', headwear: 'combat', headwearColor: 9, top: 'acu', topColor: 9, pants: 'acupants', pantsColor: 9, shoes: 'tactical', shoesColor: 10, gear: 'platecarrier', gearColor: 9 });
   return { outfit: a, zombie: true, skin: ZOMBIE_SKINS[k % ZOMBIE_SKINS.length], decay: 0.5 + (k % 4) * 0.12 };
 }
 
@@ -2004,7 +2016,7 @@ function bruteLook(i: number): HumanoidLook {
   a.face = a.neck = a.gloves = a.back = 'none';
   a.hair = 'buzz';
   if (k === 0) {
-    Object.assign(a, { headwear: 'army', headwearColor: 1, top: 'longsleeve', topColor: 1, pants: 'cargo', pantsColor: 1, shoes: 'combat', shoesColor: 1, gear: 'tactical', gearColor: 0 });
+    Object.assign(a, { headwear: 'combat', headwearColor: 1, top: 'combatshirt', topColor: 1, topAccent: 0, pants: 'combatpants', pantsColor: 1, shoes: 'combat', shoesColor: 1, gear: 'platecarrier', gearColor: 0 });
   } else if (k === 1) {
     Object.assign(a, { headwear: 'hardhat', headwearColor: 15, top: 'flannel', topColor: 13, topAccent: 1, pants: 'work', pantsColor: 9, shoes: 'work', shoesColor: 10, gear: 'hivis', gearColor: 16 });
   } else if (k === 2) {

@@ -6,7 +6,7 @@
  * Run with `npm run check:models`.
  */
 import * as THREE from 'three';
-import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, WEAPONS, defaultBuild, type WeaponId } from '@dead-hours/shared';
+import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, OUTFIT_KITS, WEAPONS, defaultBuild, type WeaponId } from '@dead-hours/shared';
 import { createWeaponModel } from '../src/weapons/WeaponModels';
 import { Humanoid, survivorLook, zombieLook } from '../src/characters/Humanoid';
 
@@ -69,6 +69,18 @@ console.log('\nBodies');
 for (const [name, look] of [['man', DEFAULT_APPEARANCE], ['woman', DEFAULT_FEMALE_APPEARANCE]] as const) {
   const c = count(new Humanoid(survivorLook(look)).root);
   check(c.tris <= BUDGET.survivor.tris && c.draws <= BUDGET.survivor.draws, `survivor (${name}): ${c.tris} triangles, ${c.draws} draw calls (budget ${BUDGET.survivor.tris}, ${BUDGET.survivor.draws})`);
+}
+// Whole outfits pile the most gear on one body: the heaviest still has to fit.
+{
+  let worst = { name: '', tris: 0, draws: 0 };
+  for (const k of OUTFIT_KITS) {
+    for (const base of [DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE]) {
+      const c = count(new Humanoid(survivorLook({ ...base, ...k.look })).root);
+      if (c.tris > worst.tris) worst = { name: `${k.label}, ${base.body === 'female' ? 'woman' : 'man'}`, ...c };
+      if (c.draws > BUDGET.survivor.draws) worst = { name: k.label, ...c, tris: Infinity };
+    }
+  }
+  check(worst.tris <= BUDGET.survivor.tris, `outfits: the heaviest of ${OUTFIT_KITS.length} is ${worst.tris} triangles, ${worst.draws} draw calls (${worst.name})`);
 }
 // Proportions: a real foot is about 15% of a person's height (the shoe a little more).
 {

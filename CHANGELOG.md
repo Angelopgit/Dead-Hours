@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Survivors
+
+- Survivors and zombies are redrawn in flat, faceted planes: a squarer jaw, a clear brow and nose, larger heads, and clothes that catch the light plane by plane.
+- A new survivor starts as a drifter: swept hair and a beard, a green henley with the sleeves rolled, cargo trousers, boots and a pack with a bedroll. Survivors you have already dressed are kept as they are.
+- Military kit in the creator: combat and high-cut helmets (with goggles, a headset or night vision), a boonie, a patrol cap, a Marine cover and an operator's cap; Army and Marine uniforms in camouflage, and a combat shirt and trousers with knee pads; plate carriers, an operator's carrier with a radio and belt, a chest rig and a battle belt with a drop-leg holster; tactical boots and gloves, ballistic goggles, shooting glasses, a shemagh, an assault pack and a radio pack.
+- Balaclavas and wraps are their own choice under Eyewear & masks, in any cloth color: a balaclava, an open-faced one, a skull print, a shemagh wrap and a neck gaiter. They go under any helmet or goggles.
+- An Outfits tab dresses the survivor in one press: Drifter, Army soldier, Garrison duty, Marine, Marine in cover, Operator, Special forces, Recon and Night raid. Each changes clothes and gear only, and any piece can be changed after.
+- Some raiders now wear plate carriers or chest rigs, and a dead Guardsman walks among the zombies.
+
 ### Downtown
 
 - Court Street, Vesper's downtown, runs east off Pell Lane a block north of Hale Street. Eight stores you can go into face each other across it: the savings bank with its columns and vault, the hardware store, Dot's Diner, the coin laundry, the corner drugstore, Kline's Market, the army surplus and the Lamplighter tavern.

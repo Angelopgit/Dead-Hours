@@ -217,5 +217,7 @@ export function raiderAppearance(rand: () => number): Appearance {
     shoes: pickFrom('shoes', ['combat', 'work'], rand),
     gloves: pickFrom('gloves', ['fingerless', 'leather', 'work'], rand),
     glovesColor: dark(),
+    // Drawn after everything above, so those come out as they did before raiders had armor.
+    ...(rand() < 0.45 ? { gear: pickFrom('gear', ['platecarrier', 'chestrig', 'platecarrier'], rand), gearColor: dark() } : {}),
   } as Appearance);
 }

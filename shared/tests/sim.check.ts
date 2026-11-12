@@ -9,7 +9,7 @@ import {
   MAPLE_HOLLOW as map, Physics, initPhysics, RAPIER, GROUP, groups, createDoorBodies, buildNavGrid, Simulation, Arsenal,
   WEAPONS, DOWNED, zombieZones, rayZones, along, PLAYER, ZOMBIES, SPAWNING, SPECIALS, HORDES, LULLS, hordeAt, hordeStart, lullDuration, lullOpening, threatAt, inLull, hordeBonus, hordeDuration, hordeRunnerBoost, SUPPLY_DROPS, LIMBS, LEGS, limbClub, EXCLUSIVE_WEAPONS, PRIMARY_WEAPONS, SERUM, caseSpot, captureSnapshot, Mirror, MELEE, MELEE_PICKUPS, FOUND_MELEE, findPickupRooms, isMelee, type Vec3, type SimEvent, type NavGrid,
   type Zombie, type SimLimb, type ZoneShape, PRONE, DIVE, MOTION_FLAG, packMotion, unpackMotion,
-  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, SHAPE_MID, SHAPE_STEPS, encodeAppearance, decodeAppearance, sanitizeAppearance,
+  APPEARANCE_ITEMS, APPEARANCE_FIELDS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, OUTFIT_KITS, PALETTES, SHAPE_MID, SHAPE_STEPS, encodeAppearance, decodeAppearance, sanitizeAppearance,
   randomAppearance, rng, type Appearance, type AppearanceItem,
   BARRICADE, Mirror, NAV_INDOOR, storeyFloors, type BarricadeSlot,
   BOOSTS, BOOST_IDS, BOOST_PICKUPS, INJECT, findBoostSpots, type BoostId,
@@ -2898,6 +2898,37 @@ section('Survivor appearance');
   }
   check(shapesOk && varied.size >= 5, `random women vary in shape (${varied.size} steps seen), random men stay average`);
   check(shirtless === 0 && suits === 0, 'random women are never shirtless, a swimsuit comes with its bottoms');
+
+  // Military gear: its own headwear group, a mask slot at the end of the wire, whole outfits.
+  const has = (slot: keyof typeof APPEARANCE_ITEMS, list: string[]) => list.every((id) => ids(slot).includes(id));
+  check(hats.filter((h) => h.group === 'Military').length >= 8 && has('gear', ['platecarrier', 'operator', 'chestrig', 'battlebelt'])
+    && has('top', ['acu', 'marpat', 'combatshirt']) && has('pants', ['acupants', 'marpatpants', 'combatpants']) && has('face', ['ballistic', 'shooting'])
+    && has('mask', ['balaclava', 'openbalaclava', 'skull', 'shemaghwrap', 'gaiter']), 'helmets, vests, uniforms, goggles and balaclavas are in the catalog');
+  check(APPEARANCE_FIELDS[APPEARANCE_FIELDS.length - 2][0] === 'mask' && APPEARANCE_FIELDS[APPEARANCE_FIELDS.length - 1][0] === 'maskColor', 'the mask and its color are the last fields on the wire');
+  const masked = sanitizeAppearance({ ...DEFAULT_APPEARANCE, mask: 'skull', maskColor: 8, headwear: 'nvghelmet', face: 'ballistic', gear: 'operator' });
+  check(masked.mask === 'skull' && masked.maskColor === 8 && sameLook(decodeAppearance(encodeAppearance(masked)), masked), 'a balaclava under a helmet and goggles survives the wire');
+  const preMask = encodeAppearance(masked).split('.').slice(0, 1 + APPEARANCE_FIELDS.findIndex(([k]) => k === 'mask')).join('.');
+  check(decodeAppearance(preMask).mask === 'none' && sameLook(decodeAppearance(preMask), { ...masked, mask: 'none', maskColor: DEFAULT_APPEARANCE.maskColor }), 'looks saved before masks load with none, the rest unchanged');
+  check(sanitizeAppearance({ ...DEFAULT_APPEARANCE, mask: 'veil' }).mask === 'none', 'unknown masks fall back to none');
+  let kitsOk = OUTFIT_KITS.length >= 6 && new Set(OUTFIT_KITS.map((k) => k.id)).size === OUTFIT_KITS.length;
+  for (const k of OUTFIT_KITS) {
+    for (const body of [DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE]) {
+      const worn = sanitizeAppearance({ ...body, ...k.look });
+      if (!(Object.keys(k.look) as (keyof Appearance)[]).every((key) => worn[key] === k.look[key])) kitsOk = false;
+      if (worn.hair !== body.hair || worn.skin !== body.skin || worn.body !== body.body || !sameLook(decodeAppearance(encodeAppearance(worn)), worn)) kitsOk = false;
+    }
+  }
+  check(kitsOk, `all ${OUTFIT_KITS.length} whole outfits are valid on either body, keep the face and hair under them and survive the wire`);
+  {
+    const rare = new Set(catalogs.flatMap(([slot, items]) => items.filter((i) => i.rare).map((i) => `${slot}:${i.id}`)));
+    const rand = rng(4242);
+    let dealt = 0;
+    for (let i = 0; i < 400; i++) {
+      const a = randomAppearance(rand) as unknown as Record<string, string | number>;
+      for (const [slot] of catalogs) if (rare.has(`${slot}:${a[slot]}`)) dealt++;
+    }
+    check(rare.size >= 30 && dealt === 0, `random survivors and the dead are never dealt military issue (${rare.size} items held back)`);
+  }
 
   const { sim, body } = makeSim({ x: 0, y: 0.15, z: 6 });
   const cowboy = sanitizeAppearance({ ...DEFAULT_APPEARANCE, headwear: 'cowboy', top: 'flannel', eyes: 'fierce', eyeColor: 5 });

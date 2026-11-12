@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { SHAPE_MID, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE } from './rig';
-import { PATTERN, type Surface, type PartSink, O, TAU, mixHex, shade, luminance, Kit, type Ring, headSink, type Body, type Cover, COVERS_FACE, COVERS_MOUTH, type Shins } from './OutfitKit';
+import { PATTERN, type Surface, type PartSink, O, TAU, mixHex, shade, luminance, Kit, type Ring, headSink, type Body, type Cover, COVERS_FACE, COVERS_MOUTH, MASKS, type Shins } from './OutfitKit';
 import { faceSpec } from './HeadSculpt';
-import { face, earrings, hair, beard, headwear, faceGear, smokable } from './OutfitHead';
+import { face, earrings, hair, beard, headwear, faceGear, maskCloth, smokable } from './OutfitHead';
 
 /** Bone lengths of the rig (Humanoid builds its limbs from these). */
 export const ARM = { upper: 0.31, lower: 0.29 } as const;
@@ -45,7 +45,10 @@ export function ringAt(rings: readonly Ring[], y: number): { r: number; z: numbe
 }
 
 /** The rings a body is built with (zombies skip the fine ones). */
-const ringsFor = (b: Body, rings: readonly Ring[]): readonly Ring[] => (b.zombie ? rings.filter((r) => !r[3]) : rings);
+const ringsFor = (_b: Body, rings: readonly Ring[]): readonly Ring[] => rings.filter((r) => !r[3]);
+
+/** Rings closing a limb's or a sleeve's top into a faceted cap (a shoulder), `r` its radius where the cap starts at height y. */
+const capRings = (y: number, r: number): Ring[] => [[y + r * 0.62, r * 0.38], [y + r * 0.36, r * 0.8]];
 
 /** Rings `inf` out from another list's, sampled at `ys` (a sleeve or hem over the limb). */
 function over(rings: readonly Ring[], ys: readonly number[], inf: number): Ring[] {
@@ -251,7 +254,7 @@ const chestMax = (b: Body, y: number, w: number) => Math.max(...[-1, -0.5, 0, 0.
 function bodyLayer(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, gap: number, surf?: Surface, rb0?: number): void {
   const rows = b.female ? (b.zombie ? FEMALE_ROWS_LITE : FEMALE_ROWS) : b.zombie ? MALE_ROWS_LITE : MALE_ROWS;
   const ys = [y0, ...rows.filter((y) => y > y0 + 0.008 && y < y1 - 0.008), y1];
-  const g = sculpt(ys, gap, gap === 0, b.zombie ? 12 : b.female ? 28 : 20, (y, i) => {
+  const g = sculpt(ys, gap, gap === 0, b.zombie ? 10 : b.female ? 20 : 12, (y, i) => {
     const r = i === 0 && rb0 !== undefined ? Math.max(rb0, torsoR(b, y)) : torsoR(b, y);
     const k = shoulderK(y);
     return { ax: (r * b.bx + inf) * k, az: (depthK(b, y) * b.bz * r + inf) * (0.5 + 0.5 * k) };
@@ -349,7 +352,15 @@ const COVER: Record<string, Cover> = {
   none: 'none', sweatband: 'none', moto: 'full', knight: 'full',
   headband: 'none', hairbow: 'none', clips: 'none', flowercrown: 'none', tiara: 'none', catears: 'none',
 };
-const HIDES_EYES = new Set(['moto', 'knight', 'sunglasses', 'goggles', 'hockey', 'gasmask', 'aviators', 'oversized', 'heartglasses']);
+const HIDES_EYES = new Set(['moto', 'knight', 'sunglasses', 'goggles', 'hockey', 'gasmask', 'aviators', 'oversized', 'heartglasses', 'ballistic', 'shooting']);
+/** Tops worn out over the belt (they bring their own hem, see hem). */
+const UNTUCKED = new Set(['henley', 'acu', 'marpat']);
+/** The second color of issue camouflage, from its ground: brown-green shapes on a light ground, tan on a dark one. */
+const camoAccent = (hex: number) => {
+  const l = luminance(hex);
+  // Black kit keeps its shapes quiet; a dark green ground gets coyote, a light one brown-green.
+  return l > 0.42 ? mixHex(hex, 0x4a5232, 0.62) : l < 0.2 ? mixHex(hex, 0x5a5d60, 0.38) : mixHex(hex, 0x94845c, 0.55);
+};
 /**
  * Builds a survivor (or zombie) from an appearance: body, face, hair, clothing and gear, as
  * primitives on the skeleton's bones. The Humanoid merges them into one skinned mesh.
@@ -363,10 +374,11 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
   const bs = shape(a.bust), hs = shape(a.hips), gs = shape(a.glutes);
   const b: Body = {
     bx: build[0] * g, bz: build[1] * g, arm: build[2] * g * (female ? 0.9 : 1), skin: o.skin ?? paletteColor('skin', a.skin),
-    female, hand: female ? 0.9 : 1, leg: 1 + (build[0] * g - 1) * 0.6, seg: o.zombie ? 7 : 10,
+    female, hand: female ? 0.9 : 1, leg: 1 + (build[0] * g - 1) * 0.6, seg: o.zombie ? 6 : 8,
     bustK: 1 + SHAPE.bust * bs, bustR: 1 + SHAPE.bustSpread * bs, hipW: 1 + SHAPE.hips * hs,
     seat: female ? (SHAPE.seat + SHAPE.seatRange * gs) * build[1] * g : 0,
     zombie: o.zombie, rand: o.rand, bulk: TOP_BULK[a.top] ?? 0, face: faceSpec(female, o.zombie),
+    mask: o.zombie ? undefined : MASKS[a.mask],
   };
   const f = b.face;
   if (o.zombie) {
@@ -389,10 +401,14 @@ export function dress(sink: PartSink, a: Appearance, o: DressOptions): DressResu
   const hairHex = paletteColor('hair', a.hairColor);
   const covered = COVERS_FACE.has(a.headwear);
 
+  // A balaclava or a wrap hides the hair under it like a full helmet does.
+  const cover: Cover = b.mask?.scalp ? 'full' : COVER[a.headwear] ?? 'hat';
   face(head, neckKit, a, b, hairHex, covered);
-  hair(head, a, b, hairHex, COVER[a.headwear] ?? 'hat');
-  earrings(head, a, COVER[a.headwear] ?? 'hat');
-  if (!covered) beard(head, a, b, hairHex);
+  hair(head, a, b, hairHex, cover);
+  earrings(head, a, b.mask?.ears ? 'full' : cover);
+  // A beard would stand through cloth lying on the face, so under a mask it is left out.
+  if (!covered && !b.mask && !(COVERS_MOUTH.has(a.face) && !o.zombie)) beard(head, a, b, hairHex);
+  if (!covered) maskCloth(head, neckKit, a, b, cloth(a.maskColor));
   headwear(head, a, cloth(a.headwearColor));
   top(spine, kit, a, b);
   b.shins = pants(hips, spine, kit, a, b);
@@ -432,7 +448,7 @@ function mutate(head: Kit, spine: Kit, kit: (bone: number) => Kit, b: Body, m: M
 
 // ── Face ────────────────────────────────────────────────────────────────────────────────
 
-type Sleeve = 'none' | 'short' | 'long' | 'jacket' | 'puffy';
+type Sleeve = 'none' | 'short' | 'long' | 'jacket' | 'puffy' | 'rolled';
 
 /** A torso layer from spine-space height y0 to y1, `inf` meters out, open at the front by `gap` radians. */
 function shell(sp: Kit, b: Body, hex: number, inf: number, y0: number, y1: number, gap = 0, surf?: Surface, rbOverride?: number): void {
@@ -463,17 +479,19 @@ function sleeves(kit: (bone: number) => Kit, b: Body, kind: Sleeve, hex: number,
     const k = b.arm;
     // Zombie sleeves are often torn off at the elbow.
     const torn = b.zombie && b.rand() < 0.5;
-    const inf = kind === 'jacket' ? 0.01 : kind === 'puffy' ? 0.022 : kind === 'long' ? 0.003 : 0;
+    const inf = kind === 'jacket' ? 0.01 : kind === 'puffy' ? 0.022 : kind === 'long' || kind === 'rolled' ? 0.003 : 0;
     const upHex = kind === 'none' || kind === 'short' ? skin : hex;
     const loHex = kind === 'long' || kind === 'jacket' || kind === 'puffy' ? (torn ? skin : hex) : skin;
     const upInf = upHex === skin ? 0 : inf, loInf = loHex === skin ? 0 : inf;
     const upSurf = upHex === skin ? undefined : surf, loSurf = loHex === skin ? undefined : surf;
-    up.ball(kind === 'none' ? skin : hex, 0.058 * k + inf, [0, -0.012, 0], O, kind === 'none' ? undefined : surf, b.zombie ? 8 : 10, b.zombie ? 6 : 7);
-    // A sleeve ending at the elbow is closed off there (the bare forearm runs on inside it).
-    up.lathe(upHex, UP, k, upInf, b.seg, { top: true, bottom: upInf !== loInf }, upSurf, { bone: lb, y: -ARM.upper, band: BEND });
+    // The shoulder is the upper arm's own top, closed into a cap; a sleeve ending at the elbow
+    // is closed off there (the bare forearm runs on inside it).
+    up.lathe(upHex, [...capRings(UP[0][0], UP[0][1]), ...UP], k, upInf, b.seg, { top: true, bottom: upInf !== loInf }, upSurf, { bone: lb, y: -ARM.upper, band: BEND });
     lo.lathe(loHex, LO, k, loInf, b.seg, { top: upInf !== loInf, bottom: true }, loSurf, { bone: ub, y: 0, band: BEND });
     lo.ball(loHex, ringAt(LO, 0).r * k * jointK(b) + loInf, [0, 0, 0], O, loSurf, b.seg, b.zombie ? 3 : 5);
-    if (kind === 'short') up.lathe(hex, [[0.01, 0.065], [-0.06, 0.064], [-0.125, 0.06]], k, 0, b.seg, { top: true, bottom: true }, surf);
+    if (kind === 'short') up.lathe(hex, [...capRings(0.012, 0.058), [0.012, 0.058], [-0.045, 0.064], [-0.125, 0.06]], k, 0, b.seg, { top: true, bottom: true }, surf);
+    // Pushed up to the elbow: the roll of cloth just above it.
+    if (kind === 'rolled') up.lathe(shade(hex, 0.84), over(UP, [-0.205, -0.235, -0.268], 0.011), k, 0, b.seg, { top: true, bottom: true }, surf);
     if (kind === 'puffy') for (const y of [-0.1, -0.22]) up.torus(hex, ringAt(UP, y).r * k + inf - 0.006, 0.018, [0, y, 0], [Math.PI / 2, 0, 0], 1, 4, 10, TAU, surf);
     if (loHex !== skin && cuff !== undefined) {
       const r = ringAt(LO, -0.272).r * k + loInf + 0.004;
@@ -521,6 +539,26 @@ function pocket(sp: Kit, b: Body, hex: number, x: number, y: number, w = 0.06, h
   const z = chestZ(b, x, y) + 0.006;
   sp.box(hex, [w, h, 0.01], [x, y, z]);
   if (flap) sp.box(shade(hex, 0.85), [w + 0.006, 0.018, 0.014], [x, y + h / 2, z + 0.002]);
+}
+
+/** A flat triangle lying on the chest (an open neck): from either side at height y1 down to a point at y0, `out` off the cloth. */
+function vee(sp: Kit, b: Body, hex: number, y0: number, y1: number, w: number, out: number): void {
+  const g = new THREE.BufferGeometry();
+  const zt = chestZ(b, w, y1) + out;
+  g.setAttribute('position', new THREE.Float32BufferAttribute([-w, y1, zt, 0, y0, chestZ(b, 0, y0) + out, w, y1, zt], 3));
+  g.computeVertexNormals();
+  sp.put(g, hex);
+}
+
+/** The skirt of a shirt or coat worn out over the belt: round the hips from the waist down to hip-space y0. */
+function hem(hp: Kit, b: Body, hex: number, surf?: Surface, y0 = -0.035, inf = 0.007): void {
+  if (b.female) {
+    pelvisLayer(hp, b, hex, inf, y0, 0.1, surf);
+    return;
+  }
+  const bp = pelvisK(b);
+  const r = (y: number) => 0.17 - 0.02 * (0.1 - y) / 0.2 + inf;
+  hp.cyl(hex, r(0.1), r(y0), 0.1 - y0, [0, (0.1 + y0) / 2, 0], O, [bp, 1, 0.71 * bp], { seg: 10 }, surf);
 }
 
 function top(sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): void {
@@ -829,6 +867,68 @@ function top(sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body): void 
       collarRing(sp, acc);
       sp.box(shade(acc, 0.7), [0.008, 0.07, 0.004], [0, 0.49, chestZ(b, 0, 0.49) + 0.004]);
       break;
+    case 'henley': {
+      // A loose cotton shirt worn out over the belt, sleeves pushed up to the elbows, the
+      // buttons at the neck undone.
+      const trim = shade(main, 0.84);
+      torso(sp, b, main);
+      hem(kit(BONE.hips), b, main);
+      sleeves(kit, b, 'rolled', main);
+      collarRing(sp, trim);
+      vee(sp, b, b.skin, 0.425, 0.512, 0.048, 0.003);
+      for (const s of [1, -1]) sp.box(trim, [0.012, 0.1, 0.006], [s * 0.028, 0.47, chestZ(b, s * 0.028, 0.47) + 0.004], [-0.2, 0, -s * 0.5]);
+      sp.box(trim, [0.02, 0.07, 0.005], [0, 0.392, chestZ(b, 0, 0.392) + 0.003]);
+      buttons(sp, b, shade(main, 1.3), 0.37, 0.415, 2);
+      break;
+    }
+    case 'acu':
+    case 'marpat': {
+      // Issue camouflage, the coat worn out over the trousers. Army: a stand collar, canted
+      // chest pockets under the name and service tapes, rank on the chest, a patch on each
+      // shoulder pocket. Marines: a lay-flat collar and the emblem on the left pocket.
+      const army = kind === 'acu';
+      const cam: Surface = { pattern: army ? PATTERN.camo : PATTERN.digital, accent: camoAccent(main) };
+      const trim = shade(main, 0.84);
+      torso(sp, b, main, cam);
+      hem(kit(BONE.hips), b, main, cam);
+      sleeves(kit, b, 'long', main, cam, trim);
+      if (army) sp.cyl(main, 0.07, 0.08, 0.045, [0, 0.54, 0.002], O, [1, 1, 0.95], { seg: 8 }, cam);
+      else collarPoints(sp, b, main, cam, 0.7);
+      sp.box(trim, [0.032, 0.44, 0.005], [0, 0.27, frontZ(b, 0.27) + 0.003], O, cam);
+      const cant = army ? 0.22 : 0.1;
+      for (const s of [1, -1]) {
+        const x = s * 0.085 * b.bx, y = 0.365;
+        const z = chestZ(b, x, y) + 0.006;
+        sp.box(trim, [0.07, 0.075, 0.01], [x, y, z], [0, s * 0.25, -s * cant], cam);
+        sp.box(shade(main, 0.7), [0.074, 0.02, 0.013], [x, y + 0.034, z + 0.001], [0, s * 0.25, -s * cant], cam);
+        if (army) sp.box(s > 0 ? 0x2a2c26 : 0x34362e, [0.07, 0.014, 0.004], [x, 0.43, chestZ(b, x, 0.43) + 0.004], [0, s * 0.25, 0]);
+        const up = kit(s > 0 ? BONE.armLUpper : BONE.armRUpper);
+        const r = ringAt(ARM_UP, -0.115).r * b.arm + 0.003;
+        up.box(trim, [0.012, 0.1, 0.075], [s * (r + 0.002), -0.115, 0], O, cam);
+        if (army) up.box(s > 0 ? 0x44463a : 0x5c3a34, [0.006, 0.04, 0.055], [s * (r + 0.009), -0.1, 0]);
+      }
+      if (army) sp.box(0x23251f, [0.028, 0.03, 0.005], [0, 0.378, chestZ(b, 0, 0.378) + 0.006]);
+      else sp.box(0x1c1d18, [0.02, 0.02, 0.004], [0.085 * b.bx, 0.36, chestZ(b, 0.085 * b.bx, 0.36) + 0.013], [0, 0.25, 0]);
+      break;
+    }
+    case 'combatshirt': {
+      // Made to go under armor: a fitted knit body with a zip collar, camouflage over the
+      // shoulders and down the sleeves, padded elbows.
+      const cam: Surface = { pattern: PATTERN.camo, accent: camoAccent(acc) };
+      torso(sp, b, main, { pattern: PATTERN.knit });
+      shell(sp, b, acc, 0.004, 0.45, 0.52, 0, cam);
+      sleeves(kit, b, 'long', acc, cam, shade(acc, 0.75));
+      sp.cyl(main, 0.066, 0.077, 0.055, [0, 0.545, 0.003], O, [1, 1, 0.94], { seg: 8 });
+      sp.box(0x18191b, [0.007, 0.11, 0.004], [0, 0.468, chestZ(b, 0, 0.468) + 0.007]);
+      for (const s of [1, -1]) {
+        const ub = s > 0 ? BONE.armLUpper : BONE.armRUpper;
+        const r = ringAt(ARM_UP, -0.1).r * b.arm + 0.003;
+        kit(ub).box(shade(acc, 0.66), [0.006, 0.07, 0.07], [s * (r + 0.003), -0.1, 0]);
+        const e = ringAt(ARM_LO, -0.035).r * b.arm + 0.003;
+        kit(ub + 1).box(shade(acc, 0.55), [0.062, 0.1, 0.02], [0, -0.035, -(e + 0.003)], [0.08, 0, 0]);
+      }
+      break;
+    }
     default:
       torso(sp, b, main);
       sleeves(kit, b, 'short', main);
@@ -924,6 +1024,9 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   if (a.pants === 'jeans' || a.pants === 'overalls' || a.pants === 'flares' || a.pants === 'denimshorts') surf = { pattern: PATTERN.denim };
   if (a.pants === 'camo') surf = { pattern: PATTERN.camo, accent: mixHex(hex, 0x9a8a62, 0.55) };
   if (a.pants === 'plaidskirt') surf = { pattern: PATTERN.plaid, accent: mixHex(hex, 0x101010, 0.62) };
+  // Issue trousers: Army and operators' in blotched camouflage, Marines' in digital.
+  const issue = a.pants === 'acupants' || a.pants === 'marpatpants' || a.pants === 'combatpants';
+  if (issue) surf = { pattern: a.pants === 'marpatpants' ? PATTERN.digital : PATTERN.camo, accent: camoAccent(hex) };
   const skirted = a.pants === 'skirt' || a.pants === 'plaidskirt';
   const swim = a.pants === 'swimtrunks' || a.pants === 'boardshorts' || a.pants === 'bikinibottom';
   // Bare legs (shorts, skirts, swimwear) or tights under the plaid skirt.
@@ -972,8 +1075,8 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
   }
   const jog = a.pants === 'joggers';
   const tight = a.pants === 'leggings';
-  const hem = a.pants === 'flares' ? 0.078 : jog ? 0.047 : tight ? null : F ? 0.053 : 0.056;
-  const legs = bare || skirted ? { up: skinUp, lo: skinLo } : trouserRings(skinUp, skinLo, tight ? 0.003 : F ? 0.007 : 0.008, hem);
+  const hem = a.pants === 'flares' ? 0.078 : jog ? 0.047 : tight ? null : F ? 0.058 : 0.066;
+  const legs = bare || skirted ? { up: skinUp, lo: skinLo } : trouserRings(skinUp, skinLo, tight ? 0.003 : F ? 0.008 : 0.012, hem);
   const legColor = bare || skirted ? legHex : hex;
   const legSurf = bare || skirted ? undefined : surf;
   for (const s of [1, -1]) {
@@ -1009,10 +1112,16 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
     } else if (jog) {
       lo.lathe(shade(hex, 0.8), over(legs.lo, [-0.395, -0.445], 0.003), lk, 0, b.seg, { top: true, bottom: true }, { pattern: PATTERN.knit });
     }
-    if (a.pants === 'cargo' || a.pants === 'shorts' || a.pants === 'camo') {
+    if (a.pants === 'cargo' || a.pants === 'shorts' || a.pants === 'camo' || issue) {
       const out = (ringAt(a.pants === 'shorts' ? over(skinUp, [-0.25], 0.013) : legs.up, -0.25).r - 0.068) * lk;
       up.box(shade(hex, 0.92), [0.024, 0.09, 0.075], [s * (0.078 + out), -0.25, 0], O, surf);
       up.box(shade(hex, 0.82), [0.028, 0.02, 0.079], [s * (0.079 + out), -0.205, 0], O, surf);
+    }
+    if (a.pants === 'combatpants') {
+      // Knee pads set into the trousers.
+      const knee = ringAt(legs.lo, -0.04).r * lk;
+      lo.box(shade(hex, 0.5), [0.084, 0.11, 0.028], [0, -0.03, knee + 0.001], [-0.08, 0, 0]);
+      lo.box(shade(hex, 0.36), [0.06, 0.055, 0.012], [0, -0.03, knee + 0.018], [-0.08, 0, 0]);
     }
     if (a.pants === 'work') {
       lo.box(shade(hex, 0.78), [0.075, 0.09, 0.02], [0, -0.04, ringAt(legs.lo, -0.04).r * lk - 0.004]);
@@ -1020,11 +1129,11 @@ function pants(hp: Kit, sp: Kit, kit: (bone: number) => Kit, a: Appearance, b: B
     }
   }
   const belt = (F ? 0.176 : 0.172) * bp;
-  // A dress covers the waistband.
-  const dress = a.top === 'sundress';
-  if (!dress && (a.pants === 'jeans' || a.pants === 'work' || a.pants === 'cargo' || a.pants === 'flares' || a.pants === 'denimshorts')) {
-    hp.cyl(0x2a1d14, belt, belt, 0.032, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 });
-    hp.box(0xb8a46a, [0.035, 0.026, 0.008], [0, 0.082, (F ? 0.127 : 0.124) * bp]);
+  // A dress covers the waistband, and so does a shirt worn out over it.
+  const dress = a.top === 'sundress' || UNTUCKED.has(a.top);
+  if (!dress && (a.pants === 'jeans' || a.pants === 'work' || a.pants === 'cargo' || a.pants === 'flares' || a.pants === 'denimshorts' || issue)) {
+    hp.cyl(issue ? 0x6b5d3f : 0x2a1d14, belt, belt, 0.032, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 });
+    hp.box(issue ? 0x2b2d31 : 0xb8a46a, [0.035, 0.026, 0.008], [0, 0.082, (F ? 0.127 : 0.124) * bp]);
   }
   if (!dress && (a.pants === 'joggers' || a.pants === 'leggings')) hp.cyl(shade(hex, 0.8), belt, belt, 0.035, [0, 0.082, 0], O, [1, 1, 0.71], { seg: 12 }, { pattern: PATTERN.knit });
   if (a.pants === 'overalls') {
@@ -1095,6 +1204,18 @@ function shoes(kit: (bone: number) => Kit, a: Appearance, b: Body, shin: Shins):
           for (let i = 0; i < 4; i++) lo.box(0x0d0d0d, [0.05, 0.006, 0.006], [0, -0.33 - i * 0.03, r]);
         }
         lo.box(sole, [0.11, 0.03, 0.252], [0, -0.51, 0.052]);
+        break;
+      case 'tactical':
+        // Suede and nylon desert boots: a padded collar, a toe cap, a lugged sole.
+        lo.box(hex, [0.104, 0.08, 0.24], [0, -0.47, 0.05]);
+        {
+          const r = fit(0.064, -0.3, -0.44);
+          lo.cyl(hex, r, r + 0.002, 0.15, [0, -0.385, 0], O, 1, { seg: 8 });
+          lo.cyl(shade(hex, 0.8), r + 0.004, r + 0.004, 0.026, [0, -0.312, 0], O, 1, { seg: 8 });
+          for (let i = 0; i < 3; i++) lo.box(shade(hex, 0.5), [0.05, 0.006, 0.006], [0, -0.345 - i * 0.03, r]);
+        }
+        lo.box(shade(hex, 0.78), [0.106, 0.046, 0.07], [0, -0.484, 0.14]);
+        lo.box(mixHex(hex, 0x1a1816, 0.62), [0.11, 0.03, 0.252], [0, -0.51, 0.052]);
         break;
       case 'work':
         lo.box(hex, [0.108, 0.085, 0.24], [0, -0.468, 0.05]);
@@ -1185,6 +1306,15 @@ function gloves(kit: (bone: number) => Kit, a: Appearance, b: Body): void {
       case 'latex':
         hand(lo, s, b, hex, hex, 0.0012);
         break;
+      case 'tactical': {
+        // Hard knuckles on the back of the hand, a strap at the wrist.
+        hand(lo, s, b, hex, hex, 0.003);
+        const k = lo.at([0, -ARM.lower, 0], O, b.hand);
+        k.box(0x1d1e20, [0.012, 0.022, 0.068], [s * 0.02, -0.064, 0.001]);
+        k.box(shade(hex, 0.75), [0.01, 0.036, 0.05], [s * 0.019, -0.03, 0.001]);
+        lo.cyl(shade(hex, 0.7), wrist + 0.008, wrist + 0.007, 0.032, [0, -ARM.lower + 0.006, 0], O, 1, { seg: 8 });
+        break;
+      }
       default:
         hand(lo, s, b, b.skin, b.skin, 0);
     }
@@ -1246,6 +1376,14 @@ function neck(sp: Kit, a: Appearance, b: Body, hex: number): void {
       sp.torus(hex, 0.056, 0.007, [0, 0.565, 0.004], [Math.PI / 2, 0, 0], [1, 0.95, 1], 4, 16);
       sp.ico(0xc8ccd2, 0.007, [0, 0.555, 0.06], O, 1, 0);
       break;
+    case 'shemagh': {
+      // A woven cotton scarf bunched round the neck, its corner hanging down the chest.
+      const weave: Surface = { pattern: PATTERN.plaid, accent: shade(hex, 0.5) };
+      sp.torus(hex, 0.08, 0.034, [0, 0.558, 0.004], [Math.PI / 2, 0, 0], [1, 1.05, 1], 5, 10, TAU, weave);
+      const lift = b.female ? chestZ(b, 0, 0.42) - fz : 0;
+      sp.cone(hex, 0.115, 0.15, [0, 0.47, fz + 0.012 + lift], [Math.PI - 0.2, 0, 0], [1, 1, 0.3], 4, weave);
+      break;
+    }
     case 'locket':
       sp.torus(0xd3a628, 0.078, 0.0022, [0, 0.475, 0.07], [1.2, 0, 0], 1, 3, 20);
       sp.cyl(0xd3a628, 0.013, 0.013, 0.006, [0, 0.44, chestZ(b, 0, 0.44) + 0.006], [Math.PI / 2 - 0.15, 0, 0], [1, 1, 1.2], { seg: 10 });
@@ -1335,6 +1473,24 @@ function back(sp: Kit, a: Appearance, b: Body, hex: number): number {
       sp.box(0x9a9ca0, [0.15, 0.005, 0.005], [0, 0.43, -bz - 0.097]);
       straps(0.42, 0.024);
       return 0.1;
+    case 'assault':
+      // A three-day pack: webbing rows across the front pocket, a pouch on each side, a grab handle.
+      sp.box(hex, [0.28, 0.42, 0.14], [0, 0.3, -bz - 0.075], [0.04, 0, 0]);
+      sp.box(shade(hex, 0.9), [0.22, 0.2, 0.05], [0, 0.2, -bz - 0.165], [0.04, 0, 0]);
+      for (const y of [0.36, 0.4, 0.44]) sp.box(shade(hex, 0.68), [0.2, 0.014, 0.006], [0, y, -bz - 0.143 + (y - 0.3) * 0.04]);
+      sp.box(shade(hex, 0.6), [0.07, 0.02, 0.03], [0, 0.52, -bz - 0.06]);
+      for (const s of [1, -1]) sp.box(shade(hex, 0.82), [0.035, 0.2, 0.09], [s * 0.155, 0.2, -bz - 0.075], [0.04, 0, 0]);
+      straps(0.48, 0.04);
+      return 0.19;
+    case 'radio':
+      // A manpack radio in its carrier: the set's face on top, a whip antenna over one shoulder.
+      sp.box(hex, [0.25, 0.3, 0.1], [0, 0.3, -bz - 0.055], [0.03, 0, 0]);
+      sp.box(0x2b2d31, [0.17, 0.05, 0.075], [0, 0.47, -bz - 0.05]);
+      for (const x of [-0.05, 0.0]) sp.cyl(0x18191b, 0.012, 0.012, 0.02, [x, 0.505, -bz - 0.05], O, 1, { seg: 6 });
+      sp.cyl(0x18191b, 0.01, 0.012, 0.04, [0.06, 0.51, -bz - 0.05], O, 1, { seg: 6 });
+      sp.cyl(0x18191b, 0.003, 0.005, 0.46, [0.06, 0.76, -bz - 0.058], [-0.035, 0, 0], 1, { seg: 4 });
+      straps(0.46);
+      return 0.12;
     case 'quiver': {
       // A leather quiver slung diagonally on the back, fletched arrows over the shoulder.
       const q = sp.at([0, 0.32, -bz - 0.05], [0.08, 0, -0.45]);
@@ -1355,8 +1511,87 @@ function back(sp: Kit, a: Appearance, b: Body, hex: number): number {
 }
 
 function gear(sp: Kit, hp: Kit, kit: (bone: number) => Kit, a: Appearance, b: Body, hex: number): void {
-  if (b.zombie && a.gear !== 'hivis' && a.gear !== 'tactical') return;
+  if (b.zombie && a.gear !== 'hivis' && a.gear !== 'tactical' && a.gear !== 'platecarrier') return;
+  const dark = 0x1d1e20;
+  /** A padded belt with pouches, and a pistol in a holster strapped to the right thigh. */
+  const battleBelt = () => {
+    const bp = 0.97 + (b.bx - 1) * 0.5;
+    hp.cyl(hex, 0.182 * bp, 0.182 * bp, 0.05, [0, 0.07, 0], O, [1, 1, 0.72], { seg: 12 });
+    hp.box(dark, [0.045, 0.036, 0.012], [0, 0.07, 0.134 * bp]);
+    for (const t of [0.8, 1.15]) hp.box(shade(hex, 0.8), [0.034, 0.085, 0.03], [Math.sin(t) * 0.19 * bp, 0.062, Math.cos(t) * 0.137 * bp], [0, t, 0]);
+    hp.box(shade(hex, 0.85), [0.1, 0.09, 0.04], [Math.sin(2.45) * 0.19 * bp, 0.035, Math.cos(2.45) * 0.137 * bp], [0, 2.45, 0]);
+    hp.box(shade(hex, 0.72), [0.11, 0.07, 0.045], [-0.03, 0.06, -0.142 * bp]);
+    const th = kit(BONE.legRUpper);
+    const r = (y: number) => ringAt(LEG_UP[b.female ? 'female' : 'male'], y).r * b.leg + 0.016;
+    hp.box(dark, [0.012, 0.11, 0.035], [-0.186 * bp, 0.0, 0.005]);
+    th.box(dark, [0.03, 0.15, 0.078], [-(r(-0.16) + 0.014), -0.16, 0.012]);
+    th.box(0x111214, [0.026, 0.075, 0.042], [-(r(-0.16) + 0.014), -0.065, -0.012], [0.3, 0, 0]);
+    for (const y of [-0.12, -0.2]) th.cyl(dark, r(y), r(y), 0.026, [0, y, 0], O, 1, { seg: b.seg });
+  };
+  /**
+   * Front and back plates in their carrier, a cummerbund round the ribs, magazines across the
+   * belly. `full`: an operator's, with a radio on the back and the belt and holster under it.
+   */
+  const carrier = (full: boolean) => {
+    const inf = Math.max(0.02, b.bulk + 0.012);
+    const w = 0.25 * b.bx, y0 = 0.1, y1 = 0.455;
+    shell(sp, b, shade(hex, 0.84), inf, 0.11, 0.3);
+    const zf = Math.max(frontZ(b, 0.25), chestMax(b, 0.335, w * 0.42)) + inf + 0.006;
+    const zb = frontZ(b, 0.28) + inf + 0.008;
+    sp.box(hex, [w, y1 - y0, 0.034], [0, (y0 + y1) / 2, zf]);
+    sp.box(hex, [w, y1 - y0 + 0.02, 0.034], [0, (y0 + y1) / 2 + 0.01, -zb]);
+    for (const s of [1, -1]) {
+      const x = s * 0.088 * b.bx;
+      sp.box(shade(hex, 0.9), [0.055, 0.022, zf + zb], [x, 0.522 + inf * 0.4, (zf - zb) / 2 * 0.5]);
+      sp.box(shade(hex, 0.9), [0.055, 0.1, 0.02], [x, 0.485, zf - 0.016], [-0.42, 0, 0]);
+      sp.box(shade(hex, 0.9), [0.055, 0.09, 0.02], [x, 0.49, -zb + 0.014], [0.36, 0, 0]);
+    }
+    // Three rifle magazines in their pouches, the tops of the magazines showing.
+    for (const x of [-0.078, 0, 0.078]) {
+      sp.box(shade(hex, 0.8), [0.066, 0.12, 0.036], [x * b.bx, 0.175, zf + 0.03]);
+      sp.box(0x2b2d31, [0.05, 0.03, 0.022], [x * b.bx, 0.245, zf + 0.027]);
+    }
+    sp.box(shade(hex, 0.9), [0.15, 0.075, 0.02], [0, 0.385, zf + 0.024]);
+    sp.box(0x3a3d42, [0.07, 0.03, 0.004], [0, 0.385, zf + 0.036]);
+    sp.box(shade(hex, 0.66), [0.09, 0.02, 0.014], [0, 0.468, -zb - 0.02]);
+    for (const y of [0.2, 0.27, 0.34]) sp.box(shade(hex, 0.8), [w * 0.84, 0.016, 0.006], [0, y, -zb - 0.019]);
+    if (!full) return;
+    sp.box(0x2b2d31, [0.055, 0.12, 0.036], [0.085 * b.bx, 0.36, -zb - 0.036]);
+    sp.cyl(dark, 0.003, 0.005, 0.24, [0.085 * b.bx, 0.535, -zb - 0.044], [-0.1, 0, 0], 1, { seg: 4 });
+    sp.box(dark, [0.03, 0.04, 0.02], [0.1 * b.bx, 0.43, zf + 0.022]);
+    sp.box(shade(hex, 0.8), [0.05, 0.075, 0.03], [-0.095 * b.bx, 0.3, zf + 0.03]);
+    battleBelt();
+  };
   switch (a.gear) {
+    case 'platecarrier':
+      carrier(false);
+      break;
+    case 'operator':
+      carrier(true);
+      break;
+    case 'battlebelt':
+      battleBelt();
+      break;
+    case 'chestrig': {
+      // Four magazine pouches across the chest on an H harness.
+      const out = b.bulk + 0.01;
+      const y = 0.25, zc = Math.max(frontZ(b, y), chestMax(b, 0.3, 0.12 * b.bx)) + out;
+      sp.box(shade(hex, 0.86), [0.3 * b.bx, 0.15, 0.022], [0, y, zc]);
+      for (const x of [-0.105, -0.035, 0.035, 0.105]) {
+        sp.box(hex, [0.06, 0.13, 0.036], [x * b.bx, y - 0.005, zc + 0.026]);
+        sp.box(0x2b2d31, [0.046, 0.03, 0.022], [x * b.bx, y + 0.07, zc + 0.023]);
+      }
+      const zb = frontZ(b, 0.3) + out;
+      for (const s of [1, -1]) {
+        const x = s * 0.09 * b.bx;
+        if (b.female) frontStrap(sp, b, shade(hex, 0.7), x, 0.3, 0.52, 0.04, out);
+        else sp.box(shade(hex, 0.7), [0.04, 0.24, 0.012], [x, 0.41, frontZ(b, 0.41) + out], [-0.1, 0, 0]);
+        sp.box(shade(hex, 0.7), [0.04, 0.012, 0.27 * b.bz + out * 2], [x, 0.524 + out * 0.5, -0.005]);
+        sp.box(shade(hex, 0.7), [0.04, 0.36, 0.012], [x * 0.75, 0.36, -zb - 0.004], [0.08, 0, -s * 0.16]);
+      }
+      sp.box(shade(hex, 0.7), [0.3 * b.bx, 0.03, 0.012], [0, 0.21, -zb - 0.006]);
+      break;
+    }
     case 'tactical': {
       const inf = Math.max(0.028, b.bulk + 0.014), out = inf - 0.028;
       shell(sp, b, hex, inf, 0.08, 0.5);

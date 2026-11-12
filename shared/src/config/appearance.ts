@@ -26,6 +26,11 @@ export interface AppearanceItem {
    * as a bikini top (sanitizeAppearance swaps it, and the outfit builder never draws it bare).
    */
   only?: BodyType;
+  /**
+   * Never dealt by randomAppearance: military issue, and anything added since the neighborhood's
+   * dead were cast (their looks are that same seeded draw, so a longer list would recast them).
+   */
+  rare?: true;
 }
 
 export type BodyType = 'male' | 'female';
@@ -71,7 +76,8 @@ export const CLOTH_COLOR_LABELS = ['Charcoal', 'Black', 'White', 'Gray', 'Navy',
   'Brown', 'Maroon', 'Red', 'Orange', 'Mustard', 'Hi-vis', 'Pink', 'Purple', 'Teal'];
 export const MAKEUP_COLOR_LABELS = ['Nude', 'Pink', 'Rose', 'Red', 'Berry', 'Plum', 'Coral', 'Brown', 'Black', 'Gold', 'Blue', 'Purple'];
 
-const H = 'Hats', HL = 'Helmets', F = 'Funny hats', HA = 'Hair accessories';
+const H = 'Hats', HL = 'Helmets', F = 'Funny hats', HA = 'Hair accessories', ML = 'Military';
+const R = true as const;
 const M = 'male', W = 'female';
 
 export const APPEARANCE_ITEMS = {
@@ -106,6 +112,9 @@ export const APPEARANCE_ITEMS = {
     { id: 'messybun', label: 'Messy bun', lean: W },
     { id: 'afropuffs', label: 'Afro puffs', lean: W },
     { id: 'boxbraids', label: 'Box braids', lean: W },
+    { id: 'swept', label: 'Swept back', lean: M, rare: R },
+    { id: 'crew', label: 'Crew cut', lean: M, rare: R },
+    { id: 'hightight', label: 'High and tight', lean: M, rare: R },
   ],
   facialHair: [
     { id: 'none', label: 'Clean shaven' },
@@ -167,6 +176,14 @@ export const APPEARANCE_ITEMS = {
     { id: 'catears', label: 'Cat ears', group: F, tint: true, color: 1 },
     { id: 'witch', label: 'Witch hat', group: F, tint: true, color: 1 },
     { id: 'santa', label: 'Santa hat', group: F, tint: true, color: 13 },
+    { id: 'combat', label: 'Combat helmet', group: ML, tint: true, color: 9, rare: R },
+    { id: 'gogglehelmet', label: 'Helmet with goggles', group: ML, tint: true, color: 7, rare: R },
+    { id: 'opshelmet', label: 'High-cut helmet', group: ML, tint: true, color: 9, rare: R },
+    { id: 'nvghelmet', label: 'Helmet with night vision', group: ML, tint: true, color: 1, rare: R },
+    { id: 'boonie', label: 'Boonie hat', group: ML, tint: true, color: 8, rare: R },
+    { id: 'patrolcap', label: 'Patrol cap', group: ML, tint: true, color: 9, rare: R },
+    { id: 'marinecover', label: 'Marine cover', group: ML, tint: true, color: 7, rare: R },
+    { id: 'opscap', label: 'Cap with headset', group: ML, tint: true, color: 9, rare: R },
   ],
   top: [
     { id: 'tee', label: 'T-shirt', tint: true },
@@ -200,6 +217,11 @@ export const APPEARANCE_ITEMS = {
     { id: 'bikini', label: 'Bikini top', tint: true, accent: 'Trim', color: 19, lean: W },
     { id: 'swimsuit', label: 'One-piece swimsuit', tint: true, accent: 'Trim', color: 1, lean: W },
     { id: 'rashguard', label: 'Rash guard', tint: true, accent: 'Panels', color: 4 },
+    { id: 'henley', label: 'Henley, sleeves rolled', tint: true, color: 8, rare: R },
+    // Military issue.
+    { id: 'acu', label: 'Army combat uniform', tint: true, color: 9, rare: R },
+    { id: 'marpat', label: 'Marine utilities', tint: true, color: 7, rare: R },
+    { id: 'combatshirt', label: 'Combat shirt', tint: true, accent: 'Camo sleeves', color: 8, rare: R },
   ],
   pants: [
     { id: 'jeans', label: 'Jeans', tint: true, color: 5 },
@@ -218,6 +240,10 @@ export const APPEARANCE_ITEMS = {
     { id: 'swimtrunks', label: 'Swim trunks', tint: true, color: 6, lean: M },
     { id: 'boardshorts', label: 'Board shorts', tint: true, color: 14 },
     { id: 'bikinibottom', label: 'Bikini bottoms', tint: true, color: 19, lean: W },
+    // Military issue.
+    { id: 'acupants', label: 'Army trousers', tint: true, color: 9, rare: R },
+    { id: 'marpatpants', label: 'Marine trousers', tint: true, color: 7, rare: R },
+    { id: 'combatpants', label: 'Combat pants, knee pads', tint: true, color: 9, rare: R },
   ],
   shoes: [
     { id: 'sneakers', label: 'Sneakers', tint: true },
@@ -230,6 +256,7 @@ export const APPEARANCE_ITEMS = {
     { id: 'flats', label: 'Flats', tint: true, color: 1, lean: W },
     { id: 'platforms', label: 'Platform sneakers', tint: true, color: 2, lean: W },
     { id: 'flipflops', label: 'Flip-flops', tint: true, color: 6 },
+    { id: 'tactical', label: 'Tactical boots', tint: true, color: 10, rare: R },
   ],
   gloves: [
     { id: 'none', label: 'None' },
@@ -237,6 +264,7 @@ export const APPEARANCE_ITEMS = {
     { id: 'fingerless', label: 'Fingerless gloves', tint: true },
     { id: 'leather', label: 'Leather gloves', tint: true, color: 1 },
     { id: 'latex', label: 'Latex gloves', tint: true, color: 6 },
+    { id: 'tactical', label: 'Tactical gloves', tint: true, color: 0, rare: R },
   ],
   face: [
     { id: 'none', label: 'None' },
@@ -254,6 +282,8 @@ export const APPEARANCE_ITEMS = {
     { id: 'cateye', label: 'Cat-eye glasses', tint: true, lean: W },
     { id: 'oversized', label: 'Oversized sunglasses', tint: true, color: 1, lean: W },
     { id: 'heartglasses', label: 'Heart sunglasses', tint: true, color: 17 },
+    { id: 'ballistic', label: 'Ballistic goggles', tint: true, color: 1, rare: R },
+    { id: 'shooting', label: 'Shooting glasses', rare: R },
   ],
   neck: [
     { id: 'none', label: 'None' },
@@ -266,6 +296,7 @@ export const APPEARANCE_ITEMS = {
     { id: 'pearls', label: 'Pearl necklace', lean: W },
     { id: 'choker', label: 'Choker', tint: true, color: 1, lean: W },
     { id: 'locket', label: 'Gold locket', lean: W },
+    { id: 'shemagh', label: 'Shemagh', tint: true, color: 9, rare: R },
   ],
   back: [
     { id: 'none', label: 'None' },
@@ -277,6 +308,8 @@ export const APPEARANCE_ITEMS = {
     { id: 'purse', label: 'Shoulder bag', tint: true, color: 11, lean: W },
     { id: 'minipack', label: 'Mini backpack', tint: true, color: 17, lean: W },
     { id: 'quiver', label: 'Quiver', tint: true, color: 11 },
+    { id: 'assault', label: 'Assault pack', tint: true, color: 9, rare: R },
+    { id: 'radio', label: 'Radio pack', tint: true, color: 8, rare: R },
   ],
   gear: [
     { id: 'none', label: 'None' },
@@ -286,6 +319,10 @@ export const APPEARANCE_ITEMS = {
     { id: 'belt', label: 'Utility belt', tint: true },
     { id: 'fannypack', label: 'Fanny pack', tint: true },
     { id: 'kneepads', label: 'Knee pads', tint: true },
+    { id: 'platecarrier', label: 'Plate carrier', tint: true, color: 9, rare: R },
+    { id: 'operator', label: 'Operator kit', tint: true, color: 9, rare: R },
+    { id: 'chestrig', label: 'Chest rig', tint: true, color: 8, rare: R },
+    { id: 'battlebelt', label: 'Battle belt & holster', tint: true, color: 9, rare: R },
   ],
   body: [
     { id: 'male', label: 'Male' },
@@ -316,6 +353,15 @@ export const APPEARANCE_ITEMS = {
     { id: 'cigarette', label: 'Cigarette' },
     { id: 'joint', label: 'Joint' },
     { id: 'blunt', label: 'Blunt' },
+  ],
+  /** Cloth over the head and face, under whatever hat and eyewear go on top. */
+  mask: [
+    { id: 'none', label: 'None' },
+    { id: 'balaclava', label: 'Balaclava', tint: true, color: 1, rare: R },
+    { id: 'openbalaclava', label: 'Open-face balaclava', tint: true, color: 1, rare: R },
+    { id: 'skull', label: 'Skull balaclava', rare: R },
+    { id: 'shemaghwrap', label: 'Shemagh wrap', tint: true, color: 9, rare: R },
+    { id: 'gaiter', label: 'Neck gaiter, pulled up', tint: true, color: 8, rare: R },
   ],
 } as const satisfies Record<string, readonly AppearanceItem[]>;
 
@@ -367,6 +413,9 @@ export interface Appearance {
   bust: number;
   hips: number;
   glutes: number;
+  /** A balaclava or wrap under the headwear and eyewear. */
+  mask: ItemId<'mask'>;
+  maskColor: number;
 }
 
 type FieldKind = { slot: AppearanceSlot } | { palette: PaletteName } | { steps: number };
@@ -391,37 +440,91 @@ export const APPEARANCE_FIELDS: readonly (readonly [keyof Appearance, FieldKind]
   ['smoke', { slot: 'smoke' }],
   // Added with the body shape sliders: older strings stop before these (average).
   ['bust', { steps: SHAPE_STEPS }], ['hips', { steps: SHAPE_STEPS }], ['glutes', { steps: SHAPE_STEPS }],
+  // Added with the military gear: older strings stop before these (none).
+  ['mask', { slot: 'mask' }], ['maskColor', { palette: 'cloth' }],
 ];
 
 export const DEFAULT_APPEARANCE: Appearance = {
-  skin: 4, build: 'average',
-  hair: 'short', hairColor: 1, facialHair: 'stubble',
-  eyes: 'almond', eyeColor: 1,
+  skin: 2, build: 'average',
+  hair: 'swept', hairColor: 2, facialHair: 'beard',
+  eyes: 'narrow', eyeColor: 1,
   headwear: 'none', headwearColor: 13,
-  top: 'openflannel', topColor: 13, topAccent: 1,
-  pants: 'jeans', pantsColor: 5,
-  shoes: 'combat', shoesColor: 11,
+  top: 'henley', topColor: 8, topAccent: 1,
+  pants: 'cargo', pantsColor: 9,
+  shoes: 'combat', shoesColor: 3,
   gloves: 'none', glovesColor: 11,
   face: 'none', faceColor: 1,
   neck: 'none', neckColor: 12,
-  back: 'backpack', backColor: 8,
+  back: 'hiking', backColor: 9,
   gear: 'none', gearColor: 8,
   body: 'male', ears: 'none', makeup: 'none', makeupColor: 2,
   smoke: 'none',
   bust: SHAPE_MID, hips: SHAPE_MID, glutes: SHAPE_MID,
+  mask: 'none', maskColor: 1,
 };
 
 /** Where a new female survivor starts (the creator's reset, and switching body type). */
 export const DEFAULT_FEMALE_APPEARANCE: Appearance = {
   ...DEFAULT_APPEARANCE,
-  body: 'female', build: 'average',
+  skin: 4, body: 'female', build: 'average',
   hair: 'wavy', hairColor: 2, facialHair: 'none',
   eyes: 'almond', eyeColor: 4,
   top: 'openflannel', topColor: 4, topAccent: 2,
   pants: 'jeans', pantsColor: 5,
   shoes: 'combat', shoesColor: 1,
+  back: 'backpack', backColor: 8,
   ears: 'studs', makeup: 'none', makeupColor: 2,
 };
+
+/**
+ * A whole outfit put on at once in the creator: clothes and gear only, so the face, hair, body
+ * and skin under it stay the survivor's own.
+ */
+export interface OutfitKit {
+  id: string;
+  label: string;
+  look: Partial<Appearance>;
+}
+
+const BARE = { face: 'none', mask: 'none', neck: 'none', gloves: 'none', gear: 'none', headwear: 'none' } as const;
+
+export const OUTFIT_KITS: readonly OutfitKit[] = [
+  { id: 'drifter', label: 'Drifter', look: {
+    ...BARE, top: 'henley', topColor: 8, pants: 'cargo', pantsColor: 9, shoes: 'combat', shoesColor: 3, back: 'hiking', backColor: 9,
+  } },
+  { id: 'army', label: 'Army soldier', look: {
+    ...BARE, headwear: 'combat', headwearColor: 9, top: 'acu', topColor: 9, pants: 'acupants', pantsColor: 9, shoes: 'tactical', shoesColor: 10,
+    neck: 'dogtags', gear: 'platecarrier', gearColor: 9, back: 'assault', backColor: 9,
+  } },
+  { id: 'guard', label: 'Garrison duty', look: {
+    ...BARE, headwear: 'patrolcap', headwearColor: 9, top: 'acu', topColor: 9, pants: 'acupants', pantsColor: 9, shoes: 'tactical', shoesColor: 10,
+    neck: 'dogtags', gear: 'battlebelt', gearColor: 9, back: 'none',
+  } },
+  { id: 'marine', label: 'Marine', look: {
+    ...BARE, headwear: 'gogglehelmet', headwearColor: 7, top: 'marpat', topColor: 7, pants: 'marpatpants', pantsColor: 7, shoes: 'tactical', shoesColor: 10,
+    gloves: 'tactical', glovesColor: 10, neck: 'dogtags', gear: 'platecarrier', gearColor: 10, back: 'assault', backColor: 10,
+  } },
+  { id: 'marinecover', label: 'Marine, in cover', look: {
+    ...BARE, headwear: 'marinecover', headwearColor: 10, top: 'marpat', topColor: 10, pants: 'marpatpants', pantsColor: 10, shoes: 'tactical', shoesColor: 10,
+    neck: 'dogtags', gear: 'battlebelt', gearColor: 10, back: 'none',
+  } },
+  { id: 'operator', label: 'Operator', look: {
+    ...BARE, headwear: 'opscap', headwearColor: 9, face: 'shooting', top: 'combatshirt', topColor: 8, topAccent: 9, pants: 'combatpants', pantsColor: 9,
+    shoes: 'tactical', shoesColor: 10, gloves: 'tactical', glovesColor: 10, neck: 'shemagh', neckColor: 9, gear: 'operator', gearColor: 9, back: 'none',
+  } },
+  { id: 'specialforces', label: 'Special forces', look: {
+    ...BARE, headwear: 'nvghelmet', headwearColor: 1, face: 'ballistic', faceColor: 1, mask: 'balaclava', maskColor: 1, top: 'combatshirt', topColor: 1, topAccent: 0,
+    pants: 'combatpants', pantsColor: 0, shoes: 'combat', shoesColor: 1, gloves: 'tactical', glovesColor: 1, gear: 'operator', gearColor: 1, back: 'radio', backColor: 1,
+  } },
+  { id: 'recon', label: 'Recon', look: {
+    ...BARE, headwear: 'boonie', headwearColor: 8, mask: 'gaiter', maskColor: 8, top: 'combatshirt', topColor: 8, topAccent: 7, pants: 'combatpants', pantsColor: 7,
+    shoes: 'tactical', shoesColor: 11, gloves: 'fingerless', glovesColor: 8, gear: 'chestrig', gearColor: 8, back: 'assault', backColor: 8,
+  } },
+  { id: 'nightraid', label: 'Night raid', look: {
+    ...BARE, headwear: 'opshelmet', headwearColor: 1, mask: 'skull', top: 'combatshirt', topColor: 0, topAccent: 1, pants: 'combatpants', pantsColor: 1,
+    shoes: 'combat', shoesColor: 1, gloves: 'tactical', glovesColor: 1, gear: 'platecarrier', gearColor: 1, back: 'none',
+  } },
+];
 
 export function appearanceItem<S extends AppearanceSlot>(slot: S, id: string): AppearanceItem | undefined {
   return (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).find((i) => i.id === id);
@@ -488,7 +591,7 @@ export function randomAppearance(rand: () => number = Math.random, body?: BodyTy
   const female = sex === 'female';
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length) % xs.length];
   const ids = (slot: AppearanceSlot, filter: (i: AppearanceItem) => boolean = () => true) =>
-    (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).filter((i) => (!i.lean || i.lean === sex) && filter(i)).map((i) => i.id);
+    (APPEARANCE_ITEMS[slot] as readonly AppearanceItem[]).filter((i) => !i.rare && (!i.lean || i.lean === sex) && filter(i)).map((i) => i.id);
   const maybe = (slot: AppearanceSlot, chance: number) => (rand() < chance ? pick(ids(slot, (i) => i.id !== 'none')) : 'none');
   const cloth = () => Math.floor(rand() * CLOTH_COLORS.length);
   let headwear = 'none';
@@ -525,6 +628,7 @@ export function randomAppearance(rand: () => number = Math.random, body?: BodyTy
     bust: female ? shapeStep(rand) : SHAPE_MID,
     hips: female ? shapeStep(rand) : SHAPE_MID,
     glutes: female ? shapeStep(rand) : SHAPE_MID,
+    mask: 'none',
   });
 }
 

@@ -84,7 +84,7 @@ function faceDz(f: FaceSpec, x: number, y: number): number {
   d -= 0.0035 * g2(ax / MOUTH_W, (y - MOUTH_Y) / 0.0022);
   d -= 0.0015 * g2(ax / 0.0035, (y - 0.0745) / 0.005);
   d -= 0.0035 * g2(ax / 0.024, (y - 0.0415) / 0.0065);
-  d += (f.female ? 0.004 : 0.0065) * g2(ax / 0.024, (y - 0.02) / 0.017);
+  d += (f.female ? 0.004 : 0.008) * g2(ax / (f.female ? 0.024 : 0.032), (y - 0.02) / 0.019);
   d -= 0.002 * g2((ax - 0.031) / 0.006, (y - MOUTH_Y) / 0.006);
   // Lines from the nose's wings to the corners of the mouth on a wasted face.
   d -= 0.003 * f.gaunt * g2((ax - 0.028 - (0.085 - y) * 0.25) / 0.005, (y - 0.073) / 0.014);
@@ -106,12 +106,13 @@ export function jawSwing(p: THREE.Vector3, angle: number): THREE.Vector3 {
   return p.set(p.x, HINGE[1] + y * c - z * s, HINGE[2] + y * s + z * c);
 }
 
-// Grid lines: rows by height (packed round the eyes, nose and lips), columns by where they
-// cross the face (packed between the cheekbones), then round the back of the skull.
-const ROWS_FULL = [0.252, 0.234, 0.21, 0.186, 0.17, 0.159, 0.15, 0.1435, 0.138, 0.1325, 0.125, 0.114, 0.103, 0.096, 0.0895, 0.084, 0.077, 0.07, 0.0655, 0.0622, MOUTH_Y, 0.0588, 0.054, 0.047, 0.04, 0.029, 0.016, 0.003, -0.011];
-const ROWS_LITE = [0.25, 0.212, 0.172, 0.159, 0.148, 0.138, 0.128, 0.114, 0.1, 0.0905, 0.082, 0.071, 0.0622, MOUTH_Y, 0.0588, 0.05, 0.038, 0.02, -0.012];
-const COLS_FULL = [...[0, 0.0075, 0.015, 0.024, 0.033, 0.042, 0.051, 0.061, 0.073, 0.086].map((x) => Math.asin(x / HEAD_R[0])), 1.0, 1.2, 1.42, 1.65, 1.95, 2.3, 2.7, Math.PI];
-const COLS_LITE = [...[0, 0.011, 0.024, 0.042, 0.061, 0.082].map((x) => Math.asin(x / HEAD_R[0])), 1.0, 1.5, 2.2, Math.PI];
+// Grid lines, few and each on a feature, so the head is a handful of flat planes that meet where
+// a face's own edges are (docs/art-style.md): rows at the hairline, the brow ridge, the eye line,
+// the cheekbones, the tip and the base of the nose, each lip, the fold over the chin, the chin;
+// columns at the nose's ridge and wings, the corners of the eyes and mouth, the cheekbones, the
+// temples, the ears, then round the back of the skull.
+const ROWS = [0.252, 0.228, 0.198, 0.174, 0.1605, 0.149, 0.138, 0.127, 0.108, 0.097, 0.0885, 0.079, 0.0668, MOUTH_Y, 0.0545, 0.0415, 0.02, -0.011];
+const COLS = [...[0, 0.013, 0.027, 0.043, 0.064, 0.088].map((x) => Math.asin(x / HEAD_R[0])), 1.15, 1.5, 2.1, Math.PI];
 
 /** What is painted over the skin: color (linear r, g, b) and how much of it, by where on the face. */
 export type FacePaint = (x: number, y: number, a: number, out: Float32Array) => void;
@@ -121,8 +122,8 @@ export type FacePaint = (x: number, y: number, a: number, out: Float32Array) => 
  * body builder lays over the skin color.
  */
 export function headGeometry(f: FaceSpec, paint?: FacePaint): THREE.BufferGeometry {
-  const rows = f.lite ? ROWS_LITE : ROWS_FULL;
-  const half = f.lite ? COLS_LITE : COLS_FULL;
+  const rows = ROWS;
+  const half = COLS;
   // Columns all the way round: the front, down one side, the back, up the other.
   const cols = [...half, ...half.slice(1, -1).reverse().map((a) => -a)];
   const n = cols.length;
@@ -146,7 +147,7 @@ export function headGeometry(f: FaceSpec, paint?: FacePaint): THREE.BufferGeomet
       const bx = HEAD_R[0] * st * sa;
       const front = sstep(ca, 0.2, 0.7);
       // The sides: the corner of the jaw under the ear, the temples sunk in beside the brow.
-      const side = (f.female ? 0.002 : 0.006) * g2((by - 0.035) / 0.024, (aa - 1.2) / 0.4) - (0.0015 + 0.005 * f.gaunt) * g2((by - 0.166) / 0.03, (aa - 1.05) / 0.3);
+      const side = (f.female ? 0.003 : 0.011) * g2((by - 0.035) / 0.03, (aa - 1.2) / 0.45) - (0.0015 + 0.005 * f.gaunt) * g2((by - 0.166) / 0.03, (aa - 1.05) / 0.3);
       v.set(bx + sa * side, by, HEAD_R[2] * st * ca + ca * side + front * faceDz(f, bx, by));
       // The dead: lips drawn back off the teeth.
       if (f.lipless > 0 && r !== mouthRow) {
@@ -284,14 +285,14 @@ export function shutLidGeometry(e: EyeOpening, s: number, nu: number, skin: THRE
  * where it starts and thin at the tail, arched by `arch`, its outer end raised by `slope`.
  */
 export function browGeometry(f: FaceSpec, s: number, y0: number, slope: number, thick: number, arch: number): THREE.BufferGeometry {
-  const n = 6;
+  const n = 4;
   const pos: number[] = [], idx: number[] = [];
   for (let i = 0; i <= n; i++) {
     const t = i / n;
     const x = 0.013 + t * 0.057;
     const y = y0 + arch * Math.sin(Math.PI * Math.min(1, t * 1.25)) + slope * (x - 0.04);
     const h = thick * (t < 0.12 ? 0.75 : 1 - 0.72 * sstep(t, 0.3, 1)) * 0.5;
-    for (const k of [1, -1]) pos.push(s * x, y + k * h, faceZ(f, x, y + k * h) + 0.0016);
+    for (const k of [1, -1]) pos.push(s * x, y + k * h, faceZ(f, x, y + k * h) + 0.003);
   }
   // The hairs stand off the skin: a second layer in the middle makes it a solid strip from any side.
   for (let i = 0; i < n; i++) {

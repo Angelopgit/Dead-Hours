@@ -1,7 +1,7 @@
 import gsap from 'gsap';
 import {
-  APPEARANCE_ITEMS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, PALETTES, PALETTE_LABELS, SHAPE_LABELS, SHAPE_STEPS, appearanceItem,
-  randomAppearance, sanitizeAppearance, type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type PaletteName, type ShapeKey,
+  APPEARANCE_ITEMS, DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, OUTFIT_KITS, PALETTES, PALETTE_LABELS, SHAPE_LABELS, SHAPE_STEPS, appearanceItem,
+  randomAppearance, sanitizeAppearance, type Appearance, type AppearanceItem, type AppearanceSlot, type BodyType, type OutfitKit, type PaletteName, type ShapeKey,
 } from '@dead-hours/shared';
 import { h, wheelScrollsSideways } from './dom';
 import { padTurner } from './PadMenus';
@@ -15,7 +15,8 @@ type ColorKey = { [K in keyof Appearance]: Appearance[K] extends number ? K : ne
 type Section =
   | { kind: 'items'; title: string; slot: AppearanceSlot; groups?: boolean }
   | { kind: 'colors'; title: string; key: ColorKey; palette: PaletteName; when?: (a: Appearance) => string | false }
-  | { kind: 'shape'; title: string; key: ShapeKey; when: (a: Appearance) => boolean };
+  | { kind: 'shape'; title: string; key: ShapeKey; when: (a: Appearance) => boolean }
+  | { kind: 'kits'; title: string };
 
 interface Tab {
   id: string;
@@ -27,7 +28,7 @@ interface Tab {
 /** The color each slot's tint is stored in. */
 const SLOT_COLOR: Partial<Record<AppearanceSlot, ColorKey>> = {
   headwear: 'headwearColor', top: 'topColor', pants: 'pantsColor', shoes: 'shoesColor', gloves: 'glovesColor',
-  face: 'faceColor', neck: 'neckColor', back: 'backColor', gear: 'gearColor', makeup: 'makeupColor',
+  face: 'faceColor', neck: 'neckColor', back: 'backColor', gear: 'gearColor', makeup: 'makeupColor', mask: 'maskColor',
 };
 
 /** Each body type's starting look (reset), and the hair a switch to it falls back on. */
@@ -47,6 +48,9 @@ const tinted = (slot: AppearanceSlot, title = 'Color') => (a: Appearance): strin
 };
 
 const TABS: Tab[] = [
+  { id: 'kits', label: 'Outfits', focus: 'body', sections: [
+    { kind: 'kits', title: 'Whole outfits' },
+  ] },
   { id: 'body', label: 'Body', focus: 'body', sections: [
     { kind: 'items', title: 'Body type', slot: 'body' },
     { kind: 'colors', title: 'Skin tone', key: 'skin', palette: 'skin' },
@@ -90,6 +94,8 @@ const TABS: Tab[] = [
   { id: 'eyewear', label: 'Eyewear & masks', focus: 'head', sections: [
     { kind: 'items', title: 'Face', slot: 'face' },
     { kind: 'colors', title: 'Color', key: 'faceColor', palette: 'cloth', when: tinted('face') },
+    { kind: 'items', title: 'Balaclavas & wraps', slot: 'mask' },
+    { kind: 'colors', title: 'Color', key: 'maskColor', palette: 'cloth', when: tinted('mask', 'Balaclava') },
   ] },
   { id: 'ears', label: 'Earrings', focus: 'head', sections: [
     { kind: 'items', title: 'Earrings', slot: 'ears' },
@@ -127,7 +133,7 @@ export class CharacterCreator {
   private readonly optionsEl = h('div', { class: 'creator-options' });
   /** The same name box as the main menu's: both show and save the profile's name. */
   private readonly name: NameField = nameField('creator-name');
-  private tab = TABS[0];
+  private tab = TABS.find((t) => t.id === 'body') ?? TABS[0];
   private a: Appearance;
   private pending = 0;
 
@@ -201,6 +207,7 @@ export class CharacterCreator {
     const out: HTMLElement[] = [h('h3', { class: 'creator-tab-title' }, this.tab.label)];
     for (const s of this.tab.sections) {
       if (s.kind === 'items') out.push(...this.itemSection(s.slot, s.title, !!s.groups));
+      else if (s.kind === 'kits') out.push(...this.kitSection(s.title));
       else if (s.kind === 'shape') {
         if (s.when(this.a)) out.push(this.shapeSection(s.key, s.title));
       } else {
@@ -230,6 +237,21 @@ export class CharacterCreator {
       out.push(h('h4', {}, g ?? title), h('div', { class: 'creator-chips' }, ...items.filter((it) => it.group === g).map(chip)));
     }
     return out;
+  }
+
+  /** Whole outfits: one press dresses the survivor, the face, hair and body under it kept. */
+  private kitSection(title: string): HTMLElement[] {
+    const wears = (k: OutfitKit) => (Object.keys(k.look) as (keyof Appearance)[]).every((key) => this.a[key] === k.look[key]);
+    return [
+      h('h4', {}, title),
+      h('div', { class: 'creator-chips' }, ...OUTFIT_KITS.map((k) => h('button', {
+        class: `creator-chip ${wears(k) ? 'on' : ''}`,
+        'aria-pressed': String(wears(k)),
+        onmouseenter: () => audio.ui('hover'),
+        onclick: () => { audio.ui('click'); this.apply({ ...this.a, ...k.look }); },
+      }, k.label))),
+      h('p', { class: 'creator-note' }, 'Each puts on clothes and gear only. Change any piece after in its own tab.'),
+    ];
   }
 
   private colorSection(key: ColorKey, palette: PaletteName, title: string): HTMLElement {

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { EyeOpening, FaceSpec } from './HeadSculpt';
 
 /** Fabric patterns, drawn per pixel by the character material from bind-pose position. */
-export const PATTERN = { none: 0, plaid: 1, stripes: 2, camo: 3, floral: 4, knit: 5, denim: 6 } as const;
+export const PATTERN = { none: 0, plaid: 1, stripes: 2, camo: 3, floral: 4, knit: 5, denim: 6, digital: 7 } as const;
 
 /** Per-vertex soft shading: scales `c` for a vertex at bone-space (x, y, z) (shadow under the jaw, eye sockets). */
 export type Shade = (x: number, y: number, z: number, c: THREE.Color) => void;
@@ -204,12 +204,12 @@ function latheGeometry(rings: readonly Ring[], rk: number, inf: number, seg: num
 /**
  * The head and everything on it is built on a ball-like ellipsoid and drawn as a real head's
  * oval: HEAD_K of its built height, narrower from ear to ear (HEAD_X) and a little shallower
- * front to back (HEAD_Z). At 0.9 a 1.84 m survivor stands 7.3 heads tall: a touch more head than
- * a tape measure gives (7.6), because a real-sized head reads as too small on a clothed body
- * seen from across a street.
+ * front to back (HEAD_Z). At 1 a 1.84 m survivor stands 6.6 heads tall, the head of the faceted
+ * reference figure (docs/art-style.md): larger than a tape measure gives (7.6), so the face
+ * reads from across a street. It has been 0.8 and 0.9; both read as too small.
  */
-export const HEAD_K = 0.9;
-export const HEAD_X = 0.86;
+export const HEAD_K = 1;
+export const HEAD_X = 0.9;
 export const HEAD_Z = 0.95;
 /** How far the chin is brought forward of the ellipsoid it was built on. */
 const CHIN_FWD = 0.03;
@@ -332,6 +332,8 @@ export interface Body {
   shins?: Shins;
   /** The face's build: the head, and the brows, beards and teeth laid on it, share it. */
   face: FaceSpec;
+  /** The balaclava or wrap worn over the head, if any. */
+  mask?: MaskShape;
 }
 
 /** Where each hair part may go under headwear. */
@@ -406,6 +408,27 @@ export const SMOKES: Record<SmokeKind, SmokeShape> = {
   // Rolled cone: thin at the crutch, fat where it burns.
   joint: { len: 0.07, r0: 0.0034, r1: 0.006, droop: 0.24, yaw: 0.26 },
   blunt: { len: 0.088, r0: 0.0063, r1: 0.0069, droop: 0.2, yaw: 0.22 },
+};
+
+/**
+ * Cloth worn over the head and face (the mask slot): what each hides. `bare(x, y, a)` is true
+ * where the head is left uncovered (head space as built; `a` the angle round from the nose).
+ */
+export interface MaskShape {
+  /** Covers the mouth (no smoke, no beard showing) and the scalp, brows and ears. */
+  mouth: boolean;
+  scalp: boolean;
+  brows: boolean;
+  ears: boolean;
+  bare: (x: number, y: number, a: number) => boolean;
+}
+const eyeSlit = (x: number, y: number, a: number) => Math.abs(a) < 1.3 && Math.abs(x) < 0.07 && y > 0.12 && y < 0.155;
+export const MASKS: Record<string, MaskShape> = {
+  balaclava: { mouth: true, scalp: true, brows: true, ears: true, bare: eyeSlit },
+  skull: { mouth: true, scalp: true, brows: true, ears: true, bare: eyeSlit },
+  openbalaclava: { mouth: false, scalp: true, brows: false, ears: true, bare: (x, y, a) => Math.abs(a) < 1.3 && Math.abs(x) < 0.07 && y > 0.05 && y < 0.165 },
+  shemaghwrap: { mouth: true, scalp: true, brows: false, ears: true, bare: (x, y, a) => Math.abs(a) < 1.4 && Math.abs(x) < 0.095 && y > 0.118 && y < 0.17 },
+  gaiter: { mouth: true, scalp: false, brows: false, ears: false, bare: (_x, y) => y > 0.112 },
 };
 
 /** Faces that cover the mouth: nothing to hold a smoke with. */

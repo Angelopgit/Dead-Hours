@@ -4,14 +4,14 @@
  * `base={"body":"female"}` dresses a woman, `items=a,b` picks a few; `slot=bust|hips|glutes` steps a shape slider). `slot=zombies` shows walkers,
  * `slot=specials` screamers and bloaters (`scream=0.5` poses them mid-scream), `slot=crawlers` legless
  * zombies crawling (`speed=1` drags them along, `attack=0.55` mid-lunge). `view=hands` frames the
- * hands, `grime=0.6,0.3` dirties survivors (dirt, blood). Not part of the game build.
+ * hands, `grime=0.6,0.3` dirties survivors (dirt, blood). `slot=kits` shows every whole outfit. Not part of the game build.
  */
 import * as THREE from 'three';
-import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, SHAPE_LABELS, SHAPE_STEPS, sanitizeAppearance, type Appearance, type AppearanceSlot, type ShapeKey } from '@dead-hours/shared';
+import { APPEARANCE_ITEMS, DEFAULT_APPEARANCE, OUTFIT_KITS, SHAPE_LABELS, SHAPE_STEPS, sanitizeAppearance, type Appearance, type AppearanceSlot, type ShapeKey } from '@dead-hours/shared';
 import { Humanoid, survivorLook, zombieLook, zombieLookOf } from '../src/characters/Humanoid';
 
 const q = new URLSearchParams(location.search);
-const slot = (q.get('slot') ?? 'top') as AppearanceSlot | ShapeKey | 'zombies' | 'specials' | 'kinds' | 'crawlers';
+const slot = (q.get('slot') ?? 'top') as AppearanceSlot | ShapeKey | 'zombies' | 'specials' | 'kinds' | 'crawlers' | 'kits';
 /** `kinds`: how many hits each zombie has taken (0 fresh, more shows wounds and soaked clothes). */
 const hits = Number(q.get('hits') ?? 0);
 const speed = Number(q.get('speed') ?? 0);
@@ -43,7 +43,9 @@ const bounce = new THREE.DirectionalLight(0xffd8bc, 0.7);
 bounce.position.set(0.5, -1.2, 3);
 scene.add(bounce);
 
-const looks = slot === 'zombies'
+const looks = slot === 'kits'
+  ? OUTFIT_KITS.map((k) => ({ label: k.label, look: survivorLook(sanitizeAppearance({ ...base, ...k.look })) }))
+  : slot === 'zombies'
   ? Array.from({ length: 12 }, (_, i) => ({ label: `zombie ${i}`, look: zombieLook(i) }))
   : slot === 'kinds'
   ? (['walker', 'runner', 'brute', 'crawler', 'screamer', 'bloater'] as const).flatMap((kind) => [0, 1].map((i) => ({ label: `${kind} ${i}`, look: zombieLookOf(kind === 'crawler' ? 'walker' : kind, kind === 'crawler' ? i + 5 : i) })))

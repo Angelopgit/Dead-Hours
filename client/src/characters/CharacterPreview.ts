@@ -130,7 +130,8 @@ export class CharacterPreview {
     this.last = performance.now();
     const loop = (now: number) => {
       this.raf = requestAnimationFrame(loop);
-      const dt = Math.min((now - this.last) / 1000, 0.1);
+      // Never backwards: the first frame's stamp can sit before the clock read in start().
+      const dt = THREE.MathUtils.clamp((now - this.last) / 1000, 0, 0.1);
       this.last = now;
       this.render(dt);
     };

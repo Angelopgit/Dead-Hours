@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE } from './rig';
-import { PATTERN, type Surface, type PartSink, type V3, O, TAU, mat, mixHex, shade, luminance, Kit, crumple, headWarp, headSink, faceShade, neckShade, type Body, type Cover, COVERS_FACE, EYES, EYE_Y, EYE_X, EYE_Z, type EyePart, DOME_C, domeR, taperTube, type SmokeKind, type SmokeShape, SMOKES, COVERS_MOUTH, EMBER_LEN, CHAR, type SmokeRig } from './OutfitKit';
+import { PATTERN, type Surface, type PartSink, type V3, O, TAU, mat, mixHex, shade, luminance, Kit, crumple, headWarp, headSink, faceShade, neckShade, type Body, type Cover, COVERS_FACE, EYES, EYE_Y, EYE_X, EYE_Z, type EyePart, DOME_C, domeR, taperTube, type SmokeKind, type SmokeShape, SMOKES, COVERS_MOUTH, MASKS, EMBER_LEN, CHAR, type SmokeRig } from './OutfitKit';
 import { EYEBALL_R, EYE_YAW, MOUTH_Y, browGeometry, earGeometry, faceLayer, faceZ, headGeometry, lidGeometry, lidUp, shutLidGeometry, teethGeometry, type FacePaint } from './HeadSculpt';
 
 /** Lip, lid and cheek colors the makeup gives (undefined: bare). */
@@ -91,9 +91,9 @@ export function face(h: Kit, neck: Kit, a: Appearance, b: Body, hairHex: number,
   const skin = b.skin, f = b.face;
   const soft: Surface = { shade: faceShade };
   const nk = (b.female ? 0.82 : 1) * (b.zombie ? 0.9 : 1);
-  neck.cyl(skin, 0.054 * nk, 0.065 * nk, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: b.zombie ? 8 : 12 }, { shade: neckShade });
+  neck.cyl(skin, 0.054 * nk, 0.065 * nk, 0.12, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: 8 }, { shade: neckShade });
   h.put(headGeometry(f, facePaint(a, b, hairHex, covered)), skin, O, O, 1, soft);
-  for (const s of [1, -1]) h.put(earGeometry(s, b.zombie), shade(skin, 0.96), [s * 0.1125, 0.113, -0.012], [-0.18, -s * 0.3, 0], 1, soft);
+  if (!b.mask?.ears) for (const s of [1, -1]) h.put(earGeometry(s, b.zombie), shade(skin, 0.96), [s * 0.1125, 0.113, -0.012], [-0.18, -s * 0.3, 0], 1, soft);
   if (b.zombie) {
     // Teeth, behind lips drawn back off them.
     h.put(teethGeometry(f, true, b.rand), 0xb9ad86);
@@ -110,10 +110,53 @@ export function face(h: Kit, neck: Kit, a: Appearance, b: Body, hairHex: number,
     const eye = h.at([s * EYE_X, EYE_Y, EYE_Z], [0, s * EYE_YAW, 0]);
     eye.put(lidGeometry(e, s, true, 8, lash), lidHex, O, O, 1, mk.lids !== undefined ? undefined : soft);
     eye.put(lidGeometry(e, s, false, 8, rim), shade(skin, 0.97), O, O, 1, soft);
-    if (covered) continue;
+    if (covered || b.mask?.brows) continue;
     const brow = luminance(hairHex) > 0.7 ? shade(hairHex, 0.85) : hairHex;
     // Women's brows thinner and arched, men's heavier and flatter.
-    h.put(browGeometry(f, s, e.browY + (b.female ? 0.002 : 0), e.brow * 0.55, b.female ? 0.0062 : 0.0098, b.female ? 0.0042 : 0.002), brow);
+    h.put(browGeometry(f, s, e.browY + (b.female ? 0.002 : 0), e.brow * 0.55, b.female ? 0.0068 : 0.0125, b.female ? 0.0042 : 0.0012), brow);
+  }
+}
+
+/**
+ * A balaclava, a wrap or a gaiter (the mask slot): cloth lying on the head's own surface, so it
+ * follows the nose, the jaw and the chin, open where the mask leaves the face bare. Hats and
+ * eyewear go on over it.
+ */
+export function maskCloth(h: Kit, neck: Kit, a: Appearance, b: Body, hex: number): void {
+  const m = b.mask;
+  if (!m) return;
+  const f = b.face;
+  const skull = a.mask === 'skull';
+  const wrap = a.mask === 'shemaghwrap';
+  const color = skull ? 0x17181b : hex;
+  const surf: Surface | undefined = wrap ? { pattern: PATTERN.plaid, accent: shade(hex, 0.5) } : undefined;
+  const thick = wrap ? 0.008 : 0.005;
+  const g = faceLayer(f, (x, y, an) => (m.bare(x, y, an) ? -1 : thick));
+  if (skull) {
+    // The print: bone over the brow, the cheekbones and the upper jaw, dark where the nose's
+    // hole and the hollows under the cheekbones are.
+    const P = g.getAttribute('position');
+    const pnt = new Float32Array(P.count * 4);
+    const bone = new THREE.Color(0xd9d5c8);
+    for (let i = 0; i < P.count; i++) {
+      const ax = Math.abs(P.getX(i)), y = P.getY(i);
+      let k = P.getZ(i) > 0.03 && y > 0.044 && y < 0.205 && ax < 0.09 ? 1 : 0;
+      if ((ax < 0.016 && y > 0.08 && y < 0.1) || (ax > 0.05 && y < 0.09)) k = 0;
+      pnt.set([bone.r, bone.g, bone.b, k], i * 4);
+    }
+    g.setAttribute('paint', new THREE.BufferAttribute(pnt, 4));
+  }
+  h.put(g, color, O, O, 1, surf);
+  if (skull) for (let k = -3; k <= 3; k++) h.box(0x17181b, [0.0028, 0.024, 0.004], [k * 0.0098, 0.058, faceZ(f, k * 0.0098, 0.058) + 0.0056]);
+  // Down the neck into the collar.
+  const nk = b.female ? 0.82 : 1;
+  neck.cyl(color, 0.061 * nk, 0.073 * nk, 0.125, [0, -0.04, 0.004], O, [1, 1, 0.95], { seg: 8 }, surf);
+  if (a.mask === 'gaiter') neck.cyl(shade(color, 0.86), 0.078 * nk, 0.082 * nk, 0.035, [0, -0.082, 0.004], O, [1, 1, 0.95], { seg: 8 });
+  if (wrap) {
+    // The roll of cloth across the forehead, the bunch at the neck and the loose end behind.
+    h.torus(color, 0.129, 0.015, [0, 0.188, -0.006], [Math.PI / 2 + 0.12, 0, 0], [0.96, 1.1, 1], 4, 10, TAU, surf);
+    neck.torus(color, 0.078, 0.03, [0, -0.07, 0.004], [Math.PI / 2, 0, 0], [1, 1.05, 1], 4, 10, TAU, surf);
+    h.box(color, [0.075, 0.2, 0.014], [0.05, 0.0, -0.128], [0.14, 0, 0.1], surf);
   }
 }
 
@@ -219,9 +262,10 @@ export function hair(h: Kit, a: Appearance, b: Body, hx: number, cover: Cover): 
   const scalpOk = cover !== 'full';
   const shaved = mixHex(hx, b.skin, 0.38);
   const scalp = (inf: number, theta: number, tilt: number, hex = hx) => {
-    if (scalpOk) h.cap(hex, [0.117 + inf, 0.14 + inf, 0.13 + inf], 0, theta, [0, 0.12, 0], [-tilt, 0, 0], { w: 20, h: 9 });
+    if (scalpOk) h.cap(hex, [0.117 + inf, 0.14 + inf, 0.13 + inf], 0, theta, [0, 0.12, 0], [-tilt, 0, 0], { w: 12, h: 5 });
   };
-  const fringe = (p: V3, s: V3, r: V3 = O) => { if (crown) h.ball(hx, s, p, r, undefined, 8, 5); };
+  // A clump of hair: a few flat facets, not a ball.
+  const fringe = (p: V3, s: V3, r: V3 = O) => { if (crown) h.ico(hx, 1, p, r, s, 1); };
   const onScalp = (theta: number, phi: number, inf: number) => {
     const d = new THREE.Vector3(Math.sin(theta) * Math.cos(phi), Math.cos(theta), Math.sin(theta) * Math.sin(phi));
     const p: V3 = [d.x * (0.117 + inf), 0.12 + d.y * (0.14 + inf), -0.004 + d.z * (0.13 + inf)];
@@ -398,6 +442,24 @@ export function hair(h: Kit, a: Appearance, b: Body, hx: number, cover: Cover): 
       for (const s of [1, -1]) h.ball(hx, [0.007, 0.05, 0.01], [s * 0.106, 0.115, 0.06], [0.1, 0, s * 0.1], undefined, 6, 5);
       fringe([0.02, 0.222, 0.066], [0.085, 0.026, 0.045], [0.5, 0, -0.2]);
       break;
+    case 'swept':
+      // Short at the sides, the top grown out and pushed back off the forehead in a few thick locks.
+      scalp(0.012, 1.55, 0.5);
+      fringe([0.014, 0.246, 0.05], [0.09, 0.034, 0.07], [0.32, 0, -0.16]);
+      fringe([-0.012, 0.256, -0.02], [0.1, 0.036, 0.085], [0.02, 0.2, 0.08]);
+      fringe([-0.07, 0.222, 0.052], [0.042, 0.03, 0.06], [0.4, 0, 0.42]);
+      fringe([0.07, 0.226, 0.03], [0.04, 0.03, 0.075], [0.25, 0, -0.5]);
+      fringe([0, 0.215, -0.085], [0.095, 0.06, 0.055], [-0.35, 0, 0]);
+      break;
+    case 'crew':
+      // Clipped close all over, a little longer on top.
+      scalp(0.007, 1.48, 0.5, shaved);
+      if (scalpOk) h.cap(hx, [0.117 + 0.012, 0.14 + 0.012, 0.13 + 0.012], 0, 0.95, [0, 0.12, 0.004], [-0.22, 0, 0], { w: 10, h: 3 });
+      break;
+    case 'hightight':
+      // Skin at the sides and back, a short flat patch left on top.
+      if (scalpOk) h.cap(mixHex(hx, b.skin, 0.15), [0.117 + 0.009, 0.14 + 0.009, 0.13 + 0.009], 0, 0.72, [0, 0.12, 0.006], [-0.2, 0, 0], { w: 10, h: 3 });
+      break;
     case 'afropuffs':
       scalp(0.018, 1.6, 0.45);
       if (crown) {
@@ -471,7 +533,7 @@ export function beard(h: Kit, a: Appearance, b: Body, hx: number): void {
 // ── Headwear ────────────────────────────────────────────────────────────────────────────
 
 export function headwear(h: Kit, a: Appearance, hex: number): void {
-  const dome = (k: Kit, color: number, inf: number, theta: number, surf?: Surface) => k.cap(color, domeR(inf), 0, theta, O, O, { w: 18, h: 8 }, surf);
+  const dome = (k: Kit, color: number, inf: number, theta: number, surf?: Surface) => k.cap(color, domeR(inf), 0, theta, O, O, { w: 12, h: 5 }, surf);
   /** Frame at the dome center tilted so the front rim rides higher than the back. */
   const frame = (tilt: number) => h.at(DOME_C, [-tilt, 0, 0]);
   const rim = (inf: number, theta: number): { y: number; rx: number; rz: number } => {
@@ -764,6 +826,91 @@ export function headwear(h: Kit, a: Appearance, hex: number): void {
       h.box(0xd3a628, [0.034, 0.03, 0.008], [0, 0.225, 0.14], [0.05, 0, 0]);
       break;
     }
+    case 'combat':
+    case 'gogglehelmet': {
+      // The issue helmet in its cloth cover: down over the ears, a bracket for night vision on
+      // the brow, the band round it; one wears goggles pushed up on the shell.
+      const f = frame(0.1);
+      const cam: Surface = { pattern: PATTERN.camo, accent: camoOf(hex) };
+      dome(f, hex, 0.036, 1.74, cam);
+      const R = domeR(0.036), rr = rim(0.036, 1.74);
+      f.cyl(shade(hex, 0.78), rr.rx + 0.004, rr.rx + 0.004, 0.016, [0, rr.y + 0.004, 0], O, [1, 1, rr.rz / rr.rx], { seg: 12 });
+      onDome(f, R, 1.12, 0x2b2d31, [0.042, 0.036, 0.012], 0.004);
+      const by = Math.cos(1.38) * R[1], bs = Math.sin(1.38);
+      f.cyl(shade(hex, 0.62), R[0] * bs + 0.003, R[0] * bs + 0.003, 0.02, [0, by, 0], O, [1, 1, R[2] / R[0]], { seg: 12, open: true });
+      for (const s of [1, -1]) f.box(0xc8d0a8, [0.012, 0.012, 0.004], [s * 0.022, by, -R[2] * bs - 0.004]);
+      h.torus(0x3a3226, 0.1, 0.004, [0, 0.06, 0.0], [0, Math.PI / 2, 0], [1, 1.1, 1], 3, 12, Math.PI);
+      if (a.headwear === 'gogglehelmet') {
+        const gy = Math.cos(1.0) * R[1], gs = Math.sin(1.0);
+        f.cyl(0x18191b, R[0] * gs + 0.004, R[0] * gs + 0.004, 0.026, [0, gy, 0], O, [1, 1, R[2] / R[0]], { seg: 12, open: true });
+        onDome(f, R, 1.0, 0x1d1e20, [0.15, 0.056, 0.03], 0.008);
+        onDome(f, R, 1.0, 0x8a6a2a, [0.13, 0.04, 0.006], 0.026);
+      }
+      break;
+    }
+    case 'opshelmet':
+    case 'nvghelmet': {
+      // A high-cut helmet: bare shell cut away over the ears for a headset, rails down the
+      // sides, loop panels on top, a shroud on the brow; one carries night vision tipped up.
+      const f = frame(0.08);
+      dome(f, hex, 0.034, 1.4);
+      const R = domeR(0.034);
+      f.cap(hex, R, 1.4, 0.36, O, O, { p0: Math.PI * 1.5 - 0.95, pl: 1.9, w: 5, h: 1 });
+      for (const s of [1, -1]) {
+        f.box(0x1d1e20, [0.012, 0.024, 0.12], [s * (R[0] * Math.sin(1.28) + 0.002), R[1] * Math.cos(1.28), -0.004], [0, 0, 0]);
+        f.box(shade(hex, 0.72), [0.008, 0.05, 0.07], [s * (R[0] * Math.sin(0.85) + 0.001), R[1] * Math.cos(0.85), -0.01], [0, 0, -s * 0.62]);
+      }
+      f.box(shade(hex, 0.72), [0.07, 0.008, 0.1], [0, R[1] + 0.001, -0.012]);
+      onDome(f, R, 1.1, 0x1d1e20, [0.046, 0.042, 0.014], 0.004);
+      headset(h, 0x2b2d31);
+      h.torus(0x1d1e20, 0.1, 0.004, [0, 0.06, 0.0], [0, Math.PI / 2, 0], [1, 1.1, 1], 3, 12, Math.PI);
+      if (a.headwear === 'nvghelmet') {
+        // The arm up from the shroud, and the two tubes resting above the brow.
+        onDome(f, R, 0.9, 0x1d1e20, [0.022, 0.07, 0.03], 0.016);
+        for (const s of [1, -1]) {
+          const t = f.at([s * 0.03, R[1] * Math.cos(0.8) + 0.03, R[2] * Math.sin(0.8) + 0.045], [-0.38, 0, 0]);
+          t.cyl(0x23262a, 0.019, 0.022, 0.085, O, [Math.PI / 2, 0, 0], 1, { seg: 8 });
+          t.cyl(0x3f6a52, 0.015, 0.015, 0.004, [0, 0, 0.044], [Math.PI / 2, 0, 0], 1, { seg: 8 });
+        }
+        f.box(0x1d1e20, [0.085, 0.024, 0.03], [0, R[1] * Math.cos(0.8) + 0.03, R[2] * Math.sin(0.8) + 0.02], [-0.38, 0, 0]);
+      }
+      break;
+    }
+    case 'boonie': {
+      // A soft, flat-topped crown, a wide stitched brim that droops, loops round the band.
+      const cam: Surface = { pattern: PATTERN.camo, accent: camoOf(hex) };
+      h.cyl(hex, 0.116, 0.128, 0.075, [0, 0.234, -0.005], O, [1, 1, 1.08], { seg: 10 }, cam);
+      h.cyl(hex, 0.15, 0.225, 0.03, [0, 0.186, -0.005], [0.05, 0, 0], [1, 1, 1.04], { seg: 12 }, cam);
+      h.cyl(shade(hex, 0.7), 0.131, 0.131, 0.018, [0, 0.208, -0.005], O, [1, 1, 1.08], { seg: 10 });
+      break;
+    }
+    case 'patrolcap': {
+      // A flat-topped field cap, stiff at the front, a short bill, rank in the middle.
+      const cam: Surface = { pattern: PATTERN.camo, accent: camoOf(hex) };
+      h.cyl(hex, 0.12, 0.126, 0.08, [0, 0.232, -0.006], [-0.07, 0, 0], [1, 1, 1.1], { seg: 10 }, cam);
+      h.cyl(hex, 0.105, 0.105, 0.012, [0, 0.196, 0.118], [0.3, 0, 0], [1, 1, 0.82], { seg: 8, t0: -Math.PI / 2, tl: Math.PI }, cam);
+      h.box(0x23251f, [0.02, 0.022, 0.004], [0, 0.238, 0.137], [-0.07, 0, 0]);
+      break;
+    }
+    case 'marinecover': {
+      // The eight-pointed utility cover: an octagon crown wider at the top, the emblem in front.
+      const dig: Surface = { pattern: PATTERN.digital, accent: camoOf(hex) };
+      h.cyl(hex, 0.134, 0.122, 0.078, [0, 0.232, -0.006], [-0.07, Math.PI / 8, 0], [1, 1, 1.08], { seg: 8 }, dig);
+      h.cyl(hex, 0.105, 0.105, 0.012, [0, 0.196, 0.118], [0.3, 0, 0], [1, 1, 0.82], { seg: 8, t0: -Math.PI / 2, tl: Math.PI }, dig);
+      h.box(0x1c1d18, [0.024, 0.024, 0.004], [0, 0.238, 0.14], [-0.1, 0, 0]);
+      break;
+    }
+    case 'opscap': {
+      // A ball cap with a loop patch on the front, worn under a headset.
+      const f = h.at(DOME_C, [-0.3, 0, 0]);
+      dome(f, hex, 0.02, 1.38);
+      const rr = rim(0.02, 1.38);
+      f.cyl(hex, 0.105, 0.105, 0.012, [0, rr.y + 0.004, rr.rz - 0.012], [0.32, 0, 0], [1, 1, 0.85], { seg: 8, t0: -Math.PI / 2, tl: Math.PI });
+      onDome(f, domeR(0.02), 0.95, shade(hex, 0.66), [0.06, 0.036, 0.006], 0.001);
+      h.torus(0x2b2d31, 0.129, 0.007, [0, 0.118, -0.008], [0, 0, 0], [1, 1.25, 1], 3, 8, Math.PI);
+      headset(h, 0x2b2d31);
+      break;
+    }
     case 'santa': {
       // A soft cone that rises off the fur brim and flops over behind one ear, a white pom-pom on the tip.
       const fur = 0xefebe3;
@@ -778,6 +925,28 @@ export function headwear(h: Kit, a: Appearance, hex: number): void {
       break;
     }
   }
+}
+
+/** The second color of issue camouflage (as on the uniforms). */
+const camoOf = (hex: number) => {
+  const l = luminance(hex);
+  // Black kit keeps its shapes quiet; a dark green ground gets coyote, a light one brown-green.
+  return l > 0.42 ? mixHex(hex, 0x4a5232, 0.62) : l < 0.2 ? mixHex(hex, 0x5a5d60, 0.38) : mixHex(hex, 0x94845c, 0.55);
+};
+
+/** A box lying on the front of a dome of radii R, `theta` down from its top, `out` off it. */
+function onDome(f: Kit, R: V3, theta: number, hex: number, size: V3, out: number): void {
+  f.box(hex, size, [0, Math.cos(theta) * (R[1] + out), Math.sin(theta) * (R[2] + out)], [theta - Math.PI / 2, 0, 0]);
+}
+
+/** Ear cups with a boom microphone round to the mouth. */
+function headset(h: Kit, hex: number): void {
+  for (const s of [1, -1]) {
+    h.cyl(hex, 0.036, 0.036, 0.032, [s * 0.124, 0.113, -0.008], [0, 0, Math.PI / 2], [1, 1, 1.25], { seg: 8 });
+    h.cyl(shade(hex, 0.6), 0.03, 0.03, 0.012, [s * 0.106, 0.113, -0.008], [0, 0, Math.PI / 2], [1, 1, 1.25], { seg: 8 });
+  }
+  h.box(0x18191b, [0.005, 0.005, 0.1], [0.108, 0.078, 0.055], [0.3, -0.42, 0]);
+  h.box(0x18191b, [0.016, 0.012, 0.012], [0.082, 0.062, 0.105], [0.3, -0.42, 0]);
 }
 
 function temples(h: Kit, hex: number, y = 0.14): void {
@@ -814,6 +983,18 @@ export function faceGear(h: Kit, a: Appearance, b: Body, hex: number): void {
       h.cyl(0x18191b, 0.142, 0.142, 0.028, [0, EYE_Y + 0.004, -0.004], O, [0.935, 1, 1.0], { seg: 20, open: true });
       h.front(hex, [0.13, 0.03, 0.142], Math.PI / 2 - 0.6, 1.2, 1.9, [0, EYE_Y + 0.004, 0], O, undefined, 14, 3);
       h.front(0xd07a2a, [0.134, 0.024, 0.146], Math.PI / 2 - 0.6, 1.2, 1.6, [0, EYE_Y + 0.004, 0], O, undefined, 12, 3);
+      break;
+    case 'ballistic':
+      // Low goggles on a wide strap: a dark frame hugging the eyes, a smoked lens.
+      h.cyl(shade(hex, 0.9), 0.142, 0.142, 0.024, [0, EYE_Y + 0.004, -0.004], O, [0.935, 1, 1.0], { seg: 12, open: true });
+      h.front(0x1d1e20, [0.129, 0.04, 0.143], Math.PI / 2 - 0.6, 1.2, 1.75, [0, EYE_Y + 0.002, 0], O, undefined, 8, 2);
+      h.front(0x2c343c, [0.132, 0.03, 0.1465], Math.PI / 2 - 0.6, 1.2, 1.5, [0, EYE_Y + 0.002, 0], O, undefined, 8, 2);
+      break;
+    case 'shooting':
+      // One wrapped lens, amber, on thin arms.
+      h.front(0x7a5a1c, [0.127, 0.03, 0.139], Math.PI / 2 - 0.62, 1.24, 1.7, [0, EYE_Y - 0.002, 0], O, undefined, 8, 2);
+      h.box(0x1d1e20, [0.118, 0.005, 0.006], [0, EYE_Y + 0.016, 0.136]);
+      temples(h, 0x1d1e20, EYE_Y + 0.013);
       break;
     case 'eyepatch':
       h.ball(0x0d0d0e, [0.024, 0.021, 0.007], [-0.042, EYE_Y, 0.127], [0, -0.2, 0], undefined, 10, 6);
@@ -885,7 +1066,7 @@ export function faceGear(h: Kit, a: Appearance, b: Body, hex: number): void {
 /** Who holds a lit smoke in the mouth (living survivors whose mouth isn't covered), and which one. */
 function smokeKind(a: Appearance, zombie: boolean): SmokeKind | null {
   if (zombie || a.smoke === 'none' || !(a.smoke in SMOKES)) return null;
-  if (COVERS_MOUTH.has(a.face) || COVERS_FACE.has(a.headwear)) return null;
+  if (COVERS_MOUTH.has(a.face) || COVERS_FACE.has(a.headwear) || MASKS[a.mask]?.mouth) return null;
   return a.smoke as SmokeKind;
 }
 
