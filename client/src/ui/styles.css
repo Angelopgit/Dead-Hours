@@ -956,6 +956,10 @@ body.touch-play .weapon-panel .w-mode { font-size: 0.88em; }
 /* The pause menu stands in this column: PAUSED was printed over the item counts (and over the ammo at 568x320).
    The ammo or the gauges and the boost chips hide under it; the health bar, above the title, stays. */
 body.touch-play #ui-root:has(> .pause) :is(.weapon-panel, .car-panel, .vitals .boosts) { visibility: hidden; }
+/* The held bag covers the screen, and on a phone the HUD stands where its title and cards are: the ammo and the
+   item counts showed through under INVENTORY, the prompt under the cards (13 crossings at 568x320). They hide
+   while it is open; it has its own timer, ammo and health, and the health bar above it stays. */
+body.touch-play #ui-root:has(> .inventory) :is(.weapon-panel, .car-panel, .vitals .boosts, .hud-top, .prompt, .feed) { visibility: hidden; }
 /* At the wheel the gauges take the ammo panel's place (the driver has no gun in hand); a passenger keeps the gun. */
 body.touch-play .hud.driving .weapon-panel, body.touch-play .hud.riding .car-panel { display: none !important; }
 body.touch-play .car-panel { bottom: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));

@@ -372,6 +372,10 @@ check(none === null, 'nothing near: full speed');
   // ammo at 568x320 (nine crossings). The ammo or the gauges and the boost chips hide under it; health stays.
   check(prop('body.touch-play #ui-root:has(> .pause) :is(.weapon-panel, .car-panel, .vitals .boosts)', 'visibility') === 'hidden',
     'touch: the ammo panel and boost chips hide under the pause menu');
+  // The held bag covers a phone's screen, where the HUD stands at the top: the ammo and item counts showed through
+  // under INVENTORY, the prompt under the cards (13 crossings at 568x320, 5 at 844x390). They hide while it is open.
+  check(prop('body.touch-play #ui-root:has(> .inventory) :is(.weapon-panel, .car-panel, .vitals .boosts, .hud-top, .prompt, .feed)', 'visibility') === 'hidden',
+    'touch: the ammo panel, timer, prompt and feed hide under the held bag');
   // Tonight's goals sit at the top left, where the menu's title lands in a short window: online (five items) in a
   // 960x540 or 800x450 frame MENU was printed over the last goal. The card hides under the menu.
   check(prop('#ui-root:has(> .pause) .goals', 'visibility') === 'hidden', "tonight's goals hide under the pause menu");
