@@ -607,6 +607,16 @@ export function talkHint(openMic: boolean, inNight: boolean, device: Device = cu
   return openMic ? `YOUR MIC OPENS WHEN YOU TALK. ${key('radio')} FOR RADIO` : `HOLD ${key('talk')} TO TALK, ${key('radio')} FOR RADIO`;
 }
 
+/**
+ * The end of the prompt in a vehicle seat: how to move to the next free seat. A phone has a SEAT
+ * button, so it is named and no key is (it read "SEAT CHANGE SEAT").
+ */
+export function seatHint(device: Device = current): string {
+  if (device === 'touch') return ', SEAT MOVES OVER';
+  const key = device === 'pad' ? padLabel('barricade') : codeLabel(settings.value.controls.bindings.barricade[0] ?? '');
+  return key ? `, ${key} CHANGE SEAT` : '';
+}
+
 export function codeLabel(code: string): string {
   if (code.startsWith('Mouse')) return ['LMB', 'MMB', 'RMB', 'M4', 'M5'][Number(code.slice(5))] ?? code;
   if (code.startsWith('Key')) return code.slice(3);

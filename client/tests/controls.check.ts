@@ -156,6 +156,13 @@ check(none === null, 'nothing near: full speed');
     check(keys === 'HOLD T TO TALK, B FOR RADIO' && /FOR RADIO$/.test(padKeys) && padKeys !== keys && talkHint(true, true, 'mouse') === 'YOUR MIC OPENS WHEN YOU TALK. B FOR RADIO',
       `keyboard and controller: the mic line still names their talk and radio buttons ("${keys}", "${padKeys}")`);
   }
+  // In a vehicle seat the prompt ends with how to move over. A phone has no key for it: it read "SEAT CHANGE SEAT".
+  {
+    const { seatHint } = await import('../src/core/Input');
+    const phone = seatHint('touch'), keys = seatHint('mouse'), padKeys = seatHint('pad');
+    check(phone === ', SEAT MOVES OVER' && keys === ', G CHANGE SEAT' && /^, .+ CHANGE SEAT$/.test(padKeys) && !/SEAT CHANGE SEAT/.test(phone + keys + padKeys),
+      `seat prompt: a phone names its SEAT button once, keys and pads name theirs ("GET OUT${phone}", "GET OUT${keys}", "GET OUT${padKeys}")`);
+  }
   // The phone's USE button says the prompt's first two words. It read "DRIVE THE" beside a car, "RIDE THE" at a
   // skateboard, "PRY A" at a boarded door and "HOLD TO" over a downed teammate.
   {
@@ -163,7 +170,7 @@ check(none === null, 'nothing near: full speed');
     const says: [string, string][] = [
       ['DRIVE THE HUMVEE, GAS 72%', 'DRIVE'], ['GET IN THE POLICE CAR, GAS 40%', 'GET IN'], ['RIDE THE SKATEBOARD', 'RIDE'],
       ['PRY A BOARD OFF THE DOOR, 2 OF 3', 'PRY'], ['HOLD TO REVIVE DANA', 'REVIVE DANA'], ['HOP OFF THE SKATEBOARD', 'HOP OFF'],
-      ['OPEN DOOR', 'OPEN DOOR'], ['TAKE AMMUNITION, 3 LEFT', 'TAKE AMMUNITION'], ['GET OUT, SEAT CHANGE SEAT', 'GET OUT'],
+      ['OPEN DOOR', 'OPEN DOOR'], ['TAKE AMMUNITION, 3 LEFT', 'TAKE AMMUNITION'], ['GET OUT, SEAT MOVES OVER', 'GET OUT'],
       ['PICK UP A SECOND KATANA FOR TWO HANDS', 'PICK UP'], ['SELECT WEAPON', 'SELECT WEAPON'],
     ];
     const wrong = says.filter(([prompt, want]) => shortUse(prompt) !== want).map(([prompt]) => `"${prompt}" reads "${shortUse(prompt)}"`);

@@ -9,7 +9,7 @@ import {
   type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type Vehicle, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
-import { actionLabel, onDeviceChange, typing, type Input } from '../core/Input';
+import { actionLabel, onDeviceChange, seatHint, typing, type Input } from '../core/Input';
 import { PAD, glyph, menuButtons, physicalOf } from '../core/PadLayout';
 import { PadKeyboard } from '../ui/PadKeyboard';
 import { padTurner } from '../ui/PadMenus';
@@ -2444,10 +2444,9 @@ export class GameSession {
     const [v] = at;
     const speed = Math.abs(this.driving ? this.driving.body.speed : v.speed);
     const free = v.seats.includes(null);
-    const key = (a: Action, alt: string) => actionLabel(a) || alt;
-    const seatHint = free ? `, ${key('barricade', 'SEAT')} CHANGE SEAT` : '';
-    if (speed > VEHICLE.exitSpeed) this.hud.setPrompt('interact', `SLOW DOWN TO GET OUT${seatHint}`);
-    else this.hud.setPrompt('interact', `GET OUT${seatHint}`);
+    const over = free ? seatHint() : '';
+    if (speed > VEHICLE.exitSpeed) this.hud.setPrompt('interact', `SLOW DOWN TO GET OUT${over}`);
+    else this.hud.setPrompt('interact', `GET OUT${over}`);
     if (this.input.pressed('barricade') && free) {
       this.flushDrive();
       if (this.link) this.link.act({ a: 'seat', v: v.id, s: -1 });
