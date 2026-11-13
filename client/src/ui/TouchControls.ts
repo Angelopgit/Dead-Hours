@@ -296,9 +296,14 @@ export class TouchControls {
   }
 }
 
-/** First words of a prompt ("OPEN DOOR", "TAKE AMMUNITION, 3 LEFT" → "TAKE AMMUNITION"). */
-function shortUse(text: string): string {
-  return text.split(/[·,.:]/)[0].trim().split(' ').slice(0, 2).join(' ');
+/**
+ * What the USE button says for a prompt: its first two words ("OPEN DOOR", "TAKE AMMUNITION, 3 LEFT" →
+ * "TAKE AMMUNITION"), never cut at "THE" or "A" ("DRIVE THE HUMVEE" → "DRIVE", not "DRIVE THE"), and the deed
+ * itself where the prompt opens with "HOLD TO" ("HOLD TO REVIVE DANA" → "REVIVE DANA").
+ */
+export function shortUse(text: string): string {
+  const words = text.split(/[·,.:]/)[0].trim().replace(/^HOLD TO /, '').split(' ');
+  return words.slice(0, /^(THE|A|AN)$/.test(words[1] ?? '') ? 1 : 2).join(' ');
 }
 
 /** The screen's safe-area insets (a notch, the home bar) in px. */
