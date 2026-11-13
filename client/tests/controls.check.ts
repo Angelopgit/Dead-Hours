@@ -322,6 +322,13 @@ check(none === null, 'nothing near: full speed');
     .flatMap((f) => readFileSync(new URL(f, import.meta.url), 'utf8').match(/gsap\.fromTo\([^;]*\{ opacity: 0, x: 24 \}[^;]*;/g) ?? []);
   check(slides.length === 4 && slides.every((s) => s.includes("clearProps: 'transform'")),
     `menu and table panels hand their centring back to the stylesheet after sliding in (${slides.length} slides)`);
+  // On the Humvee's roof gun both hands are on the .50, but the bag still marked the PRIMARY card as in the hands
+  // (the HUD's slot row did too). Both go by Arsenal.out, which is none of the survivor's own slots on a mounted gun.
+  const bag = readFileSync(new URL('../src/ui/Inventory.ts', import.meta.url), 'utf8');
+  const session = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+  check((bag.match(/a\.out === '(?:primary|secondary|melee)'/g) ?? []).length === 3 && !/a\.active ===|a\.meleeOut\b/.test(bag)
+    && /JSON\.stringify\(\[a\.primary, a\.secondary, a\.out,/.test(bag) && /\n {6}slot: a\.out,/.test(session),
+    'the bag and the HUD mark the weapon in the hands by Arsenal.out (none on a mounted gun)');
   // The main menu hides when a panel would slice through its words, but that was decided only as the panel opened:
   // a window that shrank afterwards (leaving fullscreen, a phone turning) had the panel printed over menu words.
   const menu = readFileSync(new URL('../src/ui/MainMenu.ts', import.meta.url), 'utf8');

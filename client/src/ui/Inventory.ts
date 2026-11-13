@@ -66,7 +66,7 @@ export class Inventory {
     const s = p.stats;
     const limb = a.limb && !a.limb.broken ? a.limb : null;
     const pad = inputDevice() === 'pad';
-    const key = JSON.stringify([a.primary, a.secondary, a.active, p.bandages, p.health, s, survived, limb && [limb.id, limb.wear], pad]);
+    const key = JSON.stringify([a.primary, a.secondary, a.out, p.bandages, p.health, s, survived, limb && [limb.id, limb.wear], pad]);
     if (key === this.last) return;
     this.last = key;
     this.title.textContent = survived;
@@ -90,8 +90,9 @@ export class Inventory {
       );
     };
     this.cards.replaceChildren(
-      card(slot('PRIMARY', 'weapon1'), a.primary.id, a.primary, a.active === 'primary' && !a.meleeOut && !limb),
-      card(slot('SECONDARY', 'weapon2'), a.secondary.id, a.secondary, a.active === 'secondary' && !a.meleeOut && !limb),
+      // The card of what is in the hands is marked: none of them on a mounted gun (their own guns stay slung).
+      card(slot('PRIMARY', 'weapon1'), a.primary.id, a.primary, a.out === 'primary' && !limb),
+      card(slot('SECONDARY', 'weapon2'), a.secondary.id, a.secondary, a.out === 'secondary' && !limb),
       limb
         ? h('div', { class: 'inv-card active' },
           slot('MELEE', 'melee'),
@@ -100,7 +101,7 @@ export class Inventory {
           h('div', { class: 'ammo' }, `${limb.wear} / ${limb.maxWear}`, h('small', {}, 'HITS LEFT')),
           h('div', { class: 'stat' }, 'Condition', h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((limb.wear / limb.maxWear) * 100)}%` }))),
         )
-        : card(slot('MELEE', 'weapon3'), a.meleeId, null, a.meleeOut),
+        : card(slot('MELEE', 'weapon3'), a.meleeId, null, a.out === 'melee'),
     );
     this.supplies.replaceChildren(
       slot('MEDICAL', 'heal'),
