@@ -6,7 +6,7 @@ import { RELOAD_STEPS } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
 import { MELEE, WEAPONS, type BoostId, type MeleeId } from '@dead-hours/shared';
-import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordingBytes, trimLead } from './Recordings';
+import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordedShot, recordingBytes, trimLead } from './Recordings';
 import { ShotVoices } from './ShotVoices';
 import { RECORDED_FILES } from './recordedFiles';
 import { weather } from '../environment/Weather';
@@ -1240,9 +1240,9 @@ export class AudioEngine {
     return takes?.length ? takes[Math.floor(Math.random() * takes.length)] : null;
   }
 
-  /** A shot for this gun: a recorded take once decoded, else the synthesized one. */
-  private shot(id: string): { buffer: AudioBuffer; level: number; rate: number; recorded: boolean } {
-    const rec = RECORDED_SHOTS[id];
+  /** A shot for this gun (`id`: the gun it is voiced as): a recorded take once decoded, else the synthesized one. */
+  private shot(id: string, weapon = id): { buffer: AudioBuffer; level: number; rate: number; recorded: boolean } {
+    const rec = recordedShot(weapon, id);
     const buffer = rec && this.recording(rec.set);
     if (rec && buffer) return { buffer, level: rec.level, rate: rec.rate, recorded: true };
     return { buffer: this.shotBuffer(id, Math.floor(Math.random() * SHOT_TAKES)), level: GUN_SOUNDS[id].level, rate: 1, recorded: false };
@@ -1252,8 +1252,8 @@ export class AudioEngine {
    * Your own shot: a sub-bass kick under the recording, and the rest of the mix dipping under it
    * (`scale` below 1 for a suppressed shot).
    */
-  private kick(id: string, t: number, scale = 1): void {
-    const weight = (RECORDED_SHOTS[id]?.punch ?? 0.5) * scale;
+  private kick(id: string, weapon: string, t: number, scale = 1): void {
+    const weight = (recordedShot(weapon, id)?.punch ?? 0.5) * scale;
     this.tone(this.guns, t, 'sine', 78, 36, 0.55 * weight, 0.002, 0.16, 0.12);
     const g = this.duck.gain;
     const depth = 1 - (1 - DUCK_DEPTH) * Math.min(1, 0.5 + weight * 0.5) * scale;
@@ -1335,7 +1335,7 @@ export class AudioEngine {
     const here = this.here;
     const there = local ? here : this.spaceOf(position);
     const d = local ? 0 : position.distanceTo(L);
-    const shot = this.shot(id);
+    const shot = this.shot(id, weapon);
     const src = ctx.createBufferSource();
     src.buffer = shot.buffer;
     src.playbackRate.value = shot.rate * (1 + (Math.random() * 2 - 1) * 0.03);
@@ -1379,7 +1379,7 @@ export class AudioEngine {
     }
     const echo = (gun.echo / (1 + d / 200)) * (suppressed ? 0.3 : 1);
     if (local) {
-      this.kick(id, t, suppressed ? 0.3 : 1);
+      this.kick(id, weapon, t, suppressed ? 0.3 : 1);
       // The gun is at the shooter's face: no panning, the shot fills both ears.
       level.connect(this.guns);
       this.sendTo(level, here, echo * SEND[here]);

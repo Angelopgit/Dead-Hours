@@ -48,7 +48,13 @@ export const RECORDED_SHOTS: Record<string, RecordedShot> = {
   // its suppressor; the RPG the 12 gauge's, slowed right down into the booster's deep thump.
   wraith: { set: 'marksman', rate: 0.95, level: 0.95, punch: 0.5 },
   rpg: { set: 'shotgun', rate: 0.62, level: 1.25, punch: 1 },
+  // The Humvee's M2 fires the M107's .50 round, eight a second. That take is mixed for single shots:
+  // at its level a burst sat 3 dB over the M249 with over a quarter of it in the clipper.
+  m2: { set: 'sniper', rate: 1, level: 0.5, punch: 0.9 },
 };
+
+/** The recorded shot a weapon plays: its own entry, else that of the gun it is voiced as. */
+export const recordedShot = (weapon: string, voicedAs: string): RecordedShot | undefined => RECORDED_SHOTS[weapon] ?? RECORDED_SHOTS[voicedAs];
 
 /**
  * Reload and handling recordings, by mechanism. Every take is cut with what leads up to its main hit

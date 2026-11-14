@@ -18,7 +18,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { WEAPONS } from '@dead-hours/shared';
 import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
 import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
-import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings } from '../src/audio/Recordings';
+import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordedShot } from '../src/audio/Recordings';
 import { RELOAD_STEPS, dueCues, reloadTimeline } from '../src/weapons/reloadScript';
 import { AKIMBO_TIMES } from '../src/weapons/PlayerWeapon';
 import { MAX_SHOTS, PER_GUN, RESPACE, RESPACE_MAX, ShotVoices, type ShotVoice } from '../src/audio/ShotVoices';
@@ -236,6 +236,15 @@ for (const id of Object.keys(GUN_SOUNDS)) {
   else recorded++;
 }
 if (recorded === Object.keys(GUN_SOUNDS).length) ok(`all ${recorded} guns play one of 4 recorded takes`);
+// The Humvee's M2 plays the M107's take eight times a second: at that take's own level a burst measured 3 dB over
+// the M249 with 28% of it in the master's clipper (dev/firefight, offline render). It has its own, lower level.
+{
+  const m2 = recordedShot('m2', 'sniper'), single = RECORDED_SHOTS.sniper;
+  if (m2 === single || m2?.set !== 'sniper') fail('m2: no recorded shot of its own on the .50 take');
+  else if (m2.level > single.level * 0.65) fail(`m2: level ${m2.level} against the M107's ${single.level}, a burst of it clips`);
+  else if (recordedShot('akimbo', 'pistol') !== RECORDED_SHOTS.pistol || recordedShot('at4', 'rpg') !== RECORDED_SHOTS.rpg) fail('guns voiced as another no longer fall back to its recorded shot');
+  else ok(`the M2 plays the .50 take at ${m2.level} (the M107's single shots ${single.level}); other borrowed voices are unchanged`);
+}
 const missing = FLESH_SETS.filter((set) => !sets[set]?.length);
 if (missing.length) fail(`flesh layers missing: ${missing.join(', ')}`);
 else ok(`flesh hit layers: ${FLESH_SETS.map((set) => `${set} ×${sets[set].length}`).join(', ')}`);
