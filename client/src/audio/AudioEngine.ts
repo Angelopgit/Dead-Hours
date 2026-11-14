@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { settings } from '../core/Settings';
 import type { Vec3 } from '@dead-hours/shared';
-import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from './GunSynth';
-import { RELOAD_STEPS } from '../weapons/reloadScript';
+import { ENCLOSURES, GUN_SOUNDS, enclosedIR, renderCrack, renderFoley, renderMech, renderShot, soundOf, streetIR, type Channels, type Enclosure, type FoleyKind } from './GunSynth';
+import { handlingCues } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
 import { MELEE, WEAPONS, type BoostId, type MeleeId } from '@dead-hours/shared';
@@ -15,12 +15,6 @@ import { WheelSounds } from './WheelSounds';
 import { FRAGMENTS, THEME, THEME_BEATS, beatSeconds, midiHz, type Note } from './Score';
 
 /** Close-shot takes rendered per gun and picked at random, so full auto never repeats one. */
-/** Guns voiced by another's sounds: the akimbo pair is two M17s. */
-// The AT4 and the M32 launch with the RPG's thump; the M2 fires the M107's .50 BMG round.
-const SOUND_OF: Record<string, string> = { akimbo: 'pistol', at4: 'rpg', mgl: 'rpg', m2: 'sniper' };
-/** The GUN_SOUNDS / recordings entry a weapon is heard as ('ar' for anything unknown). */
-const soundOf = (weapon: string): string => (GUN_SOUNDS[weapon] ? weapon : SOUND_OF[weapon] ?? 'ar');
-
 const SHOT_TAKES = 4;
 const FOLEY_TAKES = 2;
 /** Takes rendered of each melee weapon's swing, blow (light and heavy each) and pickup. */
@@ -100,10 +94,8 @@ const FOLEY_LEVEL: Record<FoleyKind, number> = {
   pumpBack: 0.42, pumpFwd: 0.45, shellIn: 0.3, shellGrab: 0.08, coverOpen: 0.32, coverClose: 0.42, belt: 0.2,
   pouch: 0.09, pouchGrab: 0.07, magDrop: 0.3, holster: 0.16, draw: 0.16, dryFire: 0.3,
 };
-/** Synthesized handling sounds each gun makes, rendered ahead of time: its reload's, and the pump's. */
-const FOLEY_SET: Record<string, FoleyKind[]> = Object.fromEntries(Object.keys(GUN_SOUNDS).map((id) => [id, [
-  ...new Set<FoleyKind>(['draw', 'holster', 'dryFire', ...(RELOAD_STEPS[id] ?? []).map((s) => s.cue), ...(id === 'shotgun' ? ['pumpBack', 'pumpFwd'] as const : [])]),
-]]));
+/** Synthesized handling sounds each gun voice makes, rendered ahead of time (reloadScript.handlingCues). */
+const FOLEY_SET: Record<string, FoleyKind[]> = Object.fromEntries(Object.keys(GUN_SOUNDS).map((id) => [id, handlingCues(id)]));
 /** How far someone else's reload carries (m). */
 const FOLEY_RANGE = 30;
 /** How much a handling sound sets its space ringing: a basement answers a magazine going in, the street hardly. */

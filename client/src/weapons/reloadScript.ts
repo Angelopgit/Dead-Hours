@@ -1,4 +1,4 @@
-import type { FoleyKind } from '../audio/GunSynth';
+import { soundOf, type FoleyKind } from '../audio/GunSynth';
 
 /**
  * The sounds of each gun's reload, placed on the hand animation in PlayerWeapon (its keyframes, as
@@ -69,6 +69,17 @@ export const RELOAD_STEPS: Record<string, ReloadStep[]> = {
   // M870, per shell: fingers on a shell at the carrier, thumbed into the tube as the hand reaches the port.
   shotgun: [{ cue: 'shellGrab', at: 0.12 }, { cue: 'shellIn', at: 0.5 }],
 };
+
+/**
+ * The handling sounds heard in the gun voice `id`, which the audio engine synthesizes before a night: drawing,
+ * holstering and a dry trigger, the pump, and every reload cue of every gun that plays in that voice. The M2
+ * plays in the M107's and the AT4 and M32 in the RPG's: their own cues (the feed cover and belt, the dropped
+ * tube, the 40 mm rounds) were left out and synthesized in the middle of the first reload.
+ */
+export function handlingCues(id: string): FoleyKind[] {
+  const reloads = Object.keys(RELOAD_STEPS).filter((weapon) => soundOf(weapon) === id).flatMap((weapon) => RELOAD_STEPS[weapon].map((s) => s.cue));
+  return [...new Set<FoleyKind>(['draw', 'holster', 'dryFire', ...reloads, ...(id === 'shotgun' ? ['pumpBack', 'pumpFwd'] as const : [])])];
+}
 
 /** Cues go out this far ahead of their hit (s), so a take's lead-in plays before it lands. */
 export const CUE_LEAD = 0.36;

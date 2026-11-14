@@ -464,6 +464,11 @@ export const GUN_SOUNDS: Record<string, GunSound> = {
     level: 1.05, echo: 1.5, mechLevel: 0, velocity: 120,
   },
 };
+/** Guns voiced by another's sounds: the akimbo pair is two M17s. */
+// The AT4 and the M32 launch with the RPG's thump; the M2 fires the M107's .50 BMG round.
+export const SOUND_OF: Record<string, string> = { akimbo: 'pistol', at4: 'rpg', mgl: 'rpg', m2: 'sniper' };
+/** The GUN_SOUNDS / recordings entry a weapon is heard as ('ar' for anything unknown). */
+export const soundOf = (weapon: string): string => (GUN_SOUNDS[weapon] ? weapon : SOUND_OF[weapon] ?? 'ar');
 
 // --------------------------------------------------------------- surroundings
 

@@ -16,10 +16,10 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { WEAPONS } from '@dead-hours/shared';
-import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
+import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, soundOf, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
 import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
 import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordedShot } from '../src/audio/Recordings';
-import { RELOAD_STEPS, dueCues, reloadTimeline } from '../src/weapons/reloadScript';
+import { RELOAD_STEPS, dueCues, handlingCues, reloadTimeline } from '../src/weapons/reloadScript';
 import { AKIMBO_TIMES } from '../src/weapons/PlayerWeapon';
 import { MAX_SHOTS, PER_GUN, RESPACE, RESPACE_MAX, ShotVoices, type ShotVoice } from '../src/audio/ShotVoices';
 import { EMITTER, emitterGain, emitterOn } from '../src/audio/Emitters';
@@ -95,6 +95,18 @@ for (const id of [...Object.keys(GUN_SOUNDS), 'knife']) {
 if (rendered === kinds.length * (Object.keys(GUN_SOUNDS).length + 1)) ok(`${rendered} handling sounds, every kind for every gun (and an unknown id)`);
 
 console.log('Reloads');
+// Every reload cue is synthesized before the night, in the voice its gun plays in. The M2 (the M107's voice), the
+// AT4 and the M32 (the RPG's) had 12 sounds made in the middle of their first reload, 4 to 12 ms on the main thread.
+{
+  const late = Object.entries(RELOAD_STEPS).flatMap(([weapon, steps]) => {
+    const ready = new Set(handlingCues(soundOf(weapon)));
+    return [...new Set(steps.map((st) => st.cue))].filter((cue) => !ready.has(cue)).map((cue) => `${weapon} ${cue} (voice ${soundOf(weapon)})`);
+  });
+  const borrowed = Object.keys(RELOAD_STEPS).filter((weapon) => soundOf(weapon) !== weapon);
+  if (late.length) fail(`handling sounds left to be synthesized mid-reload: ${late.join(', ')}`);
+  else if (!['m2', 'at4', 'mgl', 'akimbo'].every((w) => borrowed.includes(w))) fail(`guns voiced by another went missing from the reload scripts: ${borrowed.join(', ')}`);
+  else ok(`every reload cue of all ${Object.keys(RELOAD_STEPS).length} guns is synthesized ahead, also for the ${borrowed.length} that play in another gun's voice (${borrowed.join(', ')})`);
+}
 {
   const before = failures;
   // The hand animation's keyframes (PlayerWeapon.leftHand): where the new magazine seats.
