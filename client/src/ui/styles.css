@@ -476,12 +476,17 @@ body.touch-play .goals { display: none !important; }
 .inv-stats div { font-size: 0.62em; letter-spacing: 0.08em; color: var(--fg-faint); }
 .inv-stats b { display: block; font-weight: 500; font-size: 2.2em; letter-spacing: 0.02em; color: var(--fg); margin-top: 0.15em; font-variant-numeric: tabular-nums; }
 .inv-keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em 1em; margin-top: 1.2em; font-family: var(--font-body); font-size: 0.72em; color: var(--fg-dim); }
-.inv-keys span { display: inline-block; min-width: 3.6em; margin-right: 0.6em; padding: 0.1em 0.4em; border: 1px solid rgba(255,255,255,0.2); border-radius: 0;
+/* The key cap is the row's own span. With a controller its button is drawn inside that span (.pb): as `.inv-keys span`
+   this rule reached the drawn button too and made every one a wide dim box, the shoulder buttons hanging low. */
+.inv-keys > div > span { display: inline-block; min-width: 3.6em; margin-right: 0.6em; padding: 0.1em 0.4em; border: 1px solid rgba(255,255,255,0.2); border-radius: 0;
   text-align: center; color: var(--fg); font-size: 0.9em; }
 /* Phones and pads have no keyboard: no key list, no key after each slot name. */
 body.touch-play .inv-keys, body.touch-play .inv-k { display: none; }
 .inv-keys.pad { grid-template-columns: repeat(3, 1fr); }
-.inv-keys span.pad { border: none; padding: 0; min-width: 2.6em; text-align: center; }
+/* A row is a drawn button and its words, centred on each other: set on the words' baseline the lettered buttons
+   (triggers, bumpers, sticks, SELECT) hung 5 to 6 px under them. */
+.inv-keys.pad > div { display: flex; align-items: center; }
+.inv-keys > div > span.pad { display: flex; align-items: center; justify-content: center; flex: none; border: none; padding: 0; min-width: 2.6em; }
 /* A phone on its side: the inventory ran 95-165 px off the window (770 px at 667 wide, where it fell to one
    column). Set compact under the top buttons, darker so the HUD (moved to the top on phones) stays behind. */
 @media (max-height: 500px) {

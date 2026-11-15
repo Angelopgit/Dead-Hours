@@ -416,6 +416,14 @@ check(none === null, 'nothing near: full speed');
   check(prop('#ui-root:has(> .inventory) :is(.weapon-panel, .car-panel, .vitals .boosts, .hud-top, .prompt, .feed, .goals, .waypoint)', 'visibility') === 'hidden'
     && !/body\.touch-play #ui-root:has\(> \.inventory\)/.test(css),
     'the ammo panel, boost chips, timer, prompt, feed and goals hide under the held bag on every device, not only on a phone');
+  // The bag's list of keys: with a controller the button is drawn inside the row's key cap. The cap's style, written
+  // for any span in the list, reached the drawn button too (a wide dim box each, no shapes), and on the words'
+  // baseline the lettered buttons hung 5 to 6 px low. The cap is the row's own span; pad rows centre button and words.
+  check(prop('.inv-keys > div > span', 'border') !== null && prop('.inv-keys span', 'border') === null && prop('.inv-keys span', 'display') === null
+    && prop('.inv-keys > div > span.pad', 'border') === 'none'
+    && prop('.inv-keys.pad > div', 'display') === 'flex' && prop('.inv-keys.pad > div', 'align-items') === 'center'
+    && /h\('div', \{\}, h\('span', \{ class: 'pad' \}, \.\.\.richNodes\(glyph\(/.test(readFileSync(new URL('../src/ui/Inventory.ts', import.meta.url), 'utf8')),
+    'controller: the bag draws its buttons as buttons (the key cap style stops at the row\'s own span) and centres each on its words');
   check(/@media \(max-height: 700px\) \{\s*body:not\(\.touch-play\) #ui-root:has\(> \.inventory\) \.vitals \{ visibility: hidden; \}\s*\}/.test(css),
     'desktop: the health bar hides under the bag in a short window, where the list of keys covers it');
   // Tonight's goals sit at the top left, where the menu's title lands in a short window: online (five items) in a
