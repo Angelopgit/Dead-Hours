@@ -299,11 +299,14 @@ export class TouchControls {
 /**
  * What the USE button says for a prompt: its first two words ("OPEN DOOR", "TAKE AMMUNITION, 3 LEFT" →
  * "TAKE AMMUNITION"), never cut at "THE" or "A" ("DRIVE THE HUMVEE" → "DRIVE", not "DRIVE THE"), and the deed
- * itself where the prompt opens with "HOLD TO" ("HOLD TO REVIVE DANA" → "REVIVE DANA").
+ * itself where the prompt opens with "HOLD TO" ("HOLD TO REVIVE DANA" → "REVIVE DANA"). Where the thing taken,
+ * injected or revived has a name of several words the verb stands alone, not with half the name:
+ * "INJECT RAPID RELOAD SHOT" → "INJECT" (it read "INJECT RAPID"), "TAKE UNIVERSAL AMMO + GRENADES" → "TAKE".
  */
 export function shortUse(text: string): string {
   const words = text.split(/[·,.:]/)[0].trim().replace(/^HOLD TO /, '').split(' ');
-  return words.slice(0, /^(THE|A|AN)$/.test(words[1] ?? '') ? 1 : 2).join(' ');
+  const alone = /^(THE|A|AN)$/.test(words[1] ?? '') || (words.length > 2 && /^(TAKE|INJECT|REVIVE)$/.test(words[0]));
+  return words.slice(0, alone ? 1 : 2).join(' ');
 }
 
 /** The screen's safe-area insets (a notch, the home bar) in px. */

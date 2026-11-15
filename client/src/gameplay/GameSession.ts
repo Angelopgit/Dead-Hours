@@ -2004,7 +2004,7 @@ export class GameSession {
       const pair = best.it!.weapon === 'katana' && mine === 'katana';
       this.hud.setPrompt('interact', pair ? 'PICK UP A SECOND KATANA FOR TWO HANDS'
         : best.it!.weapon === 'katana' && mine === 'katanas' ? 'BOTH HANDS HOLD A KATANA'
-        : mine === 'machete' ? `PICK UP ${what}` : `SWAP ${WEAPONS[mine].model} FOR ${what}`);
+        : mine === 'machete' ? `PICK UP ${what}` : `SWAP FOR ${what}, LEAVES THE ${WEAPONS[mine].model}`);
     }
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model}, REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
     else if (best.kind === 'board') this.hud.setPrompt('interact', 'RIDE THE SKATEBOARD');

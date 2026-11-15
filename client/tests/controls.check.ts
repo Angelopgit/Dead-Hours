@@ -172,9 +172,19 @@ check(none === null, 'nothing near: full speed');
       ['PRY A BOARD OFF THE DOOR, 2 OF 3', 'PRY'], ['HOLD TO REVIVE DANA', 'REVIVE DANA'], ['HOP OFF THE SKATEBOARD', 'HOP OFF'],
       ['OPEN DOOR', 'OPEN DOOR'], ['TAKE AMMUNITION, 3 LEFT', 'TAKE AMMUNITION'], ['GET OUT, SEAT MOVES OVER', 'GET OUT'],
       ['PICK UP A SECOND KATANA FOR TWO HANDS', 'PICK UP'], ['SELECT WEAPON', 'SELECT WEAPON'],
+      // A name of several words is not cut in half: it read "INJECT RAPID", "INJECT HALBERG", "TAKE UNIVERSAL", and
+      // "SWAP BASEBALL" where the prompt was "SWAP BASEBALL BAT FOR KATANA" (now worded like a severed arm's).
+      ['SWAP FOR KATANA, LEAVES THE BASEBALL BAT', 'SWAP FOR'], ['INJECT RAPID RELOAD SHOT, RELOAD TWICE AS FAST, 90S', 'INJECT'],
+      ['INJECT HALBERG SERUM, ARMOR AGAINST THE DEAD', 'INJECT'], ['TAKE UNIVERSAL AMMO + GRENADES, 3 LEFT', 'TAKE'], ['TAKE M249 SAW, REPLACES M4A1', 'TAKE'],
+      ['HOLD TO REVIVE DANA LEE', 'REVIVE'], ['TAKE AT4, REPLACES M4A1', 'TAKE AT4'], ['TAKE M107 .50 CAL, REPLACES M4A1', 'TAKE M107'],
+      ['TAKE BANDAGES, 2 LEFT', 'TAKE BANDAGES'], ['SWAP FOR SEVERED ARM, 1 HIT', 'SWAP FOR'], ['PICK UP PIPE WRENCH', 'PICK UP'],
+      ['BOTH HANDS HOLD A KATANA', 'BOTH HANDS'], ['SLOW DOWN TO GET OUT, SEAT MOVES OVER', 'SLOW DOWN'],
     ];
     const wrong = says.filter(([prompt, want]) => shortUse(prompt) !== want).map(([prompt]) => `"${prompt}" reads "${shortUse(prompt)}"`);
-    check(!wrong.length, wrong.length ? `phone: USE label ${wrong.join('; ')}` : `phone: the USE button never stops at "THE", "A" or "HOLD TO" (${says.length} prompts)`);
+    check(!wrong.length, wrong.length ? `phone: USE label ${wrong.join('; ')}` : `phone: the USE button never stops at "THE", "A" or "HOLD TO", or halfway through a name (${says.length} prompts)`);
+    const session = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(/`SWAP FOR \$\{what\}, LEAVES THE \$\{WEAPONS\[mine\]\.model\}`/.test(session) && !/`SWAP \$\{WEAPONS\[mine\]/.test(session),
+      'a found melee weapon is offered as SWAP FOR it, so the USE button never reads SWAP BASEBALL (or plain SWAP beside the weapon SWAP button)');
   }
   L.setPadModel('DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)');
   const auto = names('auto');
