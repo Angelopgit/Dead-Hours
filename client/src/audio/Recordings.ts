@@ -107,7 +107,14 @@ export const RECORDED_HANDLING: Record<string, Partial<Record<FoleyKind, Handlin
   pistol: { magOut: v('pmagout', 1, 0.4), magIn: v('pmagin', 1, 0.5), slide: v('pslide', 1, 0.55) },
   // M870: shells thumbed into the tube and the pump.
   shotgun: { shellIn: v('shellin', 1, 0.42), pumpBack: v('pumpback', 1, 0.5), pumpFwd: v('pumpfwd', 1, 0.55) },
+  // M2: heard as the M107, which has no feed cover, so the cover played the synthesized sound. The M249's
+  // recorded cover, lower and heavier for a slab of steel that size; the charging handle stays the M107's.
+  m2: { coverOpen: v('coveropen', 0.82, 0.5), coverClose: v('coverclose', 0.8, 0.66) },
 };
+
+/** The recording a weapon's handling sound plays: its own entry's, else that of the gun it is voiced as. */
+export const recordedHandling = (weapon: string, voicedAs: string, kind: FoleyKind): HandlingVoice | undefined =>
+  RECORDED_HANDLING[weapon]?.[kind] ?? RECORDED_HANDLING[voicedAs]?.[kind];
 
 /** The bytes behind a sound's URL, without a network request when it is inlined. */
 export async function recordingBytes(url: string): Promise<ArrayBuffer> {

@@ -6,7 +6,7 @@ import { handlingCues } from '../weapons/reloadScript';
 import { CLEAR, type Acoustics, type Muffle, type Space } from './Acoustics';
 import { renderMeleeHit, renderMeleePickup, renderMeleeSwing } from './MeleeSynth';
 import { MELEE, WEAPONS, type BoostId, type MeleeId } from '@dead-hours/shared';
-import { RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordedShot, recordingBytes, trimLead } from './Recordings';
+import { RECORDED_SHOTS, groupRecordings, recordedHandling, recordedShot, recordingBytes, trimLead } from './Recordings';
 import { ShotVoices } from './ShotVoices';
 import { RECORDED_FILES } from './recordedFiles';
 import { weather } from '../environment/Weather';
@@ -1493,7 +1493,7 @@ export class AudioEngine {
     const at = kind === 'magDrop' ? _foleyAt.set(position.x, position.y - 1.1, position.z) : position;
     if (!own && at.distanceTo(this.listenerPos) > FOLEY_RANGE) return;
     const id = soundOf(weapon);
-    const voice = RECORDED_HANDLING[id]?.[kind];
+    const voice = recordedHandling(weapon, id, kind);
     const take = voice ? this.recording(voice.set) : null;
     const buffer = take ?? this.foleyBuffer(kind, id, Math.floor(Math.random() * FOLEY_TAKES));
     const rate = (take ? voice!.rate : 1) * (1 + (Math.random() * 2 - 1) * 0.03);

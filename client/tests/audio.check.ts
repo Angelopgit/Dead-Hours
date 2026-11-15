@@ -18,7 +18,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { WEAPONS } from '@dead-hours/shared';
 import { ENCLOSURES, FOLEY_KINDS, GUN_SOUNDS, enclosedIR, renderFoley, renderMech, renderShot, soundOf, streetIR, type Channels, type Enclosure, type FoleyKind } from '../src/audio/GunSynth';
 import { MELEE_VOICES, renderMeleeHit, renderMeleePickup, renderMeleeSwing } from '../src/audio/MeleeSynth';
-import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordedShot } from '../src/audio/Recordings';
+import { FLESH_SETS, HANDLING_SETS, RECORDED_HANDLING, RECORDED_SHOTS, groupRecordings, recordedHandling, recordedShot } from '../src/audio/Recordings';
 import { RELOAD_STEPS, dueCues, handlingCues, reloadTimeline } from '../src/weapons/reloadScript';
 import { AKIMBO_TIMES } from '../src/weapons/PlayerWeapon';
 import { MAX_SHOTS, PER_GUN, RESPACE, RESPACE_MAX, ShotVoices, type ShotVoice } from '../src/audio/ShotVoices';
@@ -273,6 +273,16 @@ else ok(`flesh hit layers: ${FLESH_SETS.map((set) => `${set} ×${sets[set].lengt
     const unvoiced = (['magOut', 'magIn', 'shellIn'] as FoleyKind[]).filter((k) => scripted.has(k) && !voices[k]);
     if (unvoiced.length) fail(`${id}: ${unvoiced.join(', ')} not recorded`);
   }
+  // A feed cover is recorded: every belt-fed gun plays it, also one heard in another gun's voice. The M2 (the
+  // M107's voice, which has no cover) played the synthesized cover beside the M249's recorded one.
+  const covers = Object.keys(RELOAD_STEPS).filter((w) => RELOAD_STEPS[w].some((st) => st.cue === 'coverOpen'));
+  const synthCover = covers.flatMap((w) => (['coverOpen', 'coverClose'] as FoleyKind[]).filter((k) => !recordedHandling(w, soundOf(w), k)).map((k) => `${w} ${k}`));
+  const m2Open = recordedHandling('m2', 'sniper', 'coverOpen'), lmgOpen = recordedHandling('lmg', 'lmg', 'coverOpen');
+  if (!covers.includes('m2') || !covers.includes('lmg')) fail(`belt-fed guns with a feed cover: ${covers.join(', ')}`);
+  else if (synthCover.length) fail(`feed cover not recorded: ${synthCover.join(', ')}`);
+  else if (!(m2Open!.rate < lmgOpen!.rate && m2Open!.rate >= 0.8)) fail(`m2 cover rate ${m2Open!.rate}: lower than the M249's ${lmgOpen!.rate}, and its lead-in still inside the cue's lead`);
+  else if (recordedHandling('m2', 'sniper', 'charge') !== RECORDED_HANDLING.sniper.charge || recordedHandling('akimbo', 'pistol', 'magIn') !== RECORDED_HANDLING.pistol.magIn) fail('a gun voiced as another lost that gun\'s recorded handling');
+  else ok(`feed covers: ${covers.join(' and ')} both play the recorded cover (the M2 at ${m2Open!.rate} of its pitch), the M2's charging handle is still the M107's`);
   if (failures === before) ok(`reloads: ${HANDLING_SETS.length} recorded sets (${HANDLING_SETS.reduce((n, set) => n + sets[set].filter(Boolean).length, 0)} takes), every gun's magazine or shells recorded`);
 }
 const clicks = (sets.torch ?? []).filter(Boolean).length;
