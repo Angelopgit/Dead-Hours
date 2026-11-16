@@ -163,6 +163,34 @@ check(none === null, 'nothing near: full speed');
     check(phone === ', SEAT MOVES OVER' && keys === ', G CHANGE SEAT' && /^, .+ CHANGE SEAT$/.test(padKeys) && !/SEAT CHANGE SEAT/.test(phone + keys + padKeys),
       `seat prompt: a phone names its SEAT button once, keys and pads name theirs ("GET OUT${phone}", "GET OUT${keys}", "GET OUT${padKeys}")`);
   }
+  // Something in reach that no button does anything to (a door boarded from inside, a syringe whose boost is
+  // still running, a third katana) is a status: it read "[E] BOTH HANDS HOLD A KATANA" and lit the phone's USE
+  // button with "BOTH HANDS" (and its BOARD button at the boarded door).
+  {
+    const { HUD } = await import('../src/ui/HUD');
+    const { TouchControls } = await import('../src/ui/TouchControls');
+    const button = () => { const on = new Set<string>(); return { on, textContent: '', classList: { toggle: (c: string, v: boolean) => { if (v) on.add(c); else on.delete(c); } } }; };
+    const use = button(), board = button();
+    const touch = { buttons: new Map([['interact', use], ['barricade', board]]) };
+    let shown = false, nodes: unknown[] = [];
+    const hud = { promptKey: '', onPrompt: (a: unknown, t: string) => (TouchControls.prototype.setUse as (a: unknown, t: string) => void).call(touch, a, t),
+      prompt: { classList: { add: () => { shown = true; }, remove: () => { shown = false; } }, replaceChildren: (...n: unknown[]) => { nodes = n.filter((x) => x !== ''); } } };
+    const set = (a: string | null, t?: string) => (HUD.prototype.setPrompt as (a: unknown, t?: string) => void).call(hud, a, t);
+    const made = g.document.createElement;
+    g.document.createElement = () => ({ style: {}, className: '', kids: [] as unknown[], append(c: unknown) { this.kids.push(c); }, setAttribute: noop });
+    const states: string[] = [];
+    const state = () => `${shown ? nodes.map((n) => (typeof n === 'string' ? n : '[key]')).join('') : 'hidden'} / USE ${use.on.has('ready') ? 'lit' : 'dark'} "${use.textContent}" / BOARD ${board.on.has('ready') ? 'lit' : 'dark'}`;
+    for (const [a, t] of [['interact', 'OPEN DOOR'], [null, 'BOARDED UP FROM INSIDE'], ['interact', 'PICK UP KATANA'], [null, 'BOTH HANDS HOLD A KATANA'], [null, '']] as [string | null, string][]) { set(a, t); states.push(state()); }
+    g.document.createElement = made;
+    const key = states[0].startsWith('[key]') ? '[key]' : '';
+    check(states.join('; ') === [`${key}OPEN DOOR / USE lit "OPEN DOOR" / BOARD dark`, 'BOARDED UP FROM INSIDE / USE dark "USE" / BOARD dark', `${key}PICK UP KATANA / USE lit "PICK UP" / BOARD dark`,
+      'BOTH HANDS HOLD A KATANA / USE dark "USE" / BOARD dark', 'hidden / USE dark "USE" / BOARD dark'].join('; '),
+      `status prompts show their words with no key and leave the phone's USE dark (${states.join('; ')})`);
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    const statuses = ["'BOARDED UP FROM INSIDE'", '`${b.name.toUpperCase()}, YOURS IS STILL RUNNING`', "'BOTH HANDS HOLD A KATANA'"];
+    const loose = statuses.filter((t) => !game.includes(`setPrompt(null, ${t})`) || game.split(t).length !== 2);
+    check(!loose.length, loose.length ? `status prompts still named with a key: ${loose.join(', ')}` : 'the boarded door, the running boost and the third katana are status prompts (no key)');
+  }
   // A controller throws both kinds from one held button: it readies one, and the weapon button switches to the
   // other. With both in the pockets the weapon panel read "HOLD L1" on the grenade line and on the Molotov line.
   {
@@ -196,7 +224,7 @@ check(none === null, 'nothing near: full speed');
       ['INJECT HALBERG SERUM, ARMOR AGAINST THE DEAD', 'INJECT'], ['TAKE UNIVERSAL AMMO + GRENADES, 3 LEFT', 'TAKE'], ['TAKE M249 SAW, REPLACES M4A1', 'TAKE'],
       ['HOLD TO REVIVE DANA LEE', 'REVIVE'], ['TAKE AT4, REPLACES M4A1', 'TAKE AT4'], ['TAKE M107 .50 CAL, REPLACES M4A1', 'TAKE M107'],
       ['TAKE BANDAGES, 2 LEFT', 'TAKE BANDAGES'], ['SWAP FOR SEVERED ARM, 1 HIT', 'SWAP FOR'], ['PICK UP PIPE WRENCH', 'PICK UP'],
-      ['BOTH HANDS HOLD A KATANA', 'BOTH HANDS'], ['SLOW DOWN TO GET OUT, SEAT MOVES OVER', 'SLOW DOWN'],
+      ['SLOW DOWN TO GET OUT, SEAT MOVES OVER', 'SLOW DOWN'],
     ];
     const wrong = says.filter(([prompt, want]) => shortUse(prompt) !== want).map(([prompt]) => `"${prompt}" reads "${shortUse(prompt)}"`);
     check(!wrong.length, wrong.length ? `phone: USE label ${wrong.join('; ')}` : `phone: the USE button never stops at "THE", "A" or "HOLD TO", or halfway through a name (${says.length} prompts)`);

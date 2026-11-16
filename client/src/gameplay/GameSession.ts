@@ -1981,7 +1981,9 @@ export class GameSession {
     if (best.kind === 'door') {
       const locked = this.sim.doorLocked(best.door!.body.index);
       const hint = own && !best.door!.open ? `, HOLD ${key('barricade')} TO BOARD UP` : '';
-      this.hud.setPrompt('interact', locked ? 'BOARDED UP FROM INSIDE' : `${best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR'}${hint}`);
+      // Nothing opens a boarded door: the words alone, with no key in front (and the phone's USE stays dark).
+      if (locked) this.hud.setPrompt(null, 'BOARDED UP FROM INSIDE');
+      else this.hud.setPrompt('interact', `${best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR'}${hint}`);
     }
     else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION, ${best.it!.supply} LEFT`);
     else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES, ${best.it!.supply} LEFT`);
@@ -1994,16 +1996,15 @@ export class GameSession {
     else if (best.kind === 'boost') {
       const b = BOOSTS[best.it!.boost ?? 'strength'];
       const left = boostLeft(this.me.boosts, best.it!.boost ?? 'strength', this.sim.time);
-      this.hud.setPrompt('interact', left > b.duration * 0.5
-        ? `${b.name.toUpperCase()}, YOURS IS STILL RUNNING`
-        : `INJECT ${b.name.toUpperCase()}, ${b.blurb.toUpperCase()}, ${b.duration}S`);
+      if (left > b.duration * 0.5) this.hud.setPrompt(null, `${b.name.toUpperCase()}, YOURS IS STILL RUNNING`);
+      else this.hud.setPrompt('interact', `INJECT ${b.name.toUpperCase()}, ${b.blurb.toUpperCase()}, ${b.duration}S`);
     }
     else if (best.kind === 'melee') {
       const mine = this.me.arsenal.meleeId;
       const what = WEAPONS[best.it!.weapon ?? 'machete'].model;
       const pair = best.it!.weapon === 'katana' && mine === 'katana';
-      this.hud.setPrompt('interact', pair ? 'PICK UP A SECOND KATANA FOR TWO HANDS'
-        : best.it!.weapon === 'katana' && mine === 'katanas' ? 'BOTH HANDS HOLD A KATANA'
+      if (best.it!.weapon === 'katana' && mine === 'katanas') this.hud.setPrompt(null, 'BOTH HANDS HOLD A KATANA');
+      else this.hud.setPrompt('interact', pair ? 'PICK UP A SECOND KATANA FOR TWO HANDS'
         : mine === 'machete' ? `PICK UP ${what}` : `SWAP FOR ${what}, LEAVES THE ${WEAPONS[mine].model}`);
     }
     else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model}, REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);

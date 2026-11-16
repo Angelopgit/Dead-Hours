@@ -428,13 +428,18 @@ export class HUD {
   /** Told whenever the interaction prompt changes (the on-screen USE button follows it). */
   onPrompt: ((action: Action | null, text: string) => void) | null = null;
 
+  /**
+   * The line under the crosshair: what a button does to the thing in reach. With no action and a text it is
+   * a status, for something in reach that no button does anything to (BOARDED UP FROM INSIDE): the words
+   * alone, no key in front, and the phone's USE button stays dark.
+   */
   setPrompt(action: Action | null, text = ''): void {
     const label = action ? actionLabel(action) : '';
-    const key = action ? `${action}:${text}:${label}` : '';
+    const key = action || text ? `${action ?? ''}:${text}:${label}` : '';
     if (key === this.promptKey) return;
     this.promptKey = key;
     this.onPrompt?.(action, text);
-    if (!action) {
+    if (!action && !text) {
       this.prompt.classList.remove('show');
       return;
     }
