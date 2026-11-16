@@ -1,7 +1,7 @@
 import gsap from 'gsap';
 import { h } from './dom';
 import { pad } from './clock';
-import { actionLabel, inputDevice } from '../core/Input';
+import { actionLabel, inputDevice, throwLabels } from '../core/Input';
 import { GLYPH } from '../core/PadLayout';
 import { richNodes, richText } from './Glyphs';
 import { settings, type Action } from '../core/Settings';
@@ -29,6 +29,8 @@ export interface WeaponReadout {
   /** Grenades and Molotovs carried. */
   frags?: number;
   molotovs?: number;
+  /** Which of the two a controller's held button readies (the other is one more button from there). */
+  throwFirst?: 'grenade' | 'molotov';
   /** The flashlight's switch. */
   light?: boolean;
 }
@@ -358,7 +360,7 @@ export class HUD {
     this.slot3.classList.toggle('on', r.slot === 'melee');
     richText(this.bandages, r.healing !== null ? 'APPLYING BANDAGE' : `${keyH ? `${keyH}  ` : ''}BANDAGE × ${r.bandages}`);
     this.bandages.classList.toggle('none', r.bandages === 0 && r.healing === null);
-    const keyG = actionLabel('grenade'), keyM = actionLabel('molotov');
+    const { grenade: keyG, molotov: keyM } = throwLabels(r.throwFirst ?? 'grenade', !!r.frags && !!r.molotovs);
     richText(this.fragLine, `${keyG ? `${keyG}  ` : ''}GRENADE × ${r.frags ?? 0}`);
     this.fragLine.classList.toggle('none', !r.frags);
     richText(this.molotovLine, `${keyM ? `${keyM}  ` : ''}MOLOTOV × ${r.molotovs ?? 0}`);

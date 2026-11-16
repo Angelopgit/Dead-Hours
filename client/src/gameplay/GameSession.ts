@@ -4032,6 +4032,7 @@ export class GameSession {
       wear: limb ? limb.wear / limb.maxWear : null,
       frags: a.throwables.frag,
       molotovs: a.throwables.molotov,
+      throwFirst: this.input.throwPick?.() ?? 'grenade',
       light: flashlight()?.on ?? false,
     });
     const s = this.sim;

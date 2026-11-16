@@ -1,6 +1,6 @@
 import { settings, type Action } from './Settings';
 import { PadMenus } from '../ui/PadMenus';
-import { PAD, PAD_BUTTONS, padLabel, plain, remap, setPadModel, styleOf, type GlyphStyle } from './PadLayout';
+import { PAD, PAD_BUTTONS, glyph, padLabel, physicalOf, plain, remap, setPadModel, styleOf, type GlyphStyle } from './PadLayout';
 import { Rumble, type RumbleKind } from './Rumble';
 
 /** What the survivor is played with right now (the last one touched). */
@@ -615,6 +615,18 @@ export function seatHint(device: Device = current): string {
   if (device === 'touch') return ', SEAT MOVES OVER';
   const key = device === 'pad' ? padLabel('barricade') : codeLabel(settings.value.controls.bindings.barricade[0] ?? '');
   return key ? `, ${key} CHANGE SEAT` : '';
+}
+
+/**
+ * What to press for the grenade and for the Molotov, for the weapon panel. A controller has one button for
+ * both: held, it readies `first` (the game's pick), and the weapon button then switches to the other. With
+ * both in the pockets the second one adds that button (both lines read "HOLD L1").
+ */
+export function throwLabels(first: 'grenade' | 'molotov', both: boolean, device: Device = current): { grenade: string; molotov: string } {
+  const key = (a: 'grenade' | 'molotov') =>
+    device === 'pad' ? (both && a !== first ? `${padLabel(a)} + ${glyph(physicalOf(PAD.Y))}` : padLabel(a))
+    : device === 'touch' ? '' : codeLabel(settings.value.controls.bindings[a][0] ?? '');
+  return { grenade: key('grenade'), molotov: key('molotov') };
 }
 
 export function codeLabel(code: string): string {

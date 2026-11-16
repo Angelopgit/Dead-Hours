@@ -163,6 +163,24 @@ check(none === null, 'nothing near: full speed');
     check(phone === ', SEAT MOVES OVER' && keys === ', G CHANGE SEAT' && /^, .+ CHANGE SEAT$/.test(padKeys) && !/SEAT CHANGE SEAT/.test(phone + keys + padKeys),
       `seat prompt: a phone names its SEAT button once, keys and pads name theirs ("GET OUT${phone}", "GET OUT${keys}", "GET OUT${padKeys}")`);
   }
+  // A controller throws both kinds from one held button: it readies one, and the weapon button switches to the
+  // other. With both in the pockets the weapon panel read "HOLD L1" on the grenade line and on the Molotov line.
+  {
+    const { throwLabels } = await import('../src/core/Input');
+    const { plain, padLabel } = await import('../src/core/PadLayout');
+    const g = throwLabels('grenade', true, 'pad'), m = throwLabels('molotov', true, 'pad'), one = throwLabels('molotov', false, 'pad');
+    const hold = padLabel('grenade');
+    check(g.grenade === hold && m.molotov === hold && g.molotov !== hold && m.grenade !== hold && g.molotov === m.grenade && g.molotov.startsWith(`${hold} + `) && /^HOLD \S+ \+ \S+$/.test(plain(g.molotov)),
+      `weapon panel on a controller with both: the readied one says "${plain(g.grenade)}", the other "${plain(g.molotov)}"`);
+    check(one.grenade === hold && one.molotov === hold, 'weapon panel on a controller with one kind: its line keeps the held button');
+    const keys = throwLabels('grenade', true, 'mouse'), phone = throwLabels('grenade', true, 'touch');
+    check(keys.grenade !== keys.molotov && keys.grenade.length > 0 && phone.grenade === '' && phone.molotov === '',
+      `weapon panel on keys names each key ("${keys.grenade}", "${keys.molotov}"), a phone none`);
+    const hud = readFileSync(new URL('../src/ui/HUD.ts', import.meta.url), 'utf8');
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(/throwLabels\(r\.throwFirst \?\? 'grenade', !!r\.frags && !!r\.molotovs\)/.test(hud) && /throwFirst: this\.input\.throwPick\?\.\(\)/.test(game),
+      'weapon panel asks which throwable the held button readies, and the night tells it');
+  }
   // The phone's USE button says the prompt's first two words. It read "DRIVE THE" beside a car, "RIDE THE" at a
   // skateboard, "PRY A" at a boarded door and "HOLD TO" over a downed teammate.
   {
