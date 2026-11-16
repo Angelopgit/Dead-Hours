@@ -416,6 +416,19 @@ check(none === null, 'nothing near: full speed');
   check(prop('#ui-root:has(> .inventory) :is(.weapon-panel, .car-panel, .vitals .boosts, .hud-top, .prompt, .feed, .goals, .waypoint)', 'visibility') === 'hidden'
     && !/body\.touch-play #ui-root:has\(> \.inventory\)/.test(css),
     'the ammo panel, boost chips, timer, prompt, feed and goals hide under the held bag on every device, not only on a phone');
+  // A drawn controller button sits centred on the capitals beside it. The lettered ones (R1, R2, R3, SELECT) hung 5
+  // to 8 px under a prompt's words: `vertical-align` moved the letters inside them, not the box, and their offsets
+  // were too deep. With `contain: layout` it moves the box's bottom edge: -(height / 2 - 0.41 / font size) em each.
+  {
+    const em = (sel: string, name: string) => parseFloat(prop(sel, name) ?? 'NaN');
+    const off = ['.pb', '.pb-stick', '.pb-bumper', '.pb-trigger', '.pb-meta'].map((sel) => {
+      const want = -(em(sel, 'height') / 2 - 0.41 / em(sel, 'font-size'));
+      return { sel, got: em(sel, 'vertical-align'), want };
+    }).filter((r) => !(Math.abs(r.got - r.want) < 0.02));
+    check(prop('.pb', 'contain') === 'layout' && !off.length,
+      off.length ? `controller buttons off the capitals' centre: ${off.map((r) => `${r.sel} ${r.got}em, wants ${r.want.toFixed(2)}em`).join('; ')}`
+        : 'controller: every drawn button (face, stick, bumper, trigger, SELECT) is centred on the capitals beside it');
+  }
   // The bag's list of keys: with a controller the button is drawn inside the row's key cap. The cap's style, written
   // for any span in the list, reached the drawn button too (a wide dim box each, no shapes), and on the words'
   // baseline the lettered buttons hung 5 to 6 px low. The cap is the row's own span; pad rows centre button and words.
