@@ -384,6 +384,10 @@ check(none === null, 'nothing near: full speed');
     const vals = rules.map((r) => r[1].match(new RegExp(`(?:^|[;{\\s])${name}:\\s*([^;]+);`))?.[1].trim()).filter(Boolean);
     return vals.at(-1) ?? null;
   };
+  // A panel's row of buttons wraps onto a second row when it runs out of room. Without it the buttons were squeezed
+  // and each label broke in two: SERVERS ARE FULL has four buttons, and at UI scale 140% none fit their words.
+  check(prop('.actions', 'display') === 'flex' && prop('.actions', 'flex-wrap') === 'wrap',
+    'a row of buttons that does not fit wraps to a second row (labels stay whole)');
   const pointer = (sel: string) => prop(sel, 'pointer-events');
   check(pointer('#ui-root > .comms-hud') === 'none', 'touch: the in-game chat column lets touches through to the move stick');
   check(pointer('.chat-game') === 'none', 'touch: closed chat lines let touches through');
