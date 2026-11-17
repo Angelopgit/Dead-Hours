@@ -6,6 +6,13 @@ import type { Input } from '../core/Input';
 import type { NetLink } from '../network/NetLink';
 import { playerComms } from './PlayerComms';
 
+/**
+ * What LEAVE GAME reads after its first press while this device runs the night for others (the next press
+ * leaves). It names what the press does, on one line of the menu column, which holds about 40 of its letters
+ * (it read "LEAVING ENDS THE NIGHT FOR EVERYONE. LEAVE?" on two lines, with "LEAVE?" alone on the second).
+ */
+export const LEAVE_ENDS_NIGHT = 'LEAVE AND END THE NIGHT FOR EVERYONE';
+
 export class PauseMenu {
   readonly el: HTMLElement;
   private panel: HTMLElement | null = null;
@@ -24,7 +31,7 @@ export class PauseMenu {
     const leave = item(online ? 'LEAVE GAME' : 'QUIT TO MENU', () => {
       if (link?.carriesOthers && leave.dataset.armed !== '1') {
         leave.dataset.armed = '1';
-        leave.textContent = 'LEAVING ENDS THE NIGHT FOR EVERYONE. LEAVE?';
+        leave.textContent = LEAVE_ENDS_NIGHT;
         setTimeout(() => {
           leave.dataset.armed = '';
           leave.textContent = 'LEAVE GAME';

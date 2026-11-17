@@ -191,6 +191,15 @@ check(none === null, 'nothing near: full speed');
     const loose = statuses.filter((t) => !game.includes(`setPrompt(null, ${t})`) || game.split(t).length !== 2);
     check(!loose.length, loose.length ? `status prompts still named with a key: ${loose.join(', ')}` : 'the boarded door, the running boost and the third katana are status prompts (no key)');
   }
+  // Hosting the night on this device, LEAVE GAME asks for a second press. Its words stay on one line of the menu
+  // column (30em of 1.55em capitals: about 40 letters) and name the press: it read "LEAVING ENDS THE NIGHT FOR
+  // EVERYONE. LEAVE?" on two lines.
+  {
+    const pause = readFileSync(new URL('../src/ui/PauseMenu.ts', import.meta.url), 'utf8');
+    const armed = /export const LEAVE_ENDS_NIGHT = '([^']*)';/.exec(pause)?.[1] ?? '';
+    check(armed.length > 0 && armed.length <= 38 && /^LEAVE [A-Z ]+$/.test(armed) && pause.includes('leave.textContent = LEAVE_ENDS_NIGHT;'),
+      `pause menu: the host's second-press item is one short line that starts with LEAVE ("${armed}", ${armed.length} letters)`);
+  }
   // A controller throws both kinds from one held button: it readies one, and the weapon button switches to the
   // other. With both in the pockets the weapon panel read "HOLD L1" on the grenade line and on the Molotov line.
   {
