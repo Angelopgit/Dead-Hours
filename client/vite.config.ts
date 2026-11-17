@@ -19,6 +19,9 @@ export default defineConfig(({ mode }) => {
     server: { port: 5173, host: true, watch: { ignored: ['**/tools/**'] } },
     // Relative base so the build runs from any static host or folder.
     base: './',
+    // Names this build (or this run of the dev server). A night hosted on a player's device runs that
+    // player's copy of the game's rules, so everyone in it must be on the same build (network/host/build.ts).
+    define: { __DH_BUILD__: JSON.stringify(Date.now().toString(36)) },
     build: {
       target: 'es2022',
       chunkSizeWarningLimit: 4000,

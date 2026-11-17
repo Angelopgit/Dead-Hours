@@ -634,6 +634,10 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
 .signin-row { flex-wrap: wrap; }
 .board-list .mode { font-size: 0.62em; letter-spacing: 0.06em; color: var(--fg-faint); border: 1px solid var(--line); border-radius: 0; padding: 0.15em 0.45em; }
 .board-list .mode.online { color: var(--ok); border-color: rgba(127,163,122,0.35); }
+.board-list .mode.hosted { color: var(--fg-dim); }
+.hosted-by { margin-top: 0.6em; }
+.host-clock { margin-top: 0.3em; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.hosted-by b { font-family: var(--font-display); letter-spacing: 0.06em; color: var(--accent); font-weight: 700; }
 .board-list b { font-family: var(--font-display); font-weight: 500; font-size: 1.15em; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }
 .board-note { font-size: 0.75em !important; color: var(--fg-faint) !important; margin-top: 1.4em; }
 .board-stats { margin: 0.6em 0 0.4em; }

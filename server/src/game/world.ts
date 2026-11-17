@@ -22,5 +22,5 @@ export function createWorld() {
   if (!navBuffers) throw new Error('initWorld() first');
   const physics = new Physics(NEIGHBORHOOD);
   const doors = createDoorBodies(NEIGHBORHOOD, physics);
-  return { physics, doors, nav: new NavGrid(navBuffers) };
+  return { physics, doors, nav: new NavGrid(navBuffers), map: NEIGHBORHOOD };
 }

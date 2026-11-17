@@ -1,10 +1,12 @@
-import { GAME, ROOMS, SERVERS_FULL, WEAPONS, encodeAppearance, encodeLoadout, sanitizeAppearance, type BeginMsg, type LobbyMsg, type RoomListing, type WeaponId } from '@dead-hours/shared';
+import { GAME, ROOMS, SERVERS_FULL, VERSION_MISMATCH, WEAPONS, encodeAppearance, encodeLoadout, sanitizeAppearance, type BeginMsg, type LobbyMsg, type RoomListing, type WeaponId } from '@dead-hours/shared';
 import { h } from './dom';
 import { clock } from './HUD';
 import { settings } from '../core/Settings';
 import { audio } from '../audio/AudioEngine';
 import { net } from '../network/Net';
 import { NetLink } from '../network/NetLink';
+import { BUILD } from '../network/host/build';
+import { DeviceHost } from '../network/host/DeviceHost';
 import { account } from '../network/Account';
 import { ChatBox } from './ChatBox';
 import { playerComms } from './PlayerComms';
@@ -21,11 +23,16 @@ type View = 'browse' | 'host' | 'lobby' | 'full';
 
 function joinOptions() {
   const p = settings.value.profile;
-  return { name: p.name, primary: p.primary, secondary: p.secondary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), token: account.key, session: account.session ?? undefined, builds: encodeLoadout(account.loadout) };
+  return {
+    name: p.name, primary: p.primary, secondary: p.secondary, appearance: encodeAppearance(sanitizeAppearance(p.appearance)), token: account.key, session: account.session ?? undefined, builds: encodeLoadout(account.loadout),
+    // A player-hosted game takes only the host's build of the game; the host's place can pass to a browser that can run a night.
+    v: BUILD, canHost: DeviceHost.available,
+  };
 }
 
 /** What a failed join or create means for the player. */
 function reason(e: unknown): string {
+  if ((e as { code?: unknown } | null)?.code === VERSION_MISMATCH) return 'THAT GAME RUNS ANOTHER BUILD OF DEAD HOURS. REFRESH THIS PAGE AND JOIN AGAIN. IF IT STILL SAYS SO, ITS HOST NEEDS TO REFRESH';
   const m = (e instanceof Error ? e.message : String(e ?? '')).toLowerCase();
   if (m.includes('locked') || m.includes('full')) return 'THAT GAME IS FULL (4 OF 4)';
   if (m.includes('not found') || m.includes('no rooms') || m.includes('invalid') || m.includes('no game')) return 'NO GAME WITH THAT CODE (IT MAY HAVE CLOSED)';
@@ -47,6 +54,10 @@ export class OnlineMenu {
   private poll: ReturnType<typeof setInterval> | null = null;
   private busy = false;
   private disposed = false;
+  /** Hosting: the night runs on this device, not on the game server (beta). */
+  private onDevice = false;
+  /** LEAVE pressed once while this browser runs a night for others: the next press within a few seconds leaves. */
+  private leaveArmed = 0;
   /** The room's chat panel (kept across lobby redraws) and the speaking lights' refresh. */
   private chatBox: ChatBox | null = null;
   private comms: (() => void)[] = [];
@@ -63,6 +74,12 @@ export class OnlineMenu {
   /** ESC / CLOSE: out of the lobby means out of the room. */
   back(): void {
     if (this.link) {
+      // The night runs in this browser: leaving ends it for the others still out there.
+      if (this.link.carriesOthers && performance.now() - this.leaveArmed > 6000) {
+        this.leaveArmed = performance.now();
+        this.say('THE NIGHT RUNS ON THIS DEVICE. LEAVING ENDS IT FOR THE OTHERS. PRESS LEAVE AGAIN TO GO', 'bad');
+        return;
+      }
       this.dropComms();
       this.link.leave();
       this.link = null;
@@ -138,7 +155,7 @@ export class OnlineMenu {
     const playing = r.status === 'playing';
     const state = playing ? `PLAYING${r.survived ? `, ${clock(r.survived)}` : ''}` : r.players >= r.maxPlayers ? 'FULL' : 'IN THE LOBBY';
     return h('div', { class: 'room-row' },
-      h('div', {}, h('b', {}, r.name.toUpperCase()), h('small', {}, `HOST ${r.host.toUpperCase()}, ${r.players}/${r.maxPlayers}, ${state}`)),
+      h('div', {}, h('b', {}, r.name.toUpperCase()), h('small', {}, `HOST ${r.host.toUpperCase()}, ${r.players}/${r.maxPlayers}, ${state}${r.hosting === 'player' ? ', HOSTED BY PLAYER' : ''}`)),
       // Only rooms that can be joined get a button.
       open ? this.button(playing ? 'DROP IN' : 'JOIN', () => void this.join(async () => (await net.client()).joinById(r.roomId, joinOptions()))) : h('span', { class: 'room-state' }, r.players >= r.maxPlayers ? 'FULL' : state),
     );
@@ -171,14 +188,30 @@ export class OnlineMenu {
       h('button', { class: hidden ? 'on' : '', onclick: () => { hidden = true; draw(); } }, 'Private'),
     );
     draw();
+    // Where the night runs: on the game server, or (desktop browsers) in this one.
+    const can = DeviceHost.available;
+    if (!can) this.onDevice = false;
+    const where = h('div', { class: 'seg' });
+    const about = h('p', {});
+    const drawWhere = () => {
+      where.replaceChildren(
+        h('button', { class: this.onDevice ? '' : 'on', onclick: () => { this.onDevice = false; drawWhere(); } }, 'The game server'),
+        h('button', { class: this.onDevice ? 'on' : '', onclick: () => { this.onDevice = true; drawWhere(); } }, 'This device (beta)'),
+      );
+      about.textContent = this.onDevice
+        ? `Up to ${GAME.maxPlayers} survivors. You start the night when everyone is in. The zombies are run by this device, so everyone sees the same night: keep this tab open and in front. If you leave, the night ends for everyone, and what each survivor reached is kept. Runs go on the boards marked HOSTED.`
+        : `Up to ${GAME.maxPlayers} survivors. You start the night when everyone is in; the zombies are run by the server, so everyone sees the same night.`;
+    };
+    drawWhere();
     this.body.replaceChildren(
       h('h2', {}, 'HOST A GAME'),
       h('div', { class: 'row' }, h('label', {}, 'Name'), title),
       h('div', { class: 'row' }, h('label', {}, 'Who can join', h('span', { class: 'hint' }, 'Private games are joined with the code only')), seg),
-      h('p', {}, `Up to ${GAME.maxPlayers} survivors. You start the night when everyone is in; the zombies are run by the server, so everyone sees the same night.`),
+      ...(can ? [h('div', { class: 'row' }, h('label', {}, 'Where the night runs', h('span', { class: 'hint' }, 'On this device, a game never waits for a free server')), where)] : []),
+      about,
       h('div', { class: 'actions' },
         this.button('BACK', () => { this.view = 'browse'; this.say(''); this.render(); }),
-        this.button('CREATE GAME', () => void this.join(async () => (await net.client()).create(ROOMS.survival, { ...joinOptions(), lobbyName: title.value, private: hidden })), 'btn primary'),
+        this.button('CREATE GAME', () => void this.join(async () => (await net.client()).create(this.onDevice ? ROOMS.hosted : ROOMS.survival, { ...joinOptions(), lobbyName: title.value, private: hidden })), 'btn primary'),
       ),
     );
   }
@@ -187,11 +220,15 @@ export class OnlineMenu {
   private renderFull(): void {
     this.body.replaceChildren(
       h('h2', {}, 'SERVERS ARE FULL'),
-      h('p', {}, 'Every game server is running as many nights as it can, so a new game can\'t start right now. Games already running can still be joined with their code, and one opens up as soon as a night ends.'),
+      h('p', {}, DeviceHost.available
+        ? 'Every game server is running as many nights as it can, so a new game can\'t start there right now. You can host the night on this device instead: your friends join with the code as usual.'
+        : 'Every game server is running as many nights as it can, so a new game can\'t start right now. Games already running can still be joined with their code, and one opens up as soon as a night ends.'),
       h('div', { class: 'actions' },
-        this.button('TRY AGAIN', () => { this.view = 'host'; this.render(); }),
+        this.button('TRY AGAIN', () => { this.onDevice = false; this.view = 'host'; this.render(); }),
         this.button('JOIN A GAME', () => { this.view = 'browse'; this.render(); }),
-        this.button('PLAY SOLO', () => this.cb.onSolo(), 'btn primary'),
+        ...(DeviceHost.available
+          ? [this.button('PLAY SOLO', () => this.cb.onSolo()), this.button('HOST ON THIS DEVICE', () => { this.onDevice = true; this.view = 'host'; this.render(); }, 'btn primary')]
+          : [this.button('PLAY SOLO', () => this.cb.onSolo(), 'btn primary')]),
       ),
     );
   }
@@ -279,16 +316,28 @@ export class OnlineMenu {
       );
     });
     const waiting = m.players.filter((p) => p.id !== m.host && !p.ready).length;
+    // A player-hosted game: whose device runs the night, and what that asks of them.
+    const hosted = m.hosting === 'player';
+    const hostName = m.players.find((p) => p.id === m.host)?.name ?? 'the host';
+    const cantHost = hosted && link.isHost && !link.hostingHere;
+    // Hosting here: how the night's clock is keeping up on this device, and how it did while the tab was hidden.
+    const device = link.hostDevice;
+    const clock = device && !cantHost ? h('p', { class: 'lobby-hint host-clock' }, device.clock) : null;
+    if (device && clock) device.onTicks = () => { clock.textContent = device.clock; };
     // Back here after falling while the others play on: the next night starts when they are done.
     const underWay = m.status !== 'lobby';
     const draw = () => this.body.replaceChildren(
       h('h2', {}, m.name.toUpperCase()),
       h('div', { class: 'code-box' }, h('span', {}, m.private ? 'PRIVATE JOIN CODE' : 'JOIN CODE'), codeEl, copy),
+      ...(hosted ? [h('p', { class: 'lobby-hint hosted-by' }, h('b', {}, 'HOSTED BY PLAYER'), link.isHost
+        ? cantHost ? ' This device can\'t run a night itself. Leave and host a game on the server instead.' : ' The night runs on this device (beta). Keep this tab open and in front while it plays.'
+        : ` The night runs on ${hostName}'s device (beta). If they leave, it ends for everyone.`)] : []),
+      ...(clock ? [clock] : []),
       h('h3', {}, `Survivors ${m.players.length}/${GAME.maxPlayers}`),
       h('div', { class: 'lobby-list' }, ...players),
       ...(underWay ? [] : [h('div', { class: 'actions' },
         link.isHost
-          ? this.button(waiting ? `START ANYWAY (${waiting} NOT READY)` : 'START THE NIGHT', () => link.start(), 'btn primary')
+          ? cantHost ? h('span', { class: 'room-state' }, 'CAN\'T HOST HERE') : this.button(waiting ? `START ANYWAY (${waiting} NOT READY)` : 'START THE NIGHT', () => link.start(), 'btn primary')
           : this.button(me?.ready ? 'NOT READY' : 'READY', () => link.setReady(!me?.ready), 'btn primary'),
       )]),
       h('p', { class: 'lobby-hint' }, underWay

@@ -20,6 +20,19 @@ export class PauseMenu {
     onChat?: () => void) {
     const item = (label: string, fn: () => void) =>
       h('button', { class: 'menu-item', onmouseenter: () => audio.ui('hover'), onclick: () => { audio.ui('click'); fn(); } }, label);
+    // Hosting the night on this device for others: leaving ends it for them, so it takes a second press.
+    const leave = item(online ? 'LEAVE GAME' : 'QUIT TO MENU', () => {
+      if (link?.carriesOthers && leave.dataset.armed !== '1') {
+        leave.dataset.armed = '1';
+        leave.textContent = 'LEAVING ENDS THE NIGHT FOR EVERYONE. LEAVE?';
+        setTimeout(() => {
+          leave.dataset.armed = '';
+          leave.textContent = 'LEAVE GAME';
+        }, 6000);
+        return;
+      }
+      onQuit();
+    });
     this.main = h('div', { class: 'menu-main' },
       // Online nothing stops: the server runs the night for everyone, whoever has the menu open.
       h('h1', { class: 'title' }, online ? 'MENU' : 'PAUSED'),
@@ -29,7 +42,7 @@ export class PauseMenu {
         onChat ? item('CHAT', onChat) : null,
         link ? item('PLAYERS', () => this.openPlayers()) : null,
         item('SETTINGS', () => this.openSettings()),
-        item(online ? 'LEAVE GAME' : 'QUIT TO MENU', onQuit),
+        leave,
       ),
     );
     this.el = h('div', { class: online ? 'pause live' : 'pause' }, this.main);

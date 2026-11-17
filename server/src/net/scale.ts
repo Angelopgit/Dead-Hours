@@ -4,7 +4,7 @@ import { connect } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import type { Duplex } from 'node:stream';
 import { RedisDriver, RedisPresence, ServerError, matchMaker, type MatchMakerDriver, type Presence } from 'colyseus';
-import { SERVERS_FULL } from '@dead-hours/shared';
+import { ROOMS, SERVERS_FULL } from '@dead-hours/shared';
 
 const positive = (v: string | undefined, fallback: number) => {
   const n = Number(v);
@@ -120,11 +120,11 @@ export function gameClosed(roomId: string): void {
 }
 
 /**
- * Where a new game goes: the process running the fewest, if it has room (MAX_ROOMS); when every
+ * Where a new game the server runs goes: the process running the fewest, if it has room (MAX_ROOMS); when every
  * process is full, nobody can host until a night ends somewhere. Counts are written straight
  * away on every change (and every few seconds), and processes that stop writing drop out.
  */
-export async function chooseProcess(): Promise<string> {
+export async function chooseProcess(roomName?: string): Promise<string> {
   const now = Date.now();
   const load = new Map<string, number>();
   for (const [id, v] of Object.entries(await matchMaker.presence.hgetall(LOAD))) {
@@ -132,6 +132,9 @@ export async function chooseProcess(): Promise<string> {
     if (now - at < STALE_MS && Number.isFinite(count)) load.set(id, count);
   }
   load.set(matchMaker.processId, games.size);
+  // A game whose night runs in its host's browser costs a process next to nothing: it goes to the
+  // quietest one whether or not that one is "full", and doesn't count as one of its games.
+  if (roomName === ROOMS.hosted) return [...load].sort((a, b) => a[1] - b[1])[0][0];
   const [best] = [...load].filter(([, n]) => n < MAX_ROOMS).sort((a, b) => a[1] - b[1]);
   if (!best) throw new ServerError(SERVERS_FULL, 'SERVERS FULL');
   // Counted at once, so games asked for together don't all pick the same process.

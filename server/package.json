@@ -9,6 +9,7 @@
     "typecheck": "tsc -p .",
     "check": "tsx tests/server.check.ts",
     "check:cluster": "tsx tests/cluster.check.ts",
+    "check:hosted": "tsx tests/hosted.check.ts",
     "load": "tsx tests/load.ts",
     "bench": "tsx tests/bench.ts",
     "bench:physics": "tsx tests/physics.ts",

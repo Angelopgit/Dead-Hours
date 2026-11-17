@@ -40,10 +40,13 @@ const gameServer = new Server({ transport: new WebSocketTransport({
   // few seconds; it is dropped only after about 12-16 s without answering.
   pingInterval: 4000,
   pingMaxRetries: 3,
-  // Voice negotiation passes WebRTC descriptions (a few kB) through the room.
-  maxPayload: 16 * 1024,
+  // Voice negotiation passes WebRTC descriptions (a few kB) through the room, and a player host
+  // sends its night's snapshots through it (up to about 8 kB each with a full horde).
+  maxPayload: 64 * 1024,
 }), presence: scale.presence, driver: scale.driver, selectProcessIdToCreateRoom: chooseProcess, greet: false });
 gameServer.define(ROOMS.survival, SurvivalRoom);
+// The same room with the night left to its host's browser (see SurvivalRoom).
+gameServer.define(ROOMS.hosted, SurvivalRoom);
 forwardGameConnections(httpServer, scale);
 
 await gameServer.listen(port);

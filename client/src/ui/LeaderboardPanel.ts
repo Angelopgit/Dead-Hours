@@ -7,7 +7,7 @@ import { account, type Provider } from '../network/Account';
 interface BoardEntry {
   name: string;
   value: number;
-  mode: 'solo' | 'online';
+  mode: 'solo' | 'online' | 'hosted';
   at: number;
   /** Set by a player signed in with an account. */
   signedIn?: boolean;
@@ -86,7 +86,7 @@ export class LeaderboardPanel {
           h('span', { class: `mode ${r.mode}` }, r.mode.toUpperCase()),
           h('b', {}, kind === 'survival' ? clock(r.value) : String(r.value)))))
         : h('p', {}, 'Nobody is on the board yet. Survive a night to be the first.'),
-      h('p', { class: 'board-note' }, 'Each player\'s best run. Online runs are recorded by the game server; solo runs are reported by the player\'s own browser, checked for what a real run could reach, and marked SOLO. ✓ marks players signed in with an account.'),
+      h('p', { class: 'board-note' }, 'Each player\'s best run. Online runs are recorded by the game server. Solo runs, and runs in a game hosted on a player\'s own device, are reported by players\' browsers, checked for what a real run could reach, and marked SOLO or HOSTED. ✓ marks players signed in with an account.'),
     );
   }
 

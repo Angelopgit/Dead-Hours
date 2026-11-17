@@ -55,3 +55,6 @@ export * from './sim/Structures';
 export * from './config/bicycles';
 export * from './sim/Bicycles';
 export * from './sim/Squad';
+export * from './host/Night';
+export * from './host/NightHost';
+export * from './host/DeviceNight';

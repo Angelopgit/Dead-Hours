@@ -2,14 +2,23 @@ import type { WeaponId } from '../config/weapons';
 import type { Vec3 } from '../sim/math';
 import type { SkateTrick } from '../config/skateboards';
 import type { PlayerStats } from '../sim/Simulation';
+import type { Loadout, UnlockState } from '../config/progression';
 
 /** Room names registered on the Colyseus server. */
 export const ROOMS = {
+  /** The night runs on the game server. */
   survival: 'survival',
+  /** The night runs in the host's own browser; the server keeps the lobby and passes the messages on. */
+  hosted: 'hosted',
 } as const;
+
+/** Where a game's night runs: on the game server, or on the host player's own device. */
+export type Hosting = 'server' | 'player';
 
 /** Matchmaking error when every game server already runs as many games as it takes. */
 export const SERVERS_FULL = 4503;
+/** Join refused: a player-hosted game runs the host's build of the game, and this player's is a different one. */
+export const VERSION_MISMATCH = 4426;
 
 /** Client → server messages. */
 export const C2S = {
@@ -37,6 +46,10 @@ export const C2S = {
   blocks: 'blocks',
   /** In play, ~30 times a second while driving: packDrive() of where the car is and what the pedals do. */
   drive: 'drive',
+  /** A player-hosted game, from its host only: what the host's night sends out and reports (HostUp). */
+  host: 'host',
+  /** A player-hosted game, from everyone else, every few seconds: the night as this browser sees it (SeenMsg). */
+  seen: 'seen',
 } as const;
 
 /** Server → client messages. */
@@ -66,7 +79,64 @@ export const S2C = {
   rtc: 'rtc',
   /** How to reach the others for voice: STUN and TURN servers (IceConfig), sent on joining. */
   ice: 'ice',
+  /** A player-hosted game, to its host only: what the room passes to the host's night (HostDown). */
+  host: 'host',
 } as const;
+
+/** Messages of the night itself that a player host may send to the others through the room. */
+export const HOST_OUT: readonly string[] = [S2C.begin, S2C.snap, S2C.ev, S2C.pos, S2C.vpos, S2C.pong];
+/** Messages of the night itself that the room passes from the others to a player host. */
+export const HOST_IN: readonly string[] = [C2S.loaded, C2S.motion, C2S.act, C2S.drive, C2S.ping, C2S.debug];
+
+/** A survivor as the room hands them to a player host: who they are and what their saved profile has unlocked. */
+export interface HostMember {
+  id: string;
+  name: string;
+  primary: WeaponId;
+  secondary: WeaponId;
+  appearance: string;
+  /** Weapon builds, already checked against `unlocks` by the room. */
+  builds: Loadout;
+  unlocks: UnlockState;
+}
+
+/** How one survivor's night stands (or ended), as the host counts it. */
+export interface HostRun {
+  id: string;
+  survived: number;
+  stats: PlayerStats;
+}
+
+/** Room → the host's night. */
+export type HostDown =
+  /** The host pressed START: the night's seed (the room's choice) and everyone in it. `debug`: test commands are allowed. */
+  | { k: 'start'; seed: number; members: HostMember[]; debug: boolean }
+  /** Someone dropped into the night under way. */
+  | { k: 'join'; member: HostMember }
+  /** Someone left for good (a dropped connection is held for a while first). */
+  | { k: 'left'; id: string }
+  /** One message of the night from another player (`t` is one of HOST_IN). */
+  | { k: 'in'; from: string; t: string; m?: unknown }
+  /** The night is over as far as the room is concerned (it ended it): stop. */
+  | { k: 'stop' };
+
+/** The host's night → room. */
+export type HostUp =
+  /** One message of the night for some of the players (`t` is one of HOST_OUT). */
+  | { k: 'out'; to: string[]; t: string; m?: unknown }
+  /** Every few seconds: how everyone's night stands, so a host who vanishes takes nobody's run with them. */
+  | { k: 'progress'; runs: HostRun[]; survived: number; hordes: number }
+  /** The night ended (everyone fell): the final numbers. */
+  | { k: 'over'; runs: HostRun[]; hordes: number }
+  /** A survivor refitted a gun mid-night (the room keeps it for their next night). */
+  | { k: 'refit'; id: string; weapon: WeaponId; build: string };
+
+/** What a player's own browser sees of a player-hosted night: seconds survived so far and everyone's kills. */
+export interface SeenMsg {
+  survived: number;
+  /** [survivor id, kills, ...] */
+  kills: (string | number)[];
+}
 
 /** One thing a survivor does. The server validates every one against its own state. */
 export type ActMsg =
@@ -128,6 +198,10 @@ export interface JoinOptions {
   session?: string;
   /** encodeLoadout() of the survivor's weapon builds; the server keeps only what the profile has unlocked. */
   builds?: string;
+  /** This browser's version and build of the game: a player-hosted game takes only the host's. */
+  v?: string;
+  /** This browser could run a night itself (a desktop browser with workers): the host's place can pass to it. */
+  canHost?: boolean;
 }
 
 export interface CreateOptions extends JoinOptions {
@@ -149,6 +223,8 @@ export interface RoomListing {
   status: RoomStatus;
   /** Seconds survived so far (while playing). */
   survived: number;
+  /** Where the night runs (absent from older servers: on the server). */
+  hosting?: Hosting;
 }
 
 export interface LobbyPlayer {
@@ -169,6 +245,8 @@ export interface LobbyMsg {
   status: RoomStatus;
   private: boolean;
   players: LobbyPlayer[];
+  /** Where the night runs (absent from older servers: on the server). */
+  hosting?: Hosting;
 }
 
 /** The night has begun. */

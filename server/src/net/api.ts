@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { matchMaker } from 'colyseus';
-import { COMBAT, GAME, ROOMS, type PlayerStats, type RoomListing } from '@dead-hours/shared';
+import { GAME, ROOMS, type RoomListing } from '@dead-hours/shared';
 import { services } from '../services';
 import { unlocksOf, type BoardKind } from '../store';
 import { roomForCode } from './codes';
 import { MAX_ROOMS, forwarded, localGames } from './scale';
 import { cleanAppearance, cleanBuildsWire, cleanName, cleanPrimary } from './clean';
+import { plausibleRun } from './plausible';
 import { accountView, authProviders, exchange, logout, ownerFor } from './auth';
 
 /** The game is played from another address (the static site): every route allows any origin. */
@@ -46,44 +47,16 @@ function readJson(req: IncomingMessage, limit = 8192): Promise<unknown> {
 
 /** Public rooms for the game list (private ones are joined by code only). */
 async function listRooms(): Promise<RoomListing[]> {
-  const rooms = await matchMaker.query({ name: ROOMS.survival });
+  // Both kinds of game: nights run by the server and nights run by their host's own browser.
+  const rooms = (await Promise.all([ROOMS.survival, ROOMS.hosted].map((name) => matchMaker.query({ name })))).flat();
   return rooms
     .filter((r) => !r.private && r.metadata?.code)
     .map((r) => ({
       roomId: r.roomId, code: r.metadata.code, name: r.metadata.name, host: r.metadata.host,
       players: r.clients, maxPlayers: r.maxClients, status: r.metadata.status, survived: r.metadata.survived ?? 0,
+      hosting: r.metadata.hosting === 'player' ? 'player' as const : 'server' as const,
     }))
     .sort((a, b) => Number(a.status !== 'lobby') - Number(b.status !== 'lobby') || b.players - a.players);
-}
-
-const STAT_KEYS: (keyof PlayerStats)[] = ['kills', 'headshots', 'shotsFired', 'shotsHit', 'damageDealt', 'suppliesCollected', 'damageTaken', 'limbsSevered', 'limbKills'];
-
-/**
- * A solo run as the browser reports it. Solo games run in the player's browser, so this can't be
- * proven the way online runs are; it is held to what a real run could reach and marked solo.
- */
-function plausibleSolo(body: unknown): { survived: number; stats: PlayerStats } | null {
-  if (!body || typeof body !== 'object') return null;
-  const b = body as { survived?: unknown; stats?: Record<string, unknown> };
-  const survived = b.survived;
-  if (typeof survived !== 'number' || !Number.isFinite(survived) || survived < 0 || survived > 6 * 3600) return null;
-  if (!b.stats || typeof b.stats !== 'object') return null;
-  const stats = {} as PlayerStats;
-  for (const k of STAT_KEYS) {
-    const v = b.stats[k];
-    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e7) return null;
-    stats[k] = k === 'damageDealt' || k === 'damageTaken' ? Math.round(v) : Math.floor(v);
-  }
-  // Night goals came later: older clients leave them out.
-  const goals = b.stats.goals;
-  stats.goals = typeof goals === 'number' && Number.isFinite(goals) ? Math.max(0, Math.min(3, Math.floor(goals))) : 0;
-  const played = survived + GAME.preparationSeconds + 5;
-  if (stats.kills > 3 + survived * 1.5) return null;
-  if (stats.headshots > stats.kills || stats.limbKills > stats.kills || stats.shotsHit > stats.shotsFired) return null;
-  if (stats.shotsFired > played * 16) return null;
-  if (stats.limbsSevered > stats.kills * 2 + 6) return null;
-  if (stats.suppliesCollected > played / 2 + COMBAT.crateUses * 20) return null;
-  return { survived, stats };
 }
 
 /** One run every 15 seconds per player, 40 an hour per address. */
@@ -155,7 +128,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (!owner) return send(res, 400, { error: 'NO PLAYER KEY' }), true;
       if (!store) return send(res, 503, { error: 'LEADERBOARDS UNAVAILABLE' }), true;
       const b = (await readJson(req)) as Record<string, unknown> | null;
-      const run = plausibleSolo(b);
+      const run = plausibleRun(b);
       const name = cleanName(b?.name) || 'Survivor';
       if (!run) return send(res, 422, { error: 'RUN NOT ACCEPTED' }), true;
       if (!allowRun(owner, req.socket.remoteAddress ?? '')) return send(res, 429, { error: 'TOO MANY RUNS' }), true;

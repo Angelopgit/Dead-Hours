@@ -23,6 +23,7 @@ Headless checks (run the ones that touch what you changed, `typecheck` and `lint
 | `check:houses` | every enterable home: rooms reachable, stairs walkable, basements connected |
 | `check:audio` | renders the synthesized sounds and echo responses, checks the recorded takes and their credits |
 | `check:server` | starts a real server and plays it over WebSocket and HTTP |
+| `check:hosted` | a player-hosted game on a real server: relay both ways, drop-in, the host leaving, made-up counts refused |
 | `check:cluster` | the game cap, then two servers sharing Redis behind a balancer (needs `redis-server`) |
 | `check:render`, `check:trees`, `check:grass` | FPS limiter and the light-loop shader patch, tree models and LOD budgets, where lawn grass grows |
 | `check:controls`, `check:sights`, `check:melee` | aim assist and stick curves, aim-down-sights alignment, melee grips |
@@ -47,6 +48,8 @@ shared/   map data, weapons, player tuning, network protocol, combat simulation 
   src/sim          authoritative simulation: arsenal, hit zones, zombie AI, navigation grid, events;
                    Airdrops.ts runs supply drops, Contracts.ts the night goals
   src/protocol     room messages, compact snapshots and the client's mirror of the server's simulation
+  src/host         a night of play for a room: Night.ts (moves, actions, snapshots), NightHost.ts (who is in it, who gets what,
+                   each run), DeviceNight.ts (the same on a player host's device); the server's rooms and a host's browser share them
 client/   Vite + Three.js game
   src/core         engine loop, input + rebinding, settings, Rapier physics
   src/rendering    post-processing, materials, procedural textures, static batching
@@ -61,6 +64,7 @@ client/   Vite + Three.js game
   src/gameplay     player controller, shoulder camera, doors, weapon table, menu cinematic, the game session
                    (solo and online), the other survivors online (RemoteSurvivors.ts) and the first-night steps (FirstNight.ts)
   src/network      server address and health (Net.ts), the room connection (NetLink.ts), player key and saved survivor (Account.ts)
+                   host/ runs a player-hosted game's nights in a worker of the host's browser (see docs/online.md)
   src/audio        Web Audio engine: recorded gun and flesh-hit sounds (recorded/, CC0, see the sound credits in the README), synthesized everything else;
                    WheelSounds.ts for skateboards, bikes and cars, Score.ts for the written theme
   src/ui           logo, main menu, settings, loadout, HUD, pause, inventory, weapon table, results,
@@ -71,12 +75,12 @@ client/   Vite + Three.js game
   tools/textures   generates and encodes the KTX2 texture sets in public/textures
   tools/trailer    the cinematic trailer: render.mjs draws its frames and sound from the game (see docs/trailer.md), join.mjs puts parts together, assemble.mjs cuts the MP4
 server/   Colyseus server
-  src/game         the world's collision and navigation (built once), a night of play (Night.ts)
+  src/game         the world's collision and navigation (built once), a night over it (Night.ts; the night itself is shared/src/host)
   src/rooms        SurvivalRoom: lobby, host, start, the running night, results
   src/net          HTTP API (health, open games, join codes, leaderboards, profiles, solo runs), input cleaning
   src/store.ts     profiles, runs, boards and accounts in Postgres (DATABASE_URL) or a JSON file
   src/net/auth.ts  Google and Discord sign-in, sessions, whose profile a request plays as
-  tests/           end-to-end server check (npm run check:server), cluster check, load and balance benches
+  tests/           end-to-end server check (npm run check:server), player-hosted games (check:hosted), cluster check, load and balance benches
 ```
 
 The map is authored as data in `shared/src/map/maple-hollow.ts`. The client builds both visuals and Rapier collision from it (`propColliders` in `shared/src/map/colliders.ts` gives every prop its boxes), and the server builds identical collision from the same source.

@@ -3797,6 +3797,14 @@ export class GameSession {
     else this.reconnectLine.remove();
   }
 
+  private readonly hostAwayLine = h('div', { class: 'spectate net-lost' }, 'The host is away. The night waits for them.');
+
+  /** A player-hosted night stopped arriving (the host's tab is hidden, asleep or offline) or came back. */
+  setHostAway(on: boolean): void {
+    if (on) this.ui.append(this.hostAwayLine);
+    else this.hostAwayLine.remove();
+  }
+
   /** Online, dead: the camera follows a teammate still alive (ESC brings the results back). */
   private watch(): void {
     const next = [...this.sim.players.values()].find((p) => p.alive && p.id !== this.myId);
@@ -4172,6 +4180,7 @@ export class GameSession {
     this.teamResults?.dispose();
     this.spectateLine.remove();
     this.reconnectLine.remove();
+    this.hostAwayLine.remove();
     this.remotes?.dispose();
     flashlight()?.placeRemotes([], this.engine.camera.position);
     audio.wheels.engines([]);

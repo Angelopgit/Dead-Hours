@@ -38,7 +38,8 @@ export interface Profile extends ProfileData {
   rankKills: number | null;
 }
 
-export type RunMode = 'solo' | 'online';
+/** Who ran the night: the player's own browser alone, the game server, or a player hosting it for the others. */
+export type RunMode = 'solo' | 'online' | 'hosted';
 
 export interface RunRecord {
   /** Whose profile the run counts for (see ownerOfKey and accounts). */

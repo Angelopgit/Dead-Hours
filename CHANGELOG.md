@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Online
+
+- Host a game on your own device (beta). Host game has a new choice, Where the night runs: the game server, or this device. On this device, the night runs in your browser and your friends join with the code as usual. Desktop browsers can host; phones can join.
+- When the servers are full, you can still host on this device.
+- The lobby and the game list say HOSTED BY PLAYER, and those runs are marked HOSTED on the leaderboards.
+- If the host leaves, the night ends for everyone and each survivor keeps what they had reached. The lobby stays open and the next player hosts.
+
 ### Survivors
 
 - Survivors and zombies are redrawn in flat, faceted planes: a squarer jaw, a clear brow and nose, larger heads, and clothes that catch the light plane by plane.

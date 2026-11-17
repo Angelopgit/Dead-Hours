@@ -375,6 +375,7 @@ export class Game {
       // The host started another night while this survivor was still on the results.
       begin: (b) => void this.restartOnline(link, b),
       reconnecting: (on) => this.session?.setReconnecting(on),
+      hostAway: (on) => this.session?.setHostAway(on),
       closed: () => void this.connectionLost(link),
     };
     const backdrop = await this.engine.snapshot();

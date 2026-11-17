@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Night clock on this device (dev)</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; background: #1a1d22; font: 14px/1.5 system-ui, sans-serif; color: #ddd; }
+      main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+      h1 { font-size: 18px; margin: 0 0 8px; }
+      p { margin: 0 0 12px; color: #aab; }
+      #now { font-size: 16px; color: #fff; }
+      table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+      th, td { text-align: right; padding: 3px 10px; border-bottom: 1px solid #2c3038; }
+      th:first-child, td:first-child { text-align: left; }
+      tr.hidden td { color: #f0b35a; }
+      tr.slow td { color: #ff6b5e; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Night clock on this device</h1>
+      <p>This page runs a real night for four survivors in a worker, the way a player host's browser does. Leave it running, switch to another tab or minimise the window for a minute, then come back and read the rows marked hidden. 60 steps a second with a wait near 17 ms means the night keeps going; about 1 a second means this browser holds a hidden tab's worker back.</p>
+      <p id="now">Starting the worker.</p>
+      <table>
+        <thead><tr><th>Second</th><th>Tab</th><th>Steps</th><th>Longest wait (ms)</th><th>Snapshots</th><th>Zombies</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </main>
+    <script type="module" src="./host.ts"></script>
+  </body>
+</html>

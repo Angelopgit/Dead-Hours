@@ -1,17 +1,19 @@
 import { createHash } from 'node:crypto';
-import { Room, type Client } from 'colyseus';
+import { Room, ServerError, type Client } from 'colyseus';
 import {
-  C2S, CHAT, GAME, S2C, censor, cleanChat, type BeginMsg, type ChatLine, type CreateOptions, type JoinOptions, type LobbyMsg,
+  BUILD_SLOTS, C2S, CHAT, GAME, HOST_IN, HOST_OUT, NightHost, ROOMS, S2C, VERSION_MISMATCH, censor, cleanChat, decodeBuild, sanitizeBuild,
+  type ChatLine, type CreateOptions, type HostDown, type HostMember, type HostRun, type HostUp, type Hosting, type JoinOptions, type LobbyMsg,
   type Loadout, type OverMsg, type PlayerStats, type RoomStatus, type RtcIn, type RunResult, type TalkMsg, type UnlockState, type WeaponId,
-  NO_UNLOCKS, levelFor,
+  NO_UNLOCKS, PRIMARY_WEAPONS, SECONDARY_WEAPONS, levelFor,
 } from '@dead-hours/shared';
-import { Night } from '../game/Night';
+import { createWorld } from '../game/world';
 import { claimCode, releaseCode, renewCode } from '../net/codes';
 import { resolveOwner, type Owner } from '../net/auth';
 import { cleanAppearance, cleanBuilds, cleanName, cleanPrimary, cleanSecondary } from '../net/clean';
 import { iceConfig } from '../net/ice';
 import { Bucket } from '../net/limit';
-import { gameClosed, gameOpened } from '../net/scale';
+import { NO_STATS, plausibleRun } from '../net/plausible';
+import { MAX_ROOMS, gameClosed, gameOpened, localGames } from '../net/scale';
 import { services } from '../services';
 import { unlocksOf, type Ranks, type RunOutcome } from '../store';
 
@@ -31,16 +33,17 @@ interface Member {
   /** What the player's saved profile has unlocked (none without a profile or a store). */
   unlocks: UnlockState;
   ready: boolean;
-  /** Has the night's scene up: snapshots and events go only to loaded clients (no backlog while it builds). */
-  loaded: boolean;
-  spawn: BeginMsg['spawn'] | null;
-  /** Survival seconds already gone when they dropped into this night (0: there from the start). */
-  joinedAt: number;
   /** This night's run once it ended for them (died or left), and its leaderboard places. */
   run: { survived: number; stats: PlayerStats; ranks: Promise<Ranks | RunOutcome> } | null;
   /** Player ids this player blocks: no chat, voice or negotiation passes between them either way. */
   blocks: Set<string>;
-  limits: { chat: Bucket; talk: Bucket; rtc: Bucket };
+  limits: { chat: Bucket; talk: Bucket; rtc: Bucket; relay: Bucket };
+  /** Their browser could run a night itself: the host's place in a player-hosted game can pass to them. */
+  canHost: boolean;
+  /** A player-hosted night: in the night under way since this moment (ms; 0: not in it). */
+  inNight: number;
+  /** A player-hosted night as this player's own browser last saw it (see SeenMsg), and when (ms). */
+  seen: { survived: number; kills: Map<string, number>; at: number } | null;
   /** Last chat line and when (repeats are dropped), and when they were last told to slow down. */
   said: { text: string; at: number; warned: number };
 }
@@ -98,10 +101,24 @@ const NO_RANK: Ranks = { rankSurvival: null, rankKills: null };
  */
 const HOLD_PLACE = 45;
 
+/** How long a player host may go without a word before the room ends the night for everyone (s). */
+const HOST_SILENCE = 45;
+/** The most the host's count may run ahead of what a player's own browser last saw: kills at once, and kills a second since. */
+const KILL_SLACK = 3;
+const KILL_RATE = 1.5;
+
+const wire = (m: Member): HostMember => ({ id: m.id, name: m.name, primary: m.primary, secondary: m.secondary, appearance: m.appearance, builds: m.builds, unlocks: m.unlocks });
+
 /**
- * A hosted game: whoever creates it hosts (starts the night; the next to have joined takes
- * over when they leave), friends join with its code or from the game list. The night itself
- * runs here on the server (Night); the room carries the lobby, the messages and the records.
+ * A game: whoever creates it hosts (starts the night; the next to have joined takes over when
+ * they leave), friends join with its code or from the game list. The room carries the lobby,
+ * the chat, the voice negotiation and the records.
+ *
+ * The night itself runs in one of two places. In a game made as ROOMS.survival it runs here on
+ * the server (NightHost). In one made as ROOMS.hosted it runs in the host's own browser, with the
+ * same NightHost in a worker there: the room starts it, passes the players' moves to the host
+ * and the host's snapshots and events to the players, and checks the runs the host reports
+ * before they reach the boards. Such a game takes none of the server's simulation time.
  */
 export class SurvivalRoom extends Room {
   maxClients: number = GAME.maxPlayers;
@@ -111,11 +128,37 @@ export class SurvivalRoom extends Room {
   private title = '';
   private hidden = false;
   private status: RoomStatus = 'lobby';
-  private night: Night | null = null;
+  private hosting: Hosting = 'server';
+  /** The night, when the server runs it. */
+  private readonly nights = new NightHost(createWorld, {
+    send: (to, type, msg) => {
+      if (to.length === 1) {
+        this.clients.find((c) => c.sessionId === to[0])?.send(type, msg);
+        return;
+      }
+      const except = this.clients.filter((c) => !to.includes(c.sessionId));
+      this.broadcast(type, msg, except.length ? { except } : undefined);
+    },
+  }, services.debug);
   private metaAt = 0;
+  /** A player-hosted game: the host's version and build of the game (everyone must run the same one). */
+  private version = '';
+  /** A player-hosted night: when it began and when the host was last heard from (ms), and how it stood then. */
+  private beganAt = 0;
+  private hostHeard = 0;
+  private readonly progress = new Map<string, HostRun>();
+  private hostedSurvived = 0;
+  private hostedHordes = 0;
 
   async onCreate(o: Partial<CreateOptions>): Promise<void> {
-    gameOpened(this.roomId);
+    this.hosting = this.roomName === ROOMS.hosted ? 'player' : 'server';
+    // Only nights the server runs count against what this process can carry.
+    if (this.hosting === 'server') gameOpened(this.roomId);
+    else this.version = text(o.v, 40) ?? '';
+    this.nights.onRefit = (id, weapon, build) => {
+      const m = this.members.get(id);
+      if (m) m.builds = { ...m.builds, [weapon]: build };
+    };
     this.code = await claimCode(this.presence, this.roomId);
     this.clock.setInterval(() => void renewCode(this.presence, this.code).catch(() => undefined), 10 * 60 * 1000);
     this.title = cleanName(o.lobbyName, 32) || `${cleanName(o.name) || 'Survivor'}'s safehouse`;
@@ -130,33 +173,22 @@ export class SurvivalRoom extends Room {
       this.sendLobby();
     });
     this.onMessage(C2S.start, (c) => this.start(c));
-    this.onMessage(C2S.loaded, (c) => {
-      const m = this.members.get(c.sessionId);
-      if (!m || this.status !== 'playing' || m.loaded) return;
-      m.loaded = true;
-      // Dropped in late (or slow to load): first what is already going on that a snapshot doesn't carry.
-      const missed = this.night?.catchUp();
-      if (missed?.length) c.send(S2C.ev, missed);
-    });
-    this.onMessage(C2S.motion, (c, msg: unknown) => {
-      if (this.status !== 'playing' || !this.night) return;
-      const back = this.night.motion(c.sessionId, msg);
-      if (back) c.send(S2C.pos, back);
-    });
-    this.onMessage(C2S.drive, (c, msg: unknown) => {
-      if (this.status !== 'playing' || !this.night) return;
-      const back = this.night.drive(c.sessionId, msg);
-      if (back) c.send(S2C.vpos, back);
-    });
-    this.onMessage(C2S.act, (c, msg: unknown) => {
-      if (this.status === 'playing') this.night?.act(c.sessionId, msg);
-    });
+    // The night's own messages: to the night here, or on to the player who hosts it.
+    for (const type of [C2S.loaded, C2S.motion, C2S.drive, C2S.act, C2S.debug]) {
+      this.onMessage(type, (c, msg: unknown) => {
+        if (this.status !== 'playing') return;
+        if (this.hosting === 'player') this.toHost(c, type, msg);
+        else this.nights.message(c.sessionId, type, msg);
+      });
+    }
     this.onMessage(C2S.ping, (c, n: unknown) => {
-      if (typeof n === 'number') c.send(S2C.pong, n);
+      if (typeof n !== 'number') return;
+      // During a player-hosted night the host answers, so the round trip is the one the night's messages make.
+      if (this.hosting === 'player' && this.status === 'playing' && c.sessionId !== this.host) this.toHost(c, C2S.ping, n);
+      else c.send(S2C.pong, n);
     });
-    this.onMessage(C2S.debug, (c, msg: unknown) => {
-      if (services.debug && this.status === 'playing') this.night?.debug(c.sessionId, msg);
-    });
+    this.onMessage(C2S.host, (c, msg: unknown) => this.fromHost(c, msg));
+    this.onMessage(C2S.seen, (c, msg: unknown) => this.sees(c, msg));
     this.onMessage(C2S.chat, (c, msg: unknown) => this.chat(c, msg));
     this.onMessage(C2S.talk, (c, mode: unknown) => {
       const m = this.members.get(c.sessionId);
@@ -183,7 +215,7 @@ export class SurvivalRoom extends Room {
       m.blocks = new Set(list.slice(0, 500).filter((p): p is string => typeof p === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(p)));
     });
     this.setSimulationInterval((ms) => this.tick(ms), 1000 / 60);
-    this.log(`opened "${this.title}"${this.hidden ? ' (private)' : ''}`);
+    this.log(`opened "${this.title}"${this.hidden ? ' (private)' : ''}${this.hosting === 'player' ? ', hosted by its player' : ''}`);
   }
 
   /** One line per room event in the server log (who joined, nights started and ended). */
@@ -193,6 +225,8 @@ export class SurvivalRoom extends Room {
 
   /** Who is joining: their sign-in session or browser key, looked up before they are let in. */
   async onAuth(_client: Client, o: Partial<JoinOptions>): Promise<Owner | true> {
+    // The host's browser runs the rules of a player-hosted game: another build could disagree with it.
+    if (this.hosting === 'player' && this.version && text(o.v, 40) !== this.version) throw new ServerError(VERSION_MISMATCH, 'VERSION MISMATCH');
     try {
       return (await resolveOwner(o.session, o.token)) ?? true;
     } catch (e) {
@@ -221,37 +255,41 @@ export class SurvivalRoom extends Room {
       builds: cleanBuilds(o.builds, unlocks),
       unlocks,
       ready: false,
-      loaded: false,
-      spawn: null,
-      joinedAt: 0,
       run: null,
       blocks: new Set(),
-      limits: { chat: new Bucket(CHAT.burst, CHAT.refillSeconds), talk: new Bucket(20, 0.1), rtc: new Bucket(120, 0.05) },
+      // Passed on to a player host: moves and car moves 30 times a second each, and whatever else they do.
+      limits: { chat: new Bucket(CHAT.burst, CHAT.refillSeconds), talk: new Bucket(20, 0.1), rtc: new Bucket(120, 0.05), relay: new Bucket(240, 1 / 120) },
       said: { text: '', at: 0, warned: 0 },
+      canHost: o.canHost === true,
+      inNight: 0,
+      seen: null,
     });
     if (!this.host) this.host = client.sessionId;
     const name = this.members.get(client.sessionId)!.name;
     this.log(`${name} joined (${this.members.size}/${this.maxClients})`);
     client.send(S2C.ice, iceConfig(pid));
     // A night under way: straight into it beside the others (no waiting for the next one).
-    const late = this.status === 'playing' && this.night ? this.dropIn(client, this.members.get(client.sessionId)!) : false;
+    const late = this.status === 'playing' ? this.dropIn(this.members.get(client.sessionId)!) : false;
     this.announce(late ? `${name} joined the night` : `${name} joined`, client.sessionId);
     this.sendLobby();
     this.updateMeta();
   }
 
   /** Puts a player who joined mid-night into it at the safehouse; they load the scene and the stream starts. */
-  private dropIn(client: Client, m: Member): boolean {
-    const night = this.night;
-    if (!night) return false;
-    const sim = night.sim;
-    m.spawn = night.addSurvivor(m, sim.players.size);
+  private dropIn(m: Member): boolean {
     m.run = null;
     m.ready = false;
-    m.loaded = false;
-    m.joinedAt = sim.phase === 'survival' ? sim.phaseTime : 0;
-    client.send(S2C.begin, { seed: night.seed, t: night.time, spawn: m.spawn, late: true } satisfies BeginMsg);
-    this.log(`${m.name} dropped into the night at ${Math.floor(m.joinedAt)} s`);
+    if (this.hosting === 'player') {
+      const host = this.hostClient;
+      if (!host) return false;
+      m.inNight = Date.now();
+      m.seen = null;
+      host.send(S2C.host, { k: 'join', member: wire(m) } satisfies HostDown);
+      this.log(`${m.name} dropped into the night at ${Math.floor(this.hostedSurvived)} s`);
+      return true;
+    }
+    if (!this.nights.dropIn(wire(m))) return false;
+    this.log(`${m.name} dropped into the night at ${Math.floor(this.nights.joinedAt(m.id))} s`);
     return true;
   }
 
@@ -259,7 +297,9 @@ export class SurvivalRoom extends Room {
     const id = client.sessionId;
     if (!this.members.has(id)) return;
     // A dropped connection mid-night gets a short while to come back; the survivor stands still meanwhile.
-    if (!consented && this.status === 'playing' && this.night?.sim.players.get(id)?.alive) {
+    const m = this.members.get(id)!;
+    const inPlay = this.hosting === 'player' ? m.inNight > 0 : !!this.nights.night?.sim.players.get(id)?.alive;
+    if (!consented && this.status === 'playing' && inPlay) {
       this.log(`${this.members.get(id)!.name} lost connection, holding their place for ${HOLD_PLACE} s`);
       try {
         await this.allowReconnection(client, HOLD_PLACE);
@@ -276,24 +316,60 @@ export class SurvivalRoom extends Room {
     this.log('closed');
     void releaseCode(this.presence, this.code).catch(() => undefined);
     gameClosed(this.roomId);
-    this.night?.dispose();
-    this.night = null;
+    this.nights.dispose();
+  }
+
+  /** The host's connection, while they are here. */
+  private get hostClient(): Client | undefined {
+    return this.clients.find((c) => c.sessionId === this.host);
   }
 
   private drop(id: string): void {
-    const night = this.night;
-    if (night && this.status === 'playing' && night.sim.players.has(id)) {
-      this.record(id);
-      night.removeSurvivor(id);
-    }
-    const name = this.members.get(id)?.name ?? id;
+    const m = this.members.get(id);
+    let over = false;
+    if (this.status === 'playing' && this.hosting === 'player' && m?.inNight) {
+      // As the host last counted it (a few seconds old at most).
+      this.record(m, this.progress.get(id));
+      if (id === this.host) {
+        // The night lived in their browser: it is over for everyone, with what each had reached.
+        over = true;
+        this.announce('The host left: the night is over');
+      } else {
+        this.hostClient?.send(S2C.host, { k: 'left', id } satisfies HostDown);
+        over = ![...this.members.values()].some((o) => o.id !== id && o.inNight);
+      }
+    } else if (this.status === 'playing' && this.hosting === 'server' && this.nights.night?.sim.players.has(id)) {
+      if (m) this.record(m, this.nights.record(id));
+      over = this.nights.remove(id);
+    } else this.nights.remove(id);
+    const name = m?.name ?? id;
     this.log(`${name} left`);
+    // Before they are gone from the list: the night ending writes the runs of everyone still here.
+    if (over) void this.end();
     this.members.delete(id);
     this.announce(`${name} left`);
-    if (this.host === id) this.host = this.members.keys().next().value ?? '';
-    if (night && this.status === 'playing' && (night.allDead || night.sim.players.size === 0)) void this.end();
+    if (this.host === id) this.passHost();
     this.sendLobby();
     this.updateMeta();
+  }
+
+  /**
+   * The host left: the next to have joined takes over. In a player-hosted game that is the next
+   * whose browser can run a night; when nobody's can (phones), the server runs the nights from
+   * here on if it has room for one more game.
+   */
+  private passHost(): void {
+    const left = [...this.members.values()];
+    this.host = left[0]?.id ?? '';
+    if (this.hosting !== 'player' || !left.length) return;
+    const able = left.find((m) => m.canHost);
+    if (able) this.host = able.id;
+    else if (this.status !== 'playing' && localGames() < MAX_ROOMS) {
+      this.hosting = 'server';
+      gameOpened(this.roomId);
+      this.announce('Nobody here can host on their own device: the game server runs the nights now');
+      this.log('nobody left can host: the server runs the nights');
+    }
   }
 
   private start(client: Client): void {
@@ -302,70 +378,148 @@ export class SurvivalRoom extends Room {
       return;
     }
     if (this.status !== 'lobby') return;
-    this.night?.dispose();
+    if (this.hosting === 'player' && !this.members.get(this.host)?.canHost) {
+      client.send(S2C.notice, 'THIS DEVICE CAN\'T RUN A NIGHT ITSELF. HOST A GAME ON THE SERVER INSTEAD');
+      return;
+    }
     const seed = (Math.random() * 2 ** 31) | 1;
-    const night = new Night(seed);
-    this.night = night;
-    night.onRefit = (id, weapon, build) => {
-      const m = this.members.get(id);
-      if (m) m.builds = { ...m.builds, [weapon]: build };
-    };
-    let i = 0;
     for (const m of this.members.values()) {
-      m.spawn = night.addSurvivor(m, i++);
       m.run = null;
       m.ready = false;
-      m.loaded = false;
-      m.joinedAt = 0;
+      m.seen = null;
+      m.inNight = this.hosting === 'player' ? Date.now() : 0;
     }
     this.status = 'playing';
     this.log(`night started with ${this.members.size}`);
     // The room stays open while the night plays: friends can drop in with the code or from the list
     // (Colyseus still closes it on its own while all four places are taken).
-    for (const c of this.clients) {
-      const m = this.members.get(c.sessionId);
-      if (m?.spawn) c.send(S2C.begin, { seed, t: night.time, spawn: m.spawn } satisfies BeginMsg);
-    }
+    const members = [...this.members.values()].map(wire);
+    if (this.hosting === 'player') {
+      // The host's browser runs it from here: it tells each player where they begin.
+      this.beganAt = this.hostHeard = Date.now();
+      this.progress.clear();
+      this.hostedSurvived = this.hostedHordes = 0;
+      client.send(S2C.host, { k: 'start', seed, members, debug: services.debug } satisfies HostDown);
+    } else this.nights.start(members, seed);
     this.sendLobby();
     this.updateMeta();
   }
 
   private tick(ms: number): void {
-    const night = this.night;
-    if (this.status !== 'playing' || !night) return;
-    const { events, snapshot } = night.advance(ms / 1000);
-    const building = this.clients.filter((c) => !this.members.get(c.sessionId)?.loaded);
-    const to = building.length ? { except: building } : undefined;
-    if (events.length) {
-      this.broadcast(S2C.ev, events, to);
-      // (A death is not written to the boards here: the next lull can bring them back. The run is
-      // recorded when they leave or the night ends.)
+    if (this.status !== 'playing') return;
+    if (this.hosting === 'player') {
+      // A host whose browser stopped answering (closed lid, frozen tab) can't keep everyone waiting.
+      if (Date.now() - this.hostHeard > HOST_SILENCE * 1000) {
+        this.announce('The host stopped answering: the night is over');
+        void this.end();
+      }
+      return;
     }
-    if (snapshot) this.broadcast(S2C.snap, snapshot, to);
-    if (night.sim.phase === 'over' || night.allDead) {
+    if (this.nights.tick(ms)) {
       void this.end();
       return;
     }
-    if (night.time - this.metaAt > 5) this.updateMeta();
+    if ((this.nights.night?.time ?? 0) - this.metaAt > 5) this.updateMeta();
   }
 
-  /** Writes a survivor's run to the leaderboards (once a night: when they die or leave). */
-  private record(id: string): void {
-    const m = this.members.get(id);
-    const night = this.night;
-    const p = night?.sim.players.get(id);
-    if (!m || !night || !p || m.run) return;
-    const sim = night.sim;
-    // Seconds since the outbreak (or since they dropped in), at the moment they fell (or now, leaving
-    // alive), less any time spent dead before a lull brought them back.
-    const since = p.alive ? 0 : Math.max(0, sim.time - p.diedAt);
-    const survived = sim.phase === 'preparation' ? 0 : Math.max(0, sim.phaseTime - since - m.joinedAt - p.deadTime);
-    const stats = { ...p.stats };
+  // ------------------------------------------------------------------ a night in the host's browser
+
+  /** One of a player's messages about the night, on to the player who hosts it. */
+  private toHost(client: Client, type: string, msg: unknown): void {
+    const m = this.members.get(client.sessionId);
+    // (The host's own go straight to the night in their browser.)
+    if (!m || !m.inNight || m.id === this.host || !HOST_IN.includes(type)) return;
+    if (type === C2S.debug && !services.debug) return;
+    if (!m.limits.relay.take()) return;
+    this.hostClient?.send(S2C.host, { k: 'in', from: m.id, t: type, m: msg } satisfies HostDown);
+  }
+
+  /** What the host's night sends out and reports. Only the host is listened to, and only in a player-hosted game. */
+  private fromHost(client: Client, raw: unknown): void {
+    if (this.hosting !== 'player' || client.sessionId !== this.host || !raw || typeof raw !== 'object') return;
+    const msg = raw as HostUp;
+    this.hostHeard = Date.now();
+    if (msg.k === 'out') {
+      if (this.status !== 'playing' || !Array.isArray(msg.to) || !HOST_OUT.includes(msg.t)) return;
+      const to = this.clients.filter((c) => c.sessionId !== this.host && msg.to.includes(c.sessionId) && this.members.get(c.sessionId)?.inNight);
+      if (to.length === 1) to[0].send(msg.t, msg.m);
+      else if (to.length) this.broadcast(msg.t, msg.m, { except: this.clients.filter((c) => !to.includes(c)) });
+    } else if (msg.k === 'progress' || msg.k === 'over') {
+      if (this.status !== 'playing' || !Array.isArray(msg.runs)) return;
+      for (const r of msg.runs.slice(0, GAME.maxPlayers * 2)) {
+        if (r && typeof r.id === 'string' && this.members.get(r.id)?.inNight) this.progress.set(r.id, r);
+      }
+      if (typeof msg.hordes === 'number' && Number.isFinite(msg.hordes)) this.hostedHordes = Math.max(0, Math.min(999, Math.floor(msg.hordes)));
+      if (msg.k === 'over') void this.end();
+      else {
+        if (typeof msg.survived === 'number' && Number.isFinite(msg.survived)) this.hostedSurvived = Math.max(0, msg.survived);
+        if (Date.now() / 1000 - this.metaAt > 5) this.updateMeta();
+      }
+    } else if (msg.k === 'refit') {
+      // Kept for their next night, as far as their profile has unlocked it.
+      const m = this.members.get(msg.id);
+      if (!m || typeof msg.build !== 'string' || msg.build.length > 200) return;
+      if (!PRIMARY_WEAPONS.includes(msg.weapon) && !SECONDARY_WEAPONS.includes(msg.weapon)) return;
+      const want = decodeBuild(msg.weapon, msg.build);
+      const ok = sanitizeBuild(msg.weapon, want, m.unlocks);
+      if (BUILD_SLOTS.every((s) => ok[s] === want[s])) m.builds = { ...m.builds, [msg.weapon]: ok };
+    }
+  }
+
+  /** A player-hosted night as one of the others sees it in their own browser: what the host's count is held against. */
+  private sees(client: Client, raw: unknown): void {
+    const m = this.members.get(client.sessionId);
+    if (this.hosting !== 'player' || this.status !== 'playing' || !m?.inNight || m.id === this.host || !raw || typeof raw !== 'object') return;
+    const s = raw as { survived?: unknown; kills?: unknown };
+    if (typeof s.survived !== 'number' || !Number.isFinite(s.survived) || !Array.isArray(s.kills)) return;
+    const kills = new Map<string, number>();
+    for (let i = 0; i + 1 < s.kills.length && i < GAME.maxPlayers * 4; i += 2) {
+      const id = s.kills[i], n = s.kills[i + 1];
+      if (typeof id === 'string' && typeof n === 'number' && Number.isFinite(n)) kills.set(id, n);
+    }
+    m.seen = { survived: Math.max(0, s.survived), kills, at: Date.now() };
+  }
+
+  /**
+   * A run as a player host counted it, held to what can be checked without running the night:
+   * what a real run could reach at all, the clock on the wall, and what the player's own browser
+   * (for the host: anyone else's) last saw. Null when it can't be a real run.
+   */
+  private checked(m: Member, run: HostRun): { survived: number; stats: PlayerStats } | null {
+    const ok = plausibleRun(run);
+    if (!ok) return null;
+    const now = Date.now();
+    let survived = Math.min(ok.survived, (now - Math.max(this.beganAt, m.inNight)) / 1000 + 2);
+    const stats = ok.stats;
+    const others = [...this.members.values()].filter((o) => o.id !== this.host && o.seen);
+    const w = m.id !== this.host ? m.seen : others.sort((a, b) => b.seen!.at - a.seen!.at)[0]?.seen;
+    if (w) {
+      const age = (now - w.at) / 1000;
+      survived = Math.min(survived, w.survived + age + 5);
+      const most = Math.floor((w.kills.get(m.id) ?? 0) + KILL_SLACK + KILL_RATE * age);
+      if (stats.kills > most) {
+        stats.kills = most;
+        stats.headshots = Math.min(stats.headshots, most);
+        stats.limbKills = Math.min(stats.limbKills, most);
+      }
+    }
+    return { survived: Math.max(0, survived), stats };
+  }
+
+  // ------------------------------------------------------------------ records
+
+  /** Writes a survivor's run to the leaderboards (once a night: when they leave, or when it ends). */
+  private record(m: Member, run: HostRun | null | undefined): void {
+    if (m.run || !run) return;
+    const hosted = this.hosting === 'player';
+    const sure = hosted ? this.checked(m, run) : run;
+    // A count that can't be real goes nowhere: the room sees an empty run.
+    const { survived, stats } = sure ?? { survived: 0, stats: { ...NO_STATS } };
     const store = services.store;
     // Gone before the outbreak with nothing done: not a run worth a place on the boards.
     const counts = survived > 0 || stats.kills > 0;
-    const ranks = store && m.owner && counts
-      ? store.recordRun({ owner: m.owner, name: m.name, appearance: m.appearance, mode: 'online', survived, stats }).catch((e) => {
+    const ranks = store && m.owner && counts && sure
+      ? store.recordRun({ owner: m.owner, name: m.name, appearance: m.appearance, mode: hosted ? 'hosted' : 'online', survived, stats }).catch((e) => {
         console.warn('[dead-hours] could not record a run:', e);
         return NO_RANK;
       })
@@ -373,11 +527,22 @@ export class SurvivalRoom extends Room {
     m.run = { survived, stats, ranks };
   }
 
-  /** Everyone is dead: results with leaderboard places, then back to the lobby. */
+  /** Everyone is dead (or a player host is gone): results with leaderboard places, then back to the lobby. */
   private async end(): Promise<void> {
     if (this.status !== 'playing') return;
     this.status = 'over';
-    for (const id of this.members.keys()) this.record(id);
+    const hosted = this.hosting === 'player';
+    if (hosted) {
+      for (const m of this.members.values()) if (m.inNight) this.record(m, this.progress.get(m.id));
+      // (A host who reported the end has stopped already; one the room gave up on is told to.)
+      this.hostClient?.send(S2C.host, { k: 'stop' } satisfies HostDown);
+    } else {
+      for (const run of this.nights.finish()) {
+        const m = this.members.get(run.id);
+        if (m) this.record(m, run);
+      }
+    }
+    for (const m of this.members.values()) m.inNight = 0;
     const results: RunResult[] = [];
     // Places once every run of the night is in (an earlier death would otherwise show the place it had then).
     await Promise.all([...this.members.values()].map((m) => m.run?.ranks));
@@ -396,7 +561,7 @@ export class SurvivalRoom extends Room {
     }
     results.sort((a, b) => b.survived - a.survived || b.stats.kills - a.stats.kills);
     this.log(`night over: ${results.map((r) => `${r.name} ${Math.round(r.survived)} s ${r.stats.kills} kills`).join(', ') || 'nobody'}`);
-    const hordes = this.night?.sim.horde.survived ?? 0;
+    const hordes = hosted ? this.hostedHordes : this.nights.hordes;
     this.broadcast(S2C.over, { results, hordes } satisfies OverMsg);
     this.status = 'lobby';
     for (const m of this.members.values()) m.ready = false;
@@ -441,18 +606,18 @@ export class SurvivalRoom extends Room {
 
   private sendLobby(): void {
     const msg: LobbyMsg = {
-      code: this.code, name: this.title, host: this.host, status: this.status, private: this.hidden,
+      code: this.code, name: this.title, host: this.host, status: this.status, private: this.hidden, hosting: this.hosting,
       players: [...this.members.values()].map((m) => ({ id: m.id, pid: m.pid, name: m.name, ready: m.ready, primary: m.primary, appearance: m.appearance })),
     };
     this.broadcast(S2C.lobby, msg);
   }
 
   private updateMeta(): void {
-    const sim = this.night?.sim;
-    this.metaAt = sim?.time ?? 0;
+    const hosted = this.hosting === 'player';
+    this.metaAt = hosted ? Date.now() / 1000 : this.nights.night?.time ?? 0;
     void this.setMetadata({
-      code: this.code, name: this.title, host: this.members.get(this.host)?.name ?? '', status: this.status,
-      survived: this.status === 'playing' && sim?.phase === 'survival' ? Math.floor(sim.phaseTime) : 0,
+      code: this.code, name: this.title, host: this.members.get(this.host)?.name ?? '', status: this.status, hosting: this.hosting,
+      survived: this.status !== 'playing' ? 0 : Math.floor(hosted ? this.hostedSurvived : this.nights.survived),
     });
   }
 }
