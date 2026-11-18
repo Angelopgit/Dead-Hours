@@ -174,6 +174,16 @@ check(none === null, 'nothing near: full speed');
       && !/interact/i.test(phone + keys + L.plain(padKeys)) && /IS DOWN`, reviveHint\(\)/.test(game) && !/hold interact/i.test(game),
       `teammate down: the notice names the button that picks them up ("${keys}", "${L.plain(padKeys)}", "${phone}")`);
   }
+  // The feed is capitals, a comma between two things (docs/style.md). The two lines at the start of a quiet spell
+  // were typed in sentence case with a colon ("Downtime: no zombies coming for 01:30") and stood out in it.
+  {
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    const phrases = game.split('\n').filter((l) => l.includes('hud.feedLine(')).flatMap((l) => l.slice(l.indexOf('hud.feedLine(')).match(/'[^']*'|`[^`]*`/g) ?? [])
+      .map((q) => q.slice(1, -1).replace(/\$\{[^}]*\}/g, '')).filter((q) => q.includes(' '));
+    const wrong = phrases.filter((q) => /[a-z]|[:·!]/.test(q));
+    check(phrases.length >= 30 && !wrong.length, wrong.length ? `feed lines not in capitals or with a colon, dot or shout: ${wrong.join(' | ')}`
+      : `the feed's lines are all capitals, none with a colon or a middle dot (${phrases.length} phrases)`);
+  }
   // Something in reach that no button does anything to (a door boarded from inside, a syringe whose boost is
   // still running, a third katana) is a status: it read "[E] BOTH HANDS HOLD A KATANA" and lit the phone's USE
   // button with "BOTH HANDS" (and its BOARD button at the boarded door).

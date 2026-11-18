@@ -3894,9 +3894,9 @@ export class GameSession {
       const fallen = back.filter((id) => id !== this.myId).map((id) => this.sim.players.get(id)?.name).filter(Boolean);
       const rise = fallen.length === 1 ? ` ${fallen[0]} is back.` : fallen.length ? ' The fallen are back.' : '';
       this.hud.notify(`QUIET FOR ${clock(Math.round(left))}`, `${why}Regroup, gather ammo, heal up.${rise}`, 5.5, 'calm');
-      this.hud.feedLine(`Downtime: no zombies coming for ${clock(Math.round(left))}`);
+      this.hud.feedLine(`DOWNTIME, NO ZOMBIES COMING FOR ${clock(Math.round(left))}`);
       for (const name of fallen) this.hud.feedLine(`${name!.toUpperCase()} IS BACK IN THE FIGHT`);
-      if (!back.length && n === 1 && this.sim.players.size > 1) this.hud.feedLine('Every downtime brings back the fallen');
+      if (!back.length && n === 1 && this.sim.players.size > 1) this.hud.feedLine('EVERY DOWNTIME BRINGS BACK THE FALLEN');
       audio.lullStart(afterWave);
     } else if (stage === 'ending') {
       this.hud.notify('THE QUIET IS ENDING', `The dead come back in ${Math.round(left)} seconds. Get ready.`, 3.4, 'danger');
