@@ -163,6 +163,17 @@ check(none === null, 'nothing near: full speed');
     check(phone === ', SEAT MOVES OVER' && keys === ', G CHANGE SEAT' && /^, .+ CHANGE SEAT$/.test(padKeys) && !/SEAT CHANGE SEAT/.test(phone + keys + padKeys),
       `seat prompt: a phone names its SEAT button once, keys and pads name theirs ("GET OUT${phone}", "GET OUT${keys}", "GET OUT${padKeys}")`);
   }
+  // "<NAME> IS DOWN" told the team to "hold interact", which no key, pad button or thumb button is called: the
+  // line names the button on the device in use, and the night uses it.
+  {
+    const { reviveHint } = await import('../src/core/Input');
+    const phone = reviveHint('touch'), keys = reviveHint('mouse'), padKeys = reviveHint('pad');
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(keys === 'Get to them and hold E to pick them up.' && phone === 'Get to them and hold USE to pick them up.'
+      && L.plain(padKeys) === `Get to them and hold ${L.plain(L.padLabel('interact'))} to pick them up.` && padKeys !== L.plain(padKeys)
+      && !/interact/i.test(phone + keys + L.plain(padKeys)) && /IS DOWN`, reviveHint\(\)/.test(game) && !/hold interact/i.test(game),
+      `teammate down: the notice names the button that picks them up ("${keys}", "${L.plain(padKeys)}", "${phone}")`);
+  }
   // Something in reach that no button does anything to (a door boarded from inside, a syringe whose boost is
   // still running, a third katana) is a status: it read "[E] BOTH HANDS HOLD A KATANA" and lit the phone's USE
   // button with "BOTH HANDS" (and its BOARD button at the boarded door).

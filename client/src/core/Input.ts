@@ -618,6 +618,15 @@ export function seatHint(device: Device = current): string {
 }
 
 /**
+ * The line under "<NAME> IS DOWN": the button that picks a teammate up, by its name on the device in use (the
+ * key, the controller's button drawn, a phone's USE). It read "hold interact", which no button is called.
+ */
+export function reviveHint(device: Device = current): string {
+  const key = device === 'touch' ? 'USE' : device === 'pad' ? padLabel('interact') : codeLabel(settings.value.controls.bindings.interact[0] ?? '');
+  return key ? `Get to them and hold ${key} to pick them up.` : 'Get to them and pick them up.';
+}
+
+/**
  * What to press for the grenade and for the Molotov, for the weapon panel. A controller has one button for
  * both: held, it readies `first` (the game's pick), and the weapon button then switches to the other. With
  * both in the pockets the second one adds that button (both lines read "HOLD L1").

@@ -9,7 +9,7 @@ import {
   type OverMsg, type PlayerMotion, type SimEvent, type SimLimb, type SimPlayer, type Skateboard, type ThrowKind, type Vec3, type Vehicle, type WeaponId, type ZombieKind,
 } from '@dead-hours/shared';
 import type { Engine } from '../core/Engine';
-import { actionLabel, onDeviceChange, seatHint, typing, type Input } from '../core/Input';
+import { actionLabel, onDeviceChange, reviveHint, seatHint, typing, type Input } from '../core/Input';
 import { PAD, glyph, menuButtons, physicalOf } from '../core/PadLayout';
 import { PadKeyboard } from '../ui/PadKeyboard';
 import { padTurner } from '../ui/PadMenus';
@@ -3416,7 +3416,7 @@ export class GameSession {
       case 'playerDowned':
         if (e.player !== this.myId) {
           const who = this.sim.players.get(e.player);
-          if (who && this.me.up) this.hud.notify(`${who.name.toUpperCase()} IS DOWN`, 'Get to them and hold interact to pick them up.', 2.4, 'danger');
+          if (who && this.me.up) this.hud.notify(`${who.name.toUpperCase()} IS DOWN`, reviveHint(), 2.4, 'danger');
         }
         break;
       case 'playerRevived': {
