@@ -457,6 +457,11 @@ check(none === null, 'nothing near: full speed');
     .map(([desk, phone]) => [em(desk), phonePanel * em(phone)]);
   check(small.every(([desk, phone]) => phone >= desk * 0.98),
     `touch: the item counts and fire mode under the ammo are as big as on a desktop (${small.map(([d, p]) => `${p.toFixed(3)} vs ${d}`).join(', ')} em)`);
+  // The line under a notice ("Very rare. One .50 BMG round …", the driving keys) kept the desktop's 0.55 of the
+  // notice on a phone: 7.7 px, the smallest letters on the screen. It is no smaller than the item counts there.
+  const noticeSmall = em('body.touch-play .notice') * (em('body.touch-play .notice small') || em('.notice small'));
+  check(noticeSmall >= small[0][1] && noticeSmall <= 0.7,
+    `touch: the line under a notice is as big as the item counts (${noticeSmall.toFixed(3)} vs ${small[0][1].toFixed(3)} of the HUD's letters)`);
   // A boost chip is a syringe and the time left. The needle pokes 4 px out of the syringe's box and the room for it
   // was the name's margin, so on a phone (no name) it ran into the first digit, which was 7 px tall there.
   // Held on a phone, the bag's cards sat under the thumb buttons (SWAP, RELOAD, MELEE, FIRE … over the melee card

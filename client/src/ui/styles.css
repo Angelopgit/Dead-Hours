@@ -999,7 +999,9 @@ body.touch-play .hud-top:has(.notice.showing) .warning { display: none; }
 body.touch-play .phase-timer { font-size: 0.75em; letter-spacing: 0.04em; line-height: 1.3; }
 body.touch-play .warning { font-size: 0.7em; letter-spacing: 0.06em; line-height: 1.3; }
 body.touch-play .notice { font-size: 1em; line-height: 1.15; letter-spacing: calc(0.06em * var(--ls, 1)); margin-top: 0.1em; }
-body.touch-play .notice small { margin-top: 0.3em; line-height: 1.25; letter-spacing: 0.02em; }
+/* The line under a notice keeps close to the ammo panel's small letters (9.1 px at a 14 px HUD): at the desktop's
+   0.55em it was 7.7 px, the smallest text on a phone. The longest (the driving keys) still takes two lines at 568x320. */
+body.touch-play .notice small { margin-top: 0.3em; line-height: 1.25; letter-spacing: 0.02em; font-size: 0.65em; }
 /* The feed under the top-right buttons, ending above the thumb buttons (only the newest lines that fit stay). */
 body.touch-play .feed { bottom: auto; top: var(--stack-top); right: calc(16px + env(safe-area-inset-right));
   max-width: calc(var(--side) - 16px - env(safe-area-inset-right)); max-height: calc(100% - var(--stack-top) - var(--cluster-h) - 0.4 * var(--u));
