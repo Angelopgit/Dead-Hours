@@ -2008,10 +2008,17 @@ export class GameSession {
       const what = WEAPONS[best.it!.weapon ?? 'machete'].model;
       const pair = best.it!.weapon === 'katana' && mine === 'katana';
       if (best.it!.weapon === 'katana' && mine === 'katanas') this.hud.setPrompt(null, 'BOTH HANDS HOLD A KATANA');
+      // The same thing as the one in hand is not picked up (it read "SWAP FOR BASEBALL BAT, LEAVES THE BASEBALL BAT").
+      else if (best.it!.weapon === mine && !pair) this.hud.setPrompt(null, `${what}, YOU ALREADY CARRY ONE`);
       else this.hud.setPrompt('interact', pair ? 'PICK UP A SECOND KATANA FOR TWO HANDS'
         : mine === 'machete' ? `PICK UP ${what}` : `SWAP FOR ${what}, LEAVES THE ${WEAPONS[mine].model}`);
     }
-    else if (best.kind === 'exclusive') this.hud.setPrompt('interact', `TAKE ${WEAPONS[best.it!.weapon ?? 'ar'].model}, REPLACES ${WEAPONS[this.me.arsenal.primary.id].model}`);
+    else if (best.kind === 'exclusive') {
+      // A rack holds a few of its gun: the one just taken from it read "TAKE M249 SAW, REPLACES M249 SAW".
+      const gun = best.it!.weapon ?? 'ar', mine = this.me.arsenal.primary.id;
+      if (gun === mine) this.hud.setPrompt(null, `${WEAPONS[gun].model}, YOU ALREADY CARRY ONE`);
+      else this.hud.setPrompt('interact', `TAKE ${WEAPONS[gun].model}, REPLACES ${WEAPONS[mine].model}`);
+    }
     else if (best.kind === 'board') this.hud.setPrompt('interact', 'RIDE THE SKATEBOARD');
     else if (best.kind === 'vehicle') {
       const v = best.vehicle!;

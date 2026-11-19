@@ -183,6 +183,15 @@ check(none === null, 'nothing near: full speed');
       && /if \(\(this\.sharesTaken\.get\(it\.id\) \?\? 0\) >= SUPPLY_DROPS\.perPlayerLimit\) this\.hud\.setPrompt\(null, 'YOU TOOK YOUR SHARE'\);\s*else this\.hud\.setPrompt\('interact', `TAKE \$\{what\}/.test(game),
       'supply crate: past your share the prompt is a status, not an offer to take');
   }
+  // A gun rack holds a few of its gun, and the one just taken from it read "TAKE M249 SAW, REPLACES M249 SAW"; a bat
+  // found by a bat carrier read "SWAP FOR BASEBALL BAT, LEAVES THE BASEBALL BAT". The night refuses both, so the
+  // prompt is a status (no key, the phone's USE button dark), worded like the syringe's.
+  {
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(/if \(gun === mine\) this\.hud\.setPrompt\(null, `\$\{WEAPONS\[gun\]\.model\}, YOU ALREADY CARRY ONE`\);\s*else this\.hud\.setPrompt\('interact', `TAKE \$\{WEAPONS\[gun\]\.model\}, REPLACES/.test(game)
+      && /else if \(best\.it!\.weapon === mine && !pair\) this\.hud\.setPrompt\(null, `\$\{what\}, YOU ALREADY CARRY ONE`\);\s*else this\.hud\.setPrompt\('interact', pair \?/.test(game),
+      'a weapon already carried (a rack\'s gun, a found bat) is a status, not an offer to take it');
+  }
   // The feed is capitals, a comma between two things (docs/style.md). The two lines at the start of a quiet spell
   // were typed in sentence case with a colon ("Downtime: no zombies coming for 01:30") and stood out in it.
   {
