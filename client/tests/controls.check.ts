@@ -255,6 +255,8 @@ check(none === null, 'nothing near: full speed');
       ['HOLD TO REVIVE DANA LEE', 'REVIVE'], ['TAKE AT4, REPLACES M4A1', 'TAKE AT4'], ['TAKE M107 .50 CAL, REPLACES M4A1', 'TAKE M107'],
       ['TAKE BANDAGES, 2 LEFT', 'TAKE BANDAGES'], ['SWAP FOR SEVERED ARM, 1 HIT', 'SWAP FOR'], ['PICK UP PIPE WRENCH', 'PICK UP'],
       ['SLOW DOWN TO GET OUT, SEAT MOVES OVER', 'SLOW DOWN'],
+      // Held over a downed teammate the prompt counts up, and the button read "REVIVING DANA" for Dana Lee.
+      ['REVIVING DANA LEE, 42%', 'REVIVING'], ['REVIVING DANA, 42%', 'REVIVING DANA'], ['PRYING A BOARD OFF, 2/3, 40%', 'PRYING'],
     ];
     const wrong = says.filter(([prompt, want]) => shortUse(prompt) !== want).map(([prompt]) => `"${prompt}" reads "${shortUse(prompt)}"`);
     check(!wrong.length, wrong.length ? `phone: USE label ${wrong.join('; ')}` : `phone: the USE button never stops at "THE", "A" or "HOLD TO", or halfway through a name (${says.length} prompts)`);

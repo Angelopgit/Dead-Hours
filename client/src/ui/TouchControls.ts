@@ -301,11 +301,12 @@ export class TouchControls {
  * "TAKE AMMUNITION"), never cut at "THE" or "A" ("DRIVE THE HUMVEE" → "DRIVE", not "DRIVE THE"), and the deed
  * itself where the prompt opens with "HOLD TO" ("HOLD TO REVIVE DANA" → "REVIVE DANA"). Where the thing taken,
  * injected or revived has a name of several words the verb stands alone, not with half the name:
- * "INJECT RAPID RELOAD SHOT" → "INJECT" (it read "INJECT RAPID"), "TAKE UNIVERSAL AMMO + GRENADES" → "TAKE".
+ * "INJECT RAPID RELOAD SHOT" → "INJECT" (it read "INJECT RAPID"), "TAKE UNIVERSAL AMMO + GRENADES" → "TAKE",
+ * and while the button is held "REVIVING DANA LEE, 42%" → "REVIVING" (it read "REVIVING DANA").
  */
 export function shortUse(text: string): string {
   const words = text.split(/[·,.:]/)[0].trim().replace(/^HOLD TO /, '').split(' ');
-  const alone = /^(THE|A|AN)$/.test(words[1] ?? '') || (words.length > 2 && /^(TAKE|INJECT|REVIVE)$/.test(words[0]));
+  const alone = /^(THE|A|AN)$/.test(words[1] ?? '') || (words.length > 2 && /^(TAKE|INJECT|REVIVE|REVIVING)$/.test(words[0]));
   return words.slice(0, alone ? 1 : 2).join(' ');
 }
 
