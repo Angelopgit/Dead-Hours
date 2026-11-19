@@ -174,6 +174,15 @@ check(none === null, 'nothing near: full speed');
       && !/interact/i.test(phone + keys + L.plain(padKeys)) && /IS DOWN`, reviveHint\(\)/.test(game) && !/hold interact/i.test(game),
       `teammate down: the notice names the button that picks them up ("${keys}", "${L.plain(padKeys)}", "${phone}")`);
   }
+  // A supply crate gives each survivor two takes. After them it kept offering "TAKE UNIVERSAL AMMO, 1 LEFT" with
+  // the key and the phone's USE button lit, and a press only said YOU TOOK YOUR SHARE in the feed: the night counts
+  // its own takes from each crate and shows that as a status.
+  {
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(/e\.item === 'supply'\) \{\s*this\.sharesTaken\.set\(e\.source, \(this\.sharesTaken\.get\(e\.source\) \?\? 0\) \+ 1\);/.test(game)
+      && /if \(\(this\.sharesTaken\.get\(it\.id\) \?\? 0\) >= SUPPLY_DROPS\.perPlayerLimit\) this\.hud\.setPrompt\(null, 'YOU TOOK YOUR SHARE'\);\s*else this\.hud\.setPrompt\('interact', `TAKE \$\{what\}/.test(game),
+      'supply crate: past your share the prompt is a status, not an offer to take');
+  }
   // The feed is capitals, a comma between two things (docs/style.md). The two lines at the start of a quiet spell
   // were typed in sentence case with a colon ("Downtime: no zombies coming for 01:30") and stood out in it.
   {

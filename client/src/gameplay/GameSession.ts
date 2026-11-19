@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, seatStands, mansTurret, LIMB_NAME,
+  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SUPPLY_DROPS, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, seatStands, mansTurret, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -210,6 +210,8 @@ export class GameSession {
   /** Found melee weapons lying around indoors. */
   private readonly pickups: MeleePickups;
   private meleeHinted = false;
+  /** How often this survivor took from each supply crate (by its id): past their share the crate gives them nothing. */
+  private readonly sharesTaken = new Map<number, number>();
   /** Boost syringes lying on furniture in the houses. */
   private readonly syringes: SyringePickups;
   private boostHinted = false;
@@ -1990,7 +1992,9 @@ export class GameSession {
     else if (best.kind === 'supply') {
       const it = best.it!;
       const what = ['UNIVERSAL AMMO', it.frags ? 'GRENADES' : '', it.molotovs ? 'MOLOTOVS' : ''].filter(Boolean).join(' + ');
-      this.hud.setPrompt('interact', `TAKE ${what}, ${it.supply} LEFT`);
+      // Nobody takes more than their share of a crate. It kept offering "TAKE UNIVERSAL AMMO, 1 LEFT" after that.
+      if ((this.sharesTaken.get(it.id) ?? 0) >= SUPPLY_DROPS.perPlayerLimit) this.hud.setPrompt(null, 'YOU TOOK YOUR SHARE');
+      else this.hud.setPrompt('interact', `TAKE ${what}, ${it.supply} LEFT`);
     }
     else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()}, ARMOR AGAINST THE DEAD`);
     else if (best.kind === 'boost') {
@@ -3477,6 +3481,7 @@ export class GameSession {
         this.firstNight.mark('stock');
         if (e.item === 'ammo') this.hud.feedLine(`AMMUNITION +${e.amount}`);
         else if (e.item === 'supply') {
+          this.sharesTaken.set(e.source, (this.sharesTaken.get(e.source) ?? 0) + 1);
           this.hud.feedLine(`UNIVERSAL AMMO +${e.amount}`);
           this.hud.notify('ALL WEAPONS RESUPPLIED', 'Every gun you carry is full.', 2.2);
         }
