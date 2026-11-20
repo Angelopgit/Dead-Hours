@@ -622,8 +622,21 @@ export function seatHint(device: Device = current): string {
  * key, the controller's button drawn, a phone's USE). It read "hold interact", which no button is called.
  */
 export function reviveHint(device: Device = current): string {
-  const key = device === 'touch' ? 'USE' : device === 'pad' ? padLabel('interact') : codeLabel(settings.value.controls.bindings.interact[0] ?? '');
+  const key = useKey(device);
   return key ? `Get to them and hold ${key} to pick them up.` : 'Get to them and pick them up.';
+}
+
+/** The button that uses, takes and picks up, by its name on a device ('' with no key bound). */
+function useKey(device: Device): string {
+  return device === 'touch' ? 'USE' : device === 'pad' ? padLabel('interact') : codeLabel(settings.value.controls.bindings.interact[0] ?? '');
+}
+
+/**
+ * A loading tip as it reads on the device in use: "{use}" in it becomes that button (the key, the controller's
+ * button drawn, a phone's USE). The tip about a downed teammate read "hold interact".
+ */
+export function tipText(tip: string, device: Device = current): string {
+  return tip.replace('{use}', useKey(device) || 'the use key');
 }
 
 /**

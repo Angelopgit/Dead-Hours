@@ -202,6 +202,20 @@ check(none === null, 'nothing near: full speed');
     check(phrases.length >= 30 && !wrong.length, wrong.length ? `feed lines not in capitals or with a colon, dot or shout: ${wrong.join(' | ')}`
       : `the feed's lines are all capitals, none with a colon or a middle dot (${phrases.length} phrases)`);
   }
+  // The loading tip about a downed teammate also said "hold interact". A tip names that button as "{use}" and the
+  // loading card writes it for the device in use, drawing a controller's button.
+  {
+    const { tipText } = await import('../src/core/Input');
+    const { TIPS } = await import('../src/ui/LoadingScreen');
+    const card = readFileSync(new URL('../src/ui/LoadingScreen.ts', import.meta.url), 'utf8');
+    const tip = TIPS.find((t) => /downed teammate/i.test(t)) ?? '';
+    const shown = (['mouse', 'pad', 'touch'] as const).map((d) => tipText(tip, d));
+    const left = TIPS.flatMap((t) => (['mouse', 'pad', 'touch'] as const).map((d) => L.plain(tipText(t, d)))).filter((t) => /[{}]|\binteract\b/i.test(t));
+    check(shown[0] === 'A downed teammate can be picked up. Get to them and hold E.' && shown[2] === 'A downed teammate can be picked up. Get to them and hold USE.'
+      && L.plain(shown[1]) === `A downed teammate can be picked up. Get to them and hold ${L.plain(L.padLabel('interact'))}.` && shown[1] !== L.plain(shown[1])
+      && !left.length && /h\('p', \{ class: 'loading-tip' \}, \.\.\.richNodes\(tipText\(tip\)\)\)/.test(card),
+      left.length ? `loading tips still name an action or a placeholder: ${left.join(' | ')}` : `loading tips name the button that picks things up ("${shown[0]}", "${shown[2]}")`);
+  }
   // Something in reach that no button does anything to (a door boarded from inside, a syringe whose boost is
   // still running, a third katana) is a status: it read "[E] BOTH HANDS HOLD A KATANA" and lit the phone's USE
   // button with "BOTH HANDS" (and its BOARD button at the boarded door).

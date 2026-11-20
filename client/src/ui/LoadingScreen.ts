@@ -1,6 +1,8 @@
 import gsap from 'gsap';
 import { GAME } from '@dead-hours/shared';
+import { tipText } from '../core/Input';
 import { h } from './dom';
+import { richNodes } from './Glyphs';
 
 /** What is being got ready, in order, and roughly how much of the wait each one is. */
 export const LOAD_STEPS = {
@@ -14,7 +16,10 @@ export const LOAD_STEPS = {
 export type LoadStep = keyof typeof LOAD_STEPS;
 const ORDER = Object.keys(LOAD_STEPS) as LoadStep[];
 
-/** One of these is read out while a night loads. Keep them true to the tuning (shared/src/config). */
+/**
+ * One of these is read out while a night loads. Keep them true to the tuning (shared/src/config). "{use}" is the
+ * button that picks things up, named for the device in use (Input.tipText).
+ */
 export const TIPS = [
   'A bandage takes 2.6 seconds and gives back 40 health. You can\'t shoot while you wrap it.',
   'Board the ground-floor windows before the first horde. They pound on boards before they get through.',
@@ -26,7 +31,7 @@ export const TIPS = [
   'Take a crawler\'s legs and it still comes for you. Finish it.',
   'Supply drops refill every gun you carry. The rare ones bring something better.',
   'A van of armed raiders comes later in the night. Their van has supplies in the back.',
-  'A downed teammate can be picked up. Get to them and hold interact.',
+  'A downed teammate can be picked up. Get to them and hold {use}.',
   'Wooden doors stop zombies, not bullets. You can shoot through them.',
 ];
 
@@ -53,7 +58,7 @@ export class LoadingScreen {
       h('div', { class: 'loading-card' },
         h('div', { class: 'loading-title' }, GAME.town.toUpperCase()),
         h('div', { class: 'loading-caption' }, caption),
-        h('p', { class: 'loading-tip' }, tip),
+        h('p', { class: 'loading-tip' }, ...richNodes(tipText(tip))),
         this.bar,
         this.status,
       ),
