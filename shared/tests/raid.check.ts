@@ -157,6 +157,9 @@ section('The van comes once, after seven minutes');
   check(killed === RAID.raiders && sim.raid.stage === 'over', `the survivor kills all ${killed} (raid over)`);
   check(of(events, 'raiderHit').every((e) => e.by === 'A') && p.stats.damageDealt > RAID.health * RAID.raiders * 0.9, 'every hit is credited to the shooter');
   check(of(events, 'notice').some((e) => e.text === 'RAIDERS ELIMINATED'), 'everyone hears the raid is over');
+  // A notice's second line is a sentence. "Engine noise from Pell Lane south" was the one without its full stop.
+  const subs = of(events, 'notice').flatMap((e) => (e.sub ? [e.sub] : []));
+  check(subs.length >= 3 && subs.every((s) => /[.?]$/.test(s)), `the raid's notices end their second line with a full stop (${subs.join(' | ')})`);
   const cargo = sim.interactables.filter((it) => it.kind === 'supply' || it.kind === 'medical').filter((it) => Math.hypot(it.pos.x - van.pos.x, it.pos.z - van.pos.z) < 5);
   check(cargo.length === 2, 'their van holds universal ammo and bandages');
   run(1.2, () => noZombies(sim));

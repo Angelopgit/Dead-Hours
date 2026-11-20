@@ -624,7 +624,7 @@ export class Raid {
     }
     this.stage = 'inbound';
     sim.emit({ type: 'raid', stage: 'inbound', route: best, pos: { ...this.van.pos }, count: RAID.raiders });
-    sim.emit({ type: 'notice', player: null, text: 'VEHICLE APPROACHING', sub: `Engine noise from ${RAID_ROUTES[best].name}` });
+    sim.emit({ type: 'notice', player: null, text: 'VEHICLE APPROACHING', sub: `Engine noise from ${RAID_ROUTES[best].name}.` });
     return true;
   }
 
