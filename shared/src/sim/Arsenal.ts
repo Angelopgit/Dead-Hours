@@ -446,6 +446,15 @@ export class Arsenal {
     this.actionTotal = this.actionT = this.def.draw;
   }
 
+  /**
+   * Whether a crate has anything this survivor can take: rounds for either gun, or a grenade or a Molotov where
+   * the crate hands them out (an ammunition crate does both). For the prompt; use() itself decides what is taken.
+   */
+  hasRoomFor(frags: boolean, molotovs: boolean): boolean {
+    return this.primary.reserve < this.defOf(this.primary.id).maxReserve || this.secondary.reserve < this.defOf(this.secondary.id).maxReserve
+      || (frags && this.throwables.frag < THROWABLES.frag.max) || (molotovs && this.throwables.molotov < THROWABLES.molotov.max);
+  }
+
   /** Adds rounds to a weapon's reserve up to its carry limit; returns how many fit. */
   addReserve(slot: 'primary' | 'secondary', rounds: number): number {
     const w = slot === 'primary' ? this.primary : this.secondary;

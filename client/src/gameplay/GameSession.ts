@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import {
-  BOOSTS, BARRICADE, BICYCLE, C2S, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SUPPLY_DROPS, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, seatStands, mansTurret, LIMB_NAME,
+  BOOSTS, BARRICADE, BICYCLE, C2S, COMBAT, DOOR_WOOD, STRUCTURE_STATE, DOWNED, DRIVE_FLAG, GAME, GORE, HORDES, LULLS, MELEE, isMelee, Mirror, isGoreGun, NEIGHBORHOOD, boostLeft, type BoostId, hordeAt, lullLeft, PLAYER, PRIMARY_WEAPONS, SECONDARY_WEAPONS, SERUM, SKATEBOARD, SUPPLY_DROPS, SKATE_TRICKS, Simulation, VEHICLE, WEAPONS, seatDrop, seatStands, mansTurret, LIMB_NAME,
   encodeAppearance, isLeg, outsideBy, packDrive, packMotion, sanitizeAppearance,
   findVault, porches, type Porch, type VaultChoice, type VaultPlan,
   buildable, defaultBuild, encodeBuild, sanitizeBuild, type WeaponBuild,
@@ -1987,13 +1987,22 @@ export class GameSession {
       if (locked) this.hud.setPrompt(null, 'BOARDED UP FROM INSIDE');
       else this.hud.setPrompt('interact', `${best.door!.open ? 'CLOSE DOOR' : 'OPEN DOOR'}${hint}`);
     }
-    else if (best.kind === 'ammo') this.hud.setPrompt('interact', `TAKE AMMUNITION, ${best.it!.supply} LEFT`);
-    else if (best.kind === 'medical') this.hud.setPrompt('interact', `TAKE BANDAGES, ${best.it!.supply} LEFT`);
+    // A crate with nothing for full pockets says so: it kept offering "TAKE AMMUNITION, 3 LEFT" with the key and the
+    // phone's USE button lit, and a press only wrote AMMUNITION FULL in the feed.
+    else if (best.kind === 'ammo') {
+      if (!this.me.arsenal.hasRoomFor(true, true)) this.hud.setPrompt(null, `AMMUNITION FULL, ${best.it!.supply} LEFT HERE`);
+      else this.hud.setPrompt('interact', `TAKE AMMUNITION, ${best.it!.supply} LEFT`);
+    }
+    else if (best.kind === 'medical') {
+      if (this.me.bandages >= COMBAT.maxBandages) this.hud.setPrompt(null, `BANDAGES FULL, ${best.it!.supply} LEFT HERE`);
+      else this.hud.setPrompt('interact', `TAKE BANDAGES, ${best.it!.supply} LEFT`);
+    }
     else if (best.kind === 'supply') {
       const it = best.it!;
       const what = ['UNIVERSAL AMMO', it.frags ? 'GRENADES' : '', it.molotovs ? 'MOLOTOVS' : ''].filter(Boolean).join(' + ');
       // Nobody takes more than their share of a crate. It kept offering "TAKE UNIVERSAL AMMO, 1 LEFT" after that.
       if ((this.sharesTaken.get(it.id) ?? 0) >= SUPPLY_DROPS.perPlayerLimit) this.hud.setPrompt(null, 'YOU TOOK YOUR SHARE');
+      else if (!this.me.arsenal.hasRoomFor(!!it.frags, !!it.molotovs)) this.hud.setPrompt(null, `AMMUNITION FULL, ${it.supply} LEFT HERE`);
       else this.hud.setPrompt('interact', `TAKE ${what}, ${it.supply} LEFT`);
     }
     else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()}, ARMOR AGAINST THE DEAD`);

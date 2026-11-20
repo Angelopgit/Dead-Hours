@@ -180,7 +180,7 @@ check(none === null, 'nothing near: full speed');
   {
     const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
     check(/e\.item === 'supply'\) \{\s*this\.sharesTaken\.set\(e\.source, \(this\.sharesTaken\.get\(e\.source\) \?\? 0\) \+ 1\);/.test(game)
-      && /if \(\(this\.sharesTaken\.get\(it\.id\) \?\? 0\) >= SUPPLY_DROPS\.perPlayerLimit\) this\.hud\.setPrompt\(null, 'YOU TOOK YOUR SHARE'\);\s*else this\.hud\.setPrompt\('interact', `TAKE \$\{what\}/.test(game),
+      && /if \(\(this\.sharesTaken\.get\(it\.id\) \?\? 0\) >= SUPPLY_DROPS\.perPlayerLimit\) this\.hud\.setPrompt\(null, 'YOU TOOK YOUR SHARE'\);\s*else if [^\n]*\n\s*else this\.hud\.setPrompt\('interact', `TAKE \$\{what\}/.test(game),
       'supply crate: past your share the prompt is a status, not an offer to take');
   }
   // A gun rack holds a few of its gun, and the one just taken from it read "TAKE M249 SAW, REPLACES M249 SAW"; a bat
@@ -191,6 +191,16 @@ check(none === null, 'nothing near: full speed');
     check(/if \(gun === mine\) this\.hud\.setPrompt\(null, `\$\{WEAPONS\[gun\]\.model\}, YOU ALREADY CARRY ONE`\);\s*else this\.hud\.setPrompt\('interact', `TAKE \$\{WEAPONS\[gun\]\.model\}, REPLACES/.test(game)
       && /else if \(best\.it!\.weapon === mine && !pair\) this\.hud\.setPrompt\(null, `\$\{what\}, YOU ALREADY CARRY ONE`\);\s*else this\.hud\.setPrompt\('interact', pair \?/.test(game),
       'a weapon already carried (a rack\'s gun, a found bat) is a status, not an offer to take it');
+  }
+  // A crate with nothing for full pockets kept offering "TAKE AMMUNITION, 3 LEFT" (and the first aid box "TAKE
+  // BANDAGES, 2 LEFT") with the key and the phone's USE button lit; a press only wrote AMMUNITION FULL in the feed.
+  // Each is a status then, with what is left in it (Arsenal.hasRoomFor is checked against the crate in check:sim).
+  {
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(/if \(!this\.me\.arsenal\.hasRoomFor\(true, true\)\) this\.hud\.setPrompt\(null, `AMMUNITION FULL, \$\{best\.it!\.supply\} LEFT HERE`\);\s*else this\.hud\.setPrompt\('interact', `TAKE AMMUNITION,/.test(game)
+      && /if \(this\.me\.bandages >= COMBAT\.maxBandages\) this\.hud\.setPrompt\(null, `BANDAGES FULL, \$\{best\.it!\.supply\} LEFT HERE`\);\s*else this\.hud\.setPrompt\('interact', `TAKE BANDAGES,/.test(game)
+      && /else if \(!this\.me\.arsenal\.hasRoomFor\(!!it\.frags, !!it\.molotovs\)\) this\.hud\.setPrompt\(null, `AMMUNITION FULL, \$\{it\.supply\} LEFT HERE`\);/.test(game),
+      'crates: with full pockets the ammunition crate, the first aid box and a supply crate say FULL, not TAKE');
   }
   // The feed is capitals, a comma between two things (docs/style.md). The two lines at the start of a quiet spell
   // were typed in sentence case with a colon ("Downtime: no zombies coming for 01:30") and stood out in it.

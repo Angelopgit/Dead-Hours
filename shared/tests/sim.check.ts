@@ -106,6 +106,24 @@ for (const [name, a, b] of routes) {
 
 section('Weapons');
 {
+  // hasRoomFor (the crate prompts) agrees with what a crate would hand over, pocket by pocket.
+  const a = new Arsenal('ar', 'pistol');
+  const fill = () => { a.addReserve('primary', 9999); a.addReserve('secondary', 9999); a.addThrowable('frag', 99); a.addThrowable('molotov', 99); };
+  fill();
+  check(!a.hasRoomFor(true, true) && !a.hasRoomFor(false, false), 'full pockets: a crate has nothing to hand over');
+  a.throwables.frag--;
+  check(a.hasRoomFor(true, true) && a.hasRoomFor(true, false) && !a.hasRoomFor(false, true) && !a.hasRoomFor(false, false),
+    'a grenade short: only a crate that carries grenades has something');
+  fill();
+  a.throwables.molotov--;
+  check(a.hasRoomFor(false, true) && !a.hasRoomFor(true, false), 'a Molotov short: only a crate that carries Molotovs has something');
+  fill();
+  a.secondary.reserve--;
+  check(a.hasRoomFor(false, false) && a.addReserve('secondary', 9999) === 1 && !a.hasRoomFor(true, true), 'a round short in the pistol: any crate has something');
+  a.primary.reserve -= 5;
+  check(a.hasRoomFor(false, false) && a.addReserve('primary', 9999) === 5 && !a.hasRoomFor(true, true), 'rounds short in the rifle: any crate has something');
+}
+{
   const a = new Arsenal('ar', 'pistol');
   const ticks: never[] = [];
   const stepFor = (s: number, aim = false) => { for (let i = 0; i < Math.round(s / DT); i++) a.step(DT, aim, ticks as never); };
