@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, OUTFIT_KITS, WEAPONS, defaultBuild, type WeaponId } from '@dead-hours/shared';
 import { createWeaponModel } from '../src/weapons/WeaponModels';
+import { bakeOcclusion, occlusionBakes } from '../src/rendering/Solid';
 import { Humanoid, survivorLook, zombieLook } from '../src/characters/Humanoid';
 
 let failures = 0, passes = 0;
@@ -63,6 +64,53 @@ for (const id of Object.keys(WEAPONS) as WeaponId[]) {
     else console.log(`  wait ${line}, not rebuilt yet`);
   }
   m.dispose();
+}
+
+// A model's shading bake is most of the work of building it (20 to 35 ms of a rifle's 30 to 45), and the same gun
+// is built again and again: in the hands, in a supply case (the frame a drop was called froze for it), on a rack,
+// lying about. Each bake is kept by what went in, so only the first build of a model pays for it.
+console.log('\nShading bakes are kept');
+{
+  const colors = (id: WeaponId): number[] => {
+    const m = createWeaponModel(id, defaultBuild(id));
+    const out: number[] = [];
+    m.root.traverse((o) => {
+      const c = (o as THREE.Mesh).geometry?.getAttribute('color');
+      if (c) for (let i = 0; i < c.array.length; i++) out.push(c.array[i]);
+    });
+    m.dispose();
+    return out;
+  };
+  const ids = (Object.keys(WEAPONS) as WeaponId[]).filter((id) => id !== 'akimbo' && id !== 'katanas');
+  const first = ids.map(colors);
+  const run = occlusionBakes.run, kept = occlusionBakes.kept;
+  const again = ids.map(colors);
+  check(occlusionBakes.run === run && occlusionBakes.kept > kept, `every weapon built again works out no bake (${occlusionBakes.run - run} worked out, ${occlusionBakes.kept - kept} answered from the ones kept)`);
+  const differs = ids.filter((_, k) => first[k].length !== again[k].length || first[k].some((v, i) => v !== again[k][i]));
+  check(differs.length === 0, `a model built from kept bakes has the same colors, vertex for vertex${differs.length ? ` (not ${differs.join(', ')})` : ''}`);
+  // Two facing squares 12 mm apart shade each other; pulled 1 mm further apart they are another bake.
+  const squares = (gap: number) => {
+    const pos: number[] = [], nor: number[] = [];
+    for (const [y, n] of [[0, 1], [gap, -1]]) {
+      const quad = n > 0 ? [[0, 0], [0, 0.02], [0.02, 0], [0.02, 0], [0, 0.02], [0.02, 0.02]] : [[0, 0], [0.02, 0], [0, 0.02], [0.02, 0], [0.02, 0.02], [0, 0.02]];
+      for (const [x, z] of quad) {
+        pos.push(x, y, z);
+        nor.push(0, n, 0);
+      }
+    }
+    return [new Float32Array(pos), new Float32Array(nor)] as const;
+  };
+  const [p1, n1] = squares(0.012);
+  const a = bakeOcclusion(p1, n1, 0.02);
+  const mark = occlusionBakes.run;
+  const [p2, n2] = squares(0.012);
+  a[0] = -5;
+  const b = bakeOcclusion(p2, n2, 0.02);
+  check(occlusionBakes.run === mark && b[0] !== -5 && b.some((v) => v < 1), 'the same shape again is answered from the kept bake, whatever was done to the answer given before');
+  const [p3, n3] = squares(0.013);
+  bakeOcclusion(p3, n3, 0.02);
+  bakeOcclusion(p2, n2, 0.03);
+  check(occlusionBakes.run === mark + 2, 'a shape 1 mm different, or the same shape with another reach, is worked out afresh');
 }
 
 console.log('\nBodies');

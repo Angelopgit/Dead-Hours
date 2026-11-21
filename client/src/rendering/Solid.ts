@@ -281,6 +281,39 @@ export function loft(rings: Ring[], opts: LoftOptions = {}): THREE.BufferGeometr
  * which is what makes separate parts read as one object. `reach` is how far a surface shades.
  */
 export function bakeOcclusion(position: ArrayLike<number>, normal: ArrayLike<number>, reach: number): Float32Array {
+  // The same model is built over and over (a gun in the hands, in a supply case, on a rack, lying about) and its bake
+  // is most of the work: 20 to 35 ms of a rifle's 30 to 45. Each bake is kept by what went in and answered from there.
+  if (!(position instanceof Float32Array) || !(normal instanceof Float32Array)) return occlusion(position, normal, reach);
+  const key = `${position.length}|${reach}|${bits(position, 2166136261)}|${bits(position, 40503)}|${bits(normal, 2166136261)}|${bits(normal, 40503)}`;
+  let kept = baked.get(key);
+  if (kept) occlusionBakes.kept++;
+  else {
+    occlusionBakes.run++;
+    kept = occlusion(position, normal, reach);
+    if (baked.size >= BAKED_MAX) baked.delete(baked.keys().next().value!);
+    baked.set(key, kept);
+  }
+  return kept.slice();
+}
+
+const baked = new Map<string, Float32Array>();
+/** About 30 KB a rifle part; the night's guns with their usual fittings come to under a hundred. */
+const BAKED_MAX = 256;
+/** Bakes worked out and bakes answered from the ones kept (for the checks). */
+export const occlusionBakes = { run: 0, kept: 0 };
+
+/** A 32-bit hash of an array's exact bits (two of them with different seeds name a bake). */
+function bits(a: Float32Array, seed: number): number {
+  const w = new Uint32Array(a.buffer, a.byteOffset, a.length);
+  let h = seed >>> 0;
+  for (let i = 0; i < w.length; i++) {
+    h = Math.imul(h ^ w[i], 16777619) + seed;
+    h ^= h >>> 15;
+  }
+  return h >>> 0;
+}
+
+function occlusion(position: ArrayLike<number>, normal: ArrayLike<number>, reach: number): Float32Array {
   const count = position.length / 3;
   const out = new Float32Array(count).fill(1);
   if (count === 0) return out;
@@ -297,10 +330,12 @@ export function bakeOcclusion(position: ArrayLike<number>, normal: ArrayLike<num
   const dim = [0, 1, 2].map((k) => Math.ceil((max[k] - min[k]) / cell) + 1 + pad * 2);
   if (dim[0] * dim[1] * dim[2] > 6_000_000) return out;
   const grid = new Uint8Array(dim[0] * dim[1] * dim[2]);
+  // Plain numbers, not array reads: this runs a few hundred thousand times a model.
+  const x0 = min[0], y0 = min[1], z0 = min[2], nx = dim[0], ny = dim[1], nz = dim[2];
   const index = (x: number, y: number, z: number): number => {
-    const ix = Math.floor((x - min[0]) / cell) + pad, iy = Math.floor((y - min[1]) / cell) + pad, iz = Math.floor((z - min[2]) / cell) + pad;
-    if (ix < 0 || iy < 0 || iz < 0 || ix >= dim[0] || iy >= dim[1] || iz >= dim[2]) return -1;
-    return (iz * dim[1] + iy) * dim[0] + ix;
+    const ix = Math.floor((x - x0) / cell) + pad, iy = Math.floor((y - y0) / cell) + pad, iz = Math.floor((z - z0) / cell) + pad;
+    if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) return -1;
+    return (iz * ny + iy) * nx + ix;
   };
   // Mark every cell a triangle passes through.
   const step = cell * 0.6;
