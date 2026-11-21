@@ -264,7 +264,10 @@ try {
   b.send(C2S.debug, { cmd: 'skipPreparation' });
   check(await until(() => a.events.some((e) => e.type === 'phase' && e.phase === 'survival') && b.events.some((e) => e.type === 'phase' && e.phase === 'survival')), 'outbreak begins for both');
   b.send(C2S.motion, motionAt(pos, spawnB.yaw));
-  b.send(C2S.debug, { cmd: 'spawn', dist: 2.5, angle: 0, kind: 'walker' });
+  // Behind the guest, in the room with them. Straight ahead (angle 0) is the house wall, 1.8 m off: the zombie rose
+  // in the yard and every shot hit the wall until it wandered past the window, which a busy machine did not always
+  // see happen before the magazine ran out.
+  b.send(C2S.debug, { cmd: 'spawn', dist: 2.5, angle: Math.PI, kind: 'walker' });
   await until(() => { pump(); return view.sim.zombies.length > 0; }, 3000);
   check(view.sim.zombies.length === 1, 'a zombie appears in the guest\'s copy');
   const eye = { x: pos.x, y: pos.y + 1.6, z: pos.z };
