@@ -67,15 +67,21 @@ export class MeleePickups {
     scene.add(this.root);
   }
 
-  /** Adds weapons that turned up and removes ones taken, from the simulation's interactables. */
-  update(dt: number, sim: Simulation, camera: THREE.Camera): void {
+  /**
+   * Adds weapons that turned up and removes ones taken, from the simulation's interactables. One new model a frame
+   * (a model takes 5 to 16 ms, and the night starts with seven or eight lying about: 50 ms in the first frame of
+   * play); `all` builds every one at once, under the loading card.
+   */
+  update(dt: number, sim: Simulation, camera: THREE.Camera, all = false): void {
     this.time += dt;
     this.seen.clear();
+    let built = 0;
     for (const it of sim.interactables) {
       if (!it || it.kind !== 'melee' || it.supply <= 0 || !it.weapon || !isMelee(it.weapon)) continue;
       this.seen.add(it.id);
       let v = this.views.get(it.id);
       if (!v || v.weapon !== it.weapon) {
+        if (!all && built++ > 0) continue;
         if (v) this.remove(it.id);
         v = this.create(it, it.weapon);
       }

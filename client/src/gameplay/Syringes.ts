@@ -178,15 +178,21 @@ export class SyringePickups {
     scene.add(this.root);
   }
 
-  /** Adds syringes that turned up and removes ones taken, from the simulation's interactables. */
-  update(dt: number, sim: Simulation, camera: THREE.Camera): void {
+  /**
+   * Adds syringes that turned up and removes ones taken, from the simulation's interactables. One new syringe a
+   * frame (the night starts with a dozen or more, 10 ms in the first frame of play); `all` builds every one at once,
+   * under the loading card.
+   */
+  update(dt: number, sim: Simulation, camera: THREE.Camera, all = false): void {
     this.time += dt;
     this.seen.clear();
+    let built = 0;
     for (const it of sim.interactables) {
       if (!it || it.kind !== 'boost' || it.supply <= 0 || !it.boost) continue;
       this.seen.add(it.id);
       let v = this.views.get(it.id);
       if (!v || v.kind !== it.boost) {
+        if (!all && built++ > 0) continue;
         if (v) this.remove(it.id);
         v = this.create(it, it.boost);
       }

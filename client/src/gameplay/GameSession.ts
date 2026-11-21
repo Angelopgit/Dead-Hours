@@ -659,12 +659,26 @@ export class GameSession {
       smith.show('ar', defaultBuild('ar'));
       place(smith.holder, 1, 2);
       undo.push(() => smith.dispose());
+      this.layOut();
       stage.updateMatrixWorld(true);
     } catch (e) {
       done();
       throw e;
     }
     return done;
+  }
+
+  /**
+   * Builds what already lies about (skateboards and bicycles; online, the melee weapons and syringes too) while the
+   * loading card is up. The first frame of play built it all at once: 70 to 165 ms of the 175 it took. A solo night
+   * lays its melee weapons and syringes in its first step, so those are built one a frame (see MeleePickups.update).
+   */
+  private layOut(): void {
+    const cam = this.engine.camera;
+    this.pickups.update(0, this.sim, cam, true);
+    this.syringes.update(0, this.sim, cam, true);
+    this.skates.update(0, this.sim, cam, (b) => this.boardPose(b, 1));
+    this.bikes.update(0, this.sim, cam, (b) => this.bikePose(b, 1));
   }
 
   private applySettings(): void {

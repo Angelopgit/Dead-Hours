@@ -292,6 +292,31 @@ console.log('Reduced flashing softens the supply helicopter\'s lights');
   else ok('beacon and strobe swell and fade at half strength (under 0.05 a frame at 60 fps) with reduced flashing, blink as before without');
 }
 
+console.log('What lies about is built before the first frame of play');
+{
+  // The first frame of play (the cut from the intro into the survivor's eyes) built every lying bicycle, skateboard,
+  // melee weapon and syringe at once and took 175 ms. Bikes and boards are in the simulation from the start, so the
+  // loading card builds them (GameSession.layOut, called by prewarm); a solo night lays its melee weapons and syringes
+  // in its first step, so those are built one a frame.
+  let bad = '';
+  const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+  const warm = /\n {2}prewarm\(\): \(\) => void \{[^]*?\n {2}\}\n/.exec(game)?.[0] ?? '';
+  const lay = /\n {2}private layOut\(\): void \{[^]*?\n {2}\}\n/.exec(game)?.[0] ?? '';
+  if (!/this\.layOut\(\);/.test(warm)) bad ||= 'GameSession.prewarm no longer builds what lies about (layOut)';
+  for (const call of ['this.pickups.update(0, this.sim, cam, true)', 'this.syringes.update(0, this.sim, cam, true)', 'this.skates.update(0, this.sim, cam,', 'this.bikes.update(0, this.sim, cam,']) {
+    if (!lay.includes(call)) bad ||= `GameSession.layOut is missing ${call}`;
+  }
+  for (const file of ['MeleePickups', 'Syringes']) {
+    const src = readFileSync(new URL(`../src/gameplay/${file}.ts`, import.meta.url), 'utf8');
+    const update = /\n {2}update\(dt: number, sim: Simulation, camera: THREE\.Camera, all = false\): void \{[^]*?\n {2}\}\n/.exec(src)?.[0] ?? '';
+    if (!/let built = 0;[^]*?if \(!all && built\+\+ > 0\) continue;\s*if \(v\) this\.remove\(it\.id\);\s*v = this\.create\(/.test(update)) bad ||= `${file}.update builds more than one new model a frame`;
+    // A model waiting its turn must not be taken for one that is gone.
+    if (update.indexOf('this.seen.add(it.id);') < 0 || update.indexOf('this.seen.add(it.id);') > update.indexOf('built++')) bad ||= `${file}.update skips a waiting model before marking it seen`;
+  }
+  if (bad) fail(bad);
+  else ok('bikes and boards under the loading card, melee weapons and syringes one new model a frame');
+}
+
 if (failures) {
   console.log(`\n${failures} render check(s) FAILED`);
   process.exit(1);
