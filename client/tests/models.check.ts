@@ -6,6 +6,7 @@
  * Run with `npm run check:models`.
  */
 import * as THREE from 'three';
+import { readFileSync } from 'node:fs';
 import { DEFAULT_APPEARANCE, DEFAULT_FEMALE_APPEARANCE, OUTFIT_KITS, WEAPONS, defaultBuild, type WeaponId } from '@dead-hours/shared';
 import { createWeaponModel } from '../src/weapons/WeaponModels';
 import { bakeOcclusion, occlusionBakes } from '../src/rendering/Solid';
@@ -150,6 +151,41 @@ for (const [name, look] of [['man', DEFAULT_APPEARANCE], ['woman', DEFAULT_FEMAL
   });
   const ratio = (toe - heel) / top;
   check(ratio > 0.145 && ratio < 0.165, `survivor: shoe ${((toe - heel) * 100).toFixed(1)} cm on a ${(top * 100).toFixed(0)} cm body, ${(ratio * 100).toFixed(1)}% of the height (a real one is 15 to 16%)`);
+}
+// Every triangle of a body is one flat plane with its own three corners (docs/art-style.md), whatever its parts were
+// built from. The torso and pelvis used to be welded for smooth normals first, which the part sink took apart again
+// and threw away with the normals and texture coordinates it had carried along: a fifth of the 35 ms a new look
+// takes to build (a raider's, as each gets out of the van; every zombie look behind the loading card).
+{
+  let bad = '';
+  let tris = 0;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), face = new THREE.Vector3(), n = new THREE.Vector3();
+  for (const [name, look] of [['man', survivorLook(DEFAULT_APPEARANCE)], ['woman', survivorLook(DEFAULT_FEMALE_APPEARANCE)], ['walker', zombieLook(3)]] as const) {
+    const g = new Humanoid(look).mesh.geometry;
+    const p = g.getAttribute('position'), nor = g.getAttribute('normal');
+    if (g.index || p.count % 3 || g.getAttribute('uv')) {
+      bad ||= `${name}: corners are shared, or texture coordinates are carried along`;
+      continue;
+    }
+    for (let i = 0; i < p.count; i += 3) {
+      a.fromBufferAttribute(p, i);
+      b.fromBufferAttribute(p, i + 1);
+      c.fromBufferAttribute(p, i + 2);
+      face.subVectors(c, b).cross(n.subVectors(a, b));
+      // A sliver has no direction to speak of.
+      if (face.length() < 1e-9) continue;
+      face.normalize();
+      tris++;
+      for (let k = 0; k < 3; k++) {
+        if (Math.abs(n.fromBufferAttribute(nor, i + k).dot(face)) < 0.999) bad ||= `${name}: triangle ${i / 3} is not flat (corner ${k} leans ${(Math.acos(Math.min(1, Math.abs(n.dot(face)))) * 180 / Math.PI).toFixed(1)} degrees off its face)`;
+      }
+    }
+  }
+  if (/mergeVertices/.test(readFileSync(new URL('../src/characters/Outfit.ts', import.meta.url), 'utf8'))) bad ||= 'Outfit.ts welds corners again (the part sink only takes them apart)';
+  if (!/g\.deleteAttribute\('uv'\);\s*g\.deleteAttribute\('normal'\);\s*const geo = g\.index \? g\.toNonIndexed\(\) : g;/.test(readFileSync(new URL('../src/characters/Humanoid.ts', import.meta.url), 'utf8'))) {
+    bad ||= 'the part sink takes normals and texture coordinates apart before dropping them';
+  }
+  check(!bad, bad || `bodies: all ${tris} triangles of a man, a woman and a walker are flat, with nothing welded or carried along to get there`);
 }
 let sum = 0, worst = 0, draws = 0;
 const LOOKS = 30;

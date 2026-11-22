@@ -262,9 +262,11 @@ function buildBody(key: string, look: HumanoidLook, bones: THREE.Bone[]): BodyEn
   const skinHex = look.skin ?? paletteColor('skin', look.outfit.skin);
   const rand = rng(hashString(key));
   const sink: PartSink = (g, bone, hex, m, surf, blend) => {
+    // Neither is kept (the normals are worked out flat below): dropped first, they are not taken apart and moved either.
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
     const geo = g.index ? g.toNonIndexed() : g;
     if (geo !== g) g.dispose();
-    geo.deleteAttribute('uv');
     // Bone space first: soft shading and joint weights are laid out there.
     geo.applyMatrix4(m);
     // Faceted: every triangle is one flat plane, lit as a whole (docs/art-style.md). The

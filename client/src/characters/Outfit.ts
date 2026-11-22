@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { SHAPE_MID, paletteColor, type Appearance } from '@dead-hours/shared';
 import { BONE } from './rig';
 import { PATTERN, type Surface, type PartSink, O, TAU, mixHex, shade, luminance, Kit, type Ring, headSink, type Body, type Cover, COVERS_FACE, COVERS_MOUTH, MASKS, type Shins } from './OutfitKit';
@@ -329,10 +328,10 @@ function sculpt(
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  // Shared corners so the normals come out smooth round the body (the seam at the back and the caps stay apart).
-  const smooth = mergeVertices(g, 1e-5);
-  smooth.computeVertexNormals();
-  return smooth;
+  // Triangles with their own corners and no normals: the body is faceted, and the Humanoid's part sink works the
+  // flat normals out. (This welded the corners for smooth normals, which the sink took apart again and threw away:
+  // a fifth of the time a new look takes to build.)
+  return g;
 }
 
 /** A strap lying down the front of the chest from (x, y1) to (x, y0), `out` off the surface. */
