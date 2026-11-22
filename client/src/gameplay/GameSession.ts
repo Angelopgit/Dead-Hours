@@ -2019,12 +2019,16 @@ export class GameSession {
       else if (!this.me.arsenal.hasRoomFor(!!it.frags, !!it.molotovs)) this.hud.setPrompt(null, `AMMUNITION FULL, ${it.supply} LEFT HERE`);
       else this.hud.setPrompt('interact', `TAKE ${what}, ${it.supply} LEFT`);
     }
-    else if (best.kind === 'serum') this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()}, ARMOR AGAINST THE DEAD`);
+    else if (best.kind === 'serum') {
+      // A full dose is not topped up (the sim refuses): it kept offering INJECT, and a press only fed SERUM STILL WORKING.
+      if (this.me.armor >= SERUM.armor) this.hud.setPrompt(null, `${SERUM.name.toUpperCase()}, YOURS IS STILL AT FULL STRENGTH`);
+      else this.hud.setPrompt('interact', `INJECT ${SERUM.name.toUpperCase()}, ARMOR AGAINST THE DEAD`);
+    }
     else if (best.kind === 'boost') {
       const b = BOOSTS[best.it!.boost ?? 'strength'];
       const left = boostLeft(this.me.boosts, best.it!.boost ?? 'strength', this.sim.time);
       if (left > b.duration * 0.5) this.hud.setPrompt(null, `${b.name.toUpperCase()}, YOURS IS STILL RUNNING`);
-      else this.hud.setPrompt('interact', `INJECT ${b.name.toUpperCase()}, ${b.blurb.toUpperCase()}, ${b.duration}S`);
+      else this.hud.setPrompt('interact', `INJECT ${b.name.toUpperCase()}, ${b.blurb.toUpperCase()}, ${b.duration} S`);
     }
     else if (best.kind === 'melee') {
       const mine = this.me.arsenal.meleeId;

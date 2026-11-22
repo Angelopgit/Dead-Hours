@@ -192,6 +192,15 @@ check(none === null, 'nothing near: full speed');
       && /else if \(best\.it!\.weapon === mine && !pair\) this\.hud\.setPrompt\(null, `\$\{what\}, YOU ALREADY CARRY ONE`\);\s*else this\.hud\.setPrompt\('interact', pair \?/.test(game),
       'a weapon already carried (a rack\'s gun, a found bat) is a status, not an offer to take it');
   }
+  // The serum at a full dose (the sim tops nothing up) kept offering INJECT with the key and the phone's USE lit: a
+  // status now. And a syringe's prompt ended "90S"; seconds are written "90 s" everywhere else (docs/style.md).
+  {
+    const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+    check(/if \(this\.me\.armor >= SERUM\.armor\) this\.hud\.setPrompt\(null, `\$\{SERUM\.name\.toUpperCase\(\)\}, YOURS IS STILL AT FULL STRENGTH`\);\s*else this\.hud\.setPrompt\('interact', `INJECT \$\{SERUM\.name\.toUpperCase\(\)\}, ARMOR AGAINST THE DEAD`\);/.test(game),
+      'a serum at a full dose is a status, not an offer to inject it');
+    const glued = game.split('\n').filter((l) => /setPrompt\(|hud\.notify\(|hud\.feedLine\(/.test(l) && /\}S[`,. ]/.test(l));
+    check(!glued.length && game.includes('${b.duration} S`'), glued.length ? `seconds glued to their number: ${glued.map((l) => l.trim().slice(0, 80)).join(' | ')}` : 'a syringe\'s prompt writes its seconds apart from the number (90 S)');
+  }
   // A crate with nothing for full pockets kept offering "TAKE AMMUNITION, 3 LEFT" (and the first aid box "TAKE
   // BANDAGES, 2 LEFT") with the key and the phone's USE button lit; a press only wrote AMMUNITION FULL in the feed.
   // Each is a status then, with what is left in it (Arsenal.hasRoomFor is checked against the crate in check:sim).
@@ -292,7 +301,7 @@ check(none === null, 'nothing near: full speed');
       ['PICK UP A SECOND KATANA FOR TWO HANDS', 'PICK UP'], ['SELECT WEAPON', 'SELECT WEAPON'],
       // A name of several words is not cut in half: it read "INJECT RAPID", "INJECT HALBERG", "TAKE UNIVERSAL", and
       // "SWAP BASEBALL" where the prompt was "SWAP BASEBALL BAT FOR KATANA" (now worded like a severed arm's).
-      ['SWAP FOR KATANA, LEAVES THE BASEBALL BAT', 'SWAP FOR'], ['INJECT RAPID RELOAD SHOT, RELOAD TWICE AS FAST, 90S', 'INJECT'],
+      ['SWAP FOR KATANA, LEAVES THE BASEBALL BAT', 'SWAP FOR'], ['INJECT RAPID RELOAD SHOT, RELOAD TWICE AS FAST, 90 S', 'INJECT'],
       ['INJECT HALBERG SERUM, ARMOR AGAINST THE DEAD', 'INJECT'], ['TAKE UNIVERSAL AMMO + GRENADES, 3 LEFT', 'TAKE'], ['TAKE M249 SAW, REPLACES M4A1', 'TAKE'],
       ['HOLD TO REVIVE DANA LEE', 'REVIVE'], ['TAKE AT4, REPLACES M4A1', 'TAKE AT4'], ['TAKE M107 .50 CAL, REPLACES M4A1', 'TAKE M107'],
       ['TAKE BANDAGES, 2 LEFT', 'TAKE BANDAGES'], ['SWAP FOR SEVERED ARM, 1 HIT', 'SWAP FOR'], ['PICK UP PIPE WRENCH', 'PICK UP'],
