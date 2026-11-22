@@ -4,7 +4,8 @@
  *
  * - `scene`: `foot` (everything at once: timer, warning, notice, feed, prompt, five boosts, armor, every
  *   weapon row, chat and voices online), `skate` (a trick landing), `car` (driving), `ride` (a passenger),
- *   `downed`, `dead` (watching a teammate) or `lost` (`foot` with CONNECTION LOST).
+ *   `downed`, `dead` (watching a teammate), `lost` (`foot` with the connection lost line) or `away` (`foot` with
+ *   the line a player-hosted night shows while its host is away, the longer of the two).
  * - `ui`: the UI scale (0.8..1.4), `tc`: the touch button size (0.75..1.4), `touch=0` for the desktop
  *   HUD, `online=0` for solo (no chat, no TALK), `fps=1` shows the frame rate line.
  *
@@ -12,6 +13,9 @@
  * measured by their ink, not their line boxes), and every piece that runs off the screen or into a notch.
  * `node client/dev/hud-sweep.cjs` runs it across phone sizes, UI scales and button sizes; not part of the
  * game build.
+ *
+ * The lines are the ones the game writes today (GameSession.ts), at their longest: when one changes there,
+ * change it here, or the audit measures a line nobody sees.
  */
 import '../src/ui/styles.css';
 import gsap from 'gsap';
@@ -19,7 +23,7 @@ import { WEAPONS, type ChatLine } from '@dead-hours/shared';
 import { HUD } from '../src/ui/HUD';
 import { TouchControls } from '../src/ui/TouchControls';
 import { ChatBox } from '../src/ui/ChatBox';
-import { Input } from '../src/core/Input';
+import { Input, seatHint } from '../src/core/Input';
 import { settings } from '../src/core/Settings';
 import { h } from '../src/ui/dom';
 import type { NetLink } from '../src/network/NetLink';
@@ -32,6 +36,7 @@ const touch = q.get('touch') !== '0';
 const online = q.get('online') !== '0';
 const NAME = 'ALEXANDRA MORGAN';
 const MATE = 'CHRISTOPHER LEE';
+const device = touch ? 'touch' : 'mouse';
 
 document.documentElement.style.setProperty('--ui-scale', String(ui));
 const root = document.getElementById('ui-root')!;
@@ -52,7 +57,7 @@ if (online) {
   const chat = new ChatBox(link, 'game');
   const vox = h('div', { class: 'vox-list' },
     h('div', { class: 'vox' }, h('i'), MATE),
-    h('div', { class: 'vox radio' }, h('i'), 'SAM · RADIO'));
+    h('div', { class: 'vox radio' }, h('i'), 'SAM, RADIO'));
   root.append(h('div', { class: 'comms-hud' }, vox, chat.el));
 }
 
@@ -64,9 +69,9 @@ root.append(tcs.el);
 hud.onPrompt = (action, text) => tcs.setUse(action, text);
 
 hud.setHealth(64, 100);
-hud.setTimer('QUIET FOR 00:45 · SURVIVED 59:59', true);
-hud.setWarning('OUT OF AMMUNITION · USE YOUR HOCKEY STICK');
-for (const line of ['SOMEONE ELSE GOT TO THAT SKATEBOARD', 'HANDS ON THE BARS · USE TO GET OFF', 'LEFT THE M107 .50 CAL BEHIND', `${MATE} REVIVED ${NAME}`]) hud.feedLine(line);
+hud.setTimer('QUIET FOR 00:45\u2003SURVIVED 59:59', true);
+hud.setWarning('OUT OF AMMUNITION. USE YOUR HOCKEY STICK');
+for (const line of ['SOMEONE ELSE GOT TO THAT SKATEBOARD', 'HANDS ON THE BARS, USE TO GET OFF', 'LEFT THE M107 .50 CAL BEHIND', `${MATE} REVIVED ${NAME}`]) hud.feedLine(line);
 hud.weapon({
   model: 'M107 .50 CAL', mag: 100, magazine: 100, reserve: 400, mode: 'SEMI', reload: 0.45, slot: 'primary',
   primaryModel: 'M107 .50 CAL', secondaryModel: 'AKIMBO M17', meleeModel: 'HOCKEY STICK',
@@ -81,42 +86,43 @@ hud.setBoosts([
   { id: 'focus', label: 'FOCUS', color: 0x9b6ae0, left: 72, total: 75 },
 ]);
 
-if (scene === 'foot' || scene === 'lost') {
+if (scene === 'foot' || scene === 'lost' || scene === 'away') {
   hud.setStance('GRENADE READY');
   hud.notify(`${WEAPONS.sniper.model} EQUIPPED`, WEAPONS.sniper.description, 999, 'rare');
-  hud.setPrompt('interact', `PRY A BOARD OFF THE WINDOW · 3/4 · HOLD ${touch ? 'BOARD' : 'G'} TO ADD ONE`);
+  hud.setPrompt('interact', `PRY A BOARD OFF THE WINDOW, 3/4, HOLD ${touch ? 'BOARD' : 'G'} TO ADD ONE`);
 } else if (scene === 'skate') {
   hud.setStance('');
-  hud.notify('SKATEBOARD', touch ? 'STICK UP PUSHES · DOWN BRAKES · SIDEWAYS CARVES · JUMP OLLIES · USE HOPS OFF'
-    : 'W PUSH · S BRAKE · A/D CARVE · SPACE OLLIE · SHIFT PUSH HARDER · E HOP OFF', 999);
+  hud.notify('SKATEBOARD', touch ? 'STICK UP PUSHES, DOWN BRAKES, SIDEWAYS CARVES, JUMP OLLIES, USE HOPS OFF'
+    : 'W PUSH, S BRAKE, A/D CARVE, SPACE OLLIE, SHIFT PUSH HARDER, E HOP OFF', 999);
   hud.setPrompt('interact', 'HOP OFF THE SKATEBOARD');
   hud.trickCall('VARIAL HEELFLIP', 3);
 } else if (scene === 'ride') {
   tcs.setSeat('passenger');
   hud.setStance('');
   hud.setVehicle({ name: 'POLICE CAR', seat: 'PASSENGER', mph: 48, gas: 0.5, state: '' });
-  hud.notify('PASSENGER', touch ? 'SHOOT FROM THE WINDOWS · SEAT MOVES OVER · USE GETS OUT' : 'SHOOT FROM THE WINDOWS · G CHANGE SEAT · E GET OUT', 999);
-  hud.setPrompt('interact', 'GET OUT · SEAT MOVES OVER');
+  hud.notify('PASSENGER', touch ? 'SHOOT FROM THE WINDOWS, SEAT MOVES OVER, USE GETS OUT' : 'SHOOT FROM THE WINDOWS, G CHANGE SEAT, E GET OUT', 999);
+  hud.setPrompt('interact', `GET OUT${seatHint(device)}`);
 } else if (scene === 'car') {
   tcs.setSeat('driver');
   hud.setStance('');
   hud.setVehicle({ name: 'ARMORED TRUCK', seat: 'DRIVING', mph: 48, gas: 0.08, state: 'LIGHTS OFF' });
-  hud.notify('DRIVING · WATCH THE GAS', touch
-    ? 'STICK UP GAS · DOWN BRAKE AND REVERSE · SIDEWAYS STEERS · BRAKE BUTTON HANDBRAKE · HORN · USE GETS OUT'
-    : 'W GAS · S BRAKE AND REVERSE · A/D STEER · SPACE HANDBRAKE · F HORN · L LIGHTS · E GET OUT', 999);
-  hud.setPrompt('interact', 'SLOW DOWN TO GET OUT · SEAT MOVES OVER');
+  hud.notify('DRIVING', touch
+    ? 'STICK UP GAS, DOWN BRAKE AND REVERSE, SIDEWAYS STEERS, BRAKE BUTTON HANDBRAKE, HORN, USE GETS OUT'
+    : 'W GAS, S BRAKE AND REVERSE, A/D STEER, SPACE HANDBRAKE, F HORN, L LIGHTS, E GET OUT', 999);
+  hud.setPrompt('interact', `SLOW DOWN TO GET OUT${seatHint(device)}`);
 } else if (scene === 'downed') {
   hud.setStance('DOWN');
-  hud.notify('YOU ARE DOWN', 'ONE MORE AND YOU ARE DEAD · HOLD ON', 999, 'danger');
+  hud.notify('YOU ARE DOWN', 'Once more and you are dead. Hold on.', 999, 'danger');
   root.append(h('div', { class: 'downed-panel' }, h('div', { class: 'dp-text' }, `${MATE} IS GETTING YOU UP`),
     h('div', { class: 'dp-bar' }, h('i', { style: 'width:40%' }))));
 } else if (scene === 'dead') {
   hud.el.style.opacity = '0';
-  root.append(h('div', { class: 'spectate' }, `WATCHING ${MATE} · ${touch ? 'TAP HERE' : 'ESC'} FOR RESULTS`));
+  root.append(h('div', { class: 'spectate' }, `WATCHING ${MATE}, ${touch ? 'TAP HERE' : 'ESC'} FOR RESULTS`));
 }
-if (scene === 'lost') root.append(h('div', { class: 'spectate net-lost' }, 'CONNECTION LOST · RECONNECTING'));
+if (scene === 'lost') root.append(h('div', { class: 'spectate net-lost' }, 'Connection lost. Reconnecting…'));
+if (scene === 'away') root.append(h('div', { class: 'spectate net-lost' }, 'The host is away. The night waits for them.'));
 // (The setting is off by default: the line is written straight in.)
-if (q.get('fps') === '1') root.querySelector('.fps')!.textContent = online ? '58 FPS · 42 MS' : '58 FPS';
+if (q.get('fps') === '1') root.querySelector('.fps')!.textContent = online ? '58 FPS, 42 MS' : '58 FPS';
 
 // Every fade in done, then held still (the notice letters settle, the feed lines stay up).
 gsap.globalTimeline.totalTime(gsap.globalTimeline.totalTime() + 1);

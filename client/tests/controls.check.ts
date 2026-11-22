@@ -720,5 +720,25 @@ check(none === null, 'nothing near: full speed');
   check(!mixed.length, mixed.length ? `weapon labels not in capitals: ${mixed.join(', ')}` : `all ${Object.keys(WEAPONS).length} weapon labels are in capitals, as the HUD shows them`);
 }
 
+// The HUD layout audit (dev/hud.html, hud-sweep) measures sample lines. They had fallen behind the game: middle
+// dots where the game writes commas, notices in capitals, CONNECTION LOST · RECONNECTING, and no line at all for a
+// host who is away (the longest line in that spot). A line it measures has to be one the game writes.
+{
+  const page = readFileSync(new URL('../dev/hud.ts', import.meta.url), 'utf8');
+  const sweep = readFileSync(new URL('../dev/hud-sweep.cjs', import.meta.url), 'utf8');
+  const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+  const lines = [
+    'SOMEONE ELSE GOT TO THAT SKATEBOARD', 'HOP OFF THE SKATEBOARD', 'OUT OF AMMUNITION. USE YOUR ', 'HANDS ON THE BARS, ', 'PRY A BOARD OFF THE ',
+    'STICK UP PUSHES, DOWN BRAKES, SIDEWAYS CARVES, JUMP OLLIES, USE HOPS OFF',
+    'SHOOT FROM THE WINDOWS, SEAT MOVES OVER, USE GETS OUT',
+    'STICK UP GAS, DOWN BRAKE AND REVERSE, SIDEWAYS STEERS, BRAKE BUTTON HANDBRAKE, HORN, USE GETS OUT',
+    "'YOU ARE DOWN'", 'Once more and you are dead. Hold on.', ' IS GETTING YOU UP', ' FOR RESULTS`', ', RADIO',
+    'Connection lost. Reconnecting…', 'The host is away. The night waits for them.',
+  ];
+  const stale = lines.filter((l) => !page.includes(l) || !game.includes(l));
+  check(!stale.length && !page.includes('·') && /SLOW DOWN TO GET OUT\$\{seatHint\(device\)\}/.test(page) && /'--scenes', '[a-z,]*\baway\b/.test(sweep),
+    stale.length ? `the HUD audit page and the game disagree on: ${stale.join(' | ')}` : `the HUD audit page measures ${lines.length} lines as the game writes them, the host away line among them, with no middle dots`);
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

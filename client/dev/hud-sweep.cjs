@@ -18,7 +18,7 @@ const SIZES = [
   ['1024x768', 0, 20], ['1180x820', 0, 20],
 ];
 const sizes = opt('--sizes') ? SIZES.filter(([s]) => list('--sizes').includes(s)) : SIZES;
-const scenes = list('--scenes', 'foot,skate,car,ride,downed,dead,lost');
+const scenes = list('--scenes', 'foot,skate,car,ride,downed,dead,lost,away');
 const uis = list('--ui', '0.8,0.9,1,1.1,1.2,1.3,1.4');
 const tcs = list('--tc', '1');
 const host = opt('--host', 'http://localhost:5173');
