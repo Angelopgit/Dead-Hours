@@ -751,5 +751,31 @@ check(none === null, 'nothing near: full speed');
     line && notice ? `the connection line keeps ${line[2]}em below where a notice starts (${notice[1]}vh), never above 18vh` : 'the connection line is not tied to where a notice ends');
 }
 
+// The goal card (top left of a desktop HUD) was 19em wide whatever the window, and the line under a notice runs
+// unwrapped through the middle: the driving keys are 26.5em of the HUD's letters. At UI scale 1.4 in a 1280 px
+// window the card covered the line's first word. The card now narrows to keep out of that column, and the HUD
+// audit page draws the card so the sweep sees it.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  const page = readFileSync(new URL('../dev/hud.ts', import.meta.url), 'utf8');
+  const m = /\n\.goals \{[^}]*\bleft: (\d+)vw;[^}]*\bwidth: min\((\d+)em, (\d+)vw, max\((\d+)em, (\d+)vw - ([\d.]+)em\)\);/.exec(css);
+  const half = 26.5 / 2;
+  const crossed: string[] = [];
+  if (m) {
+    const [left, wide, share, least, room, kept] = m.slice(1).map(Number);
+    // Windows and UI scales a desktop is played at: 1100 px and up at any scale, 960 at 1.2, 800 at 1.
+    for (const [w, scales] of [[800, [0.8, 1]], [960, [0.8, 1, 1.2]], [1100, [1, 1.2, 1.4]], [1280, [1, 1.4]], [1366, [1.4]], [1920, [1, 1.4]], [2560, [1.4]]] as [number, number[]][]) {
+      for (const ui of scales) {
+        const em = 14 * ui;
+        const right = (left * w) / 100 + Math.min(wide * em, (share * w) / 100, Math.max(least * em, (room * w) / 100 - kept * em));
+        if (right + 0.5 * em > w / 2 - half * em) crossed.push(`${w} px at ${ui}`);
+      }
+    }
+  }
+  check(!!m && !crossed.length && /hud\.setCard\('TONIGHT'/.test(page) && /add\('goals', 'goal card', box\(card\)\)/.test(page),
+    !m ? 'the goal card does not keep out of the notice column' : crossed.length ? `the goal card reaches the line under a notice at ${crossed.join(', ')}`
+      : 'the goal card keeps clear of the longest line under a notice (26.5em) from 800 px windows up, and the HUD audit draws it');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

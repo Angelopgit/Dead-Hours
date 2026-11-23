@@ -377,8 +377,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 @keyframes blink { 0%, 70% { opacity: 1; } 71%, 100% { opacity: 0.35; } }
 /* Above the ammo panel with every row up (slots to FLASHLIGHT, 13em of the HUD's size, 16.7em of the feed's)
    and a gap: the last feed line printed over the weapon slots once the throwable and flashlight rows came. */
-/* The goal card (HUD.setCard): first-night steps, then tonight's goals. A note pinned at the top left. */
-.goals { position: absolute; left: 3vw; top: calc(3vh + 1.8em); width: min(19em, 30vw); padding: 0.7em 0.9em 0.75em; font-family: var(--font-body);
+/* The goal card (HUD.setCard): first-night steps, then tonight's goals. A note pinned at the top left. It keeps
+   out of the middle of the window, where the line under a notice goes: the longest (the driving keys) is 26.5em
+   of the HUD's letters, half of it 13.25em from the centre, and at a UI scale of 1.4 in a 1280 px window its
+   first word was under a 19em card. Down to 12em; a narrower card than that could not hold a goal. */
+.goals { position: absolute; left: 3vw; top: calc(3vh + 1.8em); width: min(19em, 30vw, max(12em, 47vw - 14.5em)); padding: 0.7em 0.9em 0.75em; font-family: var(--font-body);
   background: var(--grain), rgba(17, 16, 14, 0.62); border-left: 3px solid var(--accent); }
 .goals-head { font-family: var(--font-display); font-weight: 800; font-size: 1em; letter-spacing: 0.04em; color: var(--fg); margin-bottom: 0.35em; }
 .goals-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3em; font-size: 0.82em; }

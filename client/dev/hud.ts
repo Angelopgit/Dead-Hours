@@ -7,7 +7,8 @@
  *   `downed`, `dead` (watching a teammate), `lost` (`foot` with the connection lost line) or `away` (`foot` with
  *   the line a player-hosted night shows while its host is away, the longer of the two).
  * - `ui`: the UI scale (0.8..1.4), `tc`: the touch button size (0.75..1.4), `touch=0` for the desktop
- *   HUD, `online=0` for solo (no chat, no TALK), `fps=1` shows the frame rate line.
+ *   HUD, `online=0` for solo (no chat, no TALK), `fps=1` shows the frame rate line, `card=first` puts the first
+ *   night's steps on the goal card in place of tonight's goals (a desktop has the card; a phone has no room).
  *
  * `window.__hudAudit()` lists every two pieces of the HUD whose letters or buttons overlap (letters are
  * measured by their ink, not their line boxes), and every piece that runs off the screen or into a notch.
@@ -19,7 +20,7 @@
  */
 import '../src/ui/styles.css';
 import gsap from 'gsap';
-import { WEAPONS, type ChatLine } from '@dead-hours/shared';
+import { GOALS, WEAPONS, type ChatLine } from '@dead-hours/shared';
 import { HUD } from '../src/ui/HUD';
 import { TouchControls } from '../src/ui/TouchControls';
 import { ChatBox } from '../src/ui/ChatBox';
@@ -78,6 +79,19 @@ hud.weapon({
   bandages: 9, healing: null, frags: 3, molotovs: 2, light: true,
 });
 hud.setArmor(60, 100);
+if (q.get('card') === 'first') {
+  hud.setCard('BEFORE THEY COME', [
+    { text: `Board up a window: hold ${touch ? 'BOARD' : 'G'} at it`, done: true },
+    { text: 'Take ammo or bandages: there are crates and first aid boxes in the house', done: false },
+    { text: `Hold ${touch ? 'GEAR' : 'TAB'} to check your gear`, done: false },
+  ]);
+} else {
+  hud.setCard('TONIGHT', [
+    { text: GOALS.melee.text(24), meta: '11/24', done: false },
+    { text: GOALS.headshots.text(40), meta: '', done: true },
+    { text: GOALS.blasts.text(24), meta: '23/24', done: false },
+  ]);
+}
 hud.setBoosts([
   { id: 'strength', label: 'STRENGTH', color: 0xd8443a, left: 70, total: 75 },
   { id: 'stamina', label: 'STAMINA', color: 0xe8b72e, left: 80, total: 90 },
@@ -193,6 +207,8 @@ function pieces(): Piece[] {
   const all = (sel: string) => Array.from(root.querySelectorAll(sel));
   const one = (sel: string) => root.querySelector(sel);
   const text = (group: string, name: string, sel: string) => { const e = one(sel); if (e) add(group, name, ink(e)); };
+  const card = one('.goals');
+  if (card) add('goals', 'goal card', box(card));
   text('timer', 'timer', '.phase-timer');
   text('warning', 'warning', '.warning');
   text('notice', 'notice', '.notice');
