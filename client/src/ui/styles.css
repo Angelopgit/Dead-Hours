@@ -677,7 +677,9 @@ body.touch-play .creator-zoom, body.pad-nav .creator-hint { display: none; }
 .downed-panel.helped .dp-bar i { background: var(--ok); }
 .spectate { position: absolute; left: 50%; bottom: 8vh; transform: translateX(-50%); font-family: var(--font-display); letter-spacing: 0.09em; font-size: 0.85em;
   color: var(--fg-dim); text-shadow: 0 1px 4px rgba(0,0,0,0.9); cursor: pointer; padding: 0.8em 1.2em; }
-.spectate.net-lost { bottom: auto; top: 18vh; color: var(--accent); animation: net-lost 1.4s ease-in-out infinite; }
+/* Under a notice (12vh down, a title and one line, about 2.6em of the HUD's letters): in a short window or at a
+   large UI scale 18vh came above the notice's second line and the two crossed. */
+.spectate.net-lost { bottom: auto; top: max(18vh, 12vh + 2.9em); color: var(--accent); animation: net-lost 1.4s ease-in-out infinite; }
 @keyframes net-lost { 50% { opacity: 0.45; } }
 @media (max-width: 860px) {
   /* Six cells a row (the name, four stats and XP): with five columns XP wrapped under the name and every row was

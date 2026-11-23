@@ -740,5 +740,16 @@ check(none === null, 'nothing near: full speed');
     stale.length ? `the HUD audit page and the game disagree on: ${stale.join(' | ')}` : `the HUD audit page measures ${lines.length} lines as the game writes them, the host away line among them, with no middle dots`);
 }
 
+// The connection lost and host away lines sat 18vh down on a desktop, a notice 12vh down with about 2.6em of
+// letters (a title and one line, never wrapped). In a window under about 560 px tall at UI scale 1.3 or more the
+// line ran through the notice's second line. It now keeps below the notice whatever the window and the scale.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  const line = /\n\.spectate\.net-lost \{[^}]*\btop: max\(18vh, (\d+)vh \+ ([\d.]+)em\)/.exec(css);
+  const notice = /\n\.notice \{[^}]*\btop: (\d+)vh;[^}]*white-space: nowrap;/.exec(css);
+  check(!!line && !!notice && line[1] === notice[1] && Number(line[2]) >= 2.8,
+    line && notice ? `the connection line keeps ${line[2]}em below where a notice starts (${notice[1]}vh), never above 18vh` : 'the connection line is not tied to where a notice ends');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);
