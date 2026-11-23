@@ -312,7 +312,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   color: #f4ecdc; text-shadow: 0 2px 14px rgba(0,0,0,0.95), 0 0 22px rgba(230, 195, 90, 0.25); }
 .trick-call small { font-size: 0.55em; font-style: normal; letter-spacing: 0.06em; color: #e6c35a; margin-left: 0.6em; }
 .notice small { display: block; font-family: var(--font-body); letter-spacing: 0.07em; font-size: 0.55em; color: var(--fg-dim); margin-top: 0.7em; }
-.vitals { position: absolute; left: 3vw; bottom: 4vh; width: 260px; }
+/* As wide as 260 px at a UI scale of 1, and it follows the scale like every other panel (it was 260 px at any
+   scale: at 1.4 the bars stayed short under bigger letters and five boost chips took three rows, which pushed
+   the chat a row higher). Never more than 30vw, so a narrow window keeps it off the vehicle panel. */
+.vitals { position: absolute; left: 3vw; bottom: 4vh; width: min(calc(260em / 14), 30vw); }
 .vitals .name { font-size: 0.85em; letter-spacing: 0.07em; color: var(--fg-dim); margin-bottom: 0.5em; display: flex; justify-content: space-between; }
 /* A long name is cut short with an ellipsis instead of running into the health number at a big UI scale. */
 .vitals .name > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

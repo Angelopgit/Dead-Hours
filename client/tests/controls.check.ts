@@ -777,5 +777,16 @@ check(none === null, 'nothing near: full speed');
       : 'the goal card keeps clear of the longest line under a notice (26.5em) from 800 px windows up, and the HUD audit draws it');
 }
 
+// The desktop health panel was 260 px wide at any UI scale, the one panel that did not follow it: at 1.4 the bars
+// stayed short under bigger letters and five boost chips wrapped to three rows, lifting the chat a row. Its width
+// is in the HUD's letters now (260 px at a scale of 1), and never more than 30vw.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  const m = /\n\.vitals \{[^}]*\bwidth: min\(calc\((\d+)em \/ (\d+)\), (\d+)vw\);/.exec(css);
+  const root = /#ui-root \{[^}]*font-size: calc\((\d+)px \* var\(--ui-scale\)\)/.exec(css);
+  check(!!m && !!root && m[2] === root[1] && Number(m[1]) === 260 && Number(m[3]) <= 30 && /\nbody\.touch-play \.vitals \{[^}]*\bwidth: min\(/.test(css),
+    m && root ? `the health panel is ${m[1]} px wide at a UI scale of 1 and follows the scale, ${m[3]}vw at most; a phone keeps its own width` : 'the health panel width does not follow the UI scale');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);
