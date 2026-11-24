@@ -531,6 +531,11 @@ check(none === null, 'nothing near: full speed');
     .map(([desk, phone]) => [em(desk), phonePanel * em(phone)]);
   check(small.every(([desk, phone]) => phone >= desk * 0.98),
     `touch: the item counts and fire mode under the ammo are as big as on a desktop (${small.map(([d, p]) => `${p.toFixed(3)} vs ${d}`).join(', ')} em)`);
+  // The gun's name over the ammo kept the desktop's 0.82 of the panel: 8.6 px on a phone, the smallest text on the
+  // screen once the lines under it had grown. It is as big as the fire mode there.
+  const phoneGun = phonePanel * em('body.touch-play .weapon-panel .w-model');
+  check(phoneGun >= small[1][1] * 0.999 && phoneGun <= em('.w-model'),
+    `touch: the gun's name over the ammo is as big as the fire mode under it (${phoneGun.toFixed(3)} vs ${small[1][1].toFixed(3)} of the HUD's letters)`);
   // The line under a notice ("Very rare. One .50 BMG round …", the driving keys) kept the desktop's 0.55 of the
   // notice on a phone: 7.7 px, the smallest letters on the screen. It is no smaller than the item counts there.
   const noticeSmall = em('body.touch-play .notice') * (em('body.touch-play .notice small') || em('.notice small'));

@@ -976,7 +976,8 @@ body.touch-play .weapon-panel { bottom: auto; right: auto; left: var(--col-l); t
   text-align: left; font-size: 0.75em; width: max-content; max-width: var(--panel-w); }
 /* (The gun in hand is the line under it; the others are a tap on BAG away.) */
 body.touch-play .weapon-panel .w-slots { display: none; }
-body.touch-play .weapon-panel .w-model { letter-spacing: 0.07em; }
+/* The gun's name was the smallest text on a phone (8.6 px at a 14 px HUD); as big as the fire mode under the ammo. */
+body.touch-play .weapon-panel .w-model { letter-spacing: 0.07em; font-size: 0.88em; }
 body.touch-play .weapon-panel .w-bar { width: 100%; max-width: 12em; margin-left: 0; }
 /* The item counts and the fire mode keep the desktop's letter size: inside the smaller panel they came to 6.7 px,
    too small to read on a phone. */
