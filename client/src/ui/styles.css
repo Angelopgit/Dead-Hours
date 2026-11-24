@@ -486,7 +486,10 @@ body.touch-play .goals { display: none !important; }
 .inv-keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em 1em; margin-top: 1.2em; font-family: var(--font-body); font-size: 0.72em; color: var(--fg-dim); }
 /* The key cap is the row's own span. With a controller its button is drawn inside that span (.pb): as `.inv-keys span`
    this rule reached the drawn button too and made every one a wide dim box, the shoulder buttons hanging low. */
-.inv-keys > div > span { display: inline-block; min-width: 3.6em; margin-right: 0.6em; padding: 0.1em 0.4em; border: 1px solid rgba(255,255,255,0.2); border-radius: 0;
+/* A row is its key cap and its words side by side. As a cap in a line of text, words too long for the column
+   ("Go prone (dive when sprinting)" at a UI scale of 1.4) wrapped back under the cap. */
+.inv-keys > div { display: flex; align-items: baseline; }
+.inv-keys > div > span { flex: none; display: inline-block; min-width: 3.6em; margin-right: 0.6em; padding: 0.1em 0.4em; border: 1px solid rgba(255,255,255,0.2); border-radius: 0;
   text-align: center; color: var(--fg); font-size: 0.9em; }
 /* Phones and pads have no keyboard: no key list, no key after each slot name. */
 body.touch-play .inv-keys, body.touch-play .inv-k { display: none; }

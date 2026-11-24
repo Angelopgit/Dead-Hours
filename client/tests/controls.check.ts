@@ -575,6 +575,10 @@ check(none === null, 'nothing near: full speed');
     && prop('.inv-keys.pad > div', 'display') === 'flex' && prop('.inv-keys.pad > div', 'align-items') === 'center'
     && /h\('div', \{\}, h\('span', \{ class: 'pad' \}, \.\.\.richNodes\(glyph\(/.test(readFileSync(new URL('../src/ui/Inventory.ts', import.meta.url), 'utf8')),
     'controller: the bag draws its buttons as buttons (the key cap style stops at the row\'s own span) and centres each on its words');
+  // With a keyboard a row was a key cap in a line of text: words too long for their column ("Go prone (dive when
+  // sprinting)" at a UI scale of 1.4) wrapped back under the cap. A row lays the cap and the words side by side.
+  check(prop('.inv-keys > div', 'display') === 'flex' && prop('.inv-keys > div', 'align-items') === 'baseline' && prop('.inv-keys > div > span', 'flex') === 'none',
+    'the bag\'s key list keeps long words beside their key cap when they wrap');
   // The health bar hides under the bag in a window too short for both. "Short" was 700 px, right at a UI scale of 1;
   // the bag grows with the scale, so at 1.2 and 1.4 the health number showed through the bag's list of keys in
   // 1280x720 to 1600x900 windows. It is counted in the HUD's letters now, and only where the panel is under the bag.
