@@ -575,8 +575,24 @@ check(none === null, 'nothing near: full speed');
     && prop('.inv-keys.pad > div', 'display') === 'flex' && prop('.inv-keys.pad > div', 'align-items') === 'center'
     && /h\('div', \{\}, h\('span', \{ class: 'pad' \}, \.\.\.richNodes\(glyph\(/.test(readFileSync(new URL('../src/ui/Inventory.ts', import.meta.url), 'utf8')),
     'controller: the bag draws its buttons as buttons (the key cap style stops at the row\'s own span) and centres each on its words');
-  check(/@media \(max-height: 700px\) \{\s*body:not\(\.touch-play\) #ui-root:has\(> \.inventory\) \.vitals \{ visibility: hidden; \}\s*\}/.test(css),
-    'desktop: the health bar hides under the bag in a short window, where the list of keys covers it');
+  // The health bar hides under the bag in a window too short for both. "Short" was 700 px, right at a UI scale of 1;
+  // the bag grows with the scale, so at 1.2 and 1.4 the health number showed through the bag's list of keys in
+  // 1280x720 to 1600x900 windows. It is counted in the HUD's letters now, and only where the panel is under the bag.
+  {
+    const m = /\nbody:not\(\.touch-play\) #ui-root:has\(> \.inventory\) \.vitals \{\s*translate: 0 clamp\(0px, min\((\d+)em - 100vh, 3vw \+ min\(260em \/ 14, 30vw\) \+ 1em - \(100vw - min\((\d+)px, 92vw\)\) \/ 2\) \* 9999, 100vh\); \}/.exec(css);
+    const box = /\n\.inv-box \{ width: min\((\d+)px, 92vw\); \}/.exec(css);
+    const hidden = (w: number, h: number, ui: number): boolean => {
+      const em = 14 * ui;
+      return !!m && Math.min(Number(m[1]) * em - h, 0.03 * w + Math.min(260 * ui, 0.3 * w) + em - (w - Math.min(Number(m[2]), 0.92 * w)) / 2) > 0;
+    };
+    // Measured on a real night with the bag open: where the two met, and where the panel stood clear.
+    const met: [number, number, number][] = [[1366, 625, 1], [1280, 720, 1.2], [1366, 768, 1.2], [1440, 800, 1.2], [1280, 720, 1.4], [1366, 768, 1.4], [1440, 800, 1.4], [1600, 900, 1.4]];
+    const clear: [number, number, number][] = [[1280, 720, 0.8], [1280, 720, 1], [1366, 768, 1], [1920, 1080, 1], [1600, 900, 1.2], [1920, 1080, 1.2], [1920, 1000, 1.4], [1920, 1080, 1.4]];
+    const wrong = [...met.filter((c) => !hidden(...c)).map((c) => `${c[0]}x${c[1]} at ${c[2]} shows`), ...clear.filter((c) => hidden(...c)).map((c) => `${c[0]}x${c[1]} at ${c[2]} hides`)];
+    check(!!m && !!box && m[2] === box[1] && !wrong.length && !/@media \(max-height: 700px\) \{\s*body:not\(\.touch-play\) #ui-root:has\(> \.inventory\) \.vitals/.test(css),
+      !m || !box ? 'desktop: the health bar under the bag is not counted in the UI scale' : wrong.length ? `desktop: the health bar under the bag: ${wrong.join(', ')}`
+        : `desktop: the health bar hides under the bag in a window under ${m[1]}em of the HUD's letters tall, at any UI scale, and stays where it stands clear`);
+  }
   // Tonight's goals sit at the top left, where the menu's title lands in a short window: online (five items) in a
   // 960x540 or 800x450 frame MENU was printed over the last goal. The card hides under the menu.
   check(prop('#ui-root:has(> .pause) .goals', 'visibility') === 'hidden', "tonight's goals hide under the pause menu");

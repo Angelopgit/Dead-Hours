@@ -988,11 +988,15 @@ body.touch-play #ui-root:has(> .pause) :is(.weapon-panel, .car-panel, .vitals .b
    In a desktop window the prompt ran through the night's stats at any size, and at 960x540 the goals stood under
    the title and the ammo under the stats. They hide while it is open; it has its own timer, ammo and health. */
 #ui-root:has(> .inventory) :is(.weapon-panel, .car-panel, .vitals .boosts, .hud-top, .prompt, .feed, .goals, .waypoint) { visibility: hidden; }
-/* The health bar stays, without its boost chips: a phone's is above the bag. A desktop's is at the bottom, where
-   the bag's list of keys covers it in a short window. */
-@media (max-height: 700px) {
-  body:not(.touch-play) #ui-root:has(> .inventory) .vitals { visibility: hidden; }
-}
+/* The health bar stays, without its boost chips: a phone's is above the bag. A desktop's is at the bottom left,
+   where the bag's list of keys covers it in a window too short for both. Short is counted in the HUD's letters,
+   since the bag grows with the UI scale: about 35em tall and centred, it meets the panel in a window under 48em.
+   A media query cannot count in the scale: it read 700 px, right at a scale of 1, and at 1.2 and 1.4 the health
+   number showed through the keys in 1280x720 to 1600x900 windows. So the panel is moved off the bottom of the
+   screen instead: the clamp is the whole window when the window is under 50em tall and the panel would not stand
+   clear to the left of the bag (880 px wide at most), and nothing otherwise. */
+body:not(.touch-play) #ui-root:has(> .inventory) .vitals {
+  translate: 0 clamp(0px, min(50em - 100vh, 3vw + min(260em / 14, 30vw) + 1em - (100vw - min(880px, 92vw)) / 2) * 9999, 100vh); }
 /* At the wheel the gauges take the ammo panel's place (the driver has no gun in hand); a passenger keeps the gun. */
 body.touch-play .hud.driving .weapon-panel, body.touch-play .hud.riding .car-panel { display: none !important; }
 body.touch-play .car-panel { bottom: auto; left: var(--col-l); top: calc(12px + env(safe-area-inset-top) + var(--vitals-h, 3em) + 0.5 * var(--u));
