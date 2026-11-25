@@ -99,6 +99,23 @@ export function navLight(time: number, period: number, on: number, reduced: bool
   return reduced ? 0.25 - 0.25 * Math.cos((time / period) * Math.PI * 2) : time % period < on ? 1 : 0;
 }
 
+/**
+ * Whether the tip of a crate's burning flare is drawn at `time`: it sputters, out for 50 ms of every 160. With reduced
+ * flashing it burns steady (the setting promises softened flicker; the flare burns until the crate is emptied, and
+ * its tip went out six times a second with the setting on).
+ */
+export function flareTip(time: number, reduced: boolean): boolean {
+  return reduced || time % 0.16 < 0.11;
+}
+
+/**
+ * The flare's red light on the street at `time`, 1 being its mean: it jumps by up to half of that between frames
+ * (`rand` is the frame's own random number). With reduced flashing it swells and fades by a twelfth over 2.6 s instead.
+ */
+export function flareGlow(time: number, reduced: boolean, rand = Math.random()): number {
+  return reduced ? 1 + Math.sin(time * 2.4) / 12 : 0.75 + rand * 0.5;
+}
+
 const BEACON = 0xff2010, STROBE = 0xffffff;
 
 /** A utility helicopter in drab paint, nose along +Z. */
@@ -292,7 +309,7 @@ class CrateModel {
   }
 
   pose(time: number, flareOn: boolean, lidOpen: number): void {
-    this.flare.visible = flareOn && time % 0.16 < 0.11;
+    this.flare.visible = flareOn && flareTip(time, settings.value.accessibility.reducedFlashing);
     this.lid.rotation.x = -lidOpen * 1.9;
   }
 
@@ -753,7 +770,7 @@ export class SupplyDrops {
     if (flare) {
       const p = flare.crate.lid.localToWorld(this.tmp.set(0.42, 0.5, 0.25));
       this.flareLight.position.copy(p);
-      this.flareLight.intensity = 9 * (0.75 + Math.random() * 0.5);
+      this.flareLight.intensity = 9 * flareGlow(time, settings.value.accessibility.reducedFlashing);
     } else {
       this.flareLight.intensity = 0;
     }

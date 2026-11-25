@@ -16,7 +16,7 @@ import { DecalBatch } from '../src/effects/Decals';
 import { patchWire, WIRE_MIN_PX, WIRE_RADIUS } from '../src/environment/Wires';
 import { Humanoid, zombieLookOf } from '../src/characters/Humanoid';
 import { BONE_COUNT } from '../src/characters/rig';
-import { navLight } from '../src/gameplay/SupplyDrops';
+import { flareGlow, flareTip, navLight } from '../src/gameplay/SupplyDrops';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -290,6 +290,35 @@ console.log('Reduced flashing softens the supply helicopter\'s lights');
   }
   if (bad) fail(bad);
   else ok('beacon and strobe swell and fade at half strength (under 0.05 a frame at 60 fps) with reduced flashing, blink as before without');
+}
+
+console.log('Reduced flashing steadies the flare on a supply crate');
+{
+  // The setting promises softened flicker, but the flare on a landed crate burns until the crate is emptied, and with
+  // it on the tip still went out six times a second and the red light on the street jumped by up to half every frame.
+  let bad = '';
+  const drops = readFileSync(new URL('../src/gameplay/SupplyDrops.ts', import.meta.url), 'utf8');
+  if (!drops.includes('this.flare.visible = flareOn && flareTip(time, settings.value.accessibility.reducedFlashing);')) bad ||= 'the flare\'s tip is no longer drawn through flareTip with the setting';
+  if (!drops.includes('this.flareLight.intensity = 9 * flareGlow(time, settings.value.accessibility.reducedFlashing);')) bad ||= 'the flare\'s light no longer goes through flareGlow with the setting';
+  let out = 0, min = Infinity, max = 0, jump = 0, prev = flareGlow(0, true), shown = 0, lo = Infinity, hi = 0;
+  for (let f = 1; f <= 600; f++) {
+    const t = f / 60, k = flareGlow(t, true);
+    if (!flareTip(t, true)) out++;
+    min = Math.min(min, k);
+    max = Math.max(max, k);
+    jump = Math.max(jump, Math.abs(k - prev));
+    prev = k;
+    if (flareTip(t, false)) shown++;
+    const hard = flareGlow(t, false, (f * 0.618034) % 1);
+    lo = Math.min(lo, hard);
+    hi = Math.max(hi, hard);
+  }
+  if (out) bad ||= `the tip is out for ${out} of 600 frames with reduced flashing`;
+  if (min < 0.9 || max > 1.1) bad ||= `the light runs from ${min.toFixed(2)} to ${max.toFixed(2)} of its mean with reduced flashing (a tenth either way at most)`;
+  if (jump > 0.01) bad ||= `the light jumps ${jump.toFixed(3)} between frames at 60 fps with reduced flashing`;
+  if (Math.abs(shown / 600 - 0.11 / 0.16) > 0.02 || lo > 0.76 || hi < 1.24 || lo < 0.75 || hi > 1.25) bad ||= `the flare no longer sputters as before with the setting off (tip shown ${(shown / 600).toFixed(3)} of the time, light ${lo.toFixed(2)} to ${hi.toFixed(2)})`;
+  if (bad) fail(bad);
+  else ok(`the tip stays lit and the light moves ${jump.toFixed(4)} a frame at most (${min.toFixed(2)} to ${max.toFixed(2)}) with reduced flashing, sputters as before without`);
 }
 
 console.log('What lies about is built before the first frame of play');
