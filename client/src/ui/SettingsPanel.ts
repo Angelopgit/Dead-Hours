@@ -172,7 +172,7 @@ export class SettingsPanel {
         h('h3', {}, 'Key bindings'),
       );
       for (const action of Object.keys(ACTION_LABELS) as Action[]) content.push(row(ACTION_LABELS[action], this.bindingControl(action)));
-      content.push(h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => { settings.reset('controls'); this.render(); } }, 'Reset controls')));
+      content.push(h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => { audio.ui('click'); settings.reset('controls'); this.render(); } }, 'Reset controls')));
     } else {
       const a = settings.value.accessibility;
       content.push(

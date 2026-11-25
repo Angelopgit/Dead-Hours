@@ -184,8 +184,8 @@ export class OnlineMenu {
     let hidden = false;
     const seg = h('div', { class: 'seg' });
     const draw = () => seg.replaceChildren(
-      h('button', { class: hidden ? '' : 'on', onclick: () => { hidden = false; draw(); } }, 'Public'),
-      h('button', { class: hidden ? 'on' : '', onclick: () => { hidden = true; draw(); } }, 'Private'),
+      h('button', { class: hidden ? '' : 'on', onclick: () => { hidden = false; audio.ui('click'); draw(); } }, 'Public'),
+      h('button', { class: hidden ? 'on' : '', onclick: () => { hidden = true; audio.ui('click'); draw(); } }, 'Private'),
     );
     draw();
     // Where the night runs: on the game server, or (desktop browsers) in this one.
@@ -195,8 +195,8 @@ export class OnlineMenu {
     const about = h('p', {});
     const drawWhere = () => {
       where.replaceChildren(
-        h('button', { class: this.onDevice ? '' : 'on', onclick: () => { this.onDevice = false; drawWhere(); } }, 'The game server'),
-        h('button', { class: this.onDevice ? 'on' : '', onclick: () => { this.onDevice = true; drawWhere(); } }, 'This device (beta)'),
+        h('button', { class: this.onDevice ? '' : 'on', onclick: () => { this.onDevice = false; audio.ui('click'); drawWhere(); } }, 'The game server'),
+        h('button', { class: this.onDevice ? 'on' : '', onclick: () => { this.onDevice = true; audio.ui('click'); drawWhere(); } }, 'This device (beta)'),
       );
       about.textContent = this.onDevice
         ? `Up to ${GAME.maxPlayers} survivors. You start the night when everyone is in. The zombies are run by this device, so everyone sees the same night: keep this tab open and in front. If you leave, the night ends for everyone, and what each survivor reached is kept. Runs go on the boards marked HOSTED.`

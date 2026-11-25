@@ -6,7 +6,7 @@
  * (or just pressed aim), never through a wall, never onto one outside its cone, and never
  * when switched off.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { register } from 'node:module';
 import * as THREE from 'three';
 import type { Simulation } from '@dead-hours/shared';
@@ -811,6 +811,35 @@ check(none === null, 'nothing near: full speed');
   const root = /#ui-root \{[^}]*font-size: calc\((\d+)px \* var\(--ui-scale\)\)/.exec(css);
   check(!!m && !!root && m[2] === root[1] && Number(m[1]) === 260 && Number(m[3]) <= 30 && /\nbody\.touch-play \.vitals \{[^}]*\bwidth: min\(/.test(css),
     m && root ? `the health panel is ${m[1]} px wide at a UI scale of 1 and follows the scale, ${m[3]}vw at most; a phone keeps its own width` : 'the health panel width does not follow the UI scale');
+}
+
+// Every button in the menus clicks when pressed, but five were silent: Public / Private and The game server / This
+// device on HOST A GAME, and Reset controls in the settings. A press handler written in a menu file has to play an
+// interface sound, apart from the few that are quiet on purpose.
+{
+  const quiet = [
+    'this.preview.turn(', // the creator's turn arrows are held to spin the survivor
+    'this.link.chat.say(', // SEND: the chat line appearing is the answer
+    'cb.onPick(id)', 'cb.onGunsmith?.()', // the weapon table in a night: the session plays its own sounds
+  ];
+  const silent: string[] = [];
+  let seen = 0;
+  for (const name of readdirSync(new URL('../src/ui/', import.meta.url)).filter((f) => f.endsWith('.ts')).sort()) {
+    const src = readFileSync(new URL(`../src/ui/${name}`, import.meta.url), 'utf8');
+    for (const m of src.matchAll(/onclick:\s*/g)) {
+      // The handler runs to the comma or bracket that closes it.
+      let depth = 0, j = m.index + m[0].length;
+      for (; j < src.length; j++) {
+        const c = src[j];
+        if ('([{'.includes(c)) depth++;
+        else if (')]}'.includes(c)) { if (!depth) break; depth--; } else if (c === ',' && !depth) break;
+      }
+      const body = src.slice(m.index + m[0].length, j);
+      seen++;
+      if (!body.includes('audio.') && !quiet.some((q) => body.includes(q))) silent.push(`${name}: ${body.replace(/\s+/g, ' ').slice(0, 60)}`);
+    }
+  }
+  check(seen >= 40 && !silent.length, silent.length ? `menu buttons that make no sound when pressed: ${silent.join(' | ')}` : `all ${seen} press handlers in the menus play an interface sound (or are quiet on purpose)`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
