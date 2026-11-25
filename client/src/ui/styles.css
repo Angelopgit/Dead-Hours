@@ -200,7 +200,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .panel p { color: var(--fg-dim); line-height: 1.6; }
 .panel::-webkit-scrollbar { width: 6px; }
 .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 0; }
-.panel-close { position: absolute; top: 1.3em; right: 1.4em; color: var(--fg-dim); font-size: 0.8em; letter-spacing: 0.06em; }
+.panel-close { position: absolute; top: 1.3em; right: 1.4em; color: var(--fg-dim); font-size: 0.8em; letter-spacing: 0.06em; text-transform: uppercase; }
 .panel-close:hover { color: var(--fg); }
 
 .tabs { display: flex; gap: 1.6em; border-bottom: 1px solid var(--line); margin-bottom: 1.4em; }

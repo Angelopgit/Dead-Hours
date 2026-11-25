@@ -842,5 +842,13 @@ check(none === null, 'nothing near: full speed');
   check(seen >= 40 && !silent.length, silent.length ? `menu buttons that make no sound when pressed: ${silent.join(' | ')}` : `all ${seen} press handlers in the menus play an interface sound (or are quiet on purpose)`);
 }
 
+// The credits panel's close button read "Close ✕" beside "CLOSE ✕" on every other panel: its text is typed in
+// sentence case (docs/style.md) and the class set no case. The class makes them capitals now, however they are typed.
+{
+  const css = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  check(/\n\.panel-close \{[^}]*\btext-transform: uppercase;/.test(css),
+    'a panel\'s close button is in capitals by its class, so the credits\' "Close ✕" reads like the others');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);
