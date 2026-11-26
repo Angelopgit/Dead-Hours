@@ -29,10 +29,12 @@ function seg<T extends string | number>(options: [T, string][], get: () => T, se
 
 function slider(min: number, max: number, step: number, get: () => number, set: (v: number) => void, fmt: (v: number) => string): HTMLElement {
   const out = h('output', {}, fmt(get()));
-  const input = h('input', { type: 'range', min, max, step, value: get() }) as HTMLInputElement;
+  // Read out as shown beside it ("100%", "-45 dB"), not as the raw number ("1").
+  const input = h('input', { type: 'range', min, max, step, value: get(), 'aria-valuetext': fmt(get()) }) as HTMLInputElement;
   input.addEventListener('input', () => {
     const v = Number(input.value);
     out.textContent = fmt(v);
+    input.setAttribute('aria-valuetext', fmt(v));
     set(v);
   });
   return h('div', { class: 'slider' }, input, out);
@@ -49,8 +51,19 @@ function toggle(get: () => boolean, set: (v: boolean) => void): HTMLElement {
   return b;
 }
 
+/**
+ * A settings row. The label beside a control is not tied to it, so a screen reader read a tick box as "button" and
+ * a slider as "slider, 1": a tick box or slider with no name of its own takes the row's, and a row of choices or
+ * keys (each already named by its own text) is a group with the row's name.
+ */
 function row(label: string, control: HTMLElement, hint?: string): HTMLElement {
-  return h('div', { class: 'row' }, h('label', {}, label, hint ? h('span', { class: 'hint' }, hint) : null), control);
+  let named = control.hasAttribute('aria-label');
+  for (const c of control.matches('button, input') ? [control] : [...control.querySelectorAll<HTMLElement>('input')]) {
+    if (c.textContent?.trim() || c.hasAttribute('aria-label')) continue;
+    c.setAttribute('aria-label', label);
+    named = true;
+  }
+  return h('div', { class: 'row', ...(named ? {} : { role: 'group', 'aria-label': label }) }, h('label', {}, label, hint ? h('span', { class: 'hint' }, hint) : null), control);
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;

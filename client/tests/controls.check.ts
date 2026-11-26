@@ -850,5 +850,17 @@ check(none === null, 'nothing near: full speed');
     'a panel\'s close button is in capitals by its class, so the credits\' "Close ✕" reads like the others');
 }
 
+// The label beside a settings control was not tied to it: a screen reader read each of the 40 tick boxes and
+// sliders as a bare "button" or "slider, 1", and a row of choices gave no clue what it chose. A row now names what
+// has no name of its own, or is a named group, and a slider reads out the value shown beside it.
+{
+  const panel = readFileSync(new URL('../src/ui/SettingsPanel.ts', import.meta.url), 'utf8');
+  const row = /\nfunction row\(label: string, control: HTMLElement, hint\?: string\): HTMLElement \{([\s\S]*?)\n\}/.exec(panel)?.[1] ?? '';
+  const slider = /\nfunction slider\([\s\S]*?\n\}/.exec(panel)?.[0] ?? '';
+  check(/c\.setAttribute\('aria-label', label\)/.test(row) && /named \? \{\} : \{ role: 'group', 'aria-label': label \}/.test(row)
+    && /'aria-valuetext': fmt\(get\(\)\)/.test(slider) && /input\.setAttribute\('aria-valuetext', fmt\(v\)\)/.test(slider),
+    'a settings row names its tick box or slider for a screen reader, or is a named group; a slider reads out the value shown');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);
