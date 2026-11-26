@@ -85,11 +85,14 @@ export class ThirdPersonCamera {
     // Zoomed sights turn slower in proportion to the zoom, so the view keeps the same feel.
     const zoom = this.adsBlend > 0.5 ? this.camera.fov / BASE_FOV : this.aimBlend > 0.5 ? 0.7 : 1;
     const sens = 0.0022 * c.sensitivity * zoom;
+    // The mouse's invert only: a thumb drag and the look stick arrive already turned over by their own settings
+    // (Input.addTurn, Input.poll). Turned over here again, Invert Y-axis never inverted the thumb and did invert a
+    // controller whose own Invert look was off.
     const inv = c.invertY ? -1 : 1;
     this.yaw -= d.x * sens + t.x * zoom * friction;
     // Past the limits (just gone prone) the view only comes back toward them.
     const before = this.pitch;
-    this.pitch -= (d.y * sens + t.y * zoom * friction) * inv;
+    this.pitch -= d.y * sens * inv + t.y * zoom * friction;
     this.pitch = THREE.MathUtils.clamp(this.pitch, Math.min(before, this.pitchMin), Math.max(before, this.pitchMax));
     if (d.x || d.y || t.x || t.y) this.lookedAt = performance.now();
     if (input.pressed('shoulder')) this.shoulder *= -1;

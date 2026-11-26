@@ -419,6 +419,39 @@ check(none === null, 'nothing near: full speed');
   settings.update((s) => { s.controls.invertY = false; });
   check(up < 0 && upInv > 0 && upMouseInv < 0, 'controller: its own invert flips the look stick (the mouse invert leaves it alone)');
 
+  // The same, all the way to the view. The camera turned the thumb's and the stick's look over by the mouse's
+  // setting a second time: Invert Y-axis ("mouse and touch") never inverted a thumb drag, and did invert a controller
+  // whose own Invert look was off. + is the view going up.
+  {
+    const { ThirdPersonCamera } = await import('../src/gameplay/ThirdPersonCamera');
+    const cam = new ThirdPersonCamera(new THREE.PerspectiveCamera(), {} as Physics);
+    const went = (mouseInv: boolean, padInv: boolean, device: 'mouse' | 'thumb' | 'stick'): number => {
+      settings.update((s) => { s.controls.invertY = mouseInv; s.controls.padInvertY = padInv; });
+      rest();
+      cam.pitch = 0;
+      if (device === 'mouse') (input as unknown as { lookY: number }).lookY = -40;
+      else if (device === 'thumb') input.addTurn(0, -0.1);
+      else {
+        pad.axes = [0, 0, 0, -0.9];
+        input.poll(1 / 60);
+        input.endFrame();
+      }
+      cam.look(input);
+      pad.axes = [0, 0, 0, 0];
+      return Math.sign(cam.pitch);
+    };
+    const wrong: string[] = [];
+    for (const mouseInv of [false, true]) for (const padInv of [false, true]) {
+      for (const [device, inverted] of [['mouse', mouseInv], ['thumb', mouseInv], ['stick', padInv]] as const) {
+        const got = went(mouseInv, padInv, device);
+        if (got !== (inverted ? -1 : 1)) wrong.push(`${device} up goes ${got > 0 ? 'up' : got < 0 ? 'down' : 'nowhere'} with Invert Y-axis ${mouseInv ? 'on' : 'off'} and the controller's ${padInv ? 'on' : 'off'}`);
+      }
+    }
+    settings.update((s) => { s.controls.invertY = false; s.controls.padInvertY = false; });
+    rest();
+    check(!wrong.length, wrong.length ? `look: ${wrong.join('; ')}` : 'look: Invert Y-axis turns the mouse and a thumb drag over, the controller\'s Invert look its stick, each once, in all four mixes');
+  }
+
   // Rumble: scaled by the strength setting, a weaker one never cuts a stronger one short, shots kick the trigger.
   const { Rumble } = await import('../src/core/Rumble');
   const played: { type: string; p: Record<string, number> }[] = [];
