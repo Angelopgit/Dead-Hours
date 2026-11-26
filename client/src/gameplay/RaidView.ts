@@ -124,7 +124,8 @@ export class RaidView {
     const body = new Humanoid(survivorLook(decodeAppearance(r.appearance)));
     // They have been living rough out there for a while.
     body.grime.x = 0.45 + Math.random() * 0.3;
-    body.grime.y = 0.1 + Math.random() * 0.25;
+    body.splatter(0.1 + Math.random() * 0.25);
+    body.goreShown = this.gore;
     this.scene.add(body.root);
     const probe = new DynamicProbe(this.field);
     probe.attach(body.surfaces());
@@ -281,6 +282,7 @@ export class RaidView {
   setGore(on: boolean): void {
     this.gore = on;
     for (const v of this.bodies.values()) v.weapon.gore = on;
+    for (const v of [...this.bodies.values(), ...this.corpses]) v.body.goreShown = on;
   }
 
   private free(v: RaiderBody): void {

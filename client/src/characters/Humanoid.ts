@@ -693,6 +693,9 @@ export class Humanoid {
    * builds up by itself while `weathering` (in a night); blood comes from splatter().
    */
   readonly grime = new THREE.Vector4(0, 0, Math.random() * 40, 0);
+  /** The blood splattered on so far, and whether it shows (not with gore off): grime.y is one or nothing. */
+  private blood = 0;
+  private bloodShown = true;
   weathering = false;
   // Idle life: breathing (faster after a run), shifting weight, settling into a ready stance.
   private breathP = Math.random() * 6;
@@ -963,10 +966,16 @@ export class Humanoid {
     }
   }
 
-  /** Gore off: stumps go dark instead of red, and no wounds or blood show on the body. */
+  /**
+   * Gore off: stumps go dark instead of red, and no wounds or blood show on the body. That goes for the blood a
+   * survivor collects through a night too (it kept building up on clothes and skin with gore off); it is kept
+   * count of, so it is back if gore is switched on again.
+   */
   set goreShown(on: boolean) {
     if (this.gore) tintGore(this.gore, on);
     if (this.decay) this.decay.uZ.value.w = on ? 1 : 0;
+    this.bloodShown = on;
+    this.grime.y = on ? this.blood : 0;
   }
 
   /** Thickness of the body at a joint: how wide the stump left there must be. */
@@ -1537,7 +1546,8 @@ export class Humanoid {
 
   /** Blood on the survivor's clothes and skin (a hit taken, a kill up close): adds up to 1. */
   splatter(amount: number): void {
-    this.grime.y = Math.min(1, this.grime.y + amount);
+    this.blood = Math.min(1, this.blood + amount);
+    this.grime.y = this.bloodShown ? this.blood : 0;
   }
 
   /**

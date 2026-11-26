@@ -114,6 +114,7 @@ export class RemoteSurvivors {
   private create(p: SimPlayer): Remote {
     const body = new Humanoid(survivorLook(decodeAppearance(p.appearance)));
     body.weathering = true;
+    body.goreShown = this.gore;
     this.scene.add(body.root);
     const probe = new DynamicProbe(this.field);
     probe.attach(body.surfaces());
@@ -627,7 +628,10 @@ export class RemoteSurvivors {
 
   setGore(on: boolean): void {
     this.gore = on;
-    for (const r of this.remotes.values()) r.weapon.gore = on;
+    for (const r of this.remotes.values()) {
+      r.weapon.gore = on;
+      r.body.goreShown = on;
+    }
   }
 
   private free(r: Remote): void {

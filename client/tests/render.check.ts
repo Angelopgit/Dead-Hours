@@ -321,6 +321,29 @@ console.log('Reduced flashing steadies the flare on a supply crate');
   else ok(`the tip stays lit and the light moves ${jump.toFixed(4)} a frame at most (${min.toFixed(2)} to ${max.toFixed(2)}) with reduced flashing, sputters as before without`);
 }
 
+console.log('Gore off keeps blood off the survivors too');
+{
+  // The setting reads "Blood, wounds and splatter", but the blood a survivor collects through a night (hits taken,
+  // kills up close) still built up on clothes and skin with it off: only the zombies' bodies were told.
+  let bad = '';
+  const h = new Humanoid(zombieLookOf('walker', 0));
+  h.splatter(0.3);
+  if (Math.abs(h.grime.y - 0.3) > 1e-6) bad ||= `a splatter of 0.3 shows as ${h.grime.y.toFixed(2)}`;
+  h.goreShown = false;
+  if (h.grime.y !== 0) bad ||= `blood still drawn with gore off (${h.grime.y.toFixed(2)})`;
+  h.splatter(0.2);
+  if (h.grime.y !== 0) bad ||= `a splatter with gore off shows (${h.grime.y.toFixed(2)})`;
+  h.goreShown = true;
+  if (Math.abs(h.grime.y - 0.5) > 1e-6) bad ||= `gore switched back on shows ${h.grime.y.toFixed(2)} of the 0.5 collected`;
+  h.dispose();
+  const src = (f: string) => readFileSync(new URL(`../src/gameplay/${f}.ts`, import.meta.url), 'utf8');
+  if (!src('GameSession').includes("this.player.character.goreShown = g.gore !== 'off';")) bad ||= 'the session no longer passes the gore setting to the player\'s own body';
+  if (!/body\.goreShown = this\.gore;/.test(src('RemoteSurvivors')) || !/r\.body\.goreShown = on;/.test(src('RemoteSurvivors'))) bad ||= 'the other survivors\' bodies are not told the gore setting (new ones and on a change)';
+  if (!/body\.goreShown = this\.gore;/.test(src('RaidView')) || !/v\.body\.goreShown = on;/.test(src('RaidView'))) bad ||= 'the raiders\' bodies are not told the gore setting (new ones and on a change)';
+  if (bad) fail(bad);
+  else ok('no blood is drawn on a body with gore off, what it collected is back with gore on, and the player, the other survivors and the raiders are all told');
+}
+
 console.log('What lies about is built before the first frame of play');
 {
   // The first frame of play (the cut from the intro into the survivor's eyes) built every lying bicycle, skateboard,

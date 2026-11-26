@@ -691,6 +691,7 @@ export class GameSession {
     setZombieDetail(g.particleQuality === 'low' ? 'lite' : 'full');
     this.limbs.gore = g.gore !== 'off';
     this.weapon.gore = g.gore !== 'off';
+    this.player.character.goreShown = g.gore !== 'off';
     this.zombies.gibs.setGore(g.gore !== 'off');
     this.pyro.setQuality(g.particleQuality, settings.value.accessibility.reducedFlashing);
     this.remotes?.setGore(g.gore !== 'off');
