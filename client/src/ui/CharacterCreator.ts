@@ -139,10 +139,11 @@ export class CharacterCreator {
 
   constructor(private readonly onClose: () => void) {
     this.a = sanitizeAppearance(settings.value.profile.appearance);
-    const btn = (label: string, onClick: () => void, cls = '') => h('button', {
+    // One press, one sound: a button that goes back plays the back sound in place of the click.
+    const btn = (label: string, onClick: () => void, cls = '', sound: 'click' | 'back' = 'click') => h('button', {
       class: `creator-btn ${cls}`,
       onmouseenter: () => audio.ui('hover'),
-      onclick: () => { audio.ui('click'); onClick(); },
+      onclick: () => { audio.ui(sound); onClick(); },
     }, label);
 
     for (const t of TABS) {
@@ -173,7 +174,7 @@ export class CharacterCreator {
           // Both keep the body type picked: a new random survivor, or that body's starting look.
           btn('RANDOMIZE', () => this.apply(randomAppearance(Math.random, this.a.body))),
           btn('RESET', () => this.apply({ ...BODY_DEFAULTS[this.a.body] })),
-          btn('DONE', () => { audio.ui('back'); this.onClose(); }, 'primary'),
+          btn('DONE', () => this.onClose(), 'primary', 'back'),
         ),
       ),
       this.tabsEl,

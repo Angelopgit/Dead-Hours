@@ -910,5 +910,17 @@ check(none === null, 'nothing near: full speed');
     'Escape plays the sound of the button it stands in for: back when it closes a screen, the click when it resumes the night');
 }
 
+// A button that goes back plays the back sound, once. BACK on HOST A GAME played the click (the CLOSE beside it
+// and the armory's BACK play back), and the creator's DONE played the click and the back sound on top of each other.
+{
+  const online = readFileSync(new URL('../src/ui/OnlineMenu.ts', import.meta.url), 'utf8');
+  const creator = readFileSync(new URL('../src/ui/CharacterCreator.ts', import.meta.url), 'utf8');
+  const hostBack = /this\.button\('BACK', [^\n]*/.exec(online)?.[0] ?? '';
+  const done = /btn\('DONE', [^\n]*/.exec(creator)?.[0] ?? '';
+  check(/onclick: \(\) => \{ audio\.ui\(sound\); fn\(\); \}/.test(online) && /, 'btn', 'back'\),$/.test(hostBack)
+    && /onclick: \(\) => \{ audio\.ui\(sound\); onClick\(\); \}/.test(creator) && /, 'primary', 'back'\),$/.test(done) && !done.includes('audio.ui('),
+    'BACK on HOST A GAME and the creator\'s DONE play the back sound, and nothing with it');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

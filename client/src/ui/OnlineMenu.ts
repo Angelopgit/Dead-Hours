@@ -102,11 +102,11 @@ export class OnlineMenu {
     this.status.className = `online-status ${tone}`;
   }
 
-  private button(label: string, fn: () => void, cls = 'btn'): HTMLButtonElement {
+  private button(label: string, fn: () => void, cls = 'btn', sound: 'click' | 'back' = 'click'): HTMLButtonElement {
     return h('button', {
       class: cls,
       onmouseenter: () => audio.ui('hover'),
-      onclick: () => { audio.ui('click'); fn(); },
+      onclick: () => { audio.ui(sound); fn(); },
     }, label);
   }
 
@@ -210,7 +210,7 @@ export class OnlineMenu {
       ...(can ? [h('div', { class: 'row' }, h('label', {}, 'Where the night runs', h('span', { class: 'hint' }, 'On this device, a game never waits for a free server')), where)] : []),
       about,
       h('div', { class: 'actions' },
-        this.button('BACK', () => { this.view = 'browse'; this.say(''); this.render(); }),
+        this.button('BACK', () => { this.view = 'browse'; this.say(''); this.render(); }, 'btn', 'back'),
         this.button('CREATE GAME', () => void this.join(async () => (await net.client()).create(this.onDevice ? ROOMS.hosted : ROOMS.survival, { ...joinOptions(), lobbyName: title.value, private: hidden })), 'btn primary'),
       ),
     );
