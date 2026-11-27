@@ -284,7 +284,9 @@ export class SkateboardView {
       v.probe.update(dt, v.pos, camera, 0.3);
     }
     for (const id of [...this.views.keys()]) if (!seen.has(id)) this.remove(id);
-    audio.wheels.skateRoll(this.rolls);
+    // A frozen frame (a solo night behind the pause menu) rolls nowhere, so the wheels go quiet as the engines
+    // do: a board keeps the speed it was drawn at, and its rolling loop kept playing behind the menu.
+    audio.wheels.skateRoll(dt > 0 ? this.rolls : []);
   }
 
   private create(b: Skateboard): View {

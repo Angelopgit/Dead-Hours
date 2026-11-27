@@ -304,7 +304,8 @@ export class BicycleView {
       v.probe.update(dt, v.pos, camera, 0.6);
     }
     for (const id of [...this.views.keys()]) if (!seen.has(id)) this.remove(id);
-    audio.wheels.bikeRoll(this.rolls);
+    // A frozen frame (a solo night behind the pause menu) rolls nowhere: the tyres and the freewheel go quiet.
+    audio.wheels.bikeRoll(dt > 0 ? this.rolls : []);
   }
 
   /** One bike of every look standing for the loading screen's shader pass (see GameSession.prewarm). */

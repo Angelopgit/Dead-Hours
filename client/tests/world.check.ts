@@ -591,5 +591,20 @@ console.log('Wind-blown leaves and fog wisps stay out of the houses');
   else console.log(`  ok   no leaf drawn inside a house over 4 minutes standing in three of them (${(100 * lost / total).toFixed(2)}% hidden in the open); fog wisps drop every pixel under a roof`);
 }
 
+console.log('Wheels go quiet behind the solo pause menu');
+{
+  // A solo night freezes behind the pause menu (the views are updated with 0 s), and the engines, helicopters and
+  // fires go quiet. A skateboard or a bicycle kept the speed it was last drawn at, so its rolling loop played on
+  // behind the menu at full level. A frozen frame feeds the wheel loops nothing now.
+  const src = (f: string) => readFileSync(new URL(`../src/gameplay/${f}.ts`, import.meta.url), 'utf8');
+  const session = src('GameSession');
+  let bad = '';
+  if (!/const live = running \? dt : 0;/.test(session) || !/this\.skates\.update\(live, /.test(session) || !/this\.bikes\.update\(live, /.test(session)) bad ||= 'the session no longer updates boards and bikes with 0 s while a solo night is paused';
+  if (!/audio\.wheels\.skateRoll\(dt > 0 \? this\.rolls : \[\]\);/.test(src('Skateboards'))) bad ||= 'a frozen frame still feeds the skateboards\' rolling loops';
+  if (!/audio\.wheels\.bikeRoll\(dt > 0 \? this\.rolls : \[\]\);/.test(src('Bicycles'))) bad ||= 'a frozen frame still feeds the bicycles\' rolling loops';
+  if (bad) fail(bad);
+  else console.log('  ok   a frozen frame feeds no rolling loops: boards and bikes are silent behind the solo pause menu');
+}
+
 console.log(failures ? `\n${failures} FAILURES` : '\nALL WORLD CHECKS PASSED');
 process.exit(failures ? 1 : 0);
