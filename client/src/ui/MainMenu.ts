@@ -187,6 +187,8 @@ export class MainMenu {
 
   private onKey = (e: KeyboardEvent): void => {
     if (e.code !== 'Escape' || !this.el.isConnected || this.input.captureNext) return;
+    // Escape (and a controller's B, which sends it) sounds like the close button it stands in for.
+    if (this.creator || this.armory || this.online || this.panel) audio.ui('back');
     if (this.creator) this.closeCreator();
     else if (this.armory) this.closeArmory();
     else if (this.online) this.online.back();

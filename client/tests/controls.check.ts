@@ -895,5 +895,20 @@ check(none === null, 'nothing near: full speed');
     'a settings row names its tick box or slider for a screen reader, or is a named group; a slider reads out the value shown');
 }
 
+// Closing a screen with Escape (or a controller's B, which PadMenus sends as Escape) was silent, while the close
+// button of the same screen plays the back sound. The key plays what its button plays now: back for the menu's
+// panels, the creator, the armory, the lobby, the gunsmith, the weapon table and the pause menu's settings, and
+// the click RESUME plays when it resumes the night.
+{
+  const menu = readFileSync(new URL('../src/ui/MainMenu.ts', import.meta.url), 'utf8');
+  const game = readFileSync(new URL('../src/gameplay/GameSession.ts', import.meta.url), 'utf8');
+  const onKey = /\n {2}private onKey = [\s\S]*?\n {2}\};/.exec(menu)?.[0] ?? '';
+  const onKeyDown = /\n {2}private onKeyDown = [\s\S]*?\n {2}\};/.exec(game)?.[0] ?? '';
+  check(/if \(this\.creator \|\| this\.armory \|\| this\.online \|\| this\.panel\) audio\.ui\('back'\);/.test(onKey)
+    && /audio\.ui\('back'\);\s*this\.closeGunsmith\(\);/.test(onKeyDown) && /audio\.ui\('back'\);\s*this\.closeTable\(\);/.test(onKeyDown)
+    && /audio\.ui\(this\.pause\.settingsOpen \? 'back' : 'click'\);/.test(onKeyDown),
+    'Escape plays the sound of the button it stands in for: back when it closes a screen, the click when it resumes the night');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL CONTROL CHECKS PASSED');
 process.exit(failures ? 1 : 0);

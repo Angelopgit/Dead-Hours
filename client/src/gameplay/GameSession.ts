@@ -727,15 +727,23 @@ export class GameSession {
     }
     if (this.smith) {
       const b = settings.value.controls.bindings;
-      if (e.code === 'Escape' || b.interact.includes(e.code) || b.gunsmith.includes(e.code)) this.closeGunsmith();
+      // A key that closes a screen sounds like the button that does (Escape is a controller's B too).
+      if (e.code === 'Escape' || b.interact.includes(e.code) || b.gunsmith.includes(e.code)) {
+        audio.ui('back');
+        this.closeGunsmith();
+      }
       return;
     }
     if (this.phase === 'table') {
       const interact = settings.value.controls.bindings.interact;
-      if (e.code === 'Escape' || interact.includes(e.code)) this.closeTable();
+      if (e.code === 'Escape' || interact.includes(e.code)) {
+        audio.ui('back');
+        this.closeTable();
+      }
       return;
     }
     if (e.code === 'Escape' && this.phase === 'paused') {
+      audio.ui(this.pause.settingsOpen ? 'back' : 'click');
       if (this.pause.settingsOpen) this.pause.closeSettings();
       else this.resume();
     }
